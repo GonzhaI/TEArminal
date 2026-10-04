@@ -87,6 +87,27 @@ impl AxonApp {
             self.terminal.reset_scroll();
         }
 
+        // Copiar salida del último bloque / comando de agente (Ctrl + Shift + O)
+        if modifiers.ctrl && modifiers.shift && key == Key::O {
+            if let Some(output) = self.terminal.get_last_output_text() {
+                ctx.output_mut(|o| o.copied_text = output);
+            }
+            return;
+        }
+
+        // Navegación semántica por comandos (Ctrl + Shift + Arriba / Abajo)
+        if modifiers.ctrl && modifiers.shift && key == Key::ArrowUp {
+            if let Some(block) = self.terminal.command_blocks.last() {
+                let target = self.terminal.total_lines_count.saturating_sub(block.prompt_line);
+                self.terminal.scroll_offset = target.min(self.terminal.scrollback.len());
+            }
+            return;
+        }
+        if modifiers.ctrl && modifiers.shift && key == Key::ArrowDown {
+            self.terminal.reset_scroll();
+            return;
+        }
+
         // Copiar y Pegar
         if (modifiers.ctrl && modifiers.shift && key == Key::C)
             || (modifiers.ctrl && key == Key::C && self.terminal.selection.is_some())
@@ -176,11 +197,13 @@ impl AxonApp {
     }
 
     fn paste_text(&self, text: &str) {
-        if self.config.terminal.bracketed_paste {
+        let use_bracketed = self.terminal.bracketed_paste_mode || self.config.terminal.bracketed_paste;
+        if use_bracketed {
             // Protección bracketed paste para agentes CLI (evita ejecución accidental en saltos de línea)
-            let mut payload = Vec::with_capacity(text.len() + 16);
+            let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+            let mut payload = Vec::with_capacity(normalized.len() + 16);
             payload.extend_from_slice(b"\x1b[200~");
-            payload.extend_from_slice(text.as_bytes());
+            payload.extend_from_slice(normalized.as_bytes());
             payload.extend_from_slice(b"\x1b[201~");
             self.pty.write_input(&payload);
         } else {
@@ -196,7 +219,12 @@ impl eframe::App for AxonApp {
             self.terminal.process_bytes(&bytes);
         }
 
-        // 2. Procesar entrada de teclado y ratón
+        // 2. Drenar portapapeles remoto OSC 52 (túneles SSH y tmux remoto)
+        for text in self.terminal.clipboard_queue.drain(..) {
+            ctx.output_mut(|o| o.copied_text = text);
+        }
+
+        // 3. Procesar entrada de teclado y ratón
         self.handle_input(ctx);
 
         // 3. Renderizado central del buffer de la terminal
@@ -256,6 +284,22 @@ impl eframe::App for AxonApp {
                     let y = origin.y + (row_idx as f32 * row_height);
                     if y > origin.y + content_size.y {
                         break;
+                    }
+
+                    // Indicador semántico de comandos en el margen izquierdo (OSC 133 / Estilo Ghostty)
+                    let view_start = self.terminal.visible_line_start();
+                    let global_row = view_start + row_idx;
+                    if let Some(block) = self.terminal.command_blocks.iter().find(|b| b.prompt_line == global_row) {
+                        let dot_color = match block.exit_code {
+                            Some(0) => Color32::from_rgb(81, 226, 122),  // Verde éxito
+                            Some(_) => Color32::from_rgb(244, 56, 65),   // Rojo código de error
+                            None => Color32::from_rgb(78, 146, 249),     // Azul en progreso
+                        };
+                        let dot_rect = Rect::from_min_size(
+                            Pos2::new(origin.x - 7.0, y + 3.0),
+                            Vec2::new(3.0, row_height - 6.0),
+                        );
+                        painter.rect_filled(dot_rect, 1.5, dot_color);
                     }
 
                     let mut run_start_x = 0;

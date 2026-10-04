@@ -42,6 +42,15 @@ pub struct InlineImage {
     pub rgba_data: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandBlock {
+    pub prompt_line: usize,
+    pub command_line: Option<usize>,
+    pub output_start: Option<usize>,
+    pub output_end: Option<usize>,
+    pub exit_code: Option<i32>,
+}
+
 pub struct TerminalState {
     pub cols: usize,
     pub rows: usize,
@@ -62,6 +71,16 @@ pub struct TerminalState {
     pub cursor_visible: bool,
     pub scroll_region_top: usize,
     pub scroll_region_bottom: usize,
+
+    // Bloques semánticos y navegación por comandos (OSC 133 Shell Integration)
+    pub command_blocks: Vec<CommandBlock>,
+    pub active_block: Option<CommandBlock>,
+
+    // Cola de portapapeles OSC 52 (Integración segura bidireccional para túneles SSH)
+    pub clipboard_queue: Vec<String>,
+
+    // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
+    pub bracketed_paste_mode: bool,
 
     // Imágenes renderizadas en terminal (Protocolos iTerm2 / OSC 1337 / Visión IA)
     pub images: Vec<InlineImage>,
@@ -113,6 +132,10 @@ impl TerminalState {
             cursor_visible: true,
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
+            command_blocks: Vec::new(),
+            active_block: None,
+            clipboard_queue: Vec::new(),
+            bracketed_paste_mode: false,
             images: Vec::new(),
             next_image_id: 1,
             total_lines_count: 0,
@@ -129,8 +152,48 @@ impl TerminalState {
         }
     }
 
+    pub fn current_global_line(&self) -> usize {
+        self.scrollback.len() + self.cursor_y
+    }
+
+    pub fn get_last_output_text(&self) -> Option<String> {
+        let block = self.command_blocks.last()?;
+        let start = block.output_start?;
+        let end = block.output_end.unwrap_or_else(|| self.current_global_line());
+        if start > end {
+            return None;
+        }
+
+        let mut lines = Vec::new();
+        let scroll_len = self.scrollback.len();
+        for line_idx in start..=end {
+            if line_idx < scroll_len {
+                if let Some(row) = self.scrollback.get(line_idx) {
+                    let s: String = row.iter().map(|c| c.c).collect();
+                    let trimmed = s.trim_end();
+                    if !trimmed.is_empty() {
+                        lines.push(trimmed.to_string());
+                    }
+                }
+            } else {
+                let grid_idx = line_idx.saturating_sub(scroll_len);
+                if grid_idx < self.grid.len() {
+                    let row = &self.grid[grid_idx];
+                    let s: String = row.iter().map(|c| c.c).collect();
+                    let trimmed = s.trim_end();
+                    if !trimmed.is_empty() {
+                        lines.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+
+        let text = lines.join("\n").trim().to_string();
+        if text.is_empty() { None } else { Some(text) }
+    }
+
     pub fn visible_line_start(&self) -> usize {
-        self.total_lines_count.saturating_sub(self.scroll_offset)
+        self.scrollback.len().saturating_sub(self.scroll_offset)
     }
 
     pub fn active_grid_mut(&mut self) -> &mut Vec<Vec<Cell>> {
@@ -398,6 +461,8 @@ impl<'a> Perform for Performer<'a> {
                         1049 | 47 => self.state.enter_alt_screen(),
                         // Mostrar cursor
                         25 => self.state.cursor_visible = true,
+                        // Activar Bracketed Paste Mode (negociado con Claude Code, Aider, shells)
+                        2004 => self.state.bracketed_paste_mode = true,
                         _ => {}
                     },
                     // Reset Mode (l)
@@ -406,6 +471,8 @@ impl<'a> Perform for Performer<'a> {
                         1049 | 47 => self.state.exit_alt_screen(),
                         // Ocultar cursor (usado por TUIs para evitar parpadeos)
                         25 => self.state.cursor_visible = false,
+                        // Desactivar Bracketed Paste Mode
+                        2004 => self.state.bracketed_paste_mode = false,
                         _ => {}
                     },
                     _ => {}
@@ -532,8 +599,20 @@ impl<'a> Perform for Performer<'a> {
         if params.is_empty() {
             return;
         }
-        if params[0] == b"1337" && params.len() > 1 {
-            self.handle_iterm2_image(&params[1..]);
+        match params[0] {
+            // Protocolo de imagen iTerm2 (OSC 1337)
+            b"1337" if params.len() > 1 => {
+                self.handle_iterm2_image(&params[1..]);
+            }
+            // Integración de portapapeles bidireccional segura para túneles SSH (OSC 52)
+            b"52" if params.len() > 1 => {
+                self.handle_osc_52(&params[1..]);
+            }
+            // Shell Integration y Bloques Semánticos (OSC 133)
+            b"133" if params.len() > 1 => {
+                self.handle_osc_133(&params[1..]);
+            }
+            _ => {}
         }
     }
 }
@@ -692,6 +771,91 @@ impl<'a> Performer<'a> {
                     }
                 }
             }
+        }
+    }
+
+    fn handle_osc_52(&mut self, params: &[&[u8]]) {
+        let mut full = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                full.push(b';');
+            }
+            full.extend_from_slice(p);
+        }
+
+        let parts: Vec<&[u8]> = full.splitn(2, |&b| b == b';').collect();
+        if parts.len() == 2 {
+            let b64_payload = parts[1];
+            if b64_payload == b"?" {
+                // Consulta de lectura remota OSC 52 (bloqueada por seguridad)
+                return;
+            }
+
+            let clean_b64: Vec<u8> = b64_payload
+                .iter()
+                .copied()
+                .filter(|b| !b.is_ascii_whitespace())
+                .collect();
+
+            use base64::prelude::*;
+            if let Ok(decoded_bytes) = BASE64_STANDARD.decode(&clean_b64) {
+                if let Ok(text) = String::from_utf8(decoded_bytes) {
+                    self.state.clipboard_queue.push(text);
+                }
+            }
+        }
+    }
+
+    fn handle_osc_133(&mut self, params: &[&[u8]]) {
+        if params.is_empty() {
+            return;
+        }
+        let code = params[0].first().copied().unwrap_or(0);
+        let cur_line = self.state.current_global_line();
+
+        match code {
+            b'A' => {
+                // Prompt Start (OSC 133;A)
+                if let Some(mut prev) = self.state.active_block.take() {
+                    if prev.output_end.is_none() {
+                        prev.output_end = Some(cur_line.saturating_sub(1));
+                    }
+                    self.state.command_blocks.push(prev);
+                }
+                self.state.active_block = Some(CommandBlock {
+                    prompt_line: cur_line,
+                    command_line: None,
+                    output_start: None,
+                    output_end: None,
+                    exit_code: None,
+                });
+            }
+            b'B' => {
+                // Command Start (OSC 133;B)
+                if let Some(block) = &mut self.state.active_block {
+                    block.command_line = Some(cur_line);
+                }
+            }
+            b'C' => {
+                // Output Start (OSC 133;C)
+                if let Some(block) = &mut self.state.active_block {
+                    block.output_start = Some(cur_line);
+                }
+            }
+            b'D' => {
+                // Command Finished (OSC 133;D[;exit_code])
+                let exit_code = if params.len() > 1 {
+                    String::from_utf8_lossy(params[1]).trim().parse::<i32>().ok()
+                } else {
+                    None
+                };
+                if let Some(mut block) = self.state.active_block.take() {
+                    block.output_end = Some(cur_line);
+                    block.exit_code = exit_code;
+                    self.state.command_blocks.push(block);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -869,5 +1033,55 @@ mod tests {
 
         assert_eq!(term.scrollback.len() + term.rows - 1, count, "Debe retener las 100.000 líneas entre scrollback y pantalla activa");
         assert!(lines_per_sec > 100_000.0, "Debe superar las 100.000 líneas por segundo gracias a VecDeque O(1)");
+    }
+
+    #[test]
+    fn test_osc_52_clipboard() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Enviar secuencia OSC 52 con texto "Hello from SSH!" en base64 (SGVsbG8gZnJvbSBTU0gh)
+        term.process_bytes(b"\x1b]52;c;SGVsbG8gZnJvbSBTU0gh\x07");
+
+        assert_eq!(term.clipboard_queue.len(), 1, "Debe agregar el texto decodificado a la cola de portapapeles");
+        assert_eq!(term.clipboard_queue[0], "Hello from SSH!");
+    }
+
+    #[test]
+    fn test_osc_133_semantic_prompts() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Simulación de secuencia Shell Integration OSC 133
+        // 1. Inicio de prompt (A)
+        term.process_bytes(b"\x1b]133;A\x07");
+        // 2. Inicio de comando (B)
+        term.process_bytes(b"\x1b]133;B\x07git status\r\n");
+        // 3. Inicio de salida (C)
+        term.process_bytes(b"\x1b]133;C\x07On branch main\r\nnothing to commit\r\n");
+        // 4. Fin de comando con exit code 0 (D;0)
+        term.process_bytes(b"\x1b]133;D;0\x07");
+
+        assert_eq!(term.command_blocks.len(), 1, "Debe registrar un bloque de comando semántico");
+        let block = &term.command_blocks[0];
+        assert_eq!(block.exit_code, Some(0), "El código de salida debe ser 0");
+
+        let last_output = term.get_last_output_text();
+        assert!(last_output.is_some(), "Debe poder extraer la salida del comando sin mouse");
+        assert!(last_output.unwrap().contains("On branch main"));
+    }
+
+    #[test]
+    fn test_bracketed_paste_mode() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        assert_eq!(term.bracketed_paste_mode, false);
+        // Activar modo bracketed paste (?2004h)
+        term.process_bytes(b"\x1b[?2004h");
+        assert_eq!(term.bracketed_paste_mode, true);
+        // Desactivar modo bracketed paste (?2004l)
+        term.process_bytes(b"\x1b[?2004l");
+        assert_eq!(term.bracketed_paste_mode, false);
     }
 }
