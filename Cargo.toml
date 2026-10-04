@@ -1,0 +1,28 @@
+[package]
+name = "axon"
+version = "0.1.0"
+edition = "2021"
+description = "Axon: Terminal veloz, acelerada por GPU y diseñada para la era de la IA en Windows"
+authors = ["Axon Team"]
+
+[dependencies]
+# Backend de emulación de terminal y Windows ConPTY
+portable-pty = "0.8"
+vte = "0.14"
+
+# Interfaz gráfica acelerada por GPU (DirectX 12 / Vulkan vía wgpu)
+eframe = { version = "0.29", default-features = false, features = [
+    "default_fonts",
+    "wgpu",
+] }
+egui = "0.29"
+
+# Configuración y serialización
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+directories = "5.0"
+
+# Async & Networking para integración con agentes y modelos de IA (Ollama / Gemini / OpenAI)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = "0.4"

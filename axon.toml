@@ -1,0 +1,18 @@
+[appearance]
+font_family = "Cascadia Code"
+font_size = 14.5
+window_opacity = 0.95
+theme = "axon-dark"
+
+[terminal]
+default_shell = "powershell.exe"
+scrollback_limit = 10000
+bracketed_paste = true
+cursor_blink = true
+
+[ai]
+enabled = true
+provider = "ollama"
+model = "llama3"
+endpoint = "http://localhost:11434"
+auto_context_lines = 30
