@@ -2,7 +2,7 @@
 name = "axon"
 version = "0.2.0"
 edition = "2021"
-description = "Axon: Terminal veloz, ligera y con aceleración GPU para Windows optimizada para agentes CLI"
+description = "Axon: Terminal nativa veloz para Windows optimizada para agentes CLI"
 authors = ["Axon Team"]
 
 [dependencies]
@@ -10,13 +10,20 @@ authors = ["Axon Team"]
 portable-pty = "0.8"
 vte = "0.14"
 
-# Interfaz gráfica y renderizado nativo acelerado por GPU (DirectX 12 / Vulkan vía wgpu)
-eframe = { version = "0.29", default-features = false, features = [
-    "default_fonts",
-    "glow",
-    "wgpu",
+# Ventana nativa y renderizado de alto rendimiento sin capas de GUI
+winit = "0.30"
+softbuffer = "0.4"
+fontdue = "0.9"
+
+# Integración nativa de Windows 11 (DWM Dark Mode, Win32)
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_UI_WindowsAndMessaging",
 ] }
-egui = "0.29"
+
+# Portapapeles del sistema nativo
+arboard = "3.6"
 
 # Configuración ligera en TOML
 serde = { version = "1.0", features = ["derive"] }
@@ -27,7 +34,5 @@ directories = "5.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
 
-# Soporte tipográfico Unicode completo y anchos de caracteres (emojis, CJK, Nerd Fonts)
+# Soporte tipográfico Unicode completo y anchos de caracteres
 unicode-width = "0.1"
-
-

@@ -1,5 +1,4 @@
-use crate::theme::Theme;
-use egui::Color32;
+use crate::theme::{Color, Theme};
 use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
 
@@ -7,8 +6,8 @@ use vte::{Params, Parser, Perform};
 pub struct Cell {
     pub c: char,
     pub width: u8,
-    pub fg: Color32,
-    pub bg: Color32,
+    pub fg: Color,
+    pub bg: Color,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -23,7 +22,7 @@ impl Cell {
             c: ' ',
             width: 1,
             fg: theme.foreground,
-            bg: Color32::TRANSPARENT,
+            bg: Color::TRANSPARENT,
             bold: false,
             dim: false,
             italic: false,
@@ -35,6 +34,7 @@ impl Cell {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct InlineImage {
     pub id: u64,
     pub line_index: usize,
@@ -93,8 +93,8 @@ pub struct TerminalState {
 
     // Estado SGR actual
     pub theme: Theme,
-    current_fg: Color32,
-    current_bg: Color32,
+    current_fg: Color,
+    current_bg: Color,
     current_bold: bool,
     current_dim: bool,
     current_italic: bool,
@@ -146,7 +146,7 @@ impl TerminalState {
             total_lines_count: 0,
             theme,
             current_fg: fg,
-            current_bg: Color32::TRANSPARENT,
+            current_bg: Color::TRANSPARENT,
             current_bold: false,
             current_dim: false,
             current_italic: false,
@@ -677,7 +677,7 @@ impl<'a> Performer<'a> {
             match val {
                 0 => {
                     self.state.current_fg = self.state.theme.foreground;
-                    self.state.current_bg = Color32::TRANSPARENT;
+                    self.state.current_bg = Color::TRANSPARENT;
                     self.state.current_bold = false;
                     self.state.current_dim = false;
                     self.state.current_italic = false;
@@ -724,7 +724,7 @@ impl<'a> Performer<'a> {
                         self.state.current_bg = c;
                     }
                 }
-                49 => self.state.current_bg = Color32::TRANSPARENT,
+                49 => self.state.current_bg = Color::TRANSPARENT,
 
                 // Foreground brillante (90..=97)
                 90..=97 => {
@@ -742,7 +742,7 @@ impl<'a> Performer<'a> {
     }
 }
 
-fn parse_sgr_color<'a, I>(param: &[u16], iter: &mut I, theme: &Theme) -> Option<Color32>
+fn parse_sgr_color<'a, I>(param: &[u16], iter: &mut I, theme: &Theme) -> Option<Color>
 where
     I: Iterator<Item = &'a [u16]>,
 {
@@ -755,10 +755,10 @@ where
         } else if mode == 2 {
             if param.len() >= 6 {
                 // Formato ISO: 38:2:colorspace:r:g:b
-                return Some(Color32::from_rgb(param[3] as u8, param[4] as u8, param[5] as u8));
+                return Some(Color::from_rgb(param[3] as u8, param[4] as u8, param[5] as u8));
             } else if param.len() >= 5 {
                 // Formato corto: 38:2:r:g:b
-                return Some(Color32::from_rgb(param[2] as u8, param[3] as u8, param[4] as u8));
+                return Some(Color::from_rgb(param[2] as u8, param[3] as u8, param[4] as u8));
             }
         }
         return None;
@@ -776,7 +776,7 @@ where
             let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
             let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
             let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-            return Some(Color32::from_rgb(r, g, b));
+            return Some(Color::from_rgb(r, g, b));
         }
     }
     None
@@ -943,8 +943,8 @@ mod tests {
     #[test]
     fn test_ghostty_palette() {
         let theme = Theme::ghostty_dark();
-        assert_eq!(theme.background, Color32::from_rgb(22, 22, 24));
-        assert_eq!(theme.cursor, Color32::from_rgb(255, 255, 255));
+        assert_eq!(theme.background, Color::from_rgb(22, 22, 24));
+        assert_eq!(theme.cursor, Color::from_rgb(255, 255, 255));
         assert_eq!(theme.ansi.len(), 16);
     }
 
@@ -958,7 +958,7 @@ mod tests {
 
         let cell = &term.grid[0][0];
         assert_eq!(cell.c, 'H');
-        assert_eq!(cell.fg, Color32::from_rgb(120, 200, 250));
+        assert_eq!(cell.fg, Color::from_rgb(120, 200, 250));
     }
 
     #[test]
@@ -1250,20 +1250,20 @@ mod tests {
         term.process_bytes(b"\x1b[38;2;250;120;40;48;2;15;25;35mX\x1b[0m");
         let cell_x = &term.grid[0][0];
         assert_eq!(cell_x.c, 'X');
-        assert_eq!(cell_x.fg, Color32::from_rgb(250, 120, 40));
-        assert_eq!(cell_x.bg, Color32::from_rgb(15, 25, 35));
+        assert_eq!(cell_x.fg, Color::from_rgb(250, 120, 40));
+        assert_eq!(cell_x.bg, Color::from_rgb(15, 25, 35));
 
         // 2. TrueColor formato delimitado por dos puntos (38:2:R:G:B)
         term.process_bytes(b"\x1b[38:2:180:90:220mY\x1b[0m");
         let cell_y = &term.grid[0][1];
         assert_eq!(cell_y.c, 'Y');
-        assert_eq!(cell_y.fg, Color32::from_rgb(180, 90, 220));
+        assert_eq!(cell_y.fg, Color::from_rgb(180, 90, 220));
 
         // 3. TrueColor formato ISO con espacio de color (38:2:0:70:140:210)
         term.process_bytes(b"\x1b[38:2::70:140:210mZ\x1b[0m");
         let cell_z = &term.grid[0][2];
         assert_eq!(cell_z.c, 'Z');
-        assert_eq!(cell_z.fg, Color32::from_rgb(70, 140, 210));
+        assert_eq!(cell_z.fg, Color::from_rgb(70, 140, 210));
     }
 
     #[test]
