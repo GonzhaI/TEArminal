@@ -12,13 +12,14 @@ fn main() -> eframe::Result<()> {
     // 1. Cargar configuración de Axon
     let config = AxonConfig::load_or_default();
 
-    // 2. Opciones de ventana nativa de Windows (DirectX / GPU)
+    // 2. Opciones de ventana nativa de Windows (OpenGL nativo con aceleración GPU)
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Axon")
             .with_inner_size(Vec2::new(1020.0, 680.0))
             .with_min_inner_size(Vec2::new(500.0, 320.0))
             .with_transparent(false),
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
 
@@ -110,21 +111,6 @@ fn configure_fonts(ctx: &eframe::egui::Context, preferred_font: &str, custom_pat
         }
     }
 
-    // 3. Fuente de emojis (Segoe UI Emoji)
-    let segoe_emoji = sys_fonts_dir.join("seguiemj.ttf");
-    if segoe_emoji.exists() {
-        if let Ok(bytes) = std::fs::read(&segoe_emoji) {
-            fonts.font_data.insert(
-                "axon_segoe_emoji".to_owned(),
-                eframe::egui::FontData::from_owned(bytes),
-            );
-            fonts.families
-                .entry(eframe::egui::FontFamily::Monospace)
-                .or_default()
-                .push("axon_segoe_emoji".to_owned());
-        }
-    }
-
     ctx.set_fonts(fonts);
 }
 
@@ -145,5 +131,23 @@ mod tests {
             let width = ctx.fonts(|f| f.glyph_width(&font_id, 'M'));
             println!("glyph_width('M') took: {:?}, width={}", start2.elapsed(), width);
         });
+    }
+
+    #[test]
+    fn test_epaint_text_layout() {
+        let ctx = eframe::egui::Context::default();
+        configure_fonts(&ctx, "Cascadia Code", None);
+        let output = ctx.run(Default::default(), |ctx| {
+            eframe::egui::CentralPanel::default().show(ctx, |ui| {
+                let font_id = eframe::egui::FontId::monospace(14.0);
+                let text = "Windows PowerShell";
+                let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font_id, eframe::egui::Color32::WHITE));
+                println!("galley rows: {}, size: {:?}, num_vertices: {}", galley.rows.len(), galley.size(), galley.num_vertices);
+            });
+        });
+        println!("textures_delta set: {}, free: {}", output.textures_delta.set.len(), output.textures_delta.free.len());
+        for (id, delta) in &output.textures_delta.set {
+            println!("texture id: {:?}, size: {:?}", id, delta.image.size());
+        }
     }
 }

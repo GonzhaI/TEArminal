@@ -249,8 +249,8 @@ impl eframe::App for AxonApp {
                     self.pty.resize(new_cols as u16, new_rows as u16);
                 }
 
-                let origin = ui.min_rect().min + margin;
-                let painter = ui.painter();
+                let (response, painter) = ui.allocate_painter(available_size, egui::Sense::click_and_drag());
+                let origin = response.rect.min + margin;
 
                 // Detección de selección con el ratón
                 let mouse_pos = ui.input(|i| i.pointer.hover_pos());

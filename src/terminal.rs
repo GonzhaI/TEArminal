@@ -1170,7 +1170,7 @@ mod tests {
             let s: String = row.iter().map(|c| c.c).collect();
             let trimmed = s.trim_end();
             if !trimmed.is_empty() {
-                println!("ROW {}: {:?}", i, trimmed);
+                println!("ROW {}: {:?} (cell[0].fg: {:?}, bg: {:?})", i, trimmed, row[0].fg, row[0].bg);
             }
         }
         println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
