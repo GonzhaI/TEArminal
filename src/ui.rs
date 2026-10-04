@@ -329,21 +329,57 @@ impl eframe::App for AxonApp {
                             painter.rect_filled(rect, 0.0, cell.bg);
                         }
 
-                        // Agrupar caracteres contiguos del mismo color para un solo draw call
-                        let fg = if cell.inverse {
-                            if cell.bg != Color32::TRANSPARENT { cell.bg } else { self.theme.background }
-                        } else {
-                            cell.fg
-                        };
+                        // Subrayado (SGR 4)
+                        if cell.underline {
+                            let line_y = y + row_height - 2.0;
+                            painter.line_segment(
+                                [Pos2::new(x, line_y), Pos2::new(x + char_width, line_y)],
+                                egui::Stroke::new(1.2_f32, cell.fg),
+                            );
+                        }
+
+                        // Tachado (SGR 9)
+                        if cell.strikethrough {
+                            let line_y = y + (row_height * 0.55);
+                            painter.line_segment(
+                                [Pos2::new(x, line_y), Pos2::new(x + char_width, line_y)],
+                                egui::Stroke::new(1.2_f32, cell.fg),
+                            );
+                        }
+
+                        // Si es celda espaciadora de continuación (width == 0), no dibujar texto adicional
+                        if cell.width == 0 {
+                            if let Some((prev_cell, buffer)) = current_style.take() {
+                                let px = origin.x + (run_start_x as f32 * char_width);
+                                let color = compute_cell_fg(prev_cell, &self.theme);
+                                painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
+                            }
+                            continue;
+                        }
+
+                        // Si es carácter ancho (width == 2, ej. emojis, CJK), dibujarlo de forma individual
+                        if cell.width == 2 {
+                            if let Some((prev_cell, buffer)) = current_style.take() {
+                                let px = origin.x + (run_start_x as f32 * char_width);
+                                let color = compute_cell_fg(prev_cell, &self.theme);
+                                painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
+                            }
+                            let color = compute_cell_fg(cell, &self.theme);
+                            painter.text(Pos2::new(x, y), egui::Align2::LEFT_TOP, cell.c.to_string(), font_id.clone(), color);
+                            continue;
+                        }
+
+                        // Agrupar caracteres contiguos estándar de ancho 1 del mismo color y estilo para un solo draw call
+                        let fg = compute_cell_fg(cell, &self.theme);
 
                         match &mut current_style {
-                            Some((prev_cell, buffer)) if prev_cell.fg == fg && prev_cell.bold == cell.bold => {
+                            Some((prev_cell, buffer)) if compute_cell_fg(prev_cell, &self.theme) == fg && prev_cell.bold == cell.bold => {
                                 buffer.push(cell.c);
                             }
                             _ => {
                                 if let Some((prev_cell, buffer)) = current_style.take() {
                                     let px = origin.x + (run_start_x as f32 * char_width);
-                                    let color = if prev_cell.inverse { self.theme.background } else { prev_cell.fg };
+                                    let color = compute_cell_fg(prev_cell, &self.theme);
                                     painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
                                 }
                                 run_start_x = col_idx;
@@ -355,7 +391,7 @@ impl eframe::App for AxonApp {
                     // Vaciar último fragmento de la fila
                     if let Some((prev_cell, buffer)) = current_style {
                         let px = origin.x + (run_start_x as f32 * char_width);
-                        let color = if prev_cell.inverse { self.theme.background } else { prev_cell.fg };
+                        let color = compute_cell_fg(prev_cell, &self.theme);
                         painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
                     }
                 }
@@ -406,24 +442,37 @@ impl eframe::App for AxonApp {
                     {
                         let cx = origin.x + (self.terminal.cursor_x as f32 * char_width);
                         let cy = origin.y + (self.terminal.cursor_y as f32 * row_height);
-                        let cursor_rect = Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(char_width, row_height));
-                        painter.rect_filled(cursor_rect, 1.0, self.theme.cursor);
 
-                        // Si hay un carácter debajo del cursor, dibujarlo invertido (legibilidad perfecta)
                         let active_grid = if self.terminal.is_alt_screen {
                             &self.terminal.alt_grid
                         } else {
                             &self.terminal.grid
                         };
-                        if self.terminal.cursor_y < active_grid.len()
+
+                        let cell_under = if self.terminal.cursor_y < active_grid.len()
                             && self.terminal.cursor_x < active_grid[self.terminal.cursor_y].len()
                         {
-                            let char_under = active_grid[self.terminal.cursor_y][self.terminal.cursor_x].c;
-                            if char_under != ' ' {
+                            Some(&active_grid[self.terminal.cursor_y][self.terminal.cursor_x])
+                        } else {
+                            None
+                        };
+
+                        let c_width = if let Some(cell) = cell_under {
+                            if cell.width == 2 { char_width * 2.0 } else { char_width }
+                        } else {
+                            char_width
+                        };
+
+                        let cursor_rect = Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(c_width, row_height));
+                        painter.rect_filled(cursor_rect, 1.0, self.theme.cursor);
+
+                        // Si hay un carácter debajo del cursor, dibujarlo invertido (legibilidad perfecta)
+                        if let Some(cell) = cell_under {
+                            if cell.c != ' ' && cell.width > 0 {
                                 painter.text(
                                     Pos2::new(cx, cy),
                                     egui::Align2::LEFT_TOP,
-                                    char_under.to_string(),
+                                    cell.c.to_string(),
                                     font_id.clone(),
                                     self.theme.background,
                                 );
@@ -447,5 +496,24 @@ impl eframe::App for AxonApp {
             });
 
         ctx.request_repaint();
+    }
+}
+
+fn compute_cell_fg(cell: &Cell, theme: &crate::theme::Theme) -> Color32 {
+    let base = if cell.inverse {
+        if cell.bg != Color32::TRANSPARENT { cell.bg } else { theme.background }
+    } else {
+        cell.fg
+    };
+
+    if cell.dim {
+        Color32::from_rgba_premultiplied(
+            (base.r() as f32 * 0.65) as u8,
+            (base.g() as f32 * 0.65) as u8,
+            (base.b() as f32 * 0.65) as u8,
+            base.a(),
+        )
+    } else {
+        base
     }
 }

@@ -11,6 +11,8 @@ pub struct AxonConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppearanceConfig {
     pub font_family: String,
+    #[serde(default)]
+    pub font_path: Option<String>,
     pub font_size: f32,
     pub window_opacity: f32,
     pub theme: String,
@@ -31,6 +33,7 @@ impl Default for AxonConfig {
         Self {
             appearance: AppearanceConfig {
                 font_family: "Cascadia Code".to_string(),
+                font_path: None,
                 font_size: 14.0,
                 window_opacity: 0.98,
                 theme: "ghostty-dark".to_string(),

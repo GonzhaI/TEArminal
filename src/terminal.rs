@@ -6,12 +6,14 @@ use vte::{Params, Parser, Perform};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Cell {
     pub c: char,
+    pub width: u8,
     pub fg: Color32,
     pub bg: Color32,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
     pub underline: bool,
+    pub strikethrough: bool,
     pub inverse: bool,
 }
 
@@ -19,12 +21,14 @@ impl Cell {
     pub fn default_with_theme(theme: &Theme) -> Self {
         Self {
             c: ' ',
+            width: 1,
             fg: theme.foreground,
             bg: Color32::TRANSPARENT,
             bold: false,
             dim: false,
             italic: false,
             underline: false,
+            strikethrough: false,
             inverse: false,
         }
     }
@@ -95,6 +99,7 @@ pub struct TerminalState {
     current_dim: bool,
     current_italic: bool,
     current_underline: bool,
+    current_strikethrough: bool,
     current_inverse: bool,
 
     // Selección de texto
@@ -146,6 +151,7 @@ impl TerminalState {
             current_dim: false,
             current_italic: false,
             current_underline: false,
+            current_strikethrough: false,
             current_inverse: false,
             selection: None,
             parser: Some(Parser::new()),
@@ -169,7 +175,7 @@ impl TerminalState {
         for line_idx in start..=end {
             if line_idx < scroll_len {
                 if let Some(row) = self.scrollback.get(line_idx) {
-                    let s: String = row.iter().map(|c| c.c).collect();
+                    let s: String = row.iter().filter(|c| c.width > 0).map(|c| c.c).collect();
                     let trimmed = s.trim_end();
                     if !trimmed.is_empty() {
                         lines.push(trimmed.to_string());
@@ -179,7 +185,7 @@ impl TerminalState {
                 let grid_idx = line_idx.saturating_sub(scroll_len);
                 if grid_idx < self.grid.len() {
                     let row = &self.grid[grid_idx];
-                    let s: String = row.iter().map(|c| c.c).collect();
+                    let s: String = row.iter().filter(|c| c.width > 0).map(|c| c.c).collect();
                     let trimmed = s.trim_end();
                     if !trimmed.is_empty() {
                         lines.push(trimmed.to_string());
@@ -272,7 +278,21 @@ impl TerminalState {
     }
 
     pub fn put_char(&mut self, c: char) {
-        if self.cursor_x >= self.cols {
+        use unicode_width::UnicodeWidthChar;
+        let char_w = c.width().unwrap_or(1);
+
+        // Caracteres de control no imprimibles
+        if char_w == 0 && c.is_control() {
+            return;
+        }
+
+        let w = if char_w == 0 { 1 } else { char_w.min(2) as u8 };
+
+        // Si es de doble ancho (emoji, CJK) y no cabe al final de la línea, envolver automáticamente
+        if w == 2 && self.cursor_x + 1 >= self.cols {
+            self.cursor_x = 0;
+            self.newline();
+        } else if self.cursor_x >= self.cols {
             self.cursor_x = 0;
             self.newline();
         }
@@ -286,15 +306,35 @@ impl TerminalState {
         if self.cursor_y < self.rows && self.cursor_x < self.cols {
             grid[self.cursor_y][self.cursor_x] = Cell {
                 c,
+                width: w,
                 fg: self.current_fg,
                 bg: self.current_bg,
                 bold: self.current_bold,
                 dim: self.current_dim,
                 italic: self.current_italic,
                 underline: self.current_underline,
+                strikethrough: self.current_strikethrough,
                 inverse: self.current_inverse,
             };
-            self.cursor_x += 1;
+
+            // Para caracteres de 2 columnas, la celda contigua es un espaciador de continuación (width: 0)
+            if w == 2 && self.cursor_x + 1 < self.cols {
+                grid[self.cursor_y][self.cursor_x + 1] = Cell {
+                    c: ' ',
+                    width: 0,
+                    fg: self.current_fg,
+                    bg: self.current_bg,
+                    bold: self.current_bold,
+                    dim: self.current_dim,
+                    italic: self.current_italic,
+                    underline: self.current_underline,
+                    strikethrough: self.current_strikethrough,
+                    inverse: self.current_inverse,
+                };
+                self.cursor_x += 2;
+            } else {
+                self.cursor_x += 1;
+            }
         }
     }
 
@@ -404,7 +444,7 @@ impl TerminalState {
 
             let mut line = String::new();
             for x in x_start..=x_end {
-                if x < row.len() {
+                if x < row.len() && row[x].width > 0 {
                     line.push(row[x].c);
                 }
             }
@@ -630,6 +670,7 @@ impl<'a> Performer<'a> {
                     self.state.current_dim = false;
                     self.state.current_italic = false;
                     self.state.current_underline = false;
+                    self.state.current_strikethrough = false;
                     self.state.current_inverse = false;
                 }
                 1 => self.state.current_bold = true,
@@ -637,6 +678,7 @@ impl<'a> Performer<'a> {
                 3 => self.state.current_italic = true,
                 4 => self.state.current_underline = true,
                 7 => self.state.current_inverse = true,
+                9 => self.state.current_strikethrough = true,
                 22 => {
                     self.state.current_bold = false;
                     self.state.current_dim = false;
@@ -644,29 +686,17 @@ impl<'a> Performer<'a> {
                 23 => self.state.current_italic = false,
                 24 => self.state.current_underline = false,
                 27 => self.state.current_inverse = false,
+                29 => self.state.current_strikethrough = false,
 
                 // Foreground estándar ANSI (30..=37)
                 30..=37 => {
                     let idx = (val - 30) as usize;
                     self.state.current_fg = self.state.theme.ansi[idx];
                 }
-                // TrueColor & 256 Colors Foreground (38;2;r;g;b o 38;5;n)
+                // TrueColor & 256 Colors Foreground (38;2;r;g;b / 38:2:r:g:b / 38;5;n / 38:5:n)
                 38 => {
-                    if let Some(next_param) = iter.next() {
-                        let mode = next_param.first().copied().unwrap_or(0);
-                        if mode == 5 {
-                            // 256 colors
-                            if let Some(color_idx_param) = iter.next() {
-                                let idx = color_idx_param.first().copied().unwrap_or(0) as u8;
-                                self.state.current_fg = self.state.theme.resolve_256_color(idx);
-                            }
-                        } else if mode == 2 {
-                            // TrueColor RGB 24-bit
-                            let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            self.state.current_fg = Color32::from_rgb(r, g, b);
-                        }
+                    if let Some(c) = parse_sgr_color(param, &mut iter, &self.state.theme) {
+                        self.state.current_fg = c;
                     }
                 }
                 39 => self.state.current_fg = self.state.theme.foreground,
@@ -676,21 +706,10 @@ impl<'a> Performer<'a> {
                     let idx = (val - 40) as usize;
                     self.state.current_bg = self.state.theme.ansi[idx];
                 }
-                // TrueColor & 256 Colors Background (48;2;r;g;b o 48;5;n)
+                // TrueColor & 256 Colors Background (48;2;r;g;b / 48:2:r:g:b / 48;5;n / 48:5:n)
                 48 => {
-                    if let Some(next_param) = iter.next() {
-                        let mode = next_param.first().copied().unwrap_or(0);
-                        if mode == 5 {
-                            if let Some(color_idx_param) = iter.next() {
-                                let idx = color_idx_param.first().copied().unwrap_or(0) as u8;
-                                self.state.current_bg = self.state.theme.resolve_256_color(idx);
-                            }
-                        } else if mode == 2 {
-                            let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
-                            self.state.current_bg = Color32::from_rgb(r, g, b);
-                        }
+                    if let Some(c) = parse_sgr_color(param, &mut iter, &self.state.theme) {
+                        self.state.current_bg = c;
                     }
                 }
                 49 => self.state.current_bg = Color32::TRANSPARENT,
@@ -709,6 +728,49 @@ impl<'a> Performer<'a> {
             }
         }
     }
+}
+
+fn parse_sgr_color<'a, I>(param: &[u16], iter: &mut I, theme: &Theme) -> Option<Color32>
+where
+    I: Iterator<Item = &'a [u16]>,
+{
+    // Formato con subparámetros en el mismo grupo delimitados por dos puntos:
+    // ej: [38, 2, r, g, b] o [38, 2, cs, r, g, b] o [38, 5, idx]
+    if param.len() > 1 {
+        let mode = param[1];
+        if mode == 5 && param.len() >= 3 {
+            return Some(theme.resolve_256_color(param[2] as u8));
+        } else if mode == 2 {
+            if param.len() >= 6 {
+                // Formato ISO: 38:2:colorspace:r:g:b
+                return Some(Color32::from_rgb(param[3] as u8, param[4] as u8, param[5] as u8));
+            } else if param.len() >= 5 {
+                // Formato corto: 38:2:r:g:b
+                return Some(Color32::from_rgb(param[2] as u8, param[3] as u8, param[4] as u8));
+            }
+        }
+        return None;
+    }
+
+    // Formato estándar delimitado por punto y coma (38;2;r;g;b o 38;5;idx)
+    if let Some(next_param) = iter.next() {
+        let mode = next_param.first().copied().unwrap_or(0);
+        if mode == 5 {
+            if let Some(idx_p) = iter.next() {
+                let idx = idx_p.first().copied().unwrap_or(0) as u8;
+                return Some(theme.resolve_256_color(idx));
+            }
+        } else if mode == 2 {
+            let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+            let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+            let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+            return Some(Color32::from_rgb(r, g, b));
+        }
+    }
+    None
+}
+
+impl<'a> Performer<'a> {
 
     fn handle_iterm2_image(&mut self, params: &[&[u8]]) {
         // Concatenar parámetros del comando OSC
@@ -1083,5 +1145,99 @@ mod tests {
         // Desactivar modo bracketed paste (?2004l)
         term.process_bytes(b"\x1b[?2004l");
         assert_eq!(term.bracketed_paste_mode, false);
+    }
+
+    #[test]
+    fn test_unicode_double_width_emojis_and_cjk() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Imprimir emoji robot (🤖) y texto "AI"
+        let text = "🤖AI";
+        term.process_bytes(text.as_bytes());
+
+        // El emoji '🤖' ocupa 2 columnas:
+        // Columna 0: carácter '🤖' con width = 2
+        // Columna 1: celda de continuación espaciadora con width = 0
+        assert_eq!(term.grid[0][0].c, '🤖');
+        assert_eq!(term.grid[0][0].width, 2);
+        assert_eq!(term.grid[0][1].width, 0);
+
+        // Columna 2: 'A' con width = 1
+        assert_eq!(term.grid[0][2].c, 'A');
+        assert_eq!(term.grid[0][2].width, 1);
+
+        // Columna 3: 'I' con width = 1
+        assert_eq!(term.grid[0][3].c, 'I');
+        assert_eq!(term.grid[0][3].width, 1);
+
+        // El cursor debe estar en la columna 4
+        assert_eq!(term.cursor_x, 4);
+    }
+
+    #[test]
+    fn test_unicode_box_drawing_and_braille_patterns() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Caracteres de diagramación (Box Drawing) y patrones Braille (utilizados por btop / spinners)
+        let tui_chars = "┌─┐⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+        term.process_bytes(tui_chars.as_bytes());
+
+        assert_eq!(term.grid[0][0].c, '┌');
+        assert_eq!(term.grid[0][1].c, '─');
+        assert_eq!(term.grid[0][2].c, '┐');
+        assert_eq!(term.grid[0][3].c, '⠋');
+        assert_eq!(term.grid[0][4].c, '⠙');
+        assert_eq!(term.cursor_x, 13);
+    }
+
+    #[test]
+    fn test_truecolor_24bit_rgb_semicolon_and_colon() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // 1. TrueColor formato punto y coma estándar (38;2;R;G;B y 48;2;R;G;B)
+        term.process_bytes(b"\x1b[38;2;250;120;40;48;2;15;25;35mX\x1b[0m");
+        let cell_x = &term.grid[0][0];
+        assert_eq!(cell_x.c, 'X');
+        assert_eq!(cell_x.fg, Color32::from_rgb(250, 120, 40));
+        assert_eq!(cell_x.bg, Color32::from_rgb(15, 25, 35));
+
+        // 2. TrueColor formato delimitado por dos puntos (38:2:R:G:B)
+        term.process_bytes(b"\x1b[38:2:180:90:220mY\x1b[0m");
+        let cell_y = &term.grid[0][1];
+        assert_eq!(cell_y.c, 'Y');
+        assert_eq!(cell_y.fg, Color32::from_rgb(180, 90, 220));
+
+        // 3. TrueColor formato ISO con espacio de color (38:2:0:70:140:210)
+        term.process_bytes(b"\x1b[38:2::70:140:210mZ\x1b[0m");
+        let cell_z = &term.grid[0][2];
+        assert_eq!(cell_z.c, 'Z');
+        assert_eq!(cell_z.fg, Color32::from_rgb(70, 140, 210));
+    }
+
+    #[test]
+    fn test_sgr_text_styles_dim_bold_underline_strikethrough() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Estilos combinados: 1 (bold), 2 (dim), 4 (underline), 9 (strikethrough)
+        term.process_bytes(b"\x1b[1;2;4;9mA\x1b[0mB");
+
+        let cell_a = &term.grid[0][0];
+        assert_eq!(cell_a.c, 'A');
+        assert!(cell_a.bold);
+        assert!(cell_a.dim);
+        assert!(cell_a.underline);
+        assert!(cell_a.strikethrough);
+
+        // Tras el reset (SGR 0), 'B' debe tener estilos limpios
+        let cell_b = &term.grid[0][1];
+        assert_eq!(cell_b.c, 'B');
+        assert!(!cell_b.bold);
+        assert!(!cell_b.dim);
+        assert!(!cell_b.underline);
+        assert!(!cell_b.strikethrough);
     }
 }
