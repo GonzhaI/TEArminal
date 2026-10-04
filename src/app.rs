@@ -310,9 +310,9 @@ impl ApplicationHandler for AxonApp {
                     if let Some(renderer) = &self.renderer {
                         let mx = position.x as usize;
                         let my = position.y as usize;
-                        if mx >= 12 && my >= 10 {
-                            let col = (mx - 12) / renderer.char_width;
-                            let row = (my - 10) / renderer.row_height;
+                        if mx >= 14 && my >= 12 {
+                            let col = (mx - 14) / renderer.char_width;
+                            let row = (my - 12) / renderer.row_height;
                             if let Some(start) = self.drag_start {
                                 self.terminal.selection = Some(SelectionRange {
                                     start,
@@ -332,9 +332,9 @@ impl ApplicationHandler for AxonApp {
                         if let Some(renderer) = &self.renderer {
                             let mx = self.mouse_pos.x as usize;
                             let my = self.mouse_pos.y as usize;
-                            if mx >= 12 && my >= 10 {
-                                let col = (mx - 12) / renderer.char_width;
-                                let row = (my - 10) / renderer.row_height;
+                            if mx >= 14 && my >= 12 {
+                                let col = (mx - 14) / renderer.char_width;
+                                let row = (my - 12) / renderer.row_height;
                                 self.drag_start = Some((col, row));
                                 self.terminal.selection = None;
                                 if let Some(w) = &self.window { w.request_redraw(); }
@@ -435,12 +435,49 @@ fn enable_windows_dark_mode(window: &Window) {
         if let RawWindowHandle::Win32(win32) = handle.as_raw() {
             let hwnd = win32.hwnd.get() as windows_sys::Win32::Foundation::HWND;
             unsafe {
+                // 1. Dark Mode inmersivo
                 let dark_mode: i32 = 1;
                 windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
                     hwnd,
                     20, // DWMWA_USE_IMMERSIVE_DARK_MODE
                     &dark_mode as *const _ as *const _,
                     std::mem::size_of::<i32>() as u32,
+                );
+
+                // 2. Color de fondo del titlebar idéntico a Ghostty (#161618 -> BGR: 0x00181616)
+                let caption_color: u32 = 0x00181616;
+                windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                    hwnd,
+                    35, // DWMWA_CAPTION_COLOR
+                    &caption_color as *const _ as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                );
+
+                // 3. Color del texto del titlebar Ghostty (#e6e6eb -> BGR: 0x00ebe6e6)
+                let text_color: u32 = 0x00ebe6e6;
+                windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                    hwnd,
+                    36, // DWMWA_TEXT_COLOR
+                    &text_color as *const _ as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                );
+
+                // 4. Color del borde sutil de la ventana (#28282c -> BGR: 0x002c2828)
+                let border_color: u32 = 0x002c2828;
+                windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                    hwnd,
+                    34, // DWMWA_BORDER_COLOR
+                    &border_color as *const _ as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                );
+
+                // 5. Esquinas redondeadas nativas de Windows 11
+                let corner_pref: u32 = 2; // DWMWCP_ROUND
+                windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                    hwnd,
+                    33, // DWMWA_WINDOW_CORNER_PREFERENCE
+                    &corner_pref as *const _ as *const _,
+                    std::mem::size_of::<u32>() as u32,
                 );
             }
         }

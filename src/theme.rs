@@ -70,10 +70,10 @@ impl Theme {
     /// Paleta oficial y firma de Ghostty Dark
     pub fn ghostty_dark() -> Self {
         Self {
-            background: Color::from_rgb(22, 22, 24),     // #161618 - Carbón profundo
+            background: Color::from_rgb(22, 22, 24),     // #161618 - Carbón profundo Ghostty
             foreground: Color::from_rgb(230, 230, 235), // #e6e6eb - Texto nítido alto contraste
             cursor: Color::from_rgb(255, 255, 255),     // #ffffff - Cursor blanco sólido
-            selection: Color::from_rgba(65, 75, 105, 140), // Selección translúcida
+            selection: Color::from_rgba(54, 61, 89, 220), // #363d59 - Selección azul pizarra Ghostty
             ansi: [
                 // Colores normales (0 - 7)
                 Color::from_rgb(28, 28, 32),    // 0: Negro

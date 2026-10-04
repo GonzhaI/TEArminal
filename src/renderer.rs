@@ -4,6 +4,9 @@ use crate::theme::{Color, Theme};
 use std::collections::HashMap;
 use std::path::Path;
 
+const EMBEDDED_JETBRAINS_REGULAR: &[u8] = include_bytes!("../assets/JetBrainsMonoNerdFont-Regular.ttf");
+const EMBEDDED_JETBRAINS_BOLD: &[u8] = include_bytes!("../assets/JetBrainsMonoNerdFont-Bold.ttf");
+
 pub struct CachedGlyph {
     pub width: usize,
     pub height: usize,
@@ -13,7 +16,8 @@ pub struct CachedGlyph {
 }
 
 pub struct TerminalRenderer {
-    primary_font: fontdue::Font,
+    regular_font: fontdue::Font,
+    bold_font: fontdue::Font,
     fallback_font: Option<fontdue::Font>,
     pub font_size: f32,
     pub char_width: usize,
@@ -30,10 +34,10 @@ impl TerminalRenderer {
         let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
         let sys_fonts = Path::new(&windir).join("Fonts");
 
-        // 1. Cargar fuente monoespaciada primaria
-        let primary_font = Self::load_primary_font(config, &sys_fonts);
+        // 1. Cargar fuentes oficiales de Ghostty (JetBrains Mono Nerd Font Regular + Bold)
+        let (regular_font, bold_font) = Self::load_fonts(config);
 
-        // 2. Cargar fuente de fallback para Braille y símbolos (Segoe UI Symbol)
+        // 2. Cargar fuente de fallback para símbolos adicionales (Segoe UI Symbol)
         let fallback_font = {
             let sym_path = sys_fonts.join("seguisym.ttf");
             if sym_path.exists() {
@@ -45,85 +49,80 @@ impl TerminalRenderer {
             }
         };
 
-        // Medir dimensiones estándar de celda monoespaciada
-        let metrics = primary_font.metrics('M', font_size);
+        // Medir dimensiones estándar de celda monoespaciada al estilo Ghostty
+        let metrics = regular_font.metrics('M', font_size);
         let char_width = (metrics.advance_width.ceil() as usize).max(8);
-        let line_height_raw = primary_font
+        let line_height_raw = regular_font
             .horizontal_line_metrics(font_size)
             .map(|m| m.new_line_size)
             .unwrap_or(font_size * 1.35);
         let row_height = ((line_height_raw * config.appearance.line_spacing).ceil() as usize).max(18);
-        let baseline_y = primary_font
+        let baseline_y = regular_font
             .horizontal_line_metrics(font_size)
             .map(|m| m.ascent.ceil() as usize)
             .unwrap_or(font_size.ceil() as usize);
 
         Self {
-            primary_font,
+            regular_font,
+            bold_font,
             fallback_font,
             font_size,
             char_width,
             row_height,
             baseline_y,
             glyph_cache: HashMap::new(),
-            margin_x: 12,
-            margin_y: 10,
+            margin_x: 14, // Padding horizontal idéntico a Ghostty
+            margin_y: 12, // Padding vertical idéntico a Ghostty
         }
     }
 
-    fn load_primary_font(config: &AxonConfig, sys_fonts: &Path) -> fontdue::Font {
-        // A. Ruta personalizada si existe
+    fn load_fonts(config: &AxonConfig) -> (fontdue::Font, fontdue::Font) {
+        // A. Si el usuario configuró una ruta personalizada en config
         if let Some(custom) = &config.appearance.font_path {
             if let Ok(bytes) = std::fs::read(custom) {
-                if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-                    return font;
+                if let Ok(font) = fontdue::Font::from_bytes(bytes.clone(), fontdue::FontSettings::default()) {
+                    let bold = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).unwrap_or_else(|_| font.clone());
+                    return (font, bold);
                 }
             }
         }
 
-        // B. Fuentes monoespaciadas del sistema de alta calidad (Cascadia Code, Consolas)
-        let candidates = [
-            "CascadiaCode.ttf",
-            "CascadiaMono.ttf",
-            "consola.ttf",
-            "cour.ttf",
-        ];
+        // B. Cargar JetBrains Mono Nerd Font nativo embebido (Ghostty official font & icons)
+        let regular = fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_REGULAR, fontdue::FontSettings::default())
+            .expect("Error al inicializar fuente JetBrains Mono Nerd Font Regular");
+        let bold = fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_BOLD, fontdue::FontSettings::default())
+            .expect("Error al inicializar fuente JetBrains Mono Nerd Font Bold");
 
-        let mut search_dirs = vec![sys_fonts.to_path_buf()];
-        if let Ok(local) = std::env::var("LOCALAPPDATA") {
-            search_dirs.push(Path::new(&local).join("Microsoft").join("Windows").join("Fonts"));
-        }
-
-        for dir in &search_dirs {
-            for name in &candidates {
-                let p = dir.join(name);
-                if p.exists() {
-                    if let Ok(bytes) = std::fs::read(&p) {
-                        if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
-                            return font;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback embebido de emergencia si nada existe
-        panic!("No se encontró ninguna fuente monoespaciada en el sistema");
+        (regular, bold)
     }
 
-    /// Obtiene o rasteriza un glifo a través de la caché SIMD de fontdue
+    /// Obtiene o rasteriza un glifo a través de la caché SIMD de fontdue con soporte completo de Nerd Fonts
     pub fn get_glyph(&mut self, c: char, bold: bool) -> &CachedGlyph {
+        let (font_size, has_regular_glyph, has_bold_glyph, has_fallback_glyph) = (
+            self.font_size,
+            self.regular_font.has_glyph(c),
+            self.bold_font.has_glyph(c),
+            self.fallback_font.as_ref().map_or(false, |f| f.has_glyph(c)),
+        );
+
+        let regular_ref = &self.regular_font;
+        let bold_ref = &self.bold_font;
+        let fallback_ref = self.fallback_font.as_ref();
+
         self.glyph_cache.entry((c, bold)).or_insert_with(|| {
-            // Intentar rasterizar con la fuente primaria
-            let font = if self.primary_font.has_glyph(c) {
-                &self.primary_font
-            } else if let Some(ref fb) = self.fallback_font {
-                if fb.has_glyph(c) { fb } else { &self.primary_font }
+            let font = if bold && has_bold_glyph {
+                bold_ref
+            } else if has_regular_glyph {
+                regular_ref
+            } else if has_fallback_glyph {
+                fallback_ref.unwrap()
+            } else if bold {
+                bold_ref
             } else {
-                &self.primary_font
+                regular_ref
             };
 
-            let (metrics, bitmap) = font.rasterize(c, self.font_size);
+            let (metrics, bitmap) = font.rasterize(c, font_size);
             CachedGlyph {
                 width: metrics.width,
                 height: metrics.height,
@@ -156,7 +155,7 @@ impl TerminalRenderer {
         let bg_color = theme.background.to_u32_xrgb();
         let baseline_y = self.baseline_y;
 
-        // 1. Limpieza ultra-rápida del framebuffer completo
+        // 1. Limpieza del framebuffer con el fondo oficial Ghostty (#161618)
         buffer.fill(bg_color);
 
         let visible_rows = terminal.visible_rows();
@@ -169,15 +168,15 @@ impl TerminalRenderer {
                 break;
             }
 
-            // Indicador semántico de comandos de agentes (OSC 133 / Estilo Ghostty)
+            // Indicador semántico de comandos de agentes CLI (OSC 133 / Estilo Ghostty)
             let global_row = view_start + row_idx;
             if let Some(block) = terminal.command_blocks.iter().find(|b| b.prompt_line == global_row) {
                 let dot_color = match block.exit_code {
-                    Some(0) => Color::from_rgb(81, 226, 122).to_u32_xrgb(),  // Verde éxito
-                    Some(_) => Color::from_rgb(244, 56, 65).to_u32_xrgb(),   // Rojo error
-                    None => Color::from_rgb(78, 146, 249).to_u32_xrgb(),     // Azul en progreso
+                    Some(0) => Color::from_rgb(81, 226, 122).to_u32_xrgb(),  // Verde Ghostty #51e27a
+                    Some(_) => Color::from_rgb(244, 56, 65).to_u32_xrgb(),   // Rojo Ghostty #f43841
+                    None => Color::from_rgb(78, 146, 249).to_u32_xrgb(),     // Azul Ghostty #4e92f9
                 };
-                let bar_x = self.margin_x.saturating_sub(6);
+                let bar_x = self.margin_x.saturating_sub(7);
                 for y in (cell_y + 3)..(cell_y + self.row_height - 3) {
                     for x in bar_x..(bar_x + 3) {
                         if x < width && y < height {
@@ -241,7 +240,7 @@ impl TerminalRenderer {
                     }
                 }
 
-                // Si es celda de espaciado para carácter ancho, continuar
+                // Si es celda de espaciado para carácter ancho o espacio vacío
                 if cell.width == 0 || cell.c == ' ' {
                     continue;
                 }
@@ -249,7 +248,7 @@ impl TerminalRenderer {
                 // Calcular color final de texto
                 let fg_color = compute_cell_fg(cell, theme);
 
-                // Obtener y mezclar glifo
+                // Obtener y mezclar glifo (con soporte completo de Nerd Fonts)
                 let glyph = self.get_glyph(cell.c, cell.bold);
                 let glyph_w = glyph.width;
                 let glyph_h = glyph.height;
