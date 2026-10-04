@@ -355,7 +355,8 @@ impl eframe::App for AxonApp {
                     self.cursor_timer += ui.input(|i| i.stable_dt) as f64;
                     let cursor_visible = !self.config.terminal.cursor_blink || (self.cursor_timer % 1.0) < 0.6;
 
-                    if cursor_visible
+                    if self.terminal.cursor_visible
+                        && cursor_visible
                         && self.terminal.cursor_y < self.terminal.rows
                         && self.terminal.cursor_x < self.terminal.cols
                     {
@@ -365,10 +366,15 @@ impl eframe::App for AxonApp {
                         painter.rect_filled(cursor_rect, 1.0, self.theme.cursor);
 
                         // Si hay un carácter debajo del cursor, dibujarlo invertido (legibilidad perfecta)
-                        if self.terminal.cursor_y < self.terminal.grid.len()
-                            && self.terminal.cursor_x < self.terminal.grid[self.terminal.cursor_y].len()
+                        let active_grid = if self.terminal.is_alt_screen {
+                            &self.terminal.alt_grid
+                        } else {
+                            &self.terminal.grid
+                        };
+                        if self.terminal.cursor_y < active_grid.len()
+                            && self.terminal.cursor_x < active_grid[self.terminal.cursor_y].len()
                         {
-                            let char_under = self.terminal.grid[self.terminal.cursor_y][self.terminal.cursor_x].c;
+                            let char_under = active_grid[self.terminal.cursor_y][self.terminal.cursor_x].c;
                             if char_under != ' ' {
                                 painter.text(
                                     Pos2::new(cx, cy),

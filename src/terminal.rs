@@ -1,5 +1,6 @@
 use crate::theme::Theme;
 use egui::Color32;
+use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,9 +48,20 @@ pub struct TerminalState {
     pub cursor_x: usize,
     pub cursor_y: usize,
     pub grid: Vec<Vec<Cell>>,
-    pub scrollback: Vec<Vec<Cell>>,
+    pub scrollback: VecDeque<Vec<Cell>>,
     pub max_scrollback: usize,
-    pub scroll_offset: usize, // Cuántas líneas hacia atrás estamos viendo
+    pub scroll_offset: usize,
+
+    // Alternate Screen Buffer (Soporte nativo para tmux, btop, nvtop, vim)
+    pub is_alt_screen: bool,
+    pub alt_grid: Vec<Vec<Cell>>,
+    pub saved_cursor_x: usize,
+    pub saved_cursor_y: usize,
+
+    // Visibilidad del cursor y márgenes de desplazamiento (DECSTBM para split panes de tmux)
+    pub cursor_visible: bool,
+    pub scroll_region_top: usize,
+    pub scroll_region_bottom: usize,
 
     // Imágenes renderizadas en terminal (Protocolos iTerm2 / OSC 1337 / Visión IA)
     pub images: Vec<InlineImage>,
@@ -81,7 +93,8 @@ pub struct SelectionRange {
 impl TerminalState {
     pub fn new(cols: usize, rows: usize, max_scrollback: usize, theme: Theme) -> Self {
         let default_cell = Cell::default_with_theme(&theme);
-        let grid = vec![vec![default_cell; cols]; rows];
+        let grid = vec![vec![default_cell.clone(); cols]; rows];
+        let alt_grid = vec![vec![default_cell; cols]; rows];
         let fg = theme.foreground;
 
         Self {
@@ -90,9 +103,16 @@ impl TerminalState {
             cursor_x: 0,
             cursor_y: 0,
             grid,
-            scrollback: Vec::with_capacity(max_scrollback.min(1000)),
+            scrollback: VecDeque::with_capacity(max_scrollback.min(1000)),
             max_scrollback,
             scroll_offset: 0,
+            is_alt_screen: false,
+            alt_grid,
+            saved_cursor_x: 0,
+            saved_cursor_y: 0,
+            cursor_visible: true,
+            scroll_region_top: 0,
+            scroll_region_bottom: rows.saturating_sub(1),
             images: Vec::new(),
             next_image_id: 1,
             total_lines_count: 0,
@@ -113,6 +133,34 @@ impl TerminalState {
         self.total_lines_count.saturating_sub(self.scroll_offset)
     }
 
+    pub fn active_grid_mut(&mut self) -> &mut Vec<Vec<Cell>> {
+        if self.is_alt_screen {
+            &mut self.alt_grid
+        } else {
+            &mut self.grid
+        }
+    }
+
+    pub fn enter_alt_screen(&mut self) {
+        if !self.is_alt_screen {
+            self.is_alt_screen = true;
+            self.saved_cursor_x = self.cursor_x;
+            self.saved_cursor_y = self.cursor_y;
+            let default_cell = Cell::default_with_theme(&self.theme);
+            self.alt_grid = vec![vec![default_cell; self.cols]; self.rows];
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+        }
+    }
+
+    pub fn exit_alt_screen(&mut self) {
+        if self.is_alt_screen {
+            self.is_alt_screen = false;
+            self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
+            self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
+        }
+    }
+
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         if let Some(mut parser) = self.parser.take() {
             let mut performer = Performer { state: self };
@@ -123,15 +171,38 @@ impl TerminalState {
 
     pub fn newline(&mut self) {
         self.total_lines_count += 1;
-        if self.cursor_y + 1 >= self.rows {
-            // Empujar fila superior al scrollback de alta velocidad
-            let top_row = self.grid.remove(0);
-            if self.scrollback.len() >= self.max_scrollback {
-                self.scrollback.remove(0);
+        let default_cell = Cell::default_with_theme(&self.theme);
+
+        if self.is_alt_screen {
+            if self.cursor_y >= self.scroll_region_bottom {
+                if self.scroll_region_top < self.alt_grid.len() {
+                    self.alt_grid.remove(self.scroll_region_top);
+                    let insert_pos = self.scroll_region_bottom.min(self.alt_grid.len());
+                    self.alt_grid.insert(insert_pos, vec![default_cell; self.cols]);
+                }
+            } else {
+                self.cursor_y += 1;
             }
-            self.scrollback.push(top_row);
-            let default_cell = Cell::default_with_theme(&self.theme);
-            self.grid.push(vec![default_cell; self.cols]);
+            return;
+        }
+
+        if self.cursor_y >= self.scroll_region_bottom {
+            if self.scroll_region_top == 0 && self.scroll_region_bottom == self.rows.saturating_sub(1) {
+                // Desplazamiento fullscreen a O(1) con VecDeque
+                let top_row = self.grid.remove(0);
+                if self.scrollback.len() >= self.max_scrollback {
+                    self.scrollback.pop_front();
+                }
+                self.scrollback.push_back(top_row);
+                self.grid.push(vec![default_cell; self.cols]);
+            } else {
+                // Sub-región de desplazamiento (split panes de tmux)
+                if self.scroll_region_top < self.grid.len() {
+                    self.grid.remove(self.scroll_region_top);
+                    let insert_pos = self.scroll_region_bottom.min(self.grid.len());
+                    self.grid.insert(insert_pos, vec![default_cell; self.cols]);
+                }
+            }
         } else {
             self.cursor_y += 1;
         }
@@ -143,8 +214,14 @@ impl TerminalState {
             self.newline();
         }
 
+        let grid = if self.is_alt_screen {
+            &mut self.alt_grid
+        } else {
+            &mut self.grid
+        };
+
         if self.cursor_y < self.rows && self.cursor_x < self.cols {
-            self.grid[self.cursor_y][self.cursor_x] = Cell {
+            grid[self.cursor_y][self.cursor_x] = Cell {
                 c,
                 fg: self.current_fg,
                 bg: self.current_bg,
@@ -159,11 +236,17 @@ impl TerminalState {
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
+        if self.is_alt_screen {
+            return;
+        }
         let max_offset = self.scrollback.len();
         self.scroll_offset = (self.scroll_offset + lines).min(max_offset);
     }
 
     pub fn scroll_down(&mut self, lines: usize) {
+        if self.is_alt_screen {
+            return;
+        }
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
     }
 
@@ -173,15 +256,18 @@ impl TerminalState {
 
     /// Obtiene las filas que deben renderizarse en pantalla según `scroll_offset`
     pub fn visible_rows(&self) -> Vec<&Vec<Cell>> {
+        if self.is_alt_screen {
+            return self.alt_grid.iter().collect();
+        }
+
         if self.scroll_offset == 0 {
             self.grid.iter().collect()
         } else {
             let total_history = self.scrollback.len();
             let start = total_history.saturating_sub(self.scroll_offset);
-            let from_scrollback = &self.scrollback[start..];
-
             let mut rows = Vec::with_capacity(self.rows);
-            for r in from_scrollback {
+
+            for r in self.scrollback.range(start..) {
                 rows.push(r);
                 if rows.len() == self.rows {
                     return rows;
@@ -207,24 +293,33 @@ impl TerminalState {
         for row in self.grid.iter_mut() {
             row.resize(new_cols, default_cell.clone());
         }
+        for row in self.alt_grid.iter_mut() {
+            row.resize(new_cols, default_cell.clone());
+        }
 
         // Ajustar filas
         if new_rows > self.rows {
             for _ in self.rows..new_rows {
                 self.grid.push(vec![default_cell.clone(); new_cols]);
+                self.alt_grid.push(vec![default_cell.clone(); new_cols]);
             }
         } else if new_rows < self.rows {
             let drop_count = self.rows - new_rows;
             for _ in 0..drop_count {
                 if !self.grid.is_empty() {
                     let r = self.grid.remove(0);
-                    self.scrollback.push(r);
+                    self.scrollback.push_back(r);
+                }
+                if !self.alt_grid.is_empty() {
+                    self.alt_grid.remove(0);
                 }
             }
         }
 
         self.cols = new_cols;
         self.rows = new_rows;
+        self.scroll_region_top = 0;
+        self.scroll_region_bottom = new_rows.saturating_sub(1);
         self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
     }
@@ -290,8 +385,46 @@ impl<'a> Perform for Performer<'a> {
         }
     }
 
-    fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        // Manejo de secuencias privadas DEC (empiezan con '?')
+        if intermediates == b"?" {
+            let mut iter = params.iter();
+            while let Some(param) = iter.next() {
+                let mode = param.first().copied().unwrap_or(0);
+                match action {
+                    // Set Mode (h)
+                    'h' => match mode {
+                        // Alternate Screen Buffer (usado por tmux, btop, nvtop, vim, less)
+                        1049 | 47 => self.state.enter_alt_screen(),
+                        // Mostrar cursor
+                        25 => self.state.cursor_visible = true,
+                        _ => {}
+                    },
+                    // Reset Mode (l)
+                    'l' => match mode {
+                        // Salir de Alternate Screen Buffer y restaurar sesión original
+                        1049 | 47 => self.state.exit_alt_screen(),
+                        // Ocultar cursor (usado por TUIs para evitar parpadeos)
+                        25 => self.state.cursor_visible = false,
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+            return;
+        }
+
         match action {
+            // DECSTBM: Set Top and Bottom Margins (usado por tmux para split panes)
+            'r' => {
+                let mut iter = params.iter();
+                let top = iter.next().and_then(|p| p.first()).copied().unwrap_or(1).saturating_sub(1) as usize;
+                let bottom = iter.next().and_then(|p| p.first()).copied().unwrap_or(self.state.rows as u16).saturating_sub(1) as usize;
+                self.state.scroll_region_top = top.min(self.state.rows.saturating_sub(1));
+                self.state.scroll_region_bottom = bottom.min(self.state.rows.saturating_sub(1));
+                self.state.cursor_x = 0;
+                self.state.cursor_y = 0;
+            }
             // CUU - Cursor Up
             'A' => {
                 let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
@@ -342,7 +475,8 @@ impl<'a> Perform for Performer<'a> {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
                 let default_cell = Cell::default_with_theme(&self.state.theme);
                 if mode == 2 || mode == 3 {
-                    for row in self.state.grid.iter_mut() {
+                    let grid = self.state.active_grid_mut();
+                    for row in grid.iter_mut() {
                         for cell in row.iter_mut() {
                             *cell = default_cell.clone();
                         }
@@ -356,22 +490,30 @@ impl<'a> Perform for Performer<'a> {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
                 let cy = self.state.cursor_y;
                 let cx = self.state.cursor_x;
+                let cols = self.state.cols;
                 let default_cell = Cell::default_with_theme(&self.state.theme);
-                if cy < self.state.rows {
+                let grid = self.state.active_grid_mut();
+                if cy < grid.len() {
                     match mode {
                         0 => {
-                            for x in cx..self.state.cols {
-                                self.state.grid[cy][x] = default_cell.clone();
+                            for x in cx..cols {
+                                if x < grid[cy].len() {
+                                    grid[cy][x] = default_cell.clone();
+                                }
                             }
                         }
                         1 => {
-                            for x in 0..=cx.min(self.state.cols.saturating_sub(1)) {
-                                self.state.grid[cy][x] = default_cell.clone();
+                            for x in 0..=cx.min(cols.saturating_sub(1)) {
+                                if x < grid[cy].len() {
+                                    grid[cy][x] = default_cell.clone();
+                                }
                             }
                         }
                         2 => {
-                            for x in 0..self.state.cols {
-                                self.state.grid[cy][x] = default_cell.clone();
+                            for x in 0..cols {
+                                if x < grid[cy].len() {
+                                    grid[cy][x] = default_cell.clone();
+                                }
                             }
                         }
                         _ => {}
@@ -658,7 +800,74 @@ mod tests {
         let img = &term.images[0];
         assert_eq!(img.width_px, 1);
         assert_eq!(img.height_px, 1);
-        assert!(img.width_cols >= 5);
-        assert!(img.height_rows >= 2);
+        assert_eq!(img.width_cols >= 5, true);
+        assert_eq!(img.height_rows >= 2, true);
+    }
+
+    #[test]
+    fn test_alt_screen_buffer_tmux() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // 1. Escribir en buffer principal
+        term.process_bytes(b"Comando normal en PowerShell\r\n");
+        assert_eq!(term.scrollback.len(), 0);
+        assert_eq!(term.is_alt_screen, false);
+
+        // 2. Entrar en modo Alternate Screen (CSI ? 1049 h usado por tmux/btop/vim)
+        term.process_bytes(b"\x1b[?1049h");
+        assert_eq!(term.is_alt_screen, true);
+
+        // 3. Escribir datos dentro de tmux / btop
+        for i in 0..30 {
+            let log = format!("Panel tmux fila {}\r\n", i);
+            term.process_bytes(log.as_bytes());
+        }
+
+        // El scrollback principal NO debe ser contaminado por la pantalla alterna
+        assert_eq!(term.scrollback.len(), 0, "Alternate screen buffer no debe contaminar el scrollback principal");
+
+        // 4. Salir de tmux (CSI ? 1049 l)
+        term.process_bytes(b"\x1b[?1049l");
+        assert_eq!(term.is_alt_screen, false, "Debe restaurar el buffer principal");
+    }
+
+    #[test]
+    fn test_decstbm_tmux_split_margins() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 20, 1000, theme);
+
+        // Definir margen de desplazamiento de la línea 5 a la 10 (split pane de tmux)
+        term.process_bytes(b"\x1b[5;10r");
+        assert_eq!(term.scroll_region_top, 4);
+        assert_eq!(term.scroll_region_bottom, 9);
+    }
+
+    #[test]
+    fn bench_massive_scrollback_100k_lines() {
+        let theme = Theme::ghostty_dark();
+        // 100.000 líneas de scrollback en memoria
+        let mut term = TerminalState::new(120, 40, 100_000, theme);
+
+        let line = b"[PyTorch/vLLM INFO] Step 12450/50000 | Loss: 0.0412 | GPU-0: 98% VRAM: 22.4/24.0 GB | 185 tokens/sec\r\n";
+        let count = 100_000;
+        let total_bytes = line.len() * count;
+
+        let start = Instant::now();
+        for _ in 0..count {
+            term.process_bytes(line);
+        }
+        let elapsed = start.elapsed();
+
+        let throughput_mb = (total_bytes as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
+        let lines_per_sec = count as f64 / elapsed.as_secs_f64();
+
+        println!(
+            "\n🚀 [Axon Massive Stream Test] Procesadas {} líneas ({} MB) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
+            count, (total_bytes / (1024 * 1024)), elapsed, throughput_mb, lines_per_sec
+        );
+
+        assert_eq!(term.scrollback.len() + term.rows - 1, count, "Debe retener las 100.000 líneas entre scrollback y pantalla activa");
+        assert!(lines_per_sec > 100_000.0, "Debe superar las 100.000 líneas por segundo gracias a VecDeque O(1)");
     }
 }
