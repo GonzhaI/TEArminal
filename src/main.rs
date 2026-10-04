@@ -1,7 +1,7 @@
-mod ai;
 mod config;
 mod pty;
 mod terminal;
+mod theme;
 mod ui;
 
 use config::AxonConfig;
@@ -15,10 +15,10 @@ fn main() -> eframe::Result<()> {
     // 2. Opciones de ventana nativa de Windows (DirectX / GPU)
     let native_options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("Axon — AI Terminal")
-            .with_inner_size(Vec2::new(1150.0, 720.0))
-            .with_min_inner_size(Vec2::new(600.0, 400.0))
-            .with_transparent(true),
+            .with_title("Axon")
+            .with_inner_size(Vec2::new(1020.0, 680.0))
+            .with_min_inner_size(Vec2::new(500.0, 320.0))
+            .with_transparent(false),
         ..Default::default()
     };
 

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 pub struct AxonConfig {
     pub appearance: AppearanceConfig,
     pub terminal: TerminalConfig,
-    pub ai: AiConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -15,24 +14,16 @@ pub struct AppearanceConfig {
     pub font_size: f32,
     pub window_opacity: f32,
     pub theme: String,
+    pub line_spacing: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TerminalConfig {
     pub default_shell: String,
-    pub scrollback_limit: usize,
+    pub scrollback_lines: usize,
     pub bracketed_paste: bool,
     pub cursor_blink: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AiConfig {
-    pub enabled: bool,
-    pub provider: String,      // "ollama", "gemini", "openai"
-    pub model: String,         // ej: "llama3", "gemini-1.5-pro", etc.
-    pub endpoint: String,      // ej: "http://localhost:11434"
-    pub api_key: Option<String>,
-    pub auto_context_lines: usize,
+    pub copy_on_select: bool,
 }
 
 impl Default for AxonConfig {
@@ -40,23 +31,17 @@ impl Default for AxonConfig {
         Self {
             appearance: AppearanceConfig {
                 font_family: "Cascadia Code".to_string(),
-                font_size: 14.5,
-                window_opacity: 0.95,
-                theme: "axon-dark".to_string(),
+                font_size: 14.0,
+                window_opacity: 0.98,
+                theme: "ghostty-dark".to_string(),
+                line_spacing: 1.25,
             },
             terminal: TerminalConfig {
                 default_shell: "powershell.exe".to_string(),
-                scrollback_limit: 10_000,
+                scrollback_lines: 50_000,
                 bracketed_paste: true,
                 cursor_blink: true,
-            },
-            ai: AiConfig {
-                enabled: true,
-                provider: "ollama".to_string(),
-                model: "llama3".to_string(),
-                endpoint: "http://localhost:11434".to_string(),
-                api_key: None,
-                auto_context_lines: 30,
+                copy_on_select: false,
             },
         }
     }

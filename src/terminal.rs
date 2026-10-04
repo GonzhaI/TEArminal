@@ -1,22 +1,30 @@
+use crate::theme::Theme;
 use egui::Color32;
 use vte::{Params, Parser, Perform};
 
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Cell {
     pub c: char,
     pub fg: Color32,
     pub bg: Color32,
     pub bold: bool,
+    pub dim: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverse: bool,
 }
 
-impl Default for Cell {
-    fn default() -> Self {
+impl Cell {
+    pub fn default_with_theme(theme: &Theme) -> Self {
         Self {
             c: ' ',
-            fg: Color32::from_rgb(220, 220, 225),
+            fg: theme.foreground,
             bg: Color32::TRANSPARENT,
             bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            inverse: false,
         }
     }
 }
@@ -29,26 +37,54 @@ pub struct TerminalState {
     pub grid: Vec<Vec<Cell>>,
     pub scrollback: Vec<Vec<Cell>>,
     pub max_scrollback: usize,
+    pub scroll_offset: usize, // Cuántas líneas hacia atrás estamos viendo
+
+    // Estado SGR actual
+    pub theme: Theme,
     current_fg: Color32,
     current_bg: Color32,
     current_bold: bool,
+    current_dim: bool,
+    current_italic: bool,
+    current_underline: bool,
+    current_inverse: bool,
+
+    // Selección de texto
+    pub selection: Option<SelectionRange>,
+
     parser: Option<Parser>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectionRange {
+    pub start: (usize, usize), // (col, row_in_view)
+    pub end: (usize, usize),
+}
+
 impl TerminalState {
-    pub fn new(cols: usize, rows: usize, max_scrollback: usize) -> Self {
-        let grid = vec![vec![Cell::default(); cols]; rows];
+    pub fn new(cols: usize, rows: usize, max_scrollback: usize, theme: Theme) -> Self {
+        let default_cell = Cell::default_with_theme(&theme);
+        let grid = vec![vec![default_cell; cols]; rows];
+        let fg = theme.foreground;
+
         Self {
             cols,
             rows,
             cursor_x: 0,
             cursor_y: 0,
             grid,
-            scrollback: Vec::with_capacity(max_scrollback),
+            scrollback: Vec::with_capacity(max_scrollback.min(1000)),
             max_scrollback,
-            current_fg: Color32::from_rgb(225, 230, 240),
+            scroll_offset: 0,
+            theme,
+            current_fg: fg,
             current_bg: Color32::TRANSPARENT,
             current_bold: false,
+            current_dim: false,
+            current_italic: false,
+            current_underline: false,
+            current_inverse: false,
+            selection: None,
             parser: Some(Parser::new()),
         }
     }
@@ -63,13 +99,14 @@ impl TerminalState {
 
     pub fn newline(&mut self) {
         if self.cursor_y + 1 >= self.rows {
-            // Empujar fila superior al scrollback
+            // Empujar fila superior al scrollback de alta velocidad
             let top_row = self.grid.remove(0);
             if self.scrollback.len() >= self.max_scrollback {
                 self.scrollback.remove(0);
             }
             self.scrollback.push(top_row);
-            self.grid.push(vec![Cell::default(); self.cols]);
+            let default_cell = Cell::default_with_theme(&self.theme);
+            self.grid.push(vec![default_cell; self.cols]);
         } else {
             self.cursor_y += 1;
         }
@@ -87,34 +124,118 @@ impl TerminalState {
                 fg: self.current_fg,
                 bg: self.current_bg,
                 bold: self.current_bold,
+                dim: self.current_dim,
+                italic: self.current_italic,
+                underline: self.current_underline,
+                inverse: self.current_inverse,
             };
             self.cursor_x += 1;
         }
     }
 
-    pub fn get_recent_text(&self, max_lines: usize) -> String {
-        let mut lines = Vec::new();
+    pub fn scroll_up(&mut self, lines: usize) {
+        let max_offset = self.scrollback.len();
+        self.scroll_offset = (self.scroll_offset + lines).min(max_offset);
+    }
 
-        // Agregar desde scrollback
-        let scroll_take = max_lines.saturating_sub(self.rows);
-        if scroll_take > 0 && !self.scrollback.is_empty() {
-            let start = self.scrollback.len().saturating_sub(scroll_take);
-            for row in &self.scrollback[start..] {
-                let s: String = row.iter().map(|cell| cell.c).collect();
-                lines.push(s.trim_end().to_string());
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll_offset = self.scroll_offset.saturating_sub(lines);
+    }
+
+    pub fn reset_scroll(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    /// Obtiene las filas que deben renderizarse en pantalla según `scroll_offset`
+    pub fn visible_rows(&self) -> Vec<&Vec<Cell>> {
+        if self.scroll_offset == 0 {
+            self.grid.iter().collect()
+        } else {
+            let total_history = self.scrollback.len();
+            let start = total_history.saturating_sub(self.scroll_offset);
+            let from_scrollback = &self.scrollback[start..];
+
+            let mut rows = Vec::with_capacity(self.rows);
+            for r in from_scrollback {
+                rows.push(r);
+                if rows.len() == self.rows {
+                    return rows;
+                }
+            }
+            for r in &self.grid {
+                rows.push(r);
+                if rows.len() == self.rows {
+                    return rows;
+                }
+            }
+            rows
+        }
+    }
+
+    pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
+        if new_cols == self.cols && new_rows == self.rows {
+            return;
+        }
+        let default_cell = Cell::default_with_theme(&self.theme);
+
+        // Ajustar columnas
+        for row in self.grid.iter_mut() {
+            row.resize(new_cols, default_cell.clone());
+        }
+
+        // Ajustar filas
+        if new_rows > self.rows {
+            for _ in self.rows..new_rows {
+                self.grid.push(vec![default_cell.clone(); new_cols]);
+            }
+        } else if new_rows < self.rows {
+            let drop_count = self.rows - new_rows;
+            for _ in 0..drop_count {
+                if !self.grid.is_empty() {
+                    let r = self.grid.remove(0);
+                    self.scrollback.push(r);
+                }
             }
         }
 
-        // Agregar de la pantalla activa
-        for row in &self.grid {
-            let s: String = row.iter().map(|cell| cell.c).collect();
-            let trimmed = s.trim_end();
-            if !trimmed.is_empty() {
-                lines.push(trimmed.to_string());
+        self.cols = new_cols;
+        self.rows = new_rows;
+        self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
+        self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
+    }
+
+    pub fn copy_selection_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        let (mut p1, mut p2) = (sel.start, sel.end);
+        if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
+            std::mem::swap(&mut p1, &mut p2);
+        }
+
+        let visible = self.visible_rows();
+        let mut result = String::new();
+
+        for y in p1.1..=p2.1.min(visible.len().saturating_sub(1)) {
+            let row = visible[y];
+            let x_start = if y == p1.1 { p1.0 } else { 0 };
+            let x_end = if y == p2.1 { p2.0.min(row.len().saturating_sub(1)) } else { row.len().saturating_sub(1) };
+
+            let mut line = String::new();
+            for x in x_start..=x_end {
+                if x < row.len() {
+                    line.push(row[x].c);
+                }
+            }
+            result.push_str(line.trim_end());
+            if y < p2.1 {
+                result.push('\n');
             }
         }
 
-        lines.join("\n")
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
     }
 }
 
@@ -132,13 +253,11 @@ impl<'a> Perform for Performer<'a> {
             b'\n' => self.state.newline(),
             b'\r' => self.state.cursor_x = 0,
             b'\x08' => {
-                // Backspace
                 if self.state.cursor_x > 0 {
                     self.state.cursor_x -= 1;
                 }
             }
             b'\t' => {
-                // Tabulación (cada 4 o 8 columnas)
                 let next_tab = (self.state.cursor_x + 8) & !7;
                 self.state.cursor_x = next_tab.min(self.state.cols.saturating_sub(1));
             }
@@ -148,27 +267,44 @@ impl<'a> Perform for Performer<'a> {
 
     fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
         match action {
-            // Mover cursor arriba (CUU)
+            // CUU - Cursor Up
             'A' => {
                 let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                 self.state.cursor_y = self.state.cursor_y.saturating_sub(n.max(1));
             }
-            // Mover cursor abajo (CUD)
+            // CUD - Cursor Down
             'B' => {
                 let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                 self.state.cursor_y = (self.state.cursor_y + n.max(1)).min(self.state.rows.saturating_sub(1));
             }
-            // Mover cursor adelante (CUF)
+            // CUF - Cursor Forward
             'C' => {
                 let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                 self.state.cursor_x = (self.state.cursor_x + n.max(1)).min(self.state.cols.saturating_sub(1));
             }
-            // Mover cursor atrás (CUB)
+            // CUB - Cursor Back
             'D' => {
                 let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                 self.state.cursor_x = self.state.cursor_x.saturating_sub(n.max(1));
             }
-            // Posicionar cursor (CUP / HVP)
+            // CNL - Cursor Next Line
+            'E' => {
+                let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
+                self.state.cursor_y = (self.state.cursor_y + n.max(1)).min(self.state.rows.saturating_sub(1));
+                self.state.cursor_x = 0;
+            }
+            // CPL - Cursor Previous Line
+            'F' => {
+                let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
+                self.state.cursor_y = self.state.cursor_y.saturating_sub(n.max(1));
+                self.state.cursor_x = 0;
+            }
+            // CHA - Cursor Horizontal Absolute
+            'G' => {
+                let col = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1).saturating_sub(1) as usize;
+                self.state.cursor_x = col.min(self.state.cols.saturating_sub(1));
+            }
+            // CUP / HVP - Cursor Position
             'H' | 'f' => {
                 let mut iter = params.iter();
                 let row = iter.next().and_then(|p| p.first()).copied().unwrap_or(1).saturating_sub(1) as usize;
@@ -176,49 +312,48 @@ impl<'a> Perform for Performer<'a> {
                 self.state.cursor_y = row.min(self.state.rows.saturating_sub(1));
                 self.state.cursor_x = col.min(self.state.cols.saturating_sub(1));
             }
-            // Borrar en pantalla (ED)
+            // ED - Erase in Display
             'J' => {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
+                let default_cell = Cell::default_with_theme(&self.state.theme);
                 if mode == 2 || mode == 3 {
                     for row in self.state.grid.iter_mut() {
                         for cell in row.iter_mut() {
-                            *cell = Cell::default();
+                            *cell = default_cell.clone();
                         }
                     }
                     self.state.cursor_x = 0;
                     self.state.cursor_y = 0;
                 }
             }
-            // Borrar en línea (EL)
+            // EL - Erase in Line
             'K' => {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
                 let cy = self.state.cursor_y;
                 let cx = self.state.cursor_x;
+                let default_cell = Cell::default_with_theme(&self.state.theme);
                 if cy < self.state.rows {
                     match mode {
                         0 => {
-                            // Desde cursor hasta el final
                             for x in cx..self.state.cols {
-                                self.state.grid[cy][x] = Cell::default();
+                                self.state.grid[cy][x] = default_cell.clone();
                             }
                         }
                         1 => {
-                            // Desde inicio hasta el cursor
                             for x in 0..=cx.min(self.state.cols.saturating_sub(1)) {
-                                self.state.grid[cy][x] = Cell::default();
+                                self.state.grid[cy][x] = default_cell.clone();
                             }
                         }
                         2 => {
-                            // Toda la línea
                             for x in 0..self.state.cols {
-                                self.state.grid[cy][x] = Cell::default();
+                                self.state.grid[cy][x] = default_cell.clone();
                             }
                         }
                         _ => {}
                     }
                 }
             }
-            // Select Graphic Rendition (SGR - Colores y Estilos)
+            // SGR - Select Graphic Rendition (Colores y Estilos)
             'm' => {
                 self.handle_sgr(params);
             }
@@ -234,33 +369,179 @@ impl<'a> Performer<'a> {
             let val = param.first().copied().unwrap_or(0);
             match val {
                 0 => {
-                    self.state.current_fg = Color32::from_rgb(225, 230, 240);
+                    self.state.current_fg = self.state.theme.foreground;
                     self.state.current_bg = Color32::TRANSPARENT;
                     self.state.current_bold = false;
+                    self.state.current_dim = false;
+                    self.state.current_italic = false;
+                    self.state.current_underline = false;
+                    self.state.current_inverse = false;
                 }
                 1 => self.state.current_bold = true,
-                22 => self.state.current_bold = false,
-                // Colores estándar ANSI FG
-                30 => self.state.current_fg = Color32::from_rgb(40, 44, 52),     // Negro
-                31 => self.state.current_fg = Color32::from_rgb(235, 95, 95),    // Rojo
-                32 => self.state.current_fg = Color32::from_rgb(90, 215, 130),   // Verde
-                33 => self.state.current_fg = Color32::from_rgb(245, 200, 75),   // Amarillo
-                34 => self.state.current_fg = Color32::from_rgb(90, 160, 250),   // Azul
-                35 => self.state.current_fg = Color32::from_rgb(200, 120, 245),  // Magenta
-                36 => self.state.current_fg = Color32::from_rgb(90, 220, 220),   // Cian
-                37 => self.state.current_fg = Color32::from_rgb(220, 220, 225),  // Blanco
-                39 => self.state.current_fg = Color32::from_rgb(225, 230, 240),  // Reset FG
-                // Colores brillantes ANSI FG
-                90 => self.state.current_fg = Color32::from_rgb(90, 95, 110),
-                91 => self.state.current_fg = Color32::from_rgb(255, 115, 115),
-                92 => self.state.current_fg = Color32::from_rgb(110, 240, 150),
-                93 => self.state.current_fg = Color32::from_rgb(255, 220, 100),
-                94 => self.state.current_fg = Color32::from_rgb(115, 185, 255),
-                95 => self.state.current_fg = Color32::from_rgb(225, 145, 255),
-                96 => self.state.current_fg = Color32::from_rgb(115, 245, 245),
-                97 => self.state.current_fg = Color32::WHITE,
+                2 => self.state.current_dim = true,
+                3 => self.state.current_italic = true,
+                4 => self.state.current_underline = true,
+                7 => self.state.current_inverse = true,
+                22 => {
+                    self.state.current_bold = false;
+                    self.state.current_dim = false;
+                }
+                23 => self.state.current_italic = false,
+                24 => self.state.current_underline = false,
+                27 => self.state.current_inverse = false,
+
+                // Foreground estándar ANSI (30..=37)
+                30..=37 => {
+                    let idx = (val - 30) as usize;
+                    self.state.current_fg = self.state.theme.ansi[idx];
+                }
+                // TrueColor & 256 Colors Foreground (38;2;r;g;b o 38;5;n)
+                38 => {
+                    if let Some(next_param) = iter.next() {
+                        let mode = next_param.first().copied().unwrap_or(0);
+                        if mode == 5 {
+                            // 256 colors
+                            if let Some(color_idx_param) = iter.next() {
+                                let idx = color_idx_param.first().copied().unwrap_or(0) as u8;
+                                self.state.current_fg = self.state.theme.resolve_256_color(idx);
+                            }
+                        } else if mode == 2 {
+                            // TrueColor RGB 24-bit
+                            let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            self.state.current_fg = Color32::from_rgb(r, g, b);
+                        }
+                    }
+                }
+                39 => self.state.current_fg = self.state.theme.foreground,
+
+                // Background estándar ANSI (40..=47)
+                40..=47 => {
+                    let idx = (val - 40) as usize;
+                    self.state.current_bg = self.state.theme.ansi[idx];
+                }
+                // TrueColor & 256 Colors Background (48;2;r;g;b o 48;5;n)
+                48 => {
+                    if let Some(next_param) = iter.next() {
+                        let mode = next_param.first().copied().unwrap_or(0);
+                        if mode == 5 {
+                            if let Some(color_idx_param) = iter.next() {
+                                let idx = color_idx_param.first().copied().unwrap_or(0) as u8;
+                                self.state.current_bg = self.state.theme.resolve_256_color(idx);
+                            }
+                        } else if mode == 2 {
+                            let r = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            let g = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            let b = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                            self.state.current_bg = Color32::from_rgb(r, g, b);
+                        }
+                    }
+                }
+                49 => self.state.current_bg = Color32::TRANSPARENT,
+
+                // Foreground brillante (90..=97)
+                90..=97 => {
+                    let idx = (val - 90 + 8) as usize;
+                    self.state.current_fg = self.state.theme.ansi[idx];
+                }
+                // Background brillante (100..=107)
+                100..=107 => {
+                    let idx = (val - 100 + 8) as usize;
+                    self.state.current_bg = self.state.theme.ansi[idx];
+                }
                 _ => {}
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn test_ghostty_palette() {
+        let theme = Theme::ghostty_dark();
+        assert_eq!(theme.background, Color32::from_rgb(22, 22, 24));
+        assert_eq!(theme.cursor, Color32::from_rgb(255, 255, 255));
+        assert_eq!(theme.ansi.len(), 16);
+    }
+
+    #[test]
+    fn test_truecolor_parsing() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+        // Secuencia TrueColor: RGB(120, 200, 250)
+        let seq = b"\x1b[38;2;120;200;250mHola TrueColor\x1b[0m";
+        term.process_bytes(seq);
+
+        let cell = &term.grid[0][0];
+        assert_eq!(cell.c, 'H');
+        assert_eq!(cell.fg, Color32::from_rgb(120, 200, 250));
+    }
+
+    #[test]
+    fn test_cursor_and_clear_screen() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Escribir en posición (10, 5)
+        term.process_bytes(b"\x1b[5;10HTest");
+        assert_eq!(term.cursor_y, 4);
+        assert_eq!(term.cursor_x, 13);
+
+        // Limpiar pantalla
+        term.process_bytes(b"\x1b[2J");
+        assert_eq!(term.cursor_x, 0);
+        assert_eq!(term.cursor_y, 0);
+        assert_eq!(term.grid[0][0].c, ' ');
+    }
+
+    #[test]
+    fn test_scrollback_retention() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 10, 500, theme);
+
+        // Insertar 50 líneas (más que el tamaño de pantalla)
+        for i in 0..50 {
+            let line = format!("Línea de log {}\r\n", i);
+            term.process_bytes(line.as_bytes());
+        }
+
+        assert_eq!(term.scrollback.len(), 41);
+        term.scroll_up(20);
+        assert_eq!(term.scroll_offset, 20);
+        term.reset_scroll();
+        assert_eq!(term.scroll_offset, 0);
+    }
+
+    #[test]
+    fn bench_throughput_massive_stream() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(120, 40, 50_000, theme);
+
+        // Generar un bloque representativo de logs de agentes/compilador con colores ANSI
+        let sample = b"\x1b[32m[INFO]\x1b[0m \x1b[1mClaude/Agy Agent:\x1b[0m Analizando archivo \x1b[36msrc/main.rs\x1b[0m [OK]\r\n";
+        let iterations = 20_000;
+        let total_bytes = sample.len() * iterations;
+
+        let start = Instant::now();
+        for _ in 0..iterations {
+            term.process_bytes(sample);
+        }
+        let elapsed = start.elapsed();
+
+        let throughput_mb = (total_bytes as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
+        let lines_per_sec = iterations as f64 / elapsed.as_secs_f64();
+
+        println!(
+            "\n⚡ [Axon Benchmark] Procesados {} bytes ({} líneas) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
+            total_bytes, iterations, elapsed, throughput_mb, lines_per_sec
+        );
+
+        assert!(throughput_mb > 5.0, "El throughput debe superar los 5 MB/s");
     }
 }

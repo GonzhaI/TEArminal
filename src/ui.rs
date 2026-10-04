@@ -1,52 +1,70 @@
-use crate::ai::AiAssistant;
 use crate::config::AxonConfig;
 use crate::pty::PtyManager;
-use crate::terminal::TerminalState;
-use eframe::egui::{self, Color32, FontId, Key, Pos2, Rect, Stroke, Vec2};
+use crate::terminal::{Cell, SelectionRange, TerminalState};
+use crate::theme::Theme;
+use eframe::egui::{self, Color32, FontId, Key, Modifiers, Pos2, Rect, Vec2};
 
 pub struct AxonApp {
     config: AxonConfig,
     pty: PtyManager,
     terminal: TerminalState,
-    ai: AiAssistant,
-    show_ai_panel: bool,
-    ai_input: String,
+    theme: Theme,
     last_size: (usize, usize),
     cursor_timer: f64,
+    drag_start: Option<(usize, usize)>,
 }
 
 impl AxonApp {
     pub fn new(config: AxonConfig) -> Self {
-        let cols = 100;
-        let rows = 30;
+        let cols = 120;
+        let rows = 35;
+        let theme = Theme::ghostty_dark();
 
         let pty = PtyManager::new(&config.terminal.default_shell, cols as u16, rows as u16)
             .expect("Error al inicializar Windows ConPTY");
 
-        let terminal = TerminalState::new(cols, rows, config.terminal.scrollback_limit);
+        let terminal = TerminalState::new(
+            cols,
+            rows,
+            config.terminal.scrollback_lines,
+            theme.clone(),
+        );
 
         Self {
             config,
             pty,
             terminal,
-            ai: AiAssistant::new(),
-            show_ai_panel: true,
-            ai_input: String::new(),
+            theme,
             last_size: (cols, rows),
             cursor_timer: 0.0,
+            drag_start: None,
         }
     }
 
     fn handle_input(&mut self, ctx: &egui::Context) {
+        // Manejo de rueda de ratón para scrollback suave
+        let scroll_delta = ctx.input(|i| i.raw_scroll_delta.y);
+        if scroll_delta > 0.0 {
+            let lines = ((scroll_delta / 20.0).abs().ceil() as usize).max(1);
+            self.terminal.scroll_up(lines * 3);
+        } else if scroll_delta < 0.0 {
+            let lines = ((scroll_delta / 20.0).abs().ceil() as usize).max(1);
+            self.terminal.scroll_down(lines * 3);
+        }
+
         let events = ctx.input(|i| i.events.clone());
 
         for event in events {
             match event {
                 egui::Event::Text(text) => {
-                    // Si el panel de IA no tiene el foco activo, mandar al shell
                     if !text.is_empty() {
+                        self.terminal.reset_scroll();
                         self.pty.write_input(text.as_bytes());
                     }
+                }
+                egui::Event::Paste(text) => {
+                    self.terminal.reset_scroll();
+                    self.paste_text(&text);
                 }
                 egui::Event::Key {
                     key,
@@ -54,250 +72,294 @@ impl AxonApp {
                     modifiers,
                     ..
                 } => {
-                    // Atajo Ctrl+I para alternar panel IA
-                    if modifiers.ctrl && key == Key::I {
-                        self.show_ai_panel = !self.show_ai_panel;
-                        continue;
-                    }
-
-                    // Ctrl+C (Interrupción estándar)
-                    if modifiers.ctrl && key == Key::C {
-                        self.pty.write_input(&[0x03]);
-                        continue;
-                    }
-
-                    // Teclas de control del terminal
-                    match key {
-                        Key::Enter => self.pty.write_input(b"\r"),
-                        Key::Backspace => self.pty.write_input(&[0x08]),
-                        Key::Tab => self.pty.write_input(b"\t"),
-                        Key::Escape => self.pty.write_input(&[0x1b]),
-                        Key::ArrowUp => self.pty.write_input(b"\x1b[A"),
-                        Key::ArrowDown => self.pty.write_input(b"\x1b[B"),
-                        Key::ArrowRight => self.pty.write_input(b"\x1b[C"),
-                        Key::ArrowLeft => self.pty.write_input(b"\x1b[D"),
-                        _ => {}
-                    }
+                    self.handle_key_event(ctx, key, modifiers);
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn handle_key_event(&mut self, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+        // Cualquier pulsación de tecla devuelve el scrollback a la posición activa
+        if key != Key::PageUp && key != Key::PageDown {
+            self.terminal.reset_scroll();
+        }
+
+        // Copiar y Pegar
+        if (modifiers.ctrl && modifiers.shift && key == Key::C)
+            || (modifiers.ctrl && key == Key::C && self.terminal.selection.is_some())
+        {
+            if let Some(text) = self.terminal.copy_selection_text() {
+                ctx.output_mut(|o| o.copied_text = text);
+            }
+            return;
+        }
+
+        if (modifiers.ctrl && modifiers.shift && key == Key::V) || (modifiers.ctrl && key == Key::V) {
+            let text = ctx.input(|i| {
+                i.events.iter().find_map(|e| {
+                    if let egui::Event::Paste(t) = e {
+                        Some(t.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
+            if let Some(t) = text {
+                self.paste_text(&t);
+                return;
+            }
+        }
+
+        // Combinaciones Ctrl estándar de terminal
+        if modifiers.ctrl && !modifiers.shift && !modifiers.alt {
+            match key {
+                Key::A => { self.pty.write_input(&[0x01]); return; }
+                Key::B => { self.pty.write_input(&[0x02]); return; }
+                Key::C => { self.pty.write_input(&[0x03]); return; } // SIGINT
+                Key::D => { self.pty.write_input(&[0x04]); return; } // EOF
+                Key::E => { self.pty.write_input(&[0x05]); return; }
+                Key::F => { self.pty.write_input(&[0x06]); return; }
+                Key::K => { self.pty.write_input(&[0x0b]); return; }
+                Key::L => { self.pty.write_input(&[0x0c]); return; } // Clear
+                Key::N => { self.pty.write_input(&[0x0e]); return; }
+                Key::P => { self.pty.write_input(&[0x10]); return; }
+                Key::R => { self.pty.write_input(&[0x12]); return; } // Reverse Search
+                Key::U => { self.pty.write_input(&[0x15]); return; }
+                Key::W => { self.pty.write_input(&[0x17]); return; }
+                Key::Z => { self.pty.write_input(&[0x1a]); return; } // Suspend
+                _ => {}
+            }
+        }
+
+        // Navegación en historial (PageUp / PageDown)
+        if key == Key::PageUp {
+            let half = (self.terminal.rows / 2).max(1);
+            self.terminal.scroll_up(half);
+            return;
+        }
+        if key == Key::PageDown {
+            let half = (self.terminal.rows / 2).max(1);
+            self.terminal.scroll_down(half);
+            return;
+        }
+
+        // Secuencias de control VT
+        match key {
+            Key::Enter => self.pty.write_input(b"\r"),
+            Key::Backspace => self.pty.write_input(&[0x08]),
+            Key::Tab => self.pty.write_input(b"\t"),
+            Key::Escape => self.pty.write_input(&[0x1b]),
+            Key::Delete => self.pty.write_input(b"\x1b[3~"),
+            Key::Home => self.pty.write_input(b"\x1b[H"),
+            Key::End => self.pty.write_input(b"\x1b[F"),
+            Key::ArrowUp => self.pty.write_input(b"\x1b[A"),
+            Key::ArrowDown => self.pty.write_input(b"\x1b[B"),
+            Key::ArrowRight => self.pty.write_input(b"\x1b[C"),
+            Key::ArrowLeft => self.pty.write_input(b"\x1b[D"),
+            Key::F1 => self.pty.write_input(b"\x1bOP"),
+            Key::F2 => self.pty.write_input(b"\x1bOQ"),
+            Key::F3 => self.pty.write_input(b"\x1bOR"),
+            Key::F4 => self.pty.write_input(b"\x1bOS"),
+            Key::F5 => self.pty.write_input(b"\x1b[15~"),
+            Key::F6 => self.pty.write_input(b"\x1b[17~"),
+            Key::F7 => self.pty.write_input(b"\x1b[18~"),
+            Key::F8 => self.pty.write_input(b"\x1b[19~"),
+            Key::F9 => self.pty.write_input(b"\x1b[20~"),
+            Key::F10 => self.pty.write_input(b"\x1b[21~"),
+            Key::F11 => self.pty.write_input(b"\x1b[23~"),
+            Key::F12 => self.pty.write_input(b"\x1b[24~"),
+            _ => {}
+        }
+    }
+
+    fn paste_text(&self, text: &str) {
+        if self.config.terminal.bracketed_paste {
+            // Protección bracketed paste para agentes CLI (evita ejecución accidental en saltos de línea)
+            let mut payload = Vec::with_capacity(text.len() + 16);
+            payload.extend_from_slice(b"\x1b[200~");
+            payload.extend_from_slice(text.as_bytes());
+            payload.extend_from_slice(b"\x1b[201~");
+            self.pty.write_input(&payload);
+        } else {
+            self.pty.write_input(text.as_bytes());
         }
     }
 }
 
 impl eframe::App for AxonApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 1. Leer salida del PTY
+        // 1. Drenar salida de ConPTY (procesamiento de alta velocidad)
         while let Some(bytes) = self.pty.try_recv_output() {
             self.terminal.process_bytes(&bytes);
         }
 
-        // 2. Actualizar mensajes pendientes de la IA
-        self.ai.update();
-
-        // 3. Manejo de inputs del usuario
+        // 2. Procesar entrada de teclado y ratón
         self.handle_input(ctx);
 
-        // 4. Panel lateral de IA (Sidecar)
-        if self.show_ai_panel {
-            egui::SidePanel::right("ai_copilot_panel")
-                .resizable(true)
-                .default_width(320.0)
-                .min_width(260.0)
-                .max_width(500.0)
-                .show(ctx, |ui| {
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.heading("⚡ Axon Copilot");
-                        if ui.button("✖").clicked() {
-                            self.show_ai_panel = false;
-                        }
-                    });
-
-                    ui.separator();
-
-                    // Botón de acción rápida: Diagnosticar error en terminal
-                    if ui.button("🔍 Diagnosticar salida / error").clicked() {
-                        let context = self.terminal.get_recent_text(self.config.ai.auto_context_lines);
-                        self.ai.ask(
-                            &self.config.ai.endpoint,
-                            &self.config.ai.model,
-                            "Explica qué ocurrió en la salida reciente y sugiere los comandos para solucionarlo.",
-                            &context,
-                        );
-                    }
-
-                    ui.separator();
-
-                    // Lista de mensajes del chat de IA
-                    egui::ScrollArea::vertical()
-                        .stick_to_bottom(true)
-                        .max_height(ui.available_height() - 70.0)
-                        .show(ui, |ui| {
-                            for msg in &self.ai.messages {
-                                ui.group(|ui| {
-                                    let color = if msg.sender == "Axon" {
-                                        Color32::from_rgb(100, 200, 255)
-                                    } else {
-                                        Color32::from_rgb(180, 240, 140)
-                                    };
-                                    ui.horizontal(|ui| {
-                                        ui.colored_label(color, format!("▶ {}", msg.sender));
-                                        ui.label(
-                                            egui::RichText::new(&msg.timestamp)
-                                                .weak()
-                                                .size(10.0),
-                                        );
-                                    });
-                                    ui.label(&msg.text);
-                                });
-                                ui.add_space(4.0);
-                            }
-
-                            if self.ai.is_generating {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.label("Pensando respuesta...");
-                                });
-                            }
-                        });
-
-                    ui.separator();
-
-                    // Campo de entrada para consultar a la IA
-                    ui.horizontal(|ui| {
-                        let response = ui.text_edit_singleline(&mut self.ai_input);
-                        let send_pressed = ui.button("Enviar").clicked()
-                            || (response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
-
-                        if send_pressed && !self.ai_input.trim().is_empty() {
-                            let query = self.ai_input.clone();
-                            self.ai_input.clear();
-                            let context = self
-                                .terminal
-                                .get_recent_text(self.config.ai.auto_context_lines);
-                            self.ai.ask(
-                                &self.config.ai.endpoint,
-                                &self.config.ai.model,
-                                &query,
-                                &context,
-                            );
-                        }
-                    });
-                });
-        }
-
-        // 5. Barra de estado inferior
-        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Shell: {}", self.config.terminal.default_shell))
-                        .size(11.0)
-                        .color(Color32::from_rgb(140, 150, 170)),
-                );
-                ui.separator();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Dimensiones: {}x{}",
-                        self.terminal.cols, self.terminal.rows
-                    ))
-                    .size(11.0)
-                    .color(Color32::from_rgb(140, 150, 170)),
-                );
-                ui.separator();
-                ui.label(
-                    egui::RichText::new("Atajo: [Ctrl+I] Panel IA | [Ctrl+C] Cancelar")
-                        .size(11.0)
-                        .color(Color32::from_rgb(110, 120, 140)),
-                );
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("⚡ Copilot").clicked() {
-                        self.show_ai_panel = !self.show_ai_panel;
-                    }
-                });
-            });
-        });
-
-        // 6. Área central de renderizado del terminal
+        // 3. Renderizado central del buffer de la terminal
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgb(18, 20, 26)))
+            .frame(egui::Frame::none().fill(self.theme.background))
             .show(ctx, |ui| {
                 let font_id = FontId::monospace(self.config.appearance.font_size);
-                let char_width = ui.fonts(|f| f.glyph_width(&font_id, 'M')).max(7.0);
-                let row_height = ui.fonts(|f| f.row_height(&font_id)).max(16.0);
+                let char_width = ui.fonts(|f| f.glyph_width(&font_id, 'M')).max(7.5);
+                let row_height = (ui.fonts(|f| f.row_height(&font_id)) * self.config.appearance.line_spacing).max(17.0);
 
                 let available_size = ui.available_size();
-                let new_cols = ((available_size.x / char_width).floor() as usize).max(20);
-                let new_rows = ((available_size.y / row_height).floor() as usize).max(5);
+                let margin = Vec2::new(12.0, 10.0);
+                let content_size = available_size - (margin * 2.0);
 
-                // Auto-resize dinámico según la ventana
+                let new_cols = ((content_size.x / char_width).floor() as usize).max(20);
+                let new_rows = ((content_size.y / row_height).floor() as usize).max(5);
+
+                // Auto-redimensionamiento reactivo de ConPTY
                 if (new_cols, new_rows) != self.last_size {
                     self.last_size = (new_cols, new_rows);
+                    self.terminal.resize(new_cols, new_rows);
                     self.pty.resize(new_cols as u16, new_rows as u16);
                 }
 
+                let origin = ui.min_rect().min + margin;
                 let painter = ui.painter();
-                let origin = ui.min_rect().min + Vec2::new(10.0, 10.0);
 
-                // Renderizar caracteres del buffer
-                for (row_idx, row) in self.terminal.grid.iter().enumerate() {
+                // Detección de selección con el ratón
+                let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+                let mouse_down = ui.input(|i| i.pointer.primary_down());
+
+                if let Some(pos) = mouse_pos {
+                    if pos.x >= origin.x && pos.y >= origin.y {
+                        let col = ((pos.x - origin.x) / char_width).floor() as usize;
+                        let row = ((pos.y - origin.y) / row_height).floor() as usize;
+
+                        if mouse_down {
+                            if self.drag_start.is_none() {
+                                self.drag_start = Some((col, row));
+                                self.terminal.selection = None;
+                            } else if let Some(start) = self.drag_start {
+                                self.terminal.selection = Some(SelectionRange {
+                                    start,
+                                    end: (col, row),
+                                });
+                            }
+                        } else {
+                            self.drag_start = None;
+                        }
+                    }
+                }
+
+                let visible_rows = self.terminal.visible_rows();
+
+                // Renderizado por lotes (Batch Text Runs) para 144+ FPS estables
+                for (row_idx, row) in visible_rows.iter().enumerate() {
                     let y = origin.y + (row_idx as f32 * row_height);
-                    if y > origin.y + available_size.y {
+                    if y > origin.y + content_size.y {
                         break;
                     }
 
+                    let mut run_start_x = 0;
+                    let mut current_style: Option<(&Cell, String)> = None;
+
                     for (col_idx, cell) in row.iter().enumerate() {
+                        let is_selected = if let Some(sel) = self.terminal.selection {
+                            let (mut p1, mut p2) = (sel.start, sel.end);
+                            if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
+                                std::mem::swap(&mut p1, &mut p2);
+                            }
+                            row_idx >= p1.1 && row_idx <= p2.1
+                                && (row_idx != p1.1 || col_idx >= p1.0)
+                                && (row_idx != p2.1 || col_idx <= p2.0)
+                        } else {
+                            false
+                        };
+
                         let x = origin.x + (col_idx as f32 * char_width);
-                        if x > origin.x + available_size.x {
-                            break;
+
+                        // Fondo si es selección o color custom
+                        if is_selected {
+                            let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(char_width, row_height));
+                            painter.rect_filled(rect, 0.0, self.theme.selection);
+                        } else if cell.bg != Color32::TRANSPARENT {
+                            let rect = Rect::from_min_size(Pos2::new(x, y), Vec2::new(char_width, row_height));
+                            painter.rect_filled(rect, 0.0, cell.bg);
                         }
 
-                        // Fondo si no es transparente
-                        if cell.bg != Color32::TRANSPARENT {
-                            let cell_rect = Rect::from_min_size(
-                                Pos2::new(x, y),
-                                Vec2::new(char_width, row_height),
-                            );
-                            painter.rect_filled(cell_rect, 0.0, cell.bg);
-                        }
+                        // Agrupar caracteres contiguos del mismo color para un solo draw call
+                        let fg = if cell.inverse {
+                            if cell.bg != Color32::TRANSPARENT { cell.bg } else { self.theme.background }
+                        } else {
+                            cell.fg
+                        };
 
-                        // Carácter
-                        if cell.c != ' ' {
-                            painter.text(
-                                Pos2::new(x, y),
-                                egui::Align2::LEFT_TOP,
-                                cell.c.to_string(),
-                                font_id.clone(),
-                                cell.fg,
-                            );
+                        match &mut current_style {
+                            Some((prev_cell, buffer)) if prev_cell.fg == fg && prev_cell.bold == cell.bold => {
+                                buffer.push(cell.c);
+                            }
+                            _ => {
+                                if let Some((prev_cell, buffer)) = current_style.take() {
+                                    let px = origin.x + (run_start_x as f32 * char_width);
+                                    let color = if prev_cell.inverse { self.theme.background } else { prev_cell.fg };
+                                    painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
+                                }
+                                run_start_x = col_idx;
+                                current_style = Some((cell, cell.c.to_string()));
+                            }
+                        }
+                    }
+
+                    // Vaciar último fragmento de la fila
+                    if let Some((prev_cell, buffer)) = current_style {
+                        let px = origin.x + (run_start_x as f32 * char_width);
+                        let color = if prev_cell.inverse { self.theme.background } else { prev_cell.fg };
+                        painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
+                    }
+                }
+
+                // Renderizar cursor sólido al estilo Ghostty
+                if self.terminal.scroll_offset == 0 {
+                    self.cursor_timer += ui.input(|i| i.stable_dt) as f64;
+                    let cursor_visible = !self.config.terminal.cursor_blink || (self.cursor_timer % 1.0) < 0.6;
+
+                    if cursor_visible
+                        && self.terminal.cursor_y < self.terminal.rows
+                        && self.terminal.cursor_x < self.terminal.cols
+                    {
+                        let cx = origin.x + (self.terminal.cursor_x as f32 * char_width);
+                        let cy = origin.y + (self.terminal.cursor_y as f32 * row_height);
+                        let cursor_rect = Rect::from_min_size(Pos2::new(cx, cy), Vec2::new(char_width, row_height));
+                        painter.rect_filled(cursor_rect, 1.0, self.theme.cursor);
+
+                        // Si hay un carácter debajo del cursor, dibujarlo invertido (legibilidad perfecta)
+                        if self.terminal.cursor_y < self.terminal.grid.len()
+                            && self.terminal.cursor_x < self.terminal.grid[self.terminal.cursor_y].len()
+                        {
+                            let char_under = self.terminal.grid[self.terminal.cursor_y][self.terminal.cursor_x].c;
+                            if char_under != ' ' {
+                                painter.text(
+                                    Pos2::new(cx, cy),
+                                    egui::Align2::LEFT_TOP,
+                                    char_under.to_string(),
+                                    font_id.clone(),
+                                    self.theme.background,
+                                );
+                            }
                         }
                     }
                 }
 
-                // Renderizar cursor parpadeante
-                self.cursor_timer += ui.input(|i| i.stable_dt) as f64;
-                let cursor_visible = (self.cursor_timer % 1.0) < 0.5;
-
-                if cursor_visible
-                    && self.terminal.cursor_y < self.terminal.rows
-                    && self.terminal.cursor_x < self.terminal.cols
-                {
-                    let cx = origin.x + (self.terminal.cursor_x as f32 * char_width);
-                    let cy = origin.y + (self.terminal.cursor_y as f32 * row_height);
-                    let cursor_rect = Rect::from_min_size(
-                        Pos2::new(cx, cy),
-                        Vec2::new(char_width, row_height),
+                // Indicador sutil de scrollback en el borde derecho
+                if self.terminal.scroll_offset > 0 {
+                    let total_history = self.terminal.scrollback.len() + self.terminal.rows;
+                    let bar_height = ((self.terminal.rows as f32 / total_history as f32) * content_size.y).max(24.0);
+                    let ratio = 1.0 - (self.terminal.scroll_offset as f32 / self.terminal.scrollback.len() as f32);
+                    let bar_y = origin.y + (ratio * (content_size.y - bar_height));
+                    let bar_rect = Rect::from_min_size(
+                        Pos2::new(origin.x + content_size.x - 4.0, bar_y),
+                        Vec2::new(4.0, bar_height),
                     );
-                    painter.rect_stroke(
-                        cursor_rect,
-                        1.0,
-                        Stroke::new(1.5_f32, Color32::from_rgb(100, 200, 255)),
-                    );
+                    painter.rect_filled(bar_rect, 2.0, Color32::from_rgba_premultiplied(120, 130, 150, 160));
                 }
             });
 
-        // Solicitar refresco continuo para baja latencia a 60 FPS
         ctx.request_repaint();
     }
 }
