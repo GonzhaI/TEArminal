@@ -22,4 +22,8 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 directories = "5.0"
 
+# Soporte para protocolos gráficos de imagen (PNG, JPEG, decodificación base64)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+base64 = "0.22"
+
 

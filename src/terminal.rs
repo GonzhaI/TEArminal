@@ -29,6 +29,18 @@ impl Cell {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct InlineImage {
+    pub id: u64,
+    pub line_index: usize,
+    pub col: usize,
+    pub width_cols: usize,
+    pub height_rows: usize,
+    pub width_px: u32,
+    pub height_px: u32,
+    pub rgba_data: Vec<u8>,
+}
+
 pub struct TerminalState {
     pub cols: usize,
     pub rows: usize,
@@ -38,6 +50,11 @@ pub struct TerminalState {
     pub scrollback: Vec<Vec<Cell>>,
     pub max_scrollback: usize,
     pub scroll_offset: usize, // Cuántas líneas hacia atrás estamos viendo
+
+    // Imágenes renderizadas en terminal (Protocolos iTerm2 / OSC 1337 / Visión IA)
+    pub images: Vec<InlineImage>,
+    pub next_image_id: u64,
+    pub total_lines_count: usize,
 
     // Estado SGR actual
     pub theme: Theme,
@@ -76,6 +93,9 @@ impl TerminalState {
             scrollback: Vec::with_capacity(max_scrollback.min(1000)),
             max_scrollback,
             scroll_offset: 0,
+            images: Vec::new(),
+            next_image_id: 1,
+            total_lines_count: 0,
             theme,
             current_fg: fg,
             current_bg: Color32::TRANSPARENT,
@@ -89,6 +109,10 @@ impl TerminalState {
         }
     }
 
+    pub fn visible_line_start(&self) -> usize {
+        self.total_lines_count.saturating_sub(self.scroll_offset)
+    }
+
     pub fn process_bytes(&mut self, bytes: &[u8]) {
         if let Some(mut parser) = self.parser.take() {
             let mut performer = Performer { state: self };
@@ -98,6 +122,7 @@ impl TerminalState {
     }
 
     pub fn newline(&mut self) {
+        self.total_lines_count += 1;
         if self.cursor_y + 1 >= self.rows {
             // Empujar fila superior al scrollback de alta velocidad
             let top_row = self.grid.remove(0);
@@ -360,6 +385,15 @@ impl<'a> Perform for Performer<'a> {
             _ => {}
         }
     }
+
+    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+        if params.is_empty() {
+            return;
+        }
+        if params[0] == b"1337" && params.len() > 1 {
+            self.handle_iterm2_image(&params[1..]);
+        }
+    }
 }
 
 impl<'a> Performer<'a> {
@@ -454,6 +488,70 @@ impl<'a> Performer<'a> {
             }
         }
     }
+
+    fn handle_iterm2_image(&mut self, params: &[&[u8]]) {
+        // Concatenar parámetros del comando OSC
+        let mut full_payload = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                full_payload.push(b';');
+            }
+            full_payload.extend_from_slice(p);
+        }
+
+        // Buscar prefijo "File="
+        if let Some(pos) = full_payload.windows(5).position(|w| w == b"File=") {
+            let file_data = &full_payload[pos + 5..];
+            // Separador ':' entre argumentos y los bytes en base64 de la imagen
+            if let Some(colon_pos) = file_data.iter().position(|&b| b == b':') {
+                let args_bytes = &file_data[..colon_pos];
+                let b64_bytes = &file_data[colon_pos + 1..];
+
+                let args_str = String::from_utf8_lossy(args_bytes);
+                if !args_str.contains("inline=1") {
+                    return;
+                }
+
+                // Filtrar espacios y saltos de línea de la cadena base64
+                let clean_b64: Vec<u8> = b64_bytes.iter().copied().filter(|b| !b.is_ascii_whitespace()).collect();
+
+                use base64::prelude::*;
+                if let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) {
+                    if let Ok(dyn_img) = image::load_from_memory(&decoded) {
+                        let rgba = dyn_img.to_rgba8();
+                        let (w, h) = rgba.dimensions();
+
+                        // Dimensiones en celdas de terminal (aprox. 8px ancho, 18px alto por celda)
+                        let max_cols = (self.state.cols.saturating_sub(self.state.cursor_x + 2)).min(80).max(10);
+                        let cols = ((w as f32 / 8.0).round() as usize).clamp(10, max_cols);
+                        let aspect = h as f32 / w as f32;
+                        let rows = ((cols as f32 * (8.0 / 18.0) * aspect).round() as usize).max(3).min(30);
+
+                        let img_id = self.state.next_image_id;
+                        self.state.next_image_id += 1;
+
+                        let img_entry = InlineImage {
+                            id: img_id,
+                            line_index: self.state.total_lines_count + self.state.cursor_y,
+                            col: self.state.cursor_x,
+                            width_cols: cols,
+                            height_rows: rows,
+                            width_px: w,
+                            height_px: h,
+                            rgba_data: rgba.into_raw(),
+                        };
+
+                        self.state.images.push(img_entry);
+
+                        // Dejar espacio vertical en el grid para que el texto siguiente continúe abajo
+                        for _ in 0..rows {
+                            self.state.newline();
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 
@@ -543,5 +641,24 @@ mod tests {
         );
 
         assert!(throughput_mb > 5.0, "El throughput debe superar los 5 MB/s");
+    }
+
+    #[test]
+    fn test_iterm2_image_protocol() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // PNG 1x1 codificado en Base64
+        let b64_png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let osc_command = format!("\x1b]1337;File=inline=1:{}\x07", b64_png);
+
+        term.process_bytes(osc_command.as_bytes());
+
+        assert_eq!(term.images.len(), 1, "Debe decodificar y registrar exactamente una imagen inline");
+        let img = &term.images[0];
+        assert_eq!(img.width_px, 1);
+        assert_eq!(img.height_px, 1);
+        assert!(img.width_cols >= 5);
+        assert!(img.height_rows >= 2);
     }
 }

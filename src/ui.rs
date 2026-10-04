@@ -12,6 +12,7 @@ pub struct AxonApp {
     last_size: (usize, usize),
     cursor_timer: f64,
     drag_start: Option<(usize, usize)>,
+    textures: std::collections::HashMap<u64, egui::TextureHandle>,
 }
 
 impl AxonApp {
@@ -38,6 +39,7 @@ impl AxonApp {
             last_size: (cols, rows),
             cursor_timer: 0.0,
             drag_start: None,
+            textures: std::collections::HashMap::new(),
         }
     }
 
@@ -311,6 +313,40 @@ impl eframe::App for AxonApp {
                         let px = origin.x + (run_start_x as f32 * char_width);
                         let color = if prev_cell.inverse { self.theme.background } else { prev_cell.fg };
                         painter.text(Pos2::new(px, y), egui::Align2::LEFT_TOP, buffer, font_id.clone(), color);
+                    }
+                }
+
+                // Renderizado de imágenes inline aceleradas por GPU (Protocolo iTerm2 / OSC 1337)
+                let view_start = self.terminal.visible_line_start();
+                let view_end = view_start + visible_rows.len();
+
+                for img in &self.terminal.images {
+                    if img.line_index + img.height_rows > view_start && img.line_index < view_end {
+                        let row_in_view = img.line_index as isize - view_start as isize;
+                        let ix = origin.x + (img.col as f32 * char_width);
+                        let iy = origin.y + (row_in_view as f32 * row_height);
+                        let iw = img.width_cols as f32 * char_width;
+                        let ih = img.height_rows as f32 * row_height;
+                        let img_rect = Rect::from_min_size(Pos2::new(ix, iy), Vec2::new(iw, ih));
+
+                        let tex = self.textures.entry(img.id).or_insert_with(|| {
+                            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                                [img.width_px as usize, img.height_px as usize],
+                                &img.rgba_data,
+                            );
+                            ctx.load_texture(
+                                format!("axon_img_{}", img.id),
+                                color_image,
+                                egui::TextureOptions::LINEAR,
+                            )
+                        });
+
+                        painter.image(
+                            tex.id(),
+                            img_rect,
+                            Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
                     }
                 }
 
