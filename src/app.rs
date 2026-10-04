@@ -72,16 +72,68 @@ impl AxonApp {
     }
 
     fn paste_text(&self, text: &str) {
-        let use_bracketed = self.terminal.bracketed_paste_mode || self.config.terminal.bracketed_paste;
-        if use_bracketed {
-            let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+        if self.terminal.bracketed_paste_mode {
             let mut payload = Vec::with_capacity(normalized.len() + 16);
             payload.extend_from_slice(b"\x1b[200~");
             payload.extend_from_slice(normalized.as_bytes());
             payload.extend_from_slice(b"\x1b[201~");
             self.pty.write_input(&payload);
         } else {
-            self.pty.write_input(text.as_bytes());
+            self.pty.write_input(normalized.as_bytes());
+        }
+    }
+
+    fn adjust_font_size(&mut self, delta: f32) {
+        let new_size = (self.config.appearance.font_size + delta).clamp(8.0, 32.0);
+        if (new_size - self.config.appearance.font_size).abs() > 0.01 {
+            self.config.appearance.font_size = new_size;
+            if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+                let scale_factor = window.scale_factor();
+                renderer.update_scale(&self.config, scale_factor);
+                let size = window.inner_size();
+                let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
+                if (cols, rows) != self.last_grid_size {
+                    self.last_grid_size = (cols, rows);
+                    self.terminal.resize(cols, rows);
+                    self.pty.resize(cols as u16, rows as u16);
+                }
+                window.request_redraw();
+            }
+        }
+    }
+
+    fn reset_font_size(&mut self) {
+        let default_cfg = AxonConfig::load_or_default();
+        let target_size = default_cfg.appearance.font_size;
+        self.config.appearance.font_size = target_size;
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            let scale_factor = window.scale_factor();
+            renderer.update_scale(&self.config, scale_factor);
+            let size = window.inner_size();
+            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
+            if (cols, rows) != self.last_grid_size {
+                self.last_grid_size = (cols, rows);
+                self.terminal.resize(cols, rows);
+                self.pty.resize(cols as u16, rows as u16);
+            }
+            window.request_redraw();
+        }
+    }
+
+    fn reload_config(&mut self) {
+        self.config = AxonConfig::load_or_default();
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            let scale_factor = window.scale_factor();
+            renderer.update_scale(&self.config, scale_factor);
+            let size = window.inner_size();
+            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
+            if (cols, rows) != self.last_grid_size {
+                self.last_grid_size = (cols, rows);
+                self.terminal.resize(cols, rows);
+                self.pty.resize(cols as u16, rows as u16);
+            }
+            window.request_redraw();
         }
     }
 }
@@ -204,39 +256,36 @@ impl ApplicationHandler for AxonApp {
                     },
                 ..
             } => {
-                // Siempre devolver scroll al prompt activo al pulsar tecla
-                if logical_key != Key::Named(NamedKey::PageUp) && logical_key != Key::Named(NamedKey::PageDown) {
-                    self.terminal.reset_scroll();
-                }
-
                 let ctrl = self.modifiers.control_key();
                 let shift = self.modifiers.shift_key();
 
-                // Copiar salida del último comando del agente (Ctrl + Shift + O)
-                if ctrl && shift && logical_key == Key::Character("O".into()) {
-                    if let Some(output) = self.terminal.get_last_output_text() {
-                        if let Some(cb) = &mut self.clipboard {
-                            cb.set_text(output).ok();
-                        }
-                    }
-                    return;
+                // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
+                if logical_key != Key::Named(NamedKey::PageUp)
+                    && logical_key != Key::Named(NamedKey::PageDown)
+                    && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
+                {
+                    self.terminal.reset_scroll();
                 }
 
-                // Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
-                if (ctrl && shift && logical_key == Key::Character("C".into()))
-                    || (ctrl && logical_key == Key::Character("c".into()) && self.terminal.selection.is_some())
+                // 1. Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
+                if (ctrl && shift && key_is_char(&logical_key, 'c'))
+                    || (ctrl && !shift && key_is_char(&logical_key, 'c') && self.terminal.selection.is_some())
                 {
                     if let Some(sel_text) = self.terminal.copy_selection_text() {
                         if let Some(cb) = &mut self.clipboard {
                             cb.set_text(sel_text).ok();
                         }
+                        // Deseleccionar y repintar tras copiar exitosamente
+                        self.terminal.selection = None;
+                        if let Some(w) = &self.window { w.request_redraw(); }
                     }
                     return;
                 }
 
-                // Pegar (Ctrl + Shift + V o Ctrl + V)
-                if (ctrl && shift && logical_key == Key::Character("V".into()))
-                    || (ctrl && logical_key == Key::Character("v".into()))
+                // 2. Pegar desde el portapapeles (Ctrl + Shift + V, Ctrl + V, Shift + Insert)
+                if (ctrl && shift && key_is_char(&logical_key, 'v'))
+                    || (ctrl && !shift && key_is_char(&logical_key, 'v'))
+                    || (shift && logical_key == Key::Named(NamedKey::Insert))
                 {
                     if let Some(cb) = &mut self.clipboard {
                         if let Ok(text) = cb.get_text() {
@@ -246,7 +295,48 @@ impl ApplicationHandler for AxonApp {
                     return;
                 }
 
-                // Navegación semántica entre comandos de agentes (Ctrl + Shift + Arriba/Abajo)
+                // 3. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
+                if ctrl && !shift {
+                    if key_is_char(&logical_key, '+') || key_is_char(&logical_key, '=') {
+                        self.adjust_font_size(1.0);
+                        return;
+                    }
+                    if key_is_char(&logical_key, '-') || key_is_char(&logical_key, '_') {
+                        self.adjust_font_size(-1.0);
+                        return;
+                    }
+                    if key_is_char(&logical_key, '0') {
+                        self.reset_font_size();
+                        return;
+                    }
+                } else if ctrl && shift {
+                    if key_is_char(&logical_key, '+') || key_is_char(&logical_key, '=') {
+                        self.adjust_font_size(1.0);
+                        return;
+                    }
+                    if key_is_char(&logical_key, '_') || key_is_char(&logical_key, '-') {
+                        self.adjust_font_size(-1.0);
+                        return;
+                    }
+                }
+
+                // 4. Recarga dinámica de configuración Ghostty (Ctrl + Shift + ,)
+                if ctrl && shift && key_is_char(&logical_key, ',') {
+                    self.reload_config();
+                    return;
+                }
+
+                // 5. Copiar salida del último comando del agente (Ctrl + Shift + O)
+                if ctrl && shift && key_is_char(&logical_key, 'o') {
+                    if let Some(output) = self.terminal.get_last_output_text() {
+                        if let Some(cb) = &mut self.clipboard {
+                            cb.set_text(output).ok();
+                        }
+                    }
+                    return;
+                }
+
+                // 6. Navegación semántica entre comandos de agentes OSC 133 (Ctrl + Shift + Arriba/Abajo)
                 if ctrl && shift {
                     if let Key::Named(NamedKey::ArrowUp) = logical_key {
                         if let Some(block) = self.terminal.command_blocks.last() {
@@ -263,7 +353,75 @@ impl ApplicationHandler for AxonApp {
                     }
                 }
 
-                // Combinaciones de control clásicas de terminal (Ctrl+C, Ctrl+D, Ctrl+L, etc.)
+                // 7. Navegación de historial y scrollback (Shift + PageUp / PageDown / Home / End)
+                if shift && !ctrl {
+                    match logical_key {
+                        Key::Named(NamedKey::PageUp) => {
+                            let half = (self.terminal.rows / 2).max(1);
+                            self.terminal.scroll_up(half);
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                            return;
+                        }
+                        Key::Named(NamedKey::PageDown) => {
+                            let half = (self.terminal.rows / 2).max(1);
+                            self.terminal.scroll_down(half);
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                            return;
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            self.terminal.scroll_offset = self.terminal.scrollback.len();
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                            return;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            self.terminal.reset_scroll();
+                            if let Some(w) = &self.window { w.request_redraw(); }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // 8. Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Backspace, Ctrl + Delete)
+                if ctrl && !shift {
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            self.pty.write_input(b"\x1b[1;5D"); // Salto palabra atrás
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            self.pty.write_input(b"\x1b[1;5C"); // Salto palabra adelante
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowUp) => {
+                            self.pty.write_input(b"\x1b[1;5A");
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            self.pty.write_input(b"\x1b[1;5B");
+                            return;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            self.pty.write_input(&[0x17]); // 0x17 (^W): Borrar palabra atrás
+                            return;
+                        }
+                        Key::Named(NamedKey::Delete) => {
+                            self.pty.write_input(b"\x1b[3;5~"); // Borrar palabra adelante
+                            return;
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            self.pty.write_input(b"\x1b[1;5H");
+                            return;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            self.pty.write_input(b"\x1b[1;5F");
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // 9. Combinaciones de control clásicas de terminal (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+Z, Ctrl+R, etc.)
                 if ctrl && !shift {
                     match logical_key {
                         Key::Character(ref s) => {
@@ -278,21 +436,21 @@ impl ApplicationHandler for AxonApp {
                     }
                 }
 
-                // Historial de scroll (PageUp / PageDown)
-                if let Key::Named(NamedKey::PageUp) = logical_key {
+                // 10. Scroll por página directo sin Shift
+                if logical_key == Key::Named(NamedKey::PageUp) {
                     let half = (self.terminal.rows / 2).max(1);
                     self.terminal.scroll_up(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
-                if let Key::Named(NamedKey::PageDown) = logical_key {
+                if logical_key == Key::Named(NamedKey::PageDown) {
                     let half = (self.terminal.rows / 2).max(1);
                     self.terminal.scroll_down(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
 
-                // Teclas especiales y flechas VT
+                // 11. Teclas especiales y flechas VT estándar
                 match logical_key {
                     Key::Named(NamedKey::Enter) => self.pty.write_input(b"\r"),
                     Key::Named(NamedKey::Backspace) => self.pty.write_input(&[0x08]),
@@ -349,26 +507,41 @@ impl ApplicationHandler for AxonApp {
                 }
             }
 
-            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
-                match state {
-                    ElementState::Pressed => {
-                        self.mouse_down = true;
-                        if let Some(renderer) = &self.renderer {
-                            let mx = self.mouse_pos.x as usize;
-                            let my = self.mouse_pos.y as usize;
-                            if mx >= renderer.margin_x && my >= renderer.margin_y {
-                                let col = (mx - renderer.margin_x) / renderer.char_width;
-                                let row = (my - renderer.margin_y) / renderer.row_height;
-                                self.drag_start = Some((col, row));
-                                self.terminal.selection = None;
-                                if let Some(w) = &self.window { w.request_redraw(); }
+            WindowEvent::MouseInput { state, button, .. } => {
+                match button {
+                    MouseButton::Left => {
+                        match state {
+                            ElementState::Pressed => {
+                                self.mouse_down = true;
+                                if let Some(renderer) = &self.renderer {
+                                    let mx = self.mouse_pos.x as usize;
+                                    let my = self.mouse_pos.y as usize;
+                                    if mx >= renderer.margin_x && my >= renderer.margin_y {
+                                        let col = (mx - renderer.margin_x) / renderer.char_width;
+                                        let row = (my - renderer.margin_y) / renderer.row_height;
+                                        self.drag_start = Some((col, row));
+                                        self.terminal.selection = None;
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                    }
+                                }
+                            }
+                            ElementState::Released => {
+                                self.mouse_down = false;
+                                self.drag_start = None;
                             }
                         }
                     }
-                    ElementState::Released => {
-                        self.mouse_down = false;
-                        self.drag_start = None;
+                    MouseButton::Right => {
+                        if state == ElementState::Pressed {
+                            // Clic derecho: Pegar desde el portapapeles (estilo Ghostty y Windows Terminal)
+                            if let Some(cb) = &mut self.clipboard {
+                                if let Ok(text) = cb.get_text() {
+                                    self.paste_text(&text);
+                                }
+                            }
+                        }
                     }
+                    _ => {}
                 }
             }
 
@@ -510,3 +683,25 @@ fn enable_windows_dark_mode(window: &Window) {
 
 #[cfg(not(target_os = "windows"))]
 fn enable_windows_dark_mode(_window: &Window) {}
+
+fn key_is_char(key: &Key, target: char) -> bool {
+    match key {
+        Key::Character(s) => {
+            if let Some(c) = s.chars().next() {
+                if c.to_ascii_lowercase() == target.to_ascii_lowercase() {
+                    return true;
+                }
+                let target_lower = target.to_ascii_lowercase();
+                if target_lower >= 'a' && target_lower <= 'z' {
+                    let code = (target_lower as u8) - b'a' + 1;
+                    if c as u32 == code as u32 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
