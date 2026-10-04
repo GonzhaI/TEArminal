@@ -24,13 +24,14 @@ pub struct TerminalRenderer {
     pub row_height: usize,
     pub baseline_y: usize,
     glyph_cache: HashMap<(char, bool), CachedGlyph>,
-    margin_x: usize,
-    margin_y: usize,
+    pub margin_x: usize,
+    pub margin_y: usize,
 }
 
 impl TerminalRenderer {
-    pub fn new(config: &AxonConfig) -> Self {
-        let font_size = config.appearance.font_size;
+    pub fn new(config: &AxonConfig, scale_factor: f64) -> Self {
+        // En Ghostty (macOS y Linux), font-size predeterminado es 13pt con espaciado natural compacto
+        let font_size = (config.appearance.font_size * scale_factor as f32).round().max(10.0);
         let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
         let sys_fonts = Path::new(&windir).join("Fonts");
 
@@ -51,16 +52,19 @@ impl TerminalRenderer {
 
         // Medir dimensiones estándar de celda monoespaciada al estilo Ghostty
         let metrics = regular_font.metrics('M', font_size);
-        let char_width = (metrics.advance_width.ceil() as usize).max(8);
+        let char_width = (metrics.advance_width.round() as usize).max(7);
         let line_height_raw = regular_font
             .horizontal_line_metrics(font_size)
             .map(|m| m.new_line_size)
-            .unwrap_or(font_size * 1.35);
-        let row_height = ((line_height_raw * config.appearance.line_spacing).ceil() as usize).max(18);
+            .unwrap_or(font_size * 1.25);
+        let row_height = ((line_height_raw * config.appearance.line_spacing).round() as usize).max(15);
         let baseline_y = regular_font
             .horizontal_line_metrics(font_size)
             .map(|m| m.ascent.ceil() as usize)
             .unwrap_or(font_size.ceil() as usize);
+
+        let margin_x = (10.0 * scale_factor as f32).round() as usize;
+        let margin_y = (8.0 * scale_factor as f32).round() as usize;
 
         Self {
             regular_font,
@@ -71,9 +75,27 @@ impl TerminalRenderer {
             row_height,
             baseline_y,
             glyph_cache: HashMap::new(),
-            margin_x: 14, // Padding horizontal idéntico a Ghostty
-            margin_y: 12, // Padding vertical idéntico a Ghostty
+            margin_x,
+            margin_y,
         }
+    }
+
+    pub fn update_scale(&mut self, config: &AxonConfig, scale_factor: f64) {
+        self.font_size = (config.appearance.font_size * scale_factor as f32).round().max(10.0);
+        let metrics = self.regular_font.metrics('M', self.font_size);
+        self.char_width = (metrics.advance_width.round() as usize).max(7);
+        let line_height_raw = self.regular_font
+            .horizontal_line_metrics(self.font_size)
+            .map(|m| m.new_line_size)
+            .unwrap_or(self.font_size * 1.25);
+        self.row_height = ((line_height_raw * config.appearance.line_spacing).round() as usize).max(15);
+        self.baseline_y = self.regular_font
+            .horizontal_line_metrics(self.font_size)
+            .map(|m| m.ascent.ceil() as usize)
+            .unwrap_or(self.font_size.ceil() as usize);
+        self.margin_x = (10.0 * scale_factor as f32).round() as usize;
+        self.margin_y = (8.0 * scale_factor as f32).round() as usize;
+        self.glyph_cache.clear();
     }
 
     fn load_fonts(config: &AxonConfig) -> (fontdue::Font, fontdue::Font) {

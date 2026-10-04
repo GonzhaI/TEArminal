@@ -12,7 +12,7 @@ pub struct PtyManager {
 }
 
 impl PtyManager {
-    pub fn new(shell: &str, cols: u16, rows: u16) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(shell: &str, ghostty_prompt: bool, cols: u16, rows: u16) -> Result<Self, Box<dyn std::error::Error>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -21,7 +21,96 @@ impl PtyManager {
             pixel_height: 0,
         })?;
 
-        let cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(shell);
+
+        // Si se trata de PowerShell y ghostty_prompt está activo, inyectar el entorno Ghostty nativo
+        if ghostty_prompt {
+            let lower = shell.to_lowercase();
+            if lower.contains("powershell") || lower.contains("pwsh") {
+                cmd.arg("-NoLogo");
+                cmd.arg("-NoExit");
+                cmd.arg("-Command");
+                let init_script = concat!(
+                    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; ",
+                    "$OutputEncoding = [System.Text.Encoding]::UTF8; ",
+                    "Import-Module PSReadLine -ErrorAction SilentlyContinue; ",
+                    "Set-PSReadLineOption -Colors @{ ",
+                    "Command = ([char]27 + '[38;2;81;226;122m'); ",
+                    "Parameter = ([char]27 + '[38;2;78;146;249m'); ",
+                    "Operator = ([char]27 + '[38;2;250;189;47m'); ",
+                    "String = ([char]27 + '[38;2;142;192;124m'); ",
+                    "Number = ([char]27 + '[38;2;211;99;42m'); ",
+                    "Member = ([char]27 + '[38;2;177;98;134m'); ",
+                    "Error = ([char]27 + '[38;2;244;56;65m') ",
+                    "} -ErrorAction SilentlyContinue; ",
+                    "function prompt { ",
+                    "$p = (Get-Location).Path.Replace($HOME, '~'); ",
+                    "$esc = [char]27; ",
+                    "$git = ''; ",
+                    "try { ",
+                    "$b = (git rev-parse --abbrev-ref HEAD 2>$null); ",
+                    "if ($b) { $git = ' ' + $esc + '[38;2;81;226;122m' + [char]0xe0a0 + ' ' + $b + $esc + '[0m' } ",
+                    "} catch {}; ",
+                    "return '' + $esc + ']133;A`a' + $esc + '[38;2;78;146;249m' + [char]0xf07b + ' ' + $p + $esc + '[0m' + $git + [Environment]::NewLine + $esc + '[38;2;81;226;122m' + [char]0xf432 + ' ' + $esc + '[0m' + $esc + ']133;B`a' ",
+                    "}; ",
+                    "function ls { ",
+                    "param([Parameter(Position=0, ValueFromPipeline=$true)][string]$Path = '.', [switch]$a, [switch]$Force); ",
+                    "$esc = [char]27; ",
+                    "$show = $a -or $Force; ",
+                    "$items = if ($show) { Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue } else { Get-ChildItem -Path $Path -ErrorAction SilentlyContinue }; ",
+                    "if (-not $items) { return }; ",
+                    "$items = $items | Sort-Object { -not $_.PSIsContainer }, Name; ",
+                    "Write-Host ''; ",
+                    "foreach ($item in $items) { ",
+                    "if ($item.PSIsContainer) { ",
+                    "$icon = $esc + '[38;2;78;146;249m' + [char]0xf07b + $esc + '[0m'; ",
+                    "$name = $esc + '[1;38;2;78;146;249m' + $item.Name + $esc + '[0m'; ",
+                    "$size = $esc + '[2m<DIR>   ' + $esc + '[0m' ",
+                    "} else { ",
+                    "$ext = $item.Extension.ToLower(); ",
+                    "$icon = switch ($ext) { ",
+                    "'.rs'   { $esc + '[38;2;222;70;44m'  + [char]0xe7a8 + $esc + '[0m' } ",
+                    "'.toml' { $esc + '[38;2;250;189;47m' + [char]0xe6b2 + $esc + '[0m' } ",
+                    "'.yaml' { $esc + '[38;2;250;189;47m' + [char]0xe6b2 + $esc + '[0m' } ",
+                    "'.yml'  { $esc + '[38;2;250;189;47m' + [char]0xe6b2 + $esc + '[0m' } ",
+                    "'.json' { $esc + '[38;2;250;189;47m' + [char]0xe60b + $esc + '[0m' } ",
+                    "'.md'   { $esc + '[38;2;78;146;249m'  + [char]0xe73e + $esc + '[0m' } ",
+                    "'.ps1'  { $esc + '[38;2;0;164;239m'   + [char]0xe70f + $esc + '[0m' } ",
+                    "'.bat'  { $esc + '[38;2;0;164;239m'   + [char]0xe70f + $esc + '[0m' } ",
+                    "'.cmd'  { $esc + '[38;2;0;164;239m'   + [char]0xe70f + $esc + '[0m' } ",
+                    "'.exe'  { $esc + '[38;2;81;226;122m'  + [char]0xf489 + $esc + '[0m' } ",
+                    "'.dll'  { $esc + '[38;2;177;98;134m'  + [char]0xf013 + $esc + '[0m' } ",
+                    "'.png'  { $esc + '[38;2;177;98;134m'  + [char]0xf1c5 + $esc + '[0m' } ",
+                    "'.jpg'  { $esc + '[38;2;177;98;134m'  + [char]0xf1c5 + $esc + '[0m' } ",
+                    "'.svg'  { $esc + '[38;2;250;189;47m' + [char]0xf1c5 + $esc + '[0m' } ",
+                    "'.zip'  { $esc + '[38;2;250;189;47m' + [char]0xf1c6 + $esc + '[0m' } ",
+                    "'.tar'  { $esc + '[38;2;250;189;47m' + [char]0xf1c6 + $esc + '[0m' } ",
+                    "'.gz'   { $esc + '[38;2;250;189;47m' + [char]0xf1c6 + $esc + '[0m' } ",
+                    "'.lock' { $esc + '[38;2;142;192;124m' + [char]0xf023 + $esc + '[0m' } ",
+                    "'.py'   { $esc + '[38;2;250;189;47m' + [char]0xe73c + $esc + '[0m' } ",
+                    "'.js'   { $esc + '[38;2;250;189;47m' + [char]0xe74e + $esc + '[0m' } ",
+                    "'.ts'   { $esc + '[38;2;78;146;249m'  + [char]0xe628 + $esc + '[0m' } ",
+                    "default { if ($item.Name.StartsWith('.')) { $esc + '[38;2;100;110;130m' + [char]0xf15b + $esc + '[0m' } else { $esc + '[38;2;230;230;235m' + [char]0xf15b + $esc + '[0m' } } ",
+                    "}; ",
+                    "$name = $esc + '[38;2;230;230;235m' + $item.Name + $esc + '[0m'; ",
+                    "$len = $item.Length; ",
+                    "$str = if ($len -gt 1GB) { '{0:N1} GB' -f ($len / 1GB) } elseif ($len -gt 1MB) { '{0:N1} MB' -f ($len / 1MB) } elseif ($len -gt 1KB) { '{0:N1} KB' -f ($len / 1KB) } else { '{0} B' -f $len }; ",
+                    "$size = $esc + '[2m' + ($str.PadLeft(8)) + $esc + '[0m' ",
+                    "}; ",
+                    "$date = $esc + '[2m' + $item.LastWriteTime.ToString('yyyy-MM-dd HH:mm') + $esc + '[0m'; ",
+                    "Write-Host ('  {0}  {1,-32}  {2}  {3}' -f $icon, $name, $size, $date) ",
+                    "}; ",
+                    "Write-Host '' ",
+                    "}; ",
+                    "Remove-Item alias:ls -Force -ErrorAction SilentlyContinue; ",
+                    "Remove-Item alias:dir -Force -ErrorAction SilentlyContinue; ",
+                    "Set-Alias -Name dir -Value ls -Option AllScope -ErrorAction SilentlyContinue; ",
+                    "Write-Host ([char]27 + '[2J' + [char]27 + '[H') -NoNewline"
+                );
+                cmd.arg(init_script);
+            }
+        }
+
         let child = pair.slave.spawn_command(cmd)?;
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -91,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
-        let pty = PtyManager::new("powershell.exe", 80, 24).unwrap();
+        let pty = PtyManager::new("powershell.exe", false, 80, 24).unwrap();
         let mut total_output = String::new();
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));

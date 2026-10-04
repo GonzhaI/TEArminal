@@ -1,12 +1,13 @@
 [appearance]
-font_family = "Cascadia Code"
-font_size = 14.0
+font_family = "JetBrains Mono Nerd Font"
+font_size = 13.0
 window_opacity = 0.98
 theme = "ghostty-dark"
-line_spacing = 1.25
+line_spacing = 1.0
 
 [terminal]
 default_shell = "powershell.exe"
+ghostty_prompt = true
 scrollback_lines = 50000
 bracketed_paste = true
 cursor_blink = true

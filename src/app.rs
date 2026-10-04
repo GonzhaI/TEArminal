@@ -36,9 +36,12 @@ impl AxonApp {
         let cols = 120;
         let rows = 30;
         let theme = Theme::ghostty_dark();
-
-        let pty = PtyManager::new(&config.terminal.default_shell, cols as u16, rows as u16)
-            .expect("Error al inicializar Windows ConPTY");
+        let pty = PtyManager::new(
+            &config.terminal.default_shell,
+            config.terminal.ghostty_prompt,
+            cols as u16,
+            rows as u16,
+        ).expect("Error al inicializar Windows ConPTY");
 
         let terminal = TerminalState::new(
             cols,
@@ -112,7 +115,14 @@ impl ApplicationHandler for AxonApp {
         let surface = softbuffer::Surface::new(&context, window.clone())
             .expect("Error al inicializar superficie de renderizado nativo");
 
-        let renderer = TerminalRenderer::new(&self.config);
+        let scale_factor = window.scale_factor();
+        let renderer = TerminalRenderer::new(&self.config, scale_factor);
+
+        let initial_size = window.inner_size();
+        let (cols, rows) = renderer.compute_grid_size(initial_size.width as usize, initial_size.height as usize);
+        self.last_grid_size = (cols, rows);
+        self.terminal.resize(cols, rows);
+        self.pty.resize(cols as u16, rows as u16);
 
         self.window = Some(window);
         self.context = Some(context);
@@ -124,6 +134,20 @@ impl ApplicationHandler for AxonApp {
         match event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
+            }
+
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+                    renderer.update_scale(&self.config, scale_factor);
+                    let size = window.inner_size();
+                    let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
+                    if (cols, rows) != self.last_grid_size {
+                        self.last_grid_size = (cols, rows);
+                        self.terminal.resize(cols, rows);
+                        self.pty.resize(cols as u16, rows as u16);
+                    }
+                    window.request_redraw();
+                }
             }
 
             WindowEvent::Resized(size) => {
@@ -310,9 +334,9 @@ impl ApplicationHandler for AxonApp {
                     if let Some(renderer) = &self.renderer {
                         let mx = position.x as usize;
                         let my = position.y as usize;
-                        if mx >= 14 && my >= 12 {
-                            let col = (mx - 14) / renderer.char_width;
-                            let row = (my - 12) / renderer.row_height;
+                        if mx >= renderer.margin_x && my >= renderer.margin_y {
+                            let col = (mx - renderer.margin_x) / renderer.char_width;
+                            let row = (my - renderer.margin_y) / renderer.row_height;
                             if let Some(start) = self.drag_start {
                                 self.terminal.selection = Some(SelectionRange {
                                     start,
@@ -332,9 +356,9 @@ impl ApplicationHandler for AxonApp {
                         if let Some(renderer) = &self.renderer {
                             let mx = self.mouse_pos.x as usize;
                             let my = self.mouse_pos.y as usize;
-                            if mx >= 14 && my >= 12 {
-                                let col = (mx - 14) / renderer.char_width;
-                                let row = (my - 12) / renderer.row_height;
+                            if mx >= renderer.margin_x && my >= renderer.margin_y {
+                                let col = (mx - renderer.margin_x) / renderer.char_width;
+                                let row = (my - renderer.margin_y) / renderer.row_height;
                                 self.drag_start = Some((col, row));
                                 self.terminal.selection = None;
                                 if let Some(w) = &self.window { w.request_redraw(); }
