@@ -18,7 +18,7 @@ pub struct AxonApp {
 impl AxonApp {
     pub fn new(config: AxonConfig) -> Self {
         let cols = 120;
-        let rows = 35;
+        let rows = 30;
         let theme = Theme::ghostty_dark();
 
         let pty = PtyManager::new(&config.terminal.default_shell, cols as u16, rows as u16)
@@ -59,7 +59,7 @@ impl AxonApp {
         for event in events {
             match event {
                 egui::Event::Text(text) => {
-                    if !text.is_empty() {
+                    if !text.is_empty() && text != "\r" && text != "\n" && text != "\t" {
                         self.terminal.reset_scroll();
                         self.pty.write_input(text.as_bytes());
                     }

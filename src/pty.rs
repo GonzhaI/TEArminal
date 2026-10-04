@@ -1,4 +1,4 @@
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -6,6 +6,7 @@ use std::thread;
 
 pub struct PtyManager {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    _child: Box<dyn Child + Send + Sync>,
     to_pty_tx: Sender<Vec<u8>>,
     from_pty_rx: Receiver<Vec<u8>>,
 }
@@ -21,7 +22,7 @@ impl PtyManager {
         })?;
 
         let cmd = CommandBuilder::new(shell);
-        let _child = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
 
         let mut reader = pair.master.try_clone_reader()?;
         let mut writer = pair.master.take_writer()?;
@@ -58,6 +59,7 @@ impl PtyManager {
 
         Ok(Self {
             master: Arc::new(Mutex::new(pair.master)),
+            _child: child,
             to_pty_tx,
             from_pty_rx,
         })
@@ -80,5 +82,40 @@ impl PtyManager {
                 pixel_height: 0,
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pty_powershell_spawn_and_read() {
+        let pty = PtyManager::new("powershell.exe", 80, 24).unwrap();
+        let mut total_output = String::new();
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            while let Some(bytes) = pty.try_recv_output() {
+                let s = String::from_utf8_lossy(&bytes);
+                total_output.push_str(&s);
+            }
+        }
+        println!("TOTAL PTY OUTPUT (len {}):\n{:?}", total_output.len(), total_output);
+
+        // Enviar un comando "echo hello\r\n" a ver si responde
+        pty.write_input(b"echo hello\r\n");
+        let mut echo_output = String::new();
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            while let Some(bytes) = pty.try_recv_output() {
+                let s = String::from_utf8_lossy(&bytes);
+                echo_output.push_str(&s);
+            }
+            if echo_output.contains("hello") {
+                break;
+            }
+        }
+        println!("ECHO OUTPUT (len {}):\n{:?}", echo_output.len(), echo_output);
+        assert!(echo_output.contains("hello"), "El shell debe responder al input del usuario");
     }
 }

@@ -127,3 +127,23 @@ fn configure_fonts(ctx: &eframe::egui::Context, preferred_font: &str, custom_pat
 
     ctx.set_fonts(fonts);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_font_loading_performance() {
+        let ctx = eframe::egui::Context::default();
+        let start = std::time::Instant::now();
+        configure_fonts(&ctx, "Cascadia Code", None);
+        println!("configure_fonts took: {:?}", start.elapsed());
+
+        let _ = ctx.run(Default::default(), |ctx| {
+            let font_id = eframe::egui::FontId::monospace(14.0);
+            let start2 = std::time::Instant::now();
+            let width = ctx.fonts(|f| f.glyph_width(&font_id, 'M'));
+            println!("glyph_width('M') took: {:?}, width={}", start2.elapsed(), width);
+        });
+    }
+}

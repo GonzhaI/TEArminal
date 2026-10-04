@@ -407,15 +407,27 @@ impl TerminalState {
                 self.alt_grid.push(vec![default_cell.clone(); new_cols]);
             }
         } else if new_rows < self.rows {
-            let drop_count = self.rows - new_rows;
-            for _ in 0..drop_count {
-                if !self.grid.is_empty() {
-                    let r = self.grid.remove(0);
-                    self.scrollback.push_back(r);
+            // Solo si el cursor desborda la nueva altura de la ventana, desplazar líneas hacia el scrollback
+            if self.cursor_y >= new_rows {
+                let shift = (self.cursor_y + 1).saturating_sub(new_rows);
+                for _ in 0..shift {
+                    if !self.grid.is_empty() {
+                        let r = self.grid.remove(0);
+                        self.scrollback.push_back(r);
+                    }
+                    if !self.alt_grid.is_empty() {
+                        self.alt_grid.remove(0);
+                    }
                 }
-                if !self.alt_grid.is_empty() {
-                    self.alt_grid.remove(0);
-                }
+                self.cursor_y = self.cursor_y.saturating_sub(shift);
+            }
+
+            // Recortar el exceso de filas vacías del final de la pantalla
+            while self.grid.len() > new_rows {
+                self.grid.pop();
+            }
+            while self.alt_grid.len() > new_rows {
+                self.alt_grid.pop();
             }
         }
 
@@ -1145,6 +1157,43 @@ mod tests {
         // Desactivar modo bracketed paste (?2004l)
         term.process_bytes(b"\x1b[?2004l");
         assert_eq!(term.bracketed_paste_mode, false);
+    }
+
+    #[test]
+    fn test_powershell_full_startup_stream() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+        let raw = b"\x1b[?9001h\x1b[?1004h\x1b[?25l\x1b[2J\x1b[m\x1b[HWindows PowerShell\r\nCopyright (C) Microsoft Corporation. All rights reserved.\x1b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\x07\x1b[?25h\x1b[?25l\x1b[4;1H\x1b[?25hPS C:\\Users\\gmora> ";
+        term.process_bytes(raw);
+
+        for (i, row) in term.grid.iter().enumerate() {
+            let s: String = row.iter().map(|c| c.c).collect();
+            let trimmed = s.trim_end();
+            if !trimmed.is_empty() {
+                println!("ROW {}: {:?}", i, trimmed);
+            }
+        }
+        println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+        
+        // Simular redimensionamiento de ventana al inicio (de 24 a 20 filas)
+        println!("--- AFTER RESIZE to 20 rows ---");
+        term.resize(80, 20);
+        for (i, row) in term.grid.iter().enumerate() {
+            let s: String = row.iter().map(|c| c.c).collect();
+            let trimmed = s.trim_end();
+            if !trimmed.is_empty() {
+                println!("GRID ROW {}: {:?}", i, trimmed);
+            }
+        }
+        for (i, row) in term.scrollback.iter().enumerate() {
+            let s: String = row.iter().map(|c| c.c).collect();
+            let trimmed = s.trim_end();
+            if !trimmed.is_empty() {
+                println!("SCROLLBACK ROW {}: {:?}", i, trimmed);
+            }
+        }
+        println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+        assert!(term.cursor_x > 0);
     }
 
     #[test]
