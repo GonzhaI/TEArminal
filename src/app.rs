@@ -104,8 +104,17 @@ impl AxonApp {
 
         // 2. Si no hay texto, comprobar si hay una imagen (captura de pantalla, recorte, imagen web)
         if let Ok(img) = cb.get_image() {
+            // Si Claude Code (u otro agente CLI compatible) está activo, enviamos la secuencia
+            // nativa de pegado de imágenes (Alt + V: \x1bv). Esto hace que Claude Code
+            // procese la imagen nativamente y muestre el chip interactivo [Image 1] en el prompt.
+            if is_claude_running() {
+                self.pty.write_input(b"\x1bv");
+                return;
+            }
+
+            // Si Claude Code no está corriendo (ej: prompt PowerShell estándar u otras herramientas),
+            // guardamos la captura en el directorio temporal y pegamos la ruta formateada.
             if let Some(path_str) = self.save_clipboard_image(&img) {
-                // Pegar la ruta entrecomillada con un espacio final lista para el prompt del agente CLI
                 let formatted = format!("\"{}\" ", path_str);
                 self.paste_text(&formatted);
                 return;
@@ -341,6 +350,7 @@ impl ApplicationHandler for AxonApp {
             } => {
                 let ctrl = self.modifiers.control_key();
                 let shift = self.modifiers.shift_key();
+                let alt = self.modifiers.alt_key();
 
                 // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
                 if logical_key != Key::Named(NamedKey::PageUp)
@@ -372,6 +382,40 @@ impl ApplicationHandler for AxonApp {
                 {
                     self.paste_from_clipboard();
                     return;
+                }
+
+                // 3. Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + F/B para palabras estilo Ghostty / xterm)
+                if alt && !ctrl {
+                    if key_is_char(&logical_key, 'v') {
+                        // Enviar Alt + V (\x1bv) para pegado nativo de imágenes en Claude Code
+                        self.pty.write_input(b"\x1bv");
+                        return;
+                    }
+
+                    match logical_key {
+                        Key::Named(NamedKey::Backspace) => {
+                            self.pty.write_input(b"\x1b\x7f"); // Borrar palabra atrás
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            self.pty.write_input(b"\x1bb"); // Salto palabra atrás
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            self.pty.write_input(b"\x1bf"); // Salto palabra adelante
+                            return;
+                        }
+                        Key::Character(ref s) => {
+                            if let Some(c) = s.chars().next() {
+                                let mut buf = [0u8; 5];
+                                buf[0] = 0x1b;
+                                let len = c.encode_utf8(&mut buf[1..]).len();
+                                self.pty.write_input(&buf[..1 + len]);
+                                return;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
 
                 // 3. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
@@ -825,5 +869,46 @@ fn get_clipboard_files() -> Option<Vec<String>> {
 fn get_clipboard_files() -> Option<Vec<String>> {
     None
 }
+
+/// Comprueba si Claude Code (o un agente CLI compatible con imágenes) se encuentra activo en el sistema
+#[cfg(target_os = "windows")]
+pub(crate) fn is_claude_running() -> bool {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == 0 || snapshot == -1isize as _ {
+            return false;
+        }
+
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        let mut found = false;
+        if Process32FirstW(snapshot, &mut entry) != 0 {
+            loop {
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase();
+                if name.contains("claude") {
+                    found = true;
+                    break;
+                }
+                if Process32NextW(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+
+        windows_sys::Win32::Foundation::CloseHandle(snapshot);
+        found
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn is_claude_running() -> bool {
+    false
+}
+
 
 
