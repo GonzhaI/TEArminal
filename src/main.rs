@@ -85,5 +85,42 @@ mod tests {
         assert!(background_matches, "El fondo del canvas debe coincidir exactamente con el fondo Ghostty (#161618)");
         assert!(has_green_pixels, "El buffer debe contener píxeles con el color verde Ghostty renderizado");
     }
+
+    #[test]
+    fn test_clipboard_image_saving_and_paste_formatting() {
+        let config = AxonConfig::load_or_default();
+        let app = AxonApp::new(config);
+
+        // Crear una imagen RGBA de prueba (4x4 pixels en verde Ghostty)
+        let width = 4;
+        let height = 4;
+        let mut bytes = Vec::with_capacity(width * height * 4);
+        for _ in 0..(width * height) {
+            bytes.extend_from_slice(&[0x51, 0xe2, 0x7a, 0xff]);
+        }
+
+        let img_data = arboard::ImageData {
+            width,
+            height,
+            bytes: std::borrow::Cow::Owned(bytes),
+        };
+
+        let path_str = app.save_clipboard_image(&img_data);
+        assert!(path_str.is_some(), "Debe guardar la imagen exitosamente y devolver su ruta");
+        let path = std::path::PathBuf::from(path_str.unwrap());
+        assert!(path.exists(), "El archivo PNG generado debe existir en disco");
+
+        // Formato para chat de IA: ruta entrecomillada con espacio al final
+        let formatted = format!("\"{}\" ", path.to_string_lossy());
+        assert!(formatted.starts_with('"') && formatted.ends_with("\" "));
+
+        // Verificar que el archivo generado es un PNG válido decodificable
+        let loaded = image::open(&path).expect("El PNG guardado debe ser decodificable por el crate image");
+        assert_eq!(loaded.width(), 4);
+        assert_eq!(loaded.height(), 4);
+
+        // Limpiar archivo de prueba
+        let _ = std::fs::remove_file(path);
+    }
 }
 

@@ -84,6 +84,89 @@ impl AxonApp {
         }
     }
 
+    /// Pegar desde el portapapeles con soporte inteligente para texto, imágenes de IA y archivos.
+    /// Si el portapapeles contiene una imagen (captura Snipping Tool, Win+Shift+S, recorte web),
+    /// la guarda automáticamente en un archivo PNG temporal y pega la ruta entrecomillada
+    /// en el prompt de la terminal para consumo directo por agentes de IA (Claude Code, Aider, etc.).
+    fn paste_from_clipboard(&mut self) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        let Some(cb) = &mut self.clipboard else { return; };
+
+        // 1. Si hay texto en el portapapeles (código, comandos, texto plano), pegar directamente
+        if let Ok(text) = cb.get_text() {
+            if !text.is_empty() {
+                self.paste_text(&text);
+                return;
+            }
+        }
+
+        // 2. Si no hay texto, comprobar si hay una imagen (captura de pantalla, recorte, imagen web)
+        if let Ok(img) = cb.get_image() {
+            if let Some(path_str) = self.save_clipboard_image(&img) {
+                // Pegar la ruta entrecomillada con un espacio final lista para el prompt del agente CLI
+                let formatted = format!("\"{}\" ", path_str);
+                self.paste_text(&formatted);
+                return;
+            }
+        }
+
+        // 3. Si no hay texto ni bitmap directo, comprobar si se copiaron archivos desde el Explorador de Windows (CF_HDROP)
+        if let Some(files) = get_clipboard_files() {
+            let formatted = files
+                .into_iter()
+                .map(|p| format!("\"{}\"", p))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !formatted.is_empty() {
+                let with_space = format!("{} ", formatted);
+                self.paste_text(&with_space);
+            }
+        }
+    }
+
+    /// Guarda una imagen del portapapeles en la carpeta temporal de Axon como archivo PNG.
+    /// Realiza limpieza pasiva de archivos temporales con más de 24 horas de antigüedad.
+    pub(crate) fn save_clipboard_image(&self, img: &arboard::ImageData) -> Option<String> {
+        let clip_dir = std::env::temp_dir().join("axon_clipboard");
+        let _ = std::fs::create_dir_all(&clip_dir);
+
+        // Limpieza pasiva de capturas antiguas (>24 horas)
+        if let Ok(entries) = std::fs::read_dir(&clip_dir) {
+            let now = std::time::SystemTime::now();
+            for entry in entries.flatten() {
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(age) = now.duration_since(modified) {
+                            if age.as_secs() > 86400 {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let file_path = clip_dir.join(format!("axon_clip_{}.png", timestamp));
+
+        let width = img.width as u32;
+        let height = img.height as u32;
+        let raw_bytes = img.bytes.to_vec();
+
+        if let Some(rgba_img) = image::RgbaImage::from_raw(width, height, raw_bytes) {
+            if rgba_img.save(&file_path).is_ok() {
+                return Some(file_path.to_string_lossy().to_string());
+            }
+        }
+
+        None
+    }
+
     fn adjust_font_size(&mut self, delta: f32) {
         let new_size = (self.config.appearance.font_size + delta).clamp(8.0, 32.0);
         if (new_size - self.config.appearance.font_size).abs() > 0.01 {
@@ -287,11 +370,7 @@ impl ApplicationHandler for AxonApp {
                     || (ctrl && !shift && key_is_char(&logical_key, 'v'))
                     || (shift && logical_key == Key::Named(NamedKey::Insert))
                 {
-                    if let Some(cb) = &mut self.clipboard {
-                        if let Ok(text) = cb.get_text() {
-                            self.paste_text(&text);
-                        }
-                    }
+                    self.paste_from_clipboard();
                     return;
                 }
 
@@ -531,14 +610,10 @@ impl ApplicationHandler for AxonApp {
                             }
                         }
                     }
-                    MouseButton::Right => {
+                    MouseButton::Right | MouseButton::Middle => {
                         if state == ElementState::Pressed {
-                            // Clic derecho: Pegar desde el portapapeles (estilo Ghostty y Windows Terminal)
-                            if let Some(cb) = &mut self.clipboard {
-                                if let Ok(text) = cb.get_text() {
-                                    self.paste_text(&text);
-                                }
-                            }
+                            // Clic derecho o central: Pegar desde el portapapeles (texto o imagen IA)
+                            self.paste_from_clipboard();
                         }
                     }
                     _ => {}
@@ -704,4 +779,51 @@ fn key_is_char(key: &Key, target: char) -> bool {
         _ => false,
     }
 }
+
+/// Obtiene rutas de archivos copiados al portapapeles desde el Explorador de Windows (CF_HDROP)
+#[cfg(target_os = "windows")]
+fn get_clipboard_files() -> Option<Vec<String>> {
+    use windows_sys::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+    use windows_sys::Win32::UI::Shell::DragQueryFileW;
+    const CF_HDROP: u32 = 15;
+
+    unsafe {
+        if OpenClipboard(0) == 0 {
+            return None;
+        }
+
+        let handle = GetClipboardData(CF_HDROP);
+        if handle == 0 {
+            CloseClipboard();
+            return None;
+        }
+
+        let count = DragQueryFileW(handle as _, 0xFFFFFFFF, std::ptr::null_mut(), 0);
+        let mut paths = Vec::with_capacity(count as usize);
+
+        for i in 0..count {
+            let len = DragQueryFileW(handle as _, i, std::ptr::null_mut(), 0);
+            if len > 0 {
+                let mut buf = vec![0u16; (len + 1) as usize];
+                DragQueryFileW(handle as _, i, buf.as_mut_ptr(), len + 1);
+                let path = String::from_utf16_lossy(&buf[..len as usize]);
+                paths.push(path);
+            }
+        }
+
+        CloseClipboard();
+
+        if paths.is_empty() {
+            None
+        } else {
+            Some(paths)
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_clipboard_files() -> Option<Vec<String>> {
+    None
+}
+
 
