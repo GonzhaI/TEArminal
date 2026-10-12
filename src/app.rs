@@ -41,6 +41,7 @@ pub struct AxonApp {
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
+    hovered_toggle_btn: bool,
     renderer: Option<TerminalRenderer>,
     window: Option<Arc<Window>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
@@ -97,6 +98,7 @@ impl AxonApp {
             hovered_tab: None,
             hovered_close: None,
             hovered_new_tab: false,
+            hovered_toggle_btn: false,
             renderer: None,
             window: None,
             context: None,
@@ -497,6 +499,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     self.hovered_tab,
                     self.hovered_close,
                     self.hovered_new_tab,
+                    self.hovered_toggle_btn,
                 );
             }
 
@@ -557,6 +560,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let hovered_tab = self.hovered_tab;
                 let hovered_close = self.hovered_close;
                 let hovered_new_tab = self.hovered_new_tab;
+                let hovered_toggle_btn = self.hovered_toggle_btn;
                 let cursor_visible = !self.config.terminal.cursor_blink
                     || (self.cursor_timer.elapsed().as_millis() % 1000) < 600;
 
@@ -592,6 +596,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 hovered_tab,
                                 hovered_close,
                                 hovered_new_tab,
+                                hovered_toggle_btn,
                             );
                         }
 
@@ -604,6 +609,16 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             &self.theme,
                             cursor_visible,
                         );
+
+                        if !sidebar_visible {
+                            renderer.render_floating_sidebar_toggle(
+                                &mut buffer,
+                                size.width as usize,
+                                size.height as usize,
+                                hovered_toggle_btn,
+                            );
+                        }
+
                         buffer.present().ok();
                     }
                 }
@@ -663,19 +678,46 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
+                // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
+                let is_backspace = matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+                    || matches!(&logical_key, Key::Named(NamedKey::Backspace));
+
+                // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
+                //    Activa borrado de palabra (deleteWordLeft / backward-kill-word) en Claude Code (key.meta),
+                //    harnesses como agy, shells POSIX y PowerShell (mediante PSReadLineKeyHandler).
+                if alt && is_backspace {
+                    crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
+                    self.tabs[self.active_tab_index].pty.write_input(b"\x1b\x7f");
+                    return;
+                }
+
+                // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
+                //    Activa BackwardKillWord en PowerShell de forma nativa y deleteWordLeft en Claude Code y agy.
+                if ctrl && is_backspace {
+                    crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
+                    self.tabs[self.active_tab_index].pty.write_input(&[0x17]);
+                    return;
+                }
+
+                // 3. Backspace normal (o Shift+Backspace):
+                //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
+                if is_backspace {
+                    crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
+                    self.tabs[self.active_tab_index].pty.write_input(&[0x7f]);
+                    return;
+                }
+
                 // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) ---
-                // 1. Nueva pestaña: Ctrl + Shift + T (o Ctrl + T)
-                if (ctrl && shift && key_is_char(&logical_key, 't'))
-                    || (ctrl && !shift && key_is_char(&logical_key, 't'))
-                {
-                    crate::logger::log("-> Hotkey: Nueva pestaña");
+                // 1. Nueva pestaña / terminal: Ctrl + T (o Ctrl + Shift + T)
+                if ctrl && !alt && key_is_char(&logical_key, 't') {
+                    crate::logger::log("-> Hotkey: Nueva terminal (Ctrl+T)");
                     self.create_new_tab();
                     return;
                 }
 
-                // 2. Cerrar pestaña activa: Ctrl + Shift + W
-                if ctrl && shift && key_is_char(&logical_key, 'w') {
-                    crate::logger::log("-> Hotkey: Cerrar pestaña activa");
+                // 2. Cerrar pestaña activa: Ctrl + W (o Ctrl + Shift + W)
+                if ctrl && !alt && key_is_char(&logical_key, 'w') {
+                    crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+W)");
                     self.close_tab(self.active_tab_index, event_loop);
                     return;
                 }
@@ -716,7 +758,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 5. Alternar barra lateral (Sidebar toggle): Ctrl + B o Ctrl + Shift + B
                 if ctrl && key_is_char(&logical_key, 'b') {
-                    crate::logger::log("-> Hotkey: Alternar barra lateral");
+                    crate::logger::log("-> Hotkey: Alternar barra lateral (Ctrl+B)");
                     self.toggle_sidebar();
                     return;
                 }
@@ -727,36 +769,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
                 {
                     self.tabs[self.active_tab_index].terminal.reset_scroll();
-                }
-
-                // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
-                let is_backspace = matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
-                    || matches!(&logical_key, Key::Named(NamedKey::Backspace))
-                    || matches!(&logical_key, Key::Character(s) if s == "\u{8}" || s == "\u{7f}" || s == "\u{17}");
-
-                // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
-                //    Activa borrado de palabra (deleteWordLeft / backward-kill-word) en Claude Code (key.meta),
-                //    harnesses como agy, shells POSIX y PowerShell (mediante PSReadLineKeyHandler).
-                if alt && is_backspace {
-                    crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
-                    self.tabs[self.active_tab_index].pty.write_input(b"\x1b\x7f");
-                    return;
-                }
-
-                // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
-                //    Activa BackwardKillWord en PowerShell de forma nativa y deleteWordLeft en Claude Code y agy.
-                if ctrl && is_backspace {
-                    crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
-                    self.tabs[self.active_tab_index].pty.write_input(&[0x17]);
-                    return;
-                }
-
-                // 3. Backspace normal (o Shift+Backspace):
-                //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
-                if is_backspace {
-                    crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
-                    self.tabs[self.active_tab_index].pty.write_input(&[0x7f]);
-                    return;
                 }
 
                 // 1. Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
@@ -1045,10 +1057,31 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let mx = position.x as usize;
                 let my = position.y as usize;
 
+                let win_h = if let Some(w) = &self.window {
+                    w.inner_size().height as usize
+                } else {
+                    600
+                };
+
+                // Comprobar hover en botón inferior de alternar barra lateral
+                let toggle_btn_w = if self.sidebar_visible { SIDEBAR_WIDTH.saturating_sub(16) } else { 32 };
+                let toggle_btn_h = 30;
+                let toggle_btn_x = 8;
+                let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8);
+
+                let is_hover_toggle = mx >= toggle_btn_x
+                    && mx < toggle_btn_x + toggle_btn_w
+                    && my >= toggle_btn_y
+                    && my < toggle_btn_y + toggle_btn_h;
+
+                let mut needs_redraw = false;
+                if self.hovered_toggle_btn != is_hover_toggle {
+                    self.hovered_toggle_btn = is_hover_toggle;
+                    needs_redraw = true;
+                }
+
                 // 1. Detección de hover en la barra lateral si está visible
                 if self.sidebar_visible && mx < SIDEBAR_WIDTH {
-                    let mut needs_redraw = false;
-
                     // Hover en botón "+"
                     let plus_btn_x = SIDEBAR_WIDTH.saturating_sub(34);
                     let plus_btn_y = 8;
@@ -1066,11 +1099,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     let list_start_y = 42;
                     let tab_x = 8;
                     let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
+                    let list_max_y = win_h.saturating_sub(44);
 
                     let mut new_hovered_tab = None;
                     let mut new_hovered_close = None;
 
-                    if my >= list_start_y {
+                    if my >= list_start_y && my < list_max_y {
                         let rel_y = my - list_start_y;
                         let item_total = tab_item_h + tab_spacing;
                         let tab_idx = rel_y / item_total;
@@ -1107,13 +1141,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 } else if self.sidebar_visible {
                     // Si el ratón salió de la barra lateral, resetear estados hover
-                    let mut needs_redraw = false;
                     if self.hovered_tab.is_some() { self.hovered_tab = None; needs_redraw = true; }
                     if self.hovered_close.is_some() { self.hovered_close = None; needs_redraw = true; }
                     if self.hovered_new_tab { self.hovered_new_tab = false; needs_redraw = true; }
                     if needs_redraw {
                         if let Some(w) = &self.window { w.request_redraw(); }
                     }
+                } else if needs_redraw {
+                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
 
                 // 2. Coordenadas relativas a la cuadrícula de la terminal activa
@@ -1168,7 +1203,30 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let mx = self.mouse_pos.x as usize;
                 let my = self.mouse_pos.y as usize;
 
-                // 1. Clics en la barra lateral
+                let win_h = if let Some(w) = &self.window {
+                    w.inner_size().height as usize
+                } else {
+                    600
+                };
+
+                // Comprobar clic en botón inferior de alternar barra lateral (en ambas modalidades)
+                let toggle_btn_w = if self.sidebar_visible { SIDEBAR_WIDTH.saturating_sub(16) } else { 32 };
+                let toggle_btn_h = 30;
+                let toggle_btn_x = 8;
+                let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8);
+
+                let is_click_toggle = mx >= toggle_btn_x
+                    && mx < toggle_btn_x + toggle_btn_w
+                    && my >= toggle_btn_y
+                    && my < toggle_btn_y + toggle_btn_h;
+
+                if is_click_toggle && state == ElementState::Pressed && button == MouseButton::Left {
+                    crate::logger::log("-> Clic en botón inferior de alternar barra lateral");
+                    self.toggle_sidebar();
+                    return;
+                }
+
+                // 1. Clics en la barra lateral abierta
                 if self.sidebar_visible && mx < SIDEBAR_WIDTH {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         // Clic en botón "+"
@@ -1188,8 +1246,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         let list_start_y = 42;
                         let tab_x = 8;
                         let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
+                        let list_max_y = win_h.saturating_sub(44);
 
-                        if my >= list_start_y {
+                        if my >= list_start_y && my < list_max_y {
                             let rel_y = my - list_start_y;
                             let item_total = tab_item_h + tab_spacing;
                             let tab_idx = rel_y / item_total;

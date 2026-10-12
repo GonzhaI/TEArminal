@@ -28,7 +28,8 @@ Inspirado en la estética y rendimiento de [Ghostty](https://ghostty.org), Axon 
   * Botón interactivo `+` para spawnear nuevas sesiones independientes con su propio proceso ConPTY.
   * Botón `×` en pestañas inactivas/activas para cerrar sesiones.
   * Indicador de foco activo con acento verde Ghostty (`#51e27a`) y punto azul de actividad (`#4e92f9`) cuando una terminal en segundo plano recibe nueva salida de un comando.
-  * Barra lateral colapsable dinámicamente con `Ctrl + B`.
+  * Botón interactivo inferior `[ < Ocultar ]` en el sidebar y botón flotante `[ > ]` cuando está colapsado para alternar con un clic la visibilidad del panel.
+  * Barra lateral colapsable dinámicamente también con `Ctrl + B`.
 * **⌨️ Teclado Preciso en Windows:**
   * Borrado de 1 carácter con `Backspace` (`0x7f`) y borrado de palabra con `Ctrl+Backspace` (`0x17`) / `Alt+Backspace` (`\x1b\x7f`).
   * Aislamiento de hardware para `AltGr` (`VK_RMENU`), impidiendo que el Control sintético de Windows quede atascado.
@@ -40,8 +41,8 @@ Inspirado en la estética y rendimiento de [Ghostty](https://ghostty.org), Axon 
 
 | Atajo | Acción |
 | :--- | :--- |
-| `Ctrl + Shift + T` / `Ctrl + T` | **Nueva pestaña / terminal** |
-| `Ctrl + Shift + W` | **Cerrar pestaña activa** |
+| `Ctrl + T` / `Ctrl + Shift + T` | **Nueva pestaña / terminal** |
+| `Ctrl + W` / `Ctrl + Shift + W` | **Cerrar pestaña activa** |
 | `Ctrl + Tab` / `Ctrl + Shift + Tab` | **Pestaña siguiente / anterior** |
 | `Ctrl + 1` .. `Ctrl + 9` | **Cambiar directamente a pestaña 1-9** |
 | `Ctrl + B` | **Alternar visibilidad de la barra lateral** |

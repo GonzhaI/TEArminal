@@ -165,6 +165,7 @@ mod tests {
             Some(1),
             None,
             false,
+            false,
         );
 
         // Validar que la región de la barra lateral (0..190) fue pintada con el fondo oscuro del sidebar
@@ -180,6 +181,12 @@ mod tests {
 
         let term_bg_pixel = term.theme.background.to_u32_xrgb();
         assert_eq!(buffer[50 * 1000 + 195], term_bg_pixel, "El área de terminal después del offset debe tener fondo Ghostty");
+
+        // 4. Probar renderizado del botón flotante expand cuando el sidebar está oculto
+        renderer.render_floating_sidebar_toggle(&mut buffer, 1000, 600, true);
+        let float_btn_bg = theme::Color::from_rgb(38, 38, 46).to_u32_xrgb();
+        let float_y = 600 - 30 - 8 + 5;
+        assert_eq!(buffer[float_y * 1000 + 10], float_btn_bg, "El botón flotante debe renderizarse correctamente");
     }
 
     #[test]

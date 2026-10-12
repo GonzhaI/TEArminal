@@ -249,6 +249,7 @@ impl TerminalRenderer {
         hovered_tab: Option<usize>,
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
+        hovered_toggle_btn: bool,
     ) {
         if sidebar_width == 0 || width == 0 || height == 0 {
             return;
@@ -312,10 +313,11 @@ impl TerminalRenderer {
         let tab_item_h = 34;
         let tab_spacing = 4;
         let list_start_y = 42;
+        let list_max_y = height.saturating_sub(44);
 
         for (idx, tab) in tabs.iter().enumerate() {
             let tab_y = list_start_y + idx * (tab_item_h + tab_spacing);
-            if tab_y + tab_item_h > height {
+            if tab_y + tab_item_h > list_max_y {
                 break;
             }
 
@@ -412,6 +414,104 @@ impl TerminalRenderer {
                 );
             }
         }
+
+        // 5. Botón inferior para alternar/ocultar la barra lateral ("< Ocultar")
+        let toggle_h = 30;
+        let toggle_y = height.saturating_sub(toggle_h + 8);
+        let toggle_x = 8;
+        let toggle_w = sidebar_width.saturating_sub(16);
+
+        // Separador superior sutil
+        Self::draw_rect(buffer, width, height, 0, toggle_y.saturating_sub(6), sidebar_width, 1, divider_color);
+
+        let toggle_bg = if hovered_toggle_btn {
+            Color::from_rgb(32, 32, 38)
+        } else {
+            Color::from_rgb(22, 22, 26)
+        };
+        Self::draw_rect(buffer, width, height, toggle_x, toggle_y, toggle_w, toggle_h, toggle_bg);
+
+        let toggle_fg = if hovered_toggle_btn {
+            Color::from_rgb(81, 226, 122) // Verde Ghostty
+        } else {
+            Color::from_rgb(170, 170, 180)
+        };
+        let toggle_baseline = toggle_y + self.baseline_y.min(20);
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            "< Ocultar",
+            toggle_x + 10,
+            toggle_baseline,
+            toggle_x + toggle_w,
+            toggle_fg,
+            hovered_toggle_btn,
+        );
+
+        // Indicador de atajo Ctrl+B a la derecha
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            "Ctrl+B",
+            toggle_x + toggle_w.saturating_sub(58),
+            toggle_baseline,
+            toggle_x + toggle_w,
+            Color::from_rgb(100, 100, 112),
+            false,
+        );
+    }
+
+    /// Renderiza un botón flotante sutil en la esquina inferior izquierda para volver a desplegar la barra lateral
+    pub fn render_floating_sidebar_toggle(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        hovered: bool,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let btn_w = 32;
+        let btn_h = 30;
+        let btn_x = 8;
+        let btn_y = height.saturating_sub(btn_h + 8);
+
+        let bg_color = if hovered {
+            Color::from_rgb(38, 38, 46)
+        } else {
+            Color::from_rgb(24, 24, 28)
+        };
+        Self::draw_rect(buffer, width, height, btn_x, btn_y, btn_w, btn_h, bg_color);
+
+        // Borde fino
+        let border_color = Color::from_rgb(45, 45, 54);
+        Self::draw_rect(buffer, width, height, btn_x, btn_y, btn_w, 1, border_color);
+        Self::draw_rect(buffer, width, height, btn_x, btn_y + btn_h - 1, btn_w, 1, border_color);
+        Self::draw_rect(buffer, width, height, btn_x, btn_y, 1, btn_h, border_color);
+        Self::draw_rect(buffer, width, height, btn_x + btn_w - 1, btn_y, 1, btn_h, border_color);
+
+        let icon_fg = if hovered {
+            Color::from_rgb(81, 226, 122) // Verde Ghostty
+        } else {
+            Color::from_rgb(180, 180, 190)
+        };
+
+        let baseline = btn_y + self.baseline_y.min(20);
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            ">",
+            btn_x + 11,
+            baseline,
+            btn_x + btn_w,
+            icon_fg,
+            true,
+        );
     }
 
     /// Calcula las columnas y filas que caben en el tamaño actual de la ventana
