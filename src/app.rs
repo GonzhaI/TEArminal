@@ -279,7 +279,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
         let window_attributes = WindowAttributes::default()
             .with_title("Axon")
-            .with_visible(true)
+            .with_visible(false)
             .with_inner_size(PhysicalSize::new(1020, 680))
             .with_min_inner_size(PhysicalSize::new(480, 280))
             .with_window_icon(Some(icon));
@@ -291,6 +291,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         );
 
         // Habilitar barra de título oscura inmersiva de Windows 11 (DWM Dark Mode)
+        // y fijar el pincel de fondo de clase Win32 al tema oscuro para evitar flash blanco
         enable_windows_dark_mode(&window);
 
         let context = softbuffer::Context::new(window.clone())
@@ -299,7 +300,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             .expect("Error al inicializar superficie de renderizado nativo");
 
         let scale_factor = window.scale_factor();
-        let renderer = TerminalRenderer::new(&self.config, scale_factor);
+        let mut renderer = TerminalRenderer::new(&self.config, scale_factor);
 
         let initial_size = window.inner_size();
         if let (Some(w), Some(h)) = (NonZeroU32::new(initial_size.width), NonZeroU32::new(initial_size.height)) {
@@ -311,7 +312,22 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         self.terminal.resize(cols, rows);
         self.pty.resize(cols as u16, rows as u16);
 
-        window.request_redraw();
+        // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
+        // Esto garantiza que el usuario vea la terminal oscura de inmediato sin ningún destello blanco.
+        if let Ok(mut buffer) = surface.buffer_mut() {
+            renderer.render(
+                &mut buffer,
+                initial_size.width as usize,
+                initial_size.height as usize,
+                &self.terminal,
+                &self.theme,
+                true,
+            );
+            buffer.present().ok();
+        }
+
+        // Mostrar la ventana una vez que el primer frame oscuro ya está listo y dibujado
+        window.set_visible(true);
 
         self.window = Some(window);
         self.context = Some(context);
@@ -1082,6 +1098,18 @@ fn enable_windows_dark_mode(window: &Window) {
                     &backdrop_type as *const _ as *const _,
                     std::mem::size_of::<u32>() as u32,
                 );
+
+                // 7. Establecer el pincel de fondo de la clase Win32 al color oscuro de Ghostty (#161618)
+                // Esto previene que Windows pinte el fondo blanco por defecto (COLOR_WINDOW / WHITE_BRUSH)
+                // al crear la ventana o al procesar eventos WM_ERASEBKGND durante redimensionado.
+                let dark_brush = windows_sys::Win32::Graphics::Gdi::CreateSolidBrush(0x00181616);
+                if dark_brush != 0 {
+                    windows_sys::Win32::UI::WindowsAndMessaging::SetClassLongPtrW(
+                        hwnd,
+                        windows_sys::Win32::UI::WindowsAndMessaging::GCLP_HBRBACKGROUND,
+                        dark_brush as isize,
+                    );
+                }
             }
         }
     }
