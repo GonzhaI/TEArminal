@@ -86,6 +86,14 @@ pub struct TerminalState {
     // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
     pub bracketed_paste_mode: bool,
 
+    // Soporte para protocolos interactivos TUI (Herdr, Ratatui, Lazygit)
+    pub mouse_reporting_normal: bool,       // Modo 1000: Reporte de clics
+    pub mouse_reporting_button_event: bool, // Modo 1002: Clics y arrastre
+    pub mouse_reporting_any_event: bool,    // Modo 1003: Todo movimiento
+    pub mouse_reporting_sgr: bool,          // Modo 1006: Coordenadas SGR extendidas (\x1b[<...M/m)
+    pub focus_event_reporting: bool,        // Modo 1004: Foco ganado/perdido (\x1b[I, \x1b[O)
+    pub sync_update_mode: bool,             // Modo 2026: Renderizado sincronizado (DEC 2026)
+
     // Imágenes renderizadas en terminal (Protocolos iTerm2 / OSC 1337 / Visión IA)
     pub images: Vec<InlineImage>,
     pub next_image_id: u64,
@@ -141,6 +149,12 @@ impl TerminalState {
             active_block: None,
             clipboard_queue: Vec::new(),
             bracketed_paste_mode: false,
+            mouse_reporting_normal: false,
+            mouse_reporting_button_event: false,
+            mouse_reporting_any_event: false,
+            mouse_reporting_sgr: false,
+            focus_event_reporting: false,
+            sync_update_mode: false,
             images: Vec::new(),
             next_image_id: 1,
             total_lines_count: 0,
@@ -156,6 +170,10 @@ impl TerminalState {
             selection: None,
             parser: Some(Parser::new()),
         }
+    }
+
+    pub fn is_mouse_reporting_active(&self) -> bool {
+        self.mouse_reporting_normal || self.mouse_reporting_button_event || self.mouse_reporting_any_event
     }
 
     pub fn current_global_line(&self) -> usize {
@@ -509,10 +527,19 @@ impl<'a> Perform for Performer<'a> {
                 match action {
                     // Set Mode (h)
                     'h' => match mode {
-                        // Alternate Screen Buffer (usado por tmux, btop, nvtop, vim, less)
+                        // Alternate Screen Buffer (usado por tmux, btop, nvtop, vim, less, herdr)
                         1049 | 47 => self.state.enter_alt_screen(),
                         // Mostrar cursor
                         25 => self.state.cursor_visible = true,
+                        // Mouse tracking para TUIs (Herdr, Ratatui, Lazygit)
+                        1000 => self.state.mouse_reporting_normal = true,
+                        1002 => self.state.mouse_reporting_button_event = true,
+                        1003 => self.state.mouse_reporting_any_event = true,
+                        1006 => self.state.mouse_reporting_sgr = true,
+                        // Reporte de foco (\x1b[I, \x1b[O)
+                        1004 => self.state.focus_event_reporting = true,
+                        // Renderizado sincronizado (DEC 2026 anti-flicker)
+                        2026 => self.state.sync_update_mode = true,
                         // Activar Bracketed Paste Mode (negociado con Claude Code, Aider, shells)
                         2004 => self.state.bracketed_paste_mode = true,
                         _ => {}
@@ -523,6 +550,15 @@ impl<'a> Perform for Performer<'a> {
                         1049 | 47 => self.state.exit_alt_screen(),
                         // Ocultar cursor (usado por TUIs para evitar parpadeos)
                         25 => self.state.cursor_visible = false,
+                        // Desactivar Mouse tracking
+                        1000 => self.state.mouse_reporting_normal = false,
+                        1002 => self.state.mouse_reporting_button_event = false,
+                        1003 => self.state.mouse_reporting_any_event = false,
+                        1006 => self.state.mouse_reporting_sgr = false,
+                        // Desactivar reporte de foco
+                        1004 => self.state.focus_event_reporting = false,
+                        // Finalizar renderizado sincronizado
+                        2026 => self.state.sync_update_mode = false,
                         // Desactivar Bracketed Paste Mode
                         2004 => self.state.bracketed_paste_mode = false,
                         _ => {}
@@ -593,15 +629,79 @@ impl<'a> Perform for Performer<'a> {
             'J' => {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
                 let default_cell = Cell::default_with_theme(&self.state.theme);
-                if mode == 2 || mode == 3 {
-                    let grid = self.state.active_grid_mut();
-                    for row in grid.iter_mut() {
-                        for cell in row.iter_mut() {
-                            *cell = default_cell.clone();
+                match mode {
+                    0 => {
+                        // Borrar desde el cursor hasta el final de la pantalla
+                        let cx = self.state.cursor_x;
+                        let cy = self.state.cursor_y;
+                        let cols = self.state.cols;
+                        let grid = self.state.active_grid_mut();
+                        if cy < grid.len() {
+                            for x in cx..cols {
+                                if x < grid[cy].len() {
+                                    grid[cy][x] = default_cell.clone();
+                                }
+                            }
+                            for y in (cy + 1)..grid.len() {
+                                for x in 0..cols {
+                                    if x < grid[y].len() {
+                                        grid[y][x] = default_cell.clone();
+                                    }
+                                }
+                            }
                         }
                     }
-                    self.state.cursor_x = 0;
-                    self.state.cursor_y = 0;
+                    1 => {
+                        // Borrar desde el inicio de la pantalla hasta el cursor
+                        let cx = self.state.cursor_x;
+                        let cy = self.state.cursor_y;
+                        let cols = self.state.cols;
+                        let grid = self.state.active_grid_mut();
+                        for y in 0..cy.min(grid.len()) {
+                            for x in 0..cols {
+                                if x < grid[y].len() {
+                                    grid[y][x] = default_cell.clone();
+                                }
+                            }
+                        }
+                        if cy < grid.len() {
+                            for x in 0..=cx.min(cols.saturating_sub(1)) {
+                                if x < grid[cy].len() {
+                                    grid[cy][x] = default_cell.clone();
+                                }
+                            }
+                        }
+                    }
+                    2 => {
+                        // Borrar pantalla completa activa
+                        let grid = self.state.active_grid_mut();
+                        for row in grid.iter_mut() {
+                            for cell in row.iter_mut() {
+                                *cell = default_cell.clone();
+                            }
+                        }
+                        self.state.cursor_x = 0;
+                        self.state.cursor_y = 0;
+                        self.state.reset_scroll();
+                    }
+                    3 => {
+                        // Borrar pantalla completa y limpiar scrollback buffer (usado por clear / cls / ConPTY)
+                        let grid = self.state.active_grid_mut();
+                        for row in grid.iter_mut() {
+                            for cell in row.iter_mut() {
+                                *cell = default_cell.clone();
+                            }
+                        }
+                        self.state.cursor_x = 0;
+                        self.state.cursor_y = 0;
+                        if !self.state.is_alt_screen {
+                            self.state.scrollback.clear();
+                            self.state.scroll_offset = 0;
+                            self.state.total_lines_count = self.state.rows;
+                            self.state.command_blocks.clear();
+                        }
+                    }
+                    _ => {}
                 }
             }
             // EL - Erase in Line
@@ -639,6 +739,66 @@ impl<'a> Perform for Performer<'a> {
                     }
                 }
             }
+
+            // ECH - Erase Character (\x1b[PnX): borra Pn caracteres a partir del cursor
+            'X' => {
+                let count = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1).max(1) as usize;
+                let cy = self.state.cursor_y;
+                let cx = self.state.cursor_x;
+                let cols = self.state.cols;
+                let default_cell = Cell::default_with_theme(&self.state.theme);
+                let grid = self.state.active_grid_mut();
+                if cy < grid.len() {
+                    let end_x = (cx + count).min(cols);
+                    for x in cx..end_x {
+                        if x < grid[cy].len() {
+                            grid[cy][x] = default_cell.clone();
+                        }
+                    }
+                }
+                crate::logger::log(&format!("CSI X (ECH): borrados {} caracteres en ({}, {})", count, cx, cy));
+            }
+
+            // DCH - Delete Character (\x1b[PnP): elimina Pn caracteres en el cursor desplazando hacia la izquierda
+            'P' => {
+                let count = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1).max(1) as usize;
+                let cy = self.state.cursor_y;
+                let cx = self.state.cursor_x;
+                let cols = self.state.cols;
+                let default_cell = Cell::default_with_theme(&self.state.theme);
+                let grid = self.state.active_grid_mut();
+                if cy < grid.len() && cx < cols {
+                    let row = &mut grid[cy];
+                    for _ in 0..count {
+                        if cx < row.len() {
+                            row.remove(cx);
+                            row.push(default_cell.clone());
+                        }
+                    }
+                }
+                crate::logger::log(&format!("CSI P (DCH): eliminados {} caracteres en ({}, {})", count, cx, cy));
+            }
+
+            // ICH - Insert Character (\x1b[Pn@): inserta Pn espacios en blanco en el cursor desplazando hacia la derecha
+            '@' => {
+                let count = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1).max(1) as usize;
+                let cy = self.state.cursor_y;
+                let cx = self.state.cursor_x;
+                let cols = self.state.cols;
+                let default_cell = Cell::default_with_theme(&self.state.theme);
+                let grid = self.state.active_grid_mut();
+                if cy < grid.len() && cx < cols {
+                    let row = &mut grid[cy];
+                    for _ in 0..count {
+                        if cx < row.len() {
+                            row.insert(cx, default_cell.clone());
+                            row.pop();
+                        }
+                    }
+                }
+                crate::logger::log(&format!("CSI @ (ICH): insertados {} espacios en ({}, {})", count, cx, cy));
+            }
+
             // SGR - Select Graphic Rendition (Colores y Estilos)
             'm' => {
                 self.handle_sgr(params);
@@ -1288,5 +1448,69 @@ mod tests {
         assert!(!cell_b.dim);
         assert!(!cell_b.underline);
         assert!(!cell_b.strikethrough);
+    }
+
+    #[test]
+    fn test_tui_mouse_and_sync_protocols() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        assert!(!term.is_mouse_reporting_active());
+        assert!(!term.mouse_reporting_sgr);
+        assert!(!term.focus_event_reporting);
+        assert!(!term.sync_update_mode);
+
+        // Herdr / Ratatui activa mouse tracking (1000, 1002, 1006) y focus (1004)
+        term.process_bytes(b"\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?2026h");
+        assert!(term.is_mouse_reporting_active());
+        assert!(term.mouse_reporting_normal);
+        assert!(term.mouse_reporting_button_event);
+        assert!(term.mouse_reporting_sgr);
+        assert!(term.focus_event_reporting);
+        assert!(term.sync_update_mode);
+
+        // Desactivación al salir del TUI
+        term.process_bytes(b"\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2026l");
+        assert!(!term.is_mouse_reporting_active());
+        assert!(!term.mouse_reporting_sgr);
+        assert!(!term.focus_event_reporting);
+        assert!(!term.sync_update_mode);
+    }
+
+    #[test]
+    fn test_pwsh_startup_prompt() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+        let raw = b"\x1b[?9001h\x1b[?1004h\x1b[2J\x1b[?25l\x1b[2J\x1b[m\x1b[H\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\x1b[H\x1b]0;pwsh.exe\x07\x1b[?25h\x1b[38;2;78;146;249m\xef\x81\xbb ~\x1b[38;2;81;226;122m\r\n\xef\x90\xb2 ";
+        term.process_bytes(raw);
+        for (i, row) in term.grid.iter().enumerate() {
+            let s: String = row.iter().map(|c| c.c).collect();
+            let trimmed = s.trim_end();
+            if !trimmed.is_empty() {
+                println!("ROW {}: {:?}", i, trimmed);
+            }
+        }
+        println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+        assert!(term.cursor_x > 0);
+    }
+
+    #[test]
+    fn test_ech_erase_characters() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Escribir "hello world"
+        term.process_bytes(b"hello world");
+        assert_eq!(term.grid[0][0].c, 'h');
+        assert_eq!(term.grid[0][6].c, 'w');
+
+        // Mover cursor a columna 6 (índice 5: ' ') y borrar 6 caracteres con ECH (\x1b[6X)
+        term.process_bytes(b"\x1b[1;6H\x1b[6X");
+        assert_eq!(term.cursor_x, 5); // El cursor no debe moverse
+        assert_eq!(term.grid[0][0].c, 'h');
+        assert_eq!(term.grid[0][4].c, 'o');
+        assert_eq!(term.grid[0][5].c, ' ');
+        assert_eq!(term.grid[0][6].c, ' ');
+        assert_eq!(term.grid[0][10].c, ' ');
     }
 }

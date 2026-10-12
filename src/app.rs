@@ -10,8 +10,13 @@ use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{Key, ModifiersState, NamedKey};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
+
+#[derive(Debug, Clone, Copy)]
+pub enum AxonEvent {
+    PtyData,
+}
 
 pub struct AxonApp {
     config: AxonConfig,
@@ -29,10 +34,11 @@ pub struct AxonApp {
     mouse_down: bool,
     cursor_timer: Instant,
     last_grid_size: (usize, usize),
+    is_focused: bool,
 }
 
 impl AxonApp {
-    pub fn new(config: AxonConfig) -> Self {
+    pub fn new(config: AxonConfig, proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>) -> Self {
         let cols = 120;
         let rows = 30;
         let theme = Theme::ghostty_dark();
@@ -41,6 +47,7 @@ impl AxonApp {
             config.terminal.ghostty_prompt,
             cols as u16,
             rows as u16,
+            proxy,
         ).expect("Error al inicializar Windows ConPTY");
 
         let terminal = TerminalState::new(
@@ -68,6 +75,7 @@ impl AxonApp {
             mouse_down: false,
             cursor_timer: Instant::now(),
             last_grid_size: (cols, rows),
+            is_focused: true,
         }
     }
 
@@ -230,7 +238,32 @@ impl AxonApp {
     }
 }
 
-impl ApplicationHandler for AxonApp {
+impl ApplicationHandler<AxonEvent> for AxonApp {
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AxonEvent) {
+        match event {
+            AxonEvent::PtyData => {
+                let mut got_bytes = false;
+                while let Some(bytes) = self.pty.try_recv_output() {
+                    got_bytes = true;
+                    if bytes.contains(&0x1b) {
+                        crate::logger::log(&format!("PTY RECV ESC: {:?}", String::from_utf8_lossy(&bytes)));
+                    }
+                    self.terminal.process_bytes(&bytes);
+                }
+                for text in self.terminal.clipboard_queue.drain(..) {
+                    if let Some(cb) = &mut self.clipboard {
+                        cb.set_text(text).ok();
+                    }
+                }
+                if got_bytes {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -241,6 +274,7 @@ impl ApplicationHandler for AxonApp {
 
         let window_attributes = WindowAttributes::default()
             .with_title("Axon")
+            .with_visible(true)
             .with_inner_size(PhysicalSize::new(1020, 680))
             .with_min_inner_size(PhysicalSize::new(480, 280))
             .with_window_icon(Some(icon));
@@ -256,17 +290,23 @@ impl ApplicationHandler for AxonApp {
 
         let context = softbuffer::Context::new(window.clone())
             .expect("Error al inicializar contexto de aceleración gráfica de pantalla");
-        let surface = softbuffer::Surface::new(&context, window.clone())
+        let mut surface = softbuffer::Surface::new(&context, window.clone())
             .expect("Error al inicializar superficie de renderizado nativo");
 
         let scale_factor = window.scale_factor();
         let renderer = TerminalRenderer::new(&self.config, scale_factor);
 
         let initial_size = window.inner_size();
+        if let (Some(w), Some(h)) = (NonZeroU32::new(initial_size.width), NonZeroU32::new(initial_size.height)) {
+            let _ = surface.resize(w, h);
+        }
+
         let (cols, rows) = renderer.compute_grid_size(initial_size.width as usize, initial_size.height as usize);
         self.last_grid_size = (cols, rows);
         self.terminal.resize(cols, rows);
         self.pty.resize(cols as u16, rows as u16);
+
+        window.request_redraw();
 
         self.window = Some(window);
         self.context = Some(context);
@@ -344,13 +384,49 @@ impl ApplicationHandler for AxonApp {
                         logical_key,
                         text,
                         state: ElementState::Pressed,
+                        physical_key,
                         ..
                     },
                 ..
             } => {
-                let ctrl = self.modifiers.control_key();
-                let shift = self.modifiers.shift_key();
-                let alt = self.modifiers.alt_key();
+                // Si la terminal no tiene el foco activo, ignorar la entrada de teclado
+                if !self.is_focused {
+                    return;
+                }
+
+                #[cfg(target_os = "windows")]
+                let (ctrl, shift, alt, altgr) = get_physical_modifiers();
+
+                #[cfg(not(target_os = "windows"))]
+                let (ctrl, shift, alt, altgr) = (
+                    self.modifiers.control_key(),
+                    self.modifiers.shift_key(),
+                    self.modifiers.alt_key(),
+                    false,
+                );
+
+                crate::logger::log(&format!(
+                    "KEY: phys={:?}, log={:?}, text={:?}, ctrl={}, shift={}, alt={}, altgr={}",
+                    physical_key, logical_key, text, ctrl, shift, alt, altgr
+                ));
+
+                // Si AltGr está presionado (teclados en español para @, #, \, ~, etc.),
+                // procesar exclusivamente como entrada de texto y nunca como atajo de control
+                if altgr {
+                    if let Some(t) = text {
+                        if !t.is_empty() && t != "\r" && t != "\n" && t != "\t" {
+                            crate::logger::log(&format!("-> AltGr text: {:?}", t));
+                            self.pty.write_input(t.as_bytes());
+                        }
+                    }
+                    return;
+                }
+
+                // Alt + Tab es el atajo de cambio de tarea de Windows; NUNCA debe enviar \t al shell
+                if alt && logical_key == Key::Named(NamedKey::Tab) {
+                    crate::logger::log("-> Ignorado Alt+Tab");
+                    return;
+                }
 
                 // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
                 if logical_key != Key::Named(NamedKey::PageUp)
@@ -358,6 +434,29 @@ impl ApplicationHandler for AxonApp {
                     && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
                 {
                     self.terminal.reset_scroll();
+                }
+
+                // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
+                let is_backspace = matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+                    || matches!(&logical_key, Key::Named(NamedKey::Backspace))
+                    || matches!(&logical_key, Key::Character(s) if s == "\u{8}" || s == "\u{7f}" || s == "\u{17}");
+
+                // 1. Si Ctrl o Alt están presionados (Ctrl+Backspace o Alt+Backspace):
+                //    En Windows ConPTY, el byte nativo que emite Windows Terminal para borrar la palabra
+                //    anterior (BackwardKillWord en PSReadLine) es 0x08 (ASCII Backspace). ConPTY lo mapea
+                //    a VK_BACK con Ctrl activado, borrando la palabra completa limpiamente.
+                if (ctrl || alt) && is_backspace {
+                    crate::logger::log("-> Enviando 0x08 (borrado de palabra)");
+                    self.pty.write_input(&[0x08]);
+                    return;
+                }
+
+                // 2. Backspace normal (o Shift+Backspace):
+                //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
+                if is_backspace {
+                    crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
+                    self.pty.write_input(&[0x7f]);
+                    return;
                 }
 
                 // 1. Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
@@ -384,7 +483,7 @@ impl ApplicationHandler for AxonApp {
                     return;
                 }
 
-                // 3. Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + F/B para palabras estilo Ghostty / xterm)
+                // 3. Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + Flechas)
                 if alt && !ctrl {
                     if key_is_char(&logical_key, 'v') {
                         // Enviar Alt + V (\x1bv) para pegado nativo de imágenes en Claude Code
@@ -393,10 +492,6 @@ impl ApplicationHandler for AxonApp {
                     }
 
                     match logical_key {
-                        Key::Named(NamedKey::Backspace) => {
-                            self.pty.write_input(b"\x1b\x7f"); // Borrar palabra atrás
-                            return;
-                        }
                         Key::Named(NamedKey::ArrowLeft) => {
                             self.pty.write_input(b"\x1bb"); // Salto palabra atrás
                             return;
@@ -405,13 +500,23 @@ impl ApplicationHandler for AxonApp {
                             self.pty.write_input(b"\x1bf"); // Salto palabra adelante
                             return;
                         }
+                        Key::Named(NamedKey::Tab) => {
+                            return; // Prevenir cualquier propagación de Alt+Tab
+                        }
+                        Key::Named(NamedKey::F4) => {
+                            return; // Alt+F4 manejado por el sistema
+                        }
                         Key::Character(ref s) => {
+                            // Solo enviar secuencias escape Alt+letra para letras ASCII minúsculas/mayúsculas
+                            // para no interferir con combinaciones AltGr de teclados en español (@, #, \, ~, etc.)
                             if let Some(c) = s.chars().next() {
-                                let mut buf = [0u8; 5];
-                                buf[0] = 0x1b;
-                                let len = c.encode_utf8(&mut buf[1..]).len();
-                                self.pty.write_input(&buf[..1 + len]);
-                                return;
+                                if c.is_ascii_alphabetic() {
+                                    let mut buf = [0u8; 5];
+                                    buf[0] = 0x1b;
+                                    let len = c.encode_utf8(&mut buf[1..]).len();
+                                    self.pty.write_input(&buf[..1 + len]);
+                                    return;
+                                }
                             }
                         }
                         _ => {}
@@ -456,6 +561,16 @@ impl ApplicationHandler for AxonApp {
                             cb.set_text(output).ok();
                         }
                     }
+                    return;
+                }
+
+                // 5b. Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
+                if ctrl && shift && (key_is_char(&logical_key, 'k') || key_is_char(&logical_key, 'l')) {
+                    self.terminal.scrollback.clear();
+                    self.terminal.reset_scroll();
+                    self.terminal.command_blocks.clear();
+                    self.pty.write_input(b"\x0c");
+                    if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
 
@@ -525,7 +640,7 @@ impl ApplicationHandler for AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Backspace) => {
-                            self.pty.write_input(&[0x17]); // 0x17 (^W): Borrar palabra atrás
+                            self.pty.write_input(&[0x08]); // 0x08: Borrar palabra atrás en ConPTY
                             return;
                         }
                         Key::Named(NamedKey::Delete) => {
@@ -576,8 +691,17 @@ impl ApplicationHandler for AxonApp {
                 // 11. Teclas especiales y flechas VT estándar
                 match logical_key {
                     Key::Named(NamedKey::Enter) => self.pty.write_input(b"\r"),
-                    Key::Named(NamedKey::Backspace) => self.pty.write_input(&[0x08]),
-                    Key::Named(NamedKey::Tab) => self.pty.write_input(b"\t"),
+                    Key::Named(NamedKey::Backspace) => self.pty.write_input(&[0x7f]),
+                    Key::Named(NamedKey::Tab) => {
+                        if alt {
+                            return;
+                        }
+                        if shift {
+                            self.pty.write_input(b"\x1b[Z");
+                        } else {
+                            self.pty.write_input(b"\t");
+                        }
+                    }
                     Key::Named(NamedKey::Escape) => self.pty.write_input(&[0x1b]),
                     Key::Named(NamedKey::Delete) => self.pty.write_input(b"\x1b[3~"),
                     Key::Named(NamedKey::Home) => self.pty.write_input(b"\x1b[H"),
@@ -611,7 +735,36 @@ impl ApplicationHandler for AxonApp {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = position;
-                if self.mouse_down {
+                let bypass = self.modifiers.shift_key();
+
+                if self.terminal.is_mouse_reporting_active() && !bypass {
+                    // Reportar movimiento/arrastre a Herdr / Ratatui (SGR 1006 / 1002 / 1003)
+                    if (self.terminal.mouse_reporting_button_event && self.mouse_down) || self.terminal.mouse_reporting_any_event {
+                        if let Some(renderer) = &self.renderer {
+                            let mx = position.x as usize;
+                            let my = position.y as usize;
+                            let col = if mx >= renderer.margin_x {
+                                ((mx - renderer.margin_x) / renderer.char_width) + 1
+                            } else { 1 }.min(self.terminal.cols);
+                            let row = if my >= renderer.margin_y {
+                                ((my - renderer.margin_y) / renderer.row_height) + 1
+                            } else { 1 }.min(self.terminal.rows);
+
+                            let mut code = 32; // Flag de arrastre/movimiento
+                            if self.modifiers.shift_key() { code += 4; }
+                            if self.modifiers.alt_key() { code += 8; }
+                            if self.modifiers.control_key() { code += 16; }
+
+                            if self.terminal.mouse_reporting_sgr {
+                                let seq = format!("\x1b[<{};{};{}M", code, col, row);
+                                self.pty.write_input(seq.as_bytes());
+                            } else {
+                                let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                                self.pty.write_input(&seq);
+                            }
+                        }
+                    }
+                } else if self.mouse_down {
                     if let Some(renderer) = &self.renderer {
                         let mx = position.x as usize;
                         let my = position.y as usize;
@@ -631,65 +784,162 @@ impl ApplicationHandler for AxonApp {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                match button {
-                    MouseButton::Left => {
-                        match state {
-                            ElementState::Pressed => {
-                                self.mouse_down = true;
-                                if let Some(renderer) = &self.renderer {
-                                    let mx = self.mouse_pos.x as usize;
-                                    let my = self.mouse_pos.y as usize;
-                                    if mx >= renderer.margin_x && my >= renderer.margin_y {
-                                        let col = (mx - renderer.margin_x) / renderer.char_width;
-                                        let row = (my - renderer.margin_y) / renderer.row_height;
-                                        self.drag_start = Some((col, row));
-                                        self.terminal.selection = None;
-                                        if let Some(w) = &self.window { w.request_redraw(); }
+                let bypass = self.modifiers.shift_key();
+
+                if self.terminal.is_mouse_reporting_active() && !bypass {
+                    // Transmitir evento de ratón a Herdr / Ratatui
+                    if let Some(renderer) = &self.renderer {
+                        let mx = self.mouse_pos.x as usize;
+                        let my = self.mouse_pos.y as usize;
+                        let col = if mx >= renderer.margin_x {
+                            ((mx - renderer.margin_x) / renderer.char_width) + 1
+                        } else { 1 }.min(self.terminal.cols);
+                        let row = if my >= renderer.margin_y {
+                            ((my - renderer.margin_y) / renderer.row_height) + 1
+                        } else { 1 }.min(self.terminal.rows);
+
+                        let base_code = match button {
+                            MouseButton::Left => 0,
+                            MouseButton::Middle => 1,
+                            MouseButton::Right => 2,
+                            _ => 0,
+                        };
+
+                        let mut code = base_code;
+                        if self.modifiers.shift_key() { code += 4; }
+                        if self.modifiers.alt_key() { code += 8; }
+                        if self.modifiers.control_key() { code += 16; }
+
+                        let is_pressed = state == ElementState::Pressed;
+                        self.mouse_down = is_pressed && button == MouseButton::Left;
+
+                        if self.terminal.mouse_reporting_sgr {
+                            let suffix = if is_pressed { 'M' } else { 'm' };
+                            let seq = format!("\x1b[<{};{};{}{}", code, col, row, suffix);
+                            self.pty.write_input(seq.as_bytes());
+                        } else {
+                            let btn_byte = if is_pressed { 32 + code as u8 } else { 32 + 3 };
+                            let seq = [0x1b, b'[', b'M', btn_byte, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                            self.pty.write_input(&seq);
+                        }
+                    }
+                } else {
+                    match button {
+                        MouseButton::Left => {
+                            match state {
+                                ElementState::Pressed => {
+                                    self.mouse_down = true;
+                                    if let Some(renderer) = &self.renderer {
+                                        let mx = self.mouse_pos.x as usize;
+                                        let my = self.mouse_pos.y as usize;
+                                        if mx >= renderer.margin_x && my >= renderer.margin_y {
+                                            let col = (mx - renderer.margin_x) / renderer.char_width;
+                                            let row = (my - renderer.margin_y) / renderer.row_height;
+                                            self.drag_start = Some((col, row));
+                                            self.terminal.selection = None;
+                                            if let Some(w) = &self.window { w.request_redraw(); }
+                                        }
                                     }
                                 }
-                            }
-                            ElementState::Released => {
-                                self.mouse_down = false;
-                                self.drag_start = None;
+                                ElementState::Released => {
+                                    self.mouse_down = false;
+                                    self.drag_start = None;
+                                }
                             }
                         }
-                    }
-                    MouseButton::Right | MouseButton::Middle => {
-                        if state == ElementState::Pressed {
-                            // Clic derecho o central: Pegar desde el portapapeles (texto o imagen IA)
-                            self.paste_from_clipboard();
+                        MouseButton::Right | MouseButton::Middle => {
+                            if state == ElementState::Pressed {
+                                self.paste_from_clipboard();
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
 
             WindowEvent::MouseWheel { delta, .. } => {
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => (y.abs() as usize).max(1) * 3,
-                    MouseScrollDelta::PixelDelta(pos) => ((pos.y.abs() / 20.0).ceil() as usize).max(1) * 3,
-                };
+                let bypass = self.modifiers.shift_key();
 
-                let is_up = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y > 0.0,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
-                };
+                if self.terminal.is_mouse_reporting_active() && !bypass {
+                    // Transmitir scroll del ratón al TUI activo (Herdr / Ratatui)
+                    if let Some(renderer) = &self.renderer {
+                        let mx = self.mouse_pos.x as usize;
+                        let my = self.mouse_pos.y as usize;
+                        let col = if mx >= renderer.margin_x {
+                            ((mx - renderer.margin_x) / renderer.char_width) + 1
+                        } else { 1 }.min(self.terminal.cols);
+                        let row = if my >= renderer.margin_y {
+                            ((my - renderer.margin_y) / renderer.row_height) + 1
+                        } else { 1 }.min(self.terminal.rows);
 
-                if is_up {
-                    self.terminal.scroll_up(lines);
+                        let is_up = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => y > 0.0,
+                            MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
+                        };
+
+                        let mut code = if is_up { 64 } else { 65 };
+                        if self.modifiers.shift_key() { code += 4; }
+                        if self.modifiers.alt_key() { code += 8; }
+                        if self.modifiers.control_key() { code += 16; }
+
+                        if self.terminal.mouse_reporting_sgr {
+                            let seq = format!("\x1b[<{};{};{}M", code, col, row);
+                            self.pty.write_input(seq.as_bytes());
+                        } else {
+                            let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                            self.pty.write_input(&seq);
+                        }
+                    }
                 } else {
-                    self.terminal.scroll_down(lines);
+                    let lines = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => (y.abs() as usize).max(1) * 3,
+                        MouseScrollDelta::PixelDelta(pos) => ((pos.y.abs() / 20.0).ceil() as usize).max(1) * 3,
+                    };
+
+                    let is_up = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y > 0.0,
+                        MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
+                    };
+
+                    if is_up {
+                        self.terminal.scroll_up(lines);
+                    } else {
+                        self.terminal.scroll_down(lines);
+                    }
+
+                    if let Some(w) = &self.window { w.request_redraw(); }
+                }
+            }
+
+            WindowEvent::Focused(focused) => {
+                crate::logger::log(&format!("FOCUS: {}", focused));
+                self.is_focused = focused;
+                if !focused {
+                    // Al perder el foco (p. ej. al hacer Alt+Tab hacia otra ventana),
+                    // resetear los modificadores para evitar que Alt o Ctrl queden atascados.
+                    self.modifiers = ModifiersState::empty();
+                    self.mouse_down = false;
+                    self.drag_start = None;
+                } else {
+                    // Al retomar foco, también limpiar para partir de un estado limpio
+                    self.modifiers = ModifiersState::empty();
                 }
 
-                if let Some(w) = &self.window { w.request_redraw(); }
+                if self.terminal.focus_event_reporting {
+                    if focused {
+                        self.pty.write_input(b"\x1b[I");
+                    } else {
+                        self.pty.write_input(b"\x1b[O");
+                    }
+                }
             }
 
             _ => {}
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // 1. Drenar salida de ConPTY
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 1. Drenar salida de ConPTY por si quedó algún byte residual
         let mut got_bytes = false;
         while let Some(bytes) = self.pty.try_recv_output() {
             got_bytes = true;
@@ -703,15 +953,32 @@ impl ApplicationHandler for AxonApp {
             }
         }
 
-        // 3. Solicitar repintado si llegaron nuevos bytes del PTY o para parpadeo de cursor
+        // 3. Solicitar repintado si llegaron nuevos bytes del PTY
         if got_bytes {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
-        } else if self.config.terminal.cursor_blink {
-            if let Some(w) = &self.window {
-                w.request_redraw();
+        }
+
+        // 4. Temporizador de parpadeo de cursor cuando la terminal está inactiva
+        if self.config.terminal.cursor_blink {
+            let elapsed = self.cursor_timer.elapsed().as_millis();
+            if elapsed >= 500 {
+                self.cursor_timer = Instant::now();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
+                    std::time::Duration::from_millis(500),
+                ));
+            } else {
+                let remain = (500 - elapsed).max(16) as u64;
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
+                    std::time::Duration::from_millis(remain),
+                ));
             }
+        } else {
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
     }
 }
@@ -795,13 +1062,52 @@ fn enable_windows_dark_mode(window: &Window) {
                     &corner_pref as *const _ as *const _,
                     std::mem::size_of::<u32>() as u32,
                 );
+
+                // 6. Efecto de fondo Mica nativo de Windows 11 (estilo Ghostty)
+                let backdrop_type: u32 = 2; // 2 = DWMSBT_MAINWINDOW (Mica)
+                windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                    hwnd,
+                    38, // DWMWA_SYSTEMBACKDROP_TYPE
+                    &backdrop_type as *const _ as *const _,
+                    std::mem::size_of::<u32>() as u32,
+                );
             }
         }
     }
 }
 
+#[cfg(target_os = "windows")]
+fn get_physical_modifiers() -> (bool, bool, bool, bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LCONTROL, VK_LMENU, VK_RCONTROL, VK_RMENU, VK_SHIFT,
+    };
+
+    unsafe {
+        let is_down = |vk: u16| -> bool {
+            (GetAsyncKeyState(vk as i32) as i16) < 0
+        };
+
+        let shift = is_down(VK_SHIFT);
+        let rmenu = is_down(VK_RMENU); // AltGr (Right Alt)
+        let lmenu = is_down(VK_LMENU); // Left Alt
+        let lctrl = is_down(VK_LCONTROL);
+        let rctrl = is_down(VK_RCONTROL);
+
+        // En Windows, presionar AltGr (RMENU) inyecta automáticamente un LCONTROL sintético.
+        // Por tanto, Ctrl solo es genuino si RCONTROL está presionado, o si LCONTROL
+        // está presionado SIN que RMENU (AltGr) esté activo.
+        let ctrl = rctrl || (lctrl && !rmenu);
+        let alt = lmenu;
+        let altgr = rmenu;
+
+        (ctrl, shift, alt, altgr)
+    }
+}
+
 #[cfg(not(target_os = "windows"))]
-fn enable_windows_dark_mode(_window: &Window) {}
+fn get_physical_modifiers() -> (bool, bool, bool, bool) {
+    (false, false, false, false)
+}
 
 fn key_is_char(key: &Key, target: char) -> bool {
     match key {
@@ -823,6 +1129,7 @@ fn key_is_char(key: &Key, target: char) -> bool {
         _ => false,
     }
 }
+
 
 /// Obtiene rutas de archivos copiados al portapapeles desde el Explorador de Windows (CF_HDROP)
 #[cfg(target_os = "windows")]

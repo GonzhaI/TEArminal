@@ -59,14 +59,11 @@ impl Default for AxonConfig {
 }
 
 fn detect_preferred_shell() -> String {
-    // Si pwsh (PowerShell 7+) está instalado, preferirlo para soporte nativo de colores ANSI y sintaxis
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let pwsh_exe = dir.join("pwsh.exe");
-            if pwsh_exe.exists() {
-                return "pwsh.exe".to_string();
-            }
-        }
+    // Solo usar pwsh.exe si existe como binario Win32 nativo completo en Program Files.
+    // Los alias de Windows Store (AppData\Local\Microsoft\WindowsApps\pwsh.exe) bloquean ConPTY en Windows 11.
+    let prog_pwsh = std::path::Path::new(r"C:\Program Files\PowerShell\7\pwsh.exe");
+    if prog_pwsh.exists() {
+        return prog_pwsh.to_string_lossy().to_string();
     }
     "powershell.exe".to_string()
 }

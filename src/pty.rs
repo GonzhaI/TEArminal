@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use winit::event_loop::EventLoopProxy;
+use crate::app::AxonEvent;
 
 pub struct PtyManager {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
@@ -12,7 +14,13 @@ pub struct PtyManager {
 }
 
 impl PtyManager {
-    pub fn new(shell: &str, ghostty_prompt: bool, cols: u16, rows: u16) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        shell: &str,
+        ghostty_prompt: bool,
+        cols: u16,
+        rows: u16,
+        proxy: Option<EventLoopProxy<AxonEvent>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -22,6 +30,8 @@ impl PtyManager {
         })?;
 
         let mut cmd = CommandBuilder::new(shell);
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
 
         // Si se trata de PowerShell y ghostty_prompt está activo, inyectar el entorno Ghostty nativo
         if ghostty_prompt {
@@ -111,7 +121,19 @@ impl PtyManager {
             }
         }
 
-        let child = pair.slave.spawn_command(cmd)?;
+        let child = match pair.slave.spawn_command(cmd) {
+            Ok(c) => c,
+            Err(e) => {
+                if shell != "powershell.exe" {
+                    let mut fallback_cmd = CommandBuilder::new("powershell.exe");
+                    fallback_cmd.env("TERM", "xterm-256color");
+                    fallback_cmd.env("COLORTERM", "truecolor");
+                    pair.slave.spawn_command(fallback_cmd)?
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
 
         let mut reader = pair.master.try_clone_reader()?;
         let mut writer = pair.master.take_writer()?;
@@ -120,6 +142,7 @@ impl PtyManager {
         let (to_pty_tx, to_pty_rx) = channel::<Vec<u8>>();
 
         // Hilo lector del PTY (lee la salida del shell y la envía al terminal)
+        let proxy_clone = proxy;
         thread::Builder::new()
             .name("axon-pty-reader".into())
             .spawn(move || {
@@ -130,6 +153,9 @@ impl PtyManager {
                     }
                     if from_pty_tx.send(buffer[..n].to_vec()).is_err() {
                         break;
+                    }
+                    if let Some(p) = &proxy_clone {
+                        let _ = p.send_event(AxonEvent::PtyData);
                     }
                 }
             })?;
@@ -180,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
-        let pty = PtyManager::new("powershell.exe", false, 80, 24).unwrap();
+        let pty = PtyManager::new("powershell.exe", false, 80, 24, None).unwrap();
         let mut total_output = String::new();
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -206,5 +232,41 @@ mod tests {
         }
         println!("ECHO OUTPUT (len {}):\n{:?}", echo_output.len(), echo_output);
         assert!(echo_output.contains("hello"), "El shell debe responder al input del usuario");
+
+        // Probar Backspace con 0x7f (debe borrar solo 1 carácter)
+        pty.write_input(b"wordX\x7f\r\n");
+        let mut bs_output = String::new();
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            while let Some(bytes) = pty.try_recv_output() {
+                let s = String::from_utf8_lossy(&bytes);
+                bs_output.push_str(&s);
+            }
+            if bs_output.contains("word") {
+                break;
+            }
+        }
+        // Probar exactamente el texto de la captura del usuario
+        pty.write_input(b"asldkflsdkflsdkflsadkf lasdkflsdkflasfksadlfk alsdkflsakdflasdkf laskdflksdlf");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        while let Some(_) = pty.try_recv_output() {}
+
+        // Enviar 0x08 para borrar la última palabra
+        pty.write_input(&[0x08]);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut del1 = String::new();
+        while let Some(bytes) = pty.try_recv_output() {
+            del1.push_str(&String::from_utf8_lossy(&bytes));
+        }
+        println!("DEL 1 PTY OUTPUT: {:?}", del1);
+
+        // Enviar 0x08 para borrar otra palabra
+        pty.write_input(&[0x08]);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut del2 = String::new();
+        while let Some(bytes) = pty.try_recv_output() {
+            del2.push_str(&String::from_utf8_lossy(&bytes));
+        }
+        println!("DEL 2 PTY OUTPUT: {:?}", del2);
     }
 }

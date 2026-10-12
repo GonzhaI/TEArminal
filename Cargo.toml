@@ -20,6 +20,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_DataExchange",
     "Win32_UI_Shell",
     "Win32_System_Diagnostics_ToolHelp",

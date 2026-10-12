@@ -1,5 +1,6 @@
 #![windows_subsystem = "windows"]
 
+pub mod logger;
 mod app;
 mod config;
 mod pty;
@@ -7,7 +8,7 @@ mod renderer;
 mod terminal;
 mod theme;
 
-use app::AxonApp;
+use app::{AxonApp, AxonEvent};
 use config::AxonConfig;
 use winit::event_loop::EventLoop;
 
@@ -15,11 +16,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Cargar configuración de Axon
     let config = AxonConfig::load_or_default();
 
-    // 2. Crear EventLoop nativo de Windows
-    let event_loop = EventLoop::new()?;
+    // 2. Crear EventLoop nativo de Windows con soporte para eventos asíncronos de ConPTY
+    let event_loop = EventLoop::<AxonEvent>::with_user_event().build()?;
+    let proxy = event_loop.create_proxy();
 
     // 3. Instanciar aplicación nativa de Axon
-    let mut app = AxonApp::new(config);
+    let mut app = AxonApp::new(config, Some(proxy));
 
     // 4. Iniciar ciclo de eventos del sistema operativo
     event_loop.run_app(&mut app)?;
@@ -89,7 +91,7 @@ mod tests {
     #[test]
     fn test_clipboard_image_saving_and_paste_formatting() {
         let config = AxonConfig::load_or_default();
-        let app = AxonApp::new(config);
+        let app = AxonApp::new(config, None);
 
         // Crear una imagen RGBA de prueba (4x4 pixels en verde Ghostty)
         let width = 4;
