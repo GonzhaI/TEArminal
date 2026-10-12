@@ -1,4 +1,8 @@
-# Axon ⚡
+<div align="center">
+  <img src="assets/icon-256.png" width="120" height="120" alt="Axon Logo" />
+  <h1>Axon ⚡</h1>
+  <p><em>Emulador de terminal nativo, ultra-rápido y minimalista para Windows, diseñado para desarrolladores y agentes de IA en la CLI</em></p>
+</div>
 
 **Axon** es un emulador de terminal nativo, ultra-rápido y minimalista para Windows, escrito en Rust y diseñado específicamente para desarrolladores y **agentes de IA en la línea de comandos** (*Claude Code, Aider, Herdr, Copilot CLI, etc.*).
 

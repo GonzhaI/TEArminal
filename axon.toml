@@ -2,7 +2,7 @@
 font_family = "JetBrains Mono Nerd Font"
 font_size = 13.0
 window_opacity = 0.98
-theme = "ghostty-dark"
+theme = "Ghostty Default StyleDark"
 line_spacing = 1.0
 
 [terminal]

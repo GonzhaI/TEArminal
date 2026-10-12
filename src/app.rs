@@ -19,13 +19,238 @@ pub enum AxonEvent {
     PtyClosed(usize),
 }
 
-pub struct TerminalTab {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone)]
+pub enum PaneNode {
+    Leaf(usize),
+    Split {
+        direction: SplitDirection,
+        ratio: f32,
+        first: Box<PaneNode>,
+        second: Box<PaneNode>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PaneRect {
+    pub pane_id: usize,
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+pub struct TerminalPane {
     pub id: usize,
-    pub title: String,
     pub pty: PtyManager,
     pub terminal: TerminalState,
     pub last_grid_size: (usize, usize),
+}
+
+pub struct TerminalTab {
+    pub id: usize,
+    pub title: String,
+    pub panes: Vec<TerminalPane>,
+    pub active_pane_id: usize,
+    pub layout: PaneNode,
     pub has_unread: bool,
+}
+
+impl TerminalTab {
+    pub fn new(id: usize, title: String, first_pane: TerminalPane) -> Self {
+        let active_pane_id = first_pane.id;
+        let layout = PaneNode::Leaf(active_pane_id);
+        Self {
+            id,
+            title,
+            panes: vec![first_pane],
+            active_pane_id,
+            layout,
+            has_unread: false,
+        }
+    }
+
+    pub fn active_pane(&self) -> Option<&TerminalPane> {
+        self.panes.iter().find(|p| p.id == self.active_pane_id)
+            .or_else(|| self.panes.first())
+    }
+
+    pub fn active_pane_mut(&mut self) -> Option<&mut TerminalPane> {
+        let active_id = self.active_pane_id;
+        if let Some(pos) = self.panes.iter().position(|p| p.id == active_id) {
+            Some(&mut self.panes[pos])
+        } else {
+            self.panes.first_mut()
+        }
+    }
+
+    pub fn find_pane(&self, pane_id: usize) -> Option<&TerminalPane> {
+        self.panes.iter().find(|p| p.id == pane_id)
+    }
+
+    pub fn find_pane_mut(&mut self, pane_id: usize) -> Option<&mut TerminalPane> {
+        self.panes.iter_mut().find(|p| p.id == pane_id)
+    }
+
+    pub fn compute_pane_rects(&self, total_x: usize, total_y: usize, total_w: usize, total_h: usize) -> Vec<PaneRect> {
+        let mut rects = Vec::new();
+        self.collect_rects(&self.layout, total_x, total_y, total_w, total_h, &mut rects);
+        rects
+    }
+
+    fn collect_rects(&self, node: &PaneNode, x: usize, y: usize, w: usize, h: usize, out: &mut Vec<PaneRect>) {
+        const DIVIDER: usize = 2;
+        match node {
+            PaneNode::Leaf(pane_id) => {
+                out.push(PaneRect {
+                    pane_id: *pane_id,
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                });
+            }
+            PaneNode::Split { direction, ratio, first, second } => {
+                match direction {
+                    SplitDirection::Horizontal => {
+                        let avail_h = h.saturating_sub(DIVIDER);
+                        let h1 = ((avail_h as f32) * ratio).round() as usize;
+                        let h1 = h1.min(avail_h);
+                        let h2 = avail_h.saturating_sub(h1);
+                        self.collect_rects(first, x, y, w, h1, out);
+                        self.collect_rects(second, x, y + h1 + DIVIDER, w, h2, out);
+                    }
+                    SplitDirection::Vertical => {
+                        let avail_w = w.saturating_sub(DIVIDER);
+                        let w1 = ((avail_w as f32) * ratio).round() as usize;
+                        let w1 = w1.min(avail_w);
+                        let w2 = avail_w.saturating_sub(w1);
+                        self.collect_rects(first, x, y, w1, h, out);
+                        self.collect_rects(second, x + w1 + DIVIDER, y, w2, h, out);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn compute_dividers(&self, total_x: usize, total_y: usize, total_w: usize, total_h: usize) -> Vec<(usize, usize, usize, usize)> {
+        let mut dividers = Vec::new();
+        self.collect_dividers(&self.layout, total_x, total_y, total_w, total_h, &mut dividers);
+        dividers
+    }
+
+    fn collect_dividers(&self, node: &PaneNode, x: usize, y: usize, w: usize, h: usize, out: &mut Vec<(usize, usize, usize, usize)>) {
+        const DIVIDER: usize = 2;
+        match node {
+            PaneNode::Leaf(_) => {}
+            PaneNode::Split { direction, ratio, first, second } => {
+                match direction {
+                    SplitDirection::Horizontal => {
+                        let avail_h = h.saturating_sub(DIVIDER);
+                        let h1 = ((avail_h as f32) * ratio).round() as usize;
+                        let h1 = h1.min(avail_h);
+                        let h2 = avail_h.saturating_sub(h1);
+                        out.push((x, y + h1, w, DIVIDER));
+                        self.collect_dividers(first, x, y, w, h1, out);
+                        self.collect_dividers(second, x, y + h1 + DIVIDER, w, h2, out);
+                    }
+                    SplitDirection::Vertical => {
+                        let avail_w = w.saturating_sub(DIVIDER);
+                        let w1 = ((avail_w as f32) * ratio).round() as usize;
+                        let w1 = w1.min(avail_w);
+                        let w2 = avail_w.saturating_sub(w1);
+                        out.push((x + w1, y, DIVIDER, h));
+                        self.collect_dividers(first, x, y, w1, h, out);
+                        self.collect_dividers(second, x + w1 + DIVIDER, y, w2, h, out);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn split_active_pane(&mut self, new_pane_id: usize, new_pane: TerminalPane, direction: SplitDirection) {
+        let active_id = self.active_pane_id;
+        self.layout = Self::split_leaf_in_tree(self.layout.clone(), active_id, new_pane_id, direction);
+        self.panes.push(new_pane);
+        self.active_pane_id = new_pane_id;
+    }
+
+    fn split_leaf_in_tree(node: PaneNode, target_id: usize, new_id: usize, direction: SplitDirection) -> PaneNode {
+        match node {
+            PaneNode::Leaf(id) => {
+                if id == target_id {
+                    PaneNode::Split {
+                        direction,
+                        ratio: 0.5,
+                        first: Box::new(PaneNode::Leaf(target_id)),
+                        second: Box::new(PaneNode::Leaf(new_id)),
+                    }
+                } else {
+                    PaneNode::Leaf(id)
+                }
+            }
+            PaneNode::Split { direction: d, ratio, first, second } => {
+                PaneNode::Split {
+                    direction: d,
+                    ratio,
+                    first: Box::new(Self::split_leaf_in_tree(*first, target_id, new_id, direction)),
+                    second: Box::new(Self::split_leaf_in_tree(*second, target_id, new_id, direction)),
+                }
+            }
+        }
+    }
+
+    pub fn close_pane(&mut self, pane_id: usize) {
+        self.panes.retain(|p| p.id != pane_id);
+        if let Some(new_tree) = Self::remove_leaf_from_tree(self.layout.clone(), pane_id) {
+            self.layout = new_tree;
+        }
+        if self.active_pane_id == pane_id {
+            if let Some(p) = self.panes.last() {
+                self.active_pane_id = p.id;
+            }
+        }
+    }
+
+    fn remove_leaf_from_tree(node: PaneNode, target_id: usize) -> Option<PaneNode> {
+        match node {
+            PaneNode::Leaf(id) => {
+                if id == target_id {
+                    None
+                } else {
+                    Some(PaneNode::Leaf(id))
+                }
+            }
+            PaneNode::Split { direction, ratio, first, second } => {
+                let f = Self::remove_leaf_from_tree(*first, target_id);
+                let s = Self::remove_leaf_from_tree(*second, target_id);
+                match (f, s) {
+                    (Some(f_node), Some(s_node)) => Some(PaneNode::Split {
+                        direction,
+                        ratio,
+                        first: Box::new(f_node),
+                        second: Box::new(s_node),
+                    }),
+                    (Some(f_node), None) => Some(f_node),
+                    (None, Some(s_node)) => Some(s_node),
+                    (None, None) => None,
+                }
+            }
+        }
+    }
 }
 
 pub const SIDEBAR_WIDTH: usize = 190;
@@ -37,6 +262,7 @@ pub struct AxonApp {
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
     next_tab_id: usize,
+    next_pane_id: usize,
     pub sidebar_visible: bool,
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
@@ -53,36 +279,103 @@ pub struct AxonApp {
     mouse_down: bool,
     cursor_timer: Instant,
     is_focused: bool,
+    // Barra de desplazamiento interactiva y auto-ocultable
+    scrollbar_dragging: bool,
+    scrollbar_drag_pane_id: Option<usize>,
+    scrollbar_drag_offset_y: f32,
+    last_scroll_time: Instant,
+    #[allow(dead_code)]
+    hovered_scrollbar: bool,
 }
 
 impl AxonApp {
     pub fn new(config: AxonConfig, proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>) -> Self {
         let cols = 100;
         let rows = 30;
-        let theme = Theme::ghostty_dark();
-        let pty = PtyManager::new(
-            0,
-            &config.terminal.default_shell,
-            config.terminal.ghostty_prompt,
-            cols as u16,
-            rows as u16,
-            proxy.clone(),
-        ).expect("Error al inicializar Windows ConPTY");
+        let theme = Theme::from_name(&config.appearance.theme);
 
-        let terminal = TerminalState::new(
-            cols,
-            rows,
-            config.terminal.scrollback_lines,
-            theme.clone(),
-        );
+        // Restaurar estado de sesiones previas si existe
+        let saved_session = crate::config::SessionState::load();
+        let mut next_pane_id = 0;
+        let (tabs, active_tab_index, next_tab_id, sidebar_visible) = if let Some(session) = saved_session {
+            if !session.tabs.is_empty() {
+                let mut restored_tabs = Vec::new();
+                for (idx, tab_info) in session.tabs.into_iter().enumerate() {
+                    let pane_id = next_pane_id;
+                    next_pane_id += 1;
+                    let cwd_path = tab_info.cwd.as_ref().map(std::path::PathBuf::from);
+                    let cwd_ref = cwd_path.as_deref();
+                    let pty = PtyManager::new(
+                        pane_id,
+                        &config.terminal.default_shell,
+                        config.terminal.ghostty_prompt,
+                        cols as u16,
+                        rows as u16,
+                        cwd_ref,
+                        proxy.clone(),
+                    ).expect("Error al inicializar Windows ConPTY");
 
-        let initial_tab = TerminalTab {
-            id: 0,
-            title: "Terminal 1".to_string(),
-            pty,
-            terminal,
-            last_grid_size: (cols, rows),
-            has_unread: false,
+                    let mut terminal = TerminalState::new(
+                        cols,
+                        rows,
+                        config.terminal.scrollback_lines,
+                        theme.clone(),
+                    );
+                    terminal.current_dir = cwd_path;
+
+                    let pane = TerminalPane {
+                        id: pane_id,
+                        pty,
+                        terminal,
+                        last_grid_size: (cols, rows),
+                    };
+
+                    restored_tabs.push(TerminalTab::new(idx, tab_info.title, pane));
+                }
+                let active = session.active_tab_index.min(restored_tabs.len() - 1);
+                let next_id = restored_tabs.len();
+                (restored_tabs, active, next_id, session.sidebar_visible)
+            } else {
+                let pane_id = next_pane_id;
+                next_pane_id += 1;
+                let pty = PtyManager::new(
+                    pane_id,
+                    &config.terminal.default_shell,
+                    config.terminal.ghostty_prompt,
+                    cols as u16,
+                    rows as u16,
+                    None,
+                    proxy.clone(),
+                ).expect("Error al inicializar Windows ConPTY");
+                let terminal = TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
+                let pane = TerminalPane {
+                    id: pane_id,
+                    pty,
+                    terminal,
+                    last_grid_size: (cols, rows),
+                };
+                (vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)], 0, 1, true)
+            }
+        } else {
+            let pane_id = next_pane_id;
+            next_pane_id += 1;
+            let pty = PtyManager::new(
+                pane_id,
+                &config.terminal.default_shell,
+                config.terminal.ghostty_prompt,
+                cols as u16,
+                rows as u16,
+                None,
+                proxy.clone(),
+            ).expect("Error al inicializar Windows ConPTY");
+            let terminal = TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
+            let pane = TerminalPane {
+                id: pane_id,
+                pty,
+                terminal,
+                last_grid_size: (cols, rows),
+            };
+            (vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)], 0, 1, true)
         };
 
         let clipboard = arboard::Clipboard::new().ok();
@@ -91,10 +384,11 @@ impl AxonApp {
             config,
             theme,
             proxy,
-            tabs: vec![initial_tab],
-            active_tab_index: 0,
-            next_tab_id: 1,
-            sidebar_visible: true,
+            tabs,
+            active_tab_index,
+            next_tab_id,
+            next_pane_id,
+            sidebar_visible,
             hovered_tab: None,
             hovered_close: None,
             hovered_new_tab: false,
@@ -110,7 +404,31 @@ impl AxonApp {
             mouse_down: false,
             cursor_timer: Instant::now(),
             is_focused: true,
+            scrollbar_dragging: false,
+            scrollbar_drag_pane_id: None,
+            scrollbar_drag_offset_y: 0.0,
+            last_scroll_time: Instant::now(),
+            hovered_scrollbar: false,
         }
+    }
+
+    pub fn save_session(&self) {
+        let tab_sessions = self.tabs.iter().map(|tab| {
+            let cwd = tab.active_pane()
+                .and_then(|p| p.terminal.current_dir.as_ref())
+                .map(|p| p.to_string_lossy().to_string())
+                .or_else(|| std::env::current_dir().ok().map(|p| p.to_string_lossy().to_string()));
+            crate::config::TabSession {
+                title: tab.title.clone(),
+                cwd,
+            }
+        }).collect();
+        let state = crate::config::SessionState {
+            active_tab_index: self.active_tab_index,
+            sidebar_visible: self.sidebar_visible,
+            tabs: tab_sessions,
+        };
+        let _ = state.save();
     }
 
     pub fn sidebar_offset(&self) -> usize {
@@ -122,8 +440,10 @@ impl AxonApp {
     }
 
     pub fn create_new_tab(&mut self) {
-        let id = self.next_tab_id;
+        let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
+        let pane_id = self.next_pane_id;
+        self.next_pane_id += 1;
 
         let (cols, rows) = if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
             let size = window.inner_size();
@@ -133,11 +453,12 @@ impl AxonApp {
         };
 
         let pty = match PtyManager::new(
-            id,
+            pane_id,
             &self.config.terminal.default_shell,
             self.config.terminal.ghostty_prompt,
             cols as u16,
             rows as u16,
+            None,
             self.proxy.clone(),
         ) {
             Ok(p) => p,
@@ -155,17 +476,18 @@ impl AxonApp {
             self.theme.clone(),
         );
 
-        self.tabs.push(TerminalTab {
-            id,
-            title,
+        let pane = TerminalPane {
+            id: pane_id,
             pty,
             terminal,
             last_grid_size: (cols, rows),
-            has_unread: false,
-        });
+        };
+
+        self.tabs.push(TerminalTab::new(tab_id, title, pane));
 
         self.active_tab_index = self.tabs.len() - 1;
         self.update_window_title();
+        self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -179,6 +501,7 @@ impl AxonApp {
         self.tabs.remove(index);
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando Axon");
+            self.save_session();
             event_loop.exit();
             return;
         }
@@ -188,8 +511,152 @@ impl AxonApp {
         }
         self.tabs[self.active_tab_index].has_unread = false;
         self.update_window_title();
+        self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
+        }
+    }
+
+    pub fn split_active_pane(&mut self, direction: SplitDirection) {
+        let new_pane_id = self.next_pane_id;
+        self.next_pane_id += 1;
+
+        // Heredar el directorio de trabajo del pane activo
+        let cwd_path = self.tabs.get(self.active_tab_index)
+            .and_then(|t| t.active_pane())
+            .and_then(|p| p.terminal.current_dir.clone());
+        let cwd_ref = cwd_path.as_deref();
+
+        let (cols, rows) = (80, 24);
+
+        let pty = match PtyManager::new(
+            new_pane_id,
+            &self.config.terminal.default_shell,
+            self.config.terminal.ghostty_prompt,
+            cols as u16,
+            rows as u16,
+            cwd_ref,
+            self.proxy.clone(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                crate::logger::log(&format!("Error al spawnear nuevo PTY para split: {:?}", e));
+                return;
+            }
+        };
+
+        let mut terminal = TerminalState::new(
+            cols,
+            rows,
+            self.config.terminal.scrollback_lines,
+            self.theme.clone(),
+        );
+        terminal.current_dir = cwd_path;
+
+        let new_pane = TerminalPane {
+            id: new_pane_id,
+            pty,
+            terminal,
+            last_grid_size: (cols, rows),
+        };
+
+        let active_tab = &mut self.tabs[self.active_tab_index];
+        active_tab.split_active_pane(new_pane_id, new_pane, direction);
+
+        self.recompute_grid_for_all_tabs();
+        self.update_window_title();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub fn close_active_pane(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+            let active_pane_id = active_tab.active_pane_id;
+            self.close_pane_by_id(active_pane_id, event_loop);
+        }
+    }
+
+    pub fn close_pane_by_id(&mut self, pane_id: usize, event_loop: &ActiveEventLoop) {
+        let mut tab_to_close = None;
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.panes.iter().any(|p| p.id == pane_id) {
+                if tab.panes.len() <= 1 {
+                    tab_to_close = Some(idx);
+                } else {
+                    tab.close_pane(pane_id);
+                    self.recompute_grid_for_all_tabs();
+                    self.update_window_title();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                break;
+            }
+        }
+
+        if let Some(idx) = tab_to_close {
+            self.close_tab(idx, event_loop);
+        }
+    }
+
+    pub fn navigate_pane(&mut self, dir: PaneDirection) {
+        if let (Some(window), Some(_renderer)) = (&self.window, &self.renderer) {
+            let size = window.inner_size();
+            let offset = self.sidebar_offset();
+            let total_w = (size.width as usize).saturating_sub(offset);
+            let total_h = size.height as usize;
+            if total_w == 0 || total_h == 0 {
+                return;
+            }
+
+            let active_tab = &mut self.tabs[self.active_tab_index];
+            let rects = active_tab.compute_pane_rects(offset, 0, total_w, total_h);
+            if rects.len() <= 1 {
+                return;
+            }
+
+            let cur_rect = match rects.iter().find(|r| r.pane_id == active_tab.active_pane_id) {
+                Some(r) => *r,
+                None => return,
+            };
+
+            let cx = cur_rect.x as isize + (cur_rect.width as isize / 2);
+            let cy = cur_rect.y as isize + (cur_rect.height as isize / 2);
+
+            let mut best_candidate: Option<(usize, isize)> = None;
+
+            for r in &rects {
+                if r.pane_id == active_tab.active_pane_id {
+                    continue;
+                }
+                let rcx = r.x as isize + (r.width as isize / 2);
+                let rcy = r.y as isize + (r.height as isize / 2);
+
+                let is_valid = match dir {
+                    PaneDirection::Up => rcy < cy,
+                    PaneDirection::Down => rcy > cy,
+                    PaneDirection::Left => rcx < cx,
+                    PaneDirection::Right => rcx > cx,
+                };
+
+                if is_valid {
+                    let dist = match dir {
+                        PaneDirection::Up => (cy - rcy) * 2 + (cx - rcx).abs(),
+                        PaneDirection::Down => (rcy - cy) * 2 + (cx - rcx).abs(),
+                        PaneDirection::Left => (cx - rcx) * 2 + (cy - rcy).abs(),
+                        PaneDirection::Right => (rcx - cx) * 2 + (cy - rcy).abs(),
+                    };
+                    if best_candidate.map_or(true, |(_, best)| dist < best) {
+                        best_candidate = Some((r.pane_id, dist));
+                    }
+                }
+            }
+
+            if let Some((next_id, _)) = best_candidate {
+                active_tab.active_pane_id = next_id;
+                window.request_redraw();
+            }
         }
     }
 
@@ -198,6 +665,7 @@ impl AxonApp {
             self.active_tab_index = index;
             self.tabs[index].has_unread = false;
             self.update_window_title();
+            self.save_session();
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
@@ -225,6 +693,7 @@ impl AxonApp {
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
         self.recompute_grid_for_all_tabs();
+        self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -232,7 +701,12 @@ impl AxonApp {
 
     fn update_window_title(&self) {
         if let (Some(w), Some(tab)) = (&self.window, self.tabs.get(self.active_tab_index)) {
-            w.set_title(&format!("Axon - {}", tab.title));
+            let pane_info = if tab.panes.len() > 1 {
+                format!(" ({} paneles)", tab.panes.len())
+            } else {
+                String::new()
+            };
+            w.set_title(&format!("Axon - {}{}", tab.title, pane_info));
         }
     }
 
@@ -240,12 +714,23 @@ impl AxonApp {
         if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
             let size = window.inner_size();
             let offset = self.sidebar_offset();
-            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize, offset);
+            let total_w = (size.width as usize).saturating_sub(offset);
+            let total_h = size.height as usize;
+            if total_w == 0 || total_h == 0 {
+                return;
+            }
+
             for tab in &mut self.tabs {
-                if (cols, rows) != tab.last_grid_size {
-                    tab.last_grid_size = (cols, rows);
-                    tab.terminal.resize(cols, rows);
-                    tab.pty.resize(cols as u16, rows as u16);
+                let pane_rects = tab.compute_pane_rects(offset, 0, total_w, total_h);
+                for rect in pane_rects {
+                    if let Some(pane) = tab.find_pane_mut(rect.pane_id) {
+                        let (cols, rows) = renderer.compute_pane_grid_size(rect.width, rect.height);
+                        if (cols, rows) != pane.last_grid_size {
+                            pane.last_grid_size = (cols, rows);
+                            pane.terminal.resize(cols, rows);
+                            pane.pty.resize(cols as u16, rows as u16);
+                        }
+                    }
                 }
             }
         }
@@ -253,15 +738,17 @@ impl AxonApp {
 
     fn paste_text(&self, text: &str) {
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-        let active = &self.tabs[self.active_tab_index];
-        if active.terminal.bracketed_paste_mode {
-            let mut payload = Vec::with_capacity(normalized.len() + 16);
-            payload.extend_from_slice(b"\x1b[200~");
-            payload.extend_from_slice(normalized.as_bytes());
-            payload.extend_from_slice(b"\x1b[201~");
-            active.pty.write_input(&payload);
-        } else {
-            active.pty.write_input(normalized.as_bytes());
+        let active_tab = &self.tabs[self.active_tab_index];
+        if let Some(active_pane) = active_tab.active_pane() {
+            if active_pane.terminal.bracketed_paste_mode {
+                let mut payload = Vec::with_capacity(normalized.len() + 16);
+                payload.extend_from_slice(b"\x1b[200~");
+                payload.extend_from_slice(normalized.as_bytes());
+                payload.extend_from_slice(b"\x1b[201~");
+                active_pane.pty.write_input(&payload);
+            } else {
+                active_pane.pty.write_input(normalized.as_bytes());
+            }
         }
     }
 
@@ -289,7 +776,9 @@ impl AxonApp {
             // nativa de pegado de imágenes (Alt + V: \x1bv). Esto hace que Claude Code
             // procese la imagen nativamente y muestre el chip interactivo [Image 1] en el prompt.
             if is_claude_running() {
-                self.tabs[self.active_tab_index].pty.write_input(b"\x1bv");
+                if let Some(active_pane) = self.tabs[self.active_tab_index].active_pane() {
+                    active_pane.pty.write_input(b"\x1bv");
+                }
                 return;
             }
 
@@ -388,6 +877,12 @@ impl AxonApp {
 
     fn reload_config(&mut self) {
         self.config = AxonConfig::load_or_default();
+        self.theme = Theme::from_name(&self.config.appearance.theme);
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.theme = self.theme.clone();
+            }
+        }
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
             renderer.update_scale(&self.config, scale_factor);
@@ -402,33 +897,34 @@ impl AxonApp {
 impl ApplicationHandler<AxonEvent> for AxonApp {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
         match event {
-            AxonEvent::PtyData(tab_id) => {
-                if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
-                    let mut got_bytes = false;
-                    while let Some(bytes) = self.tabs[pos].pty.try_recv_output() {
-                        got_bytes = true;
-                        self.tabs[pos].terminal.process_bytes(&bytes);
-                    }
-                    for text in self.tabs[pos].terminal.clipboard_queue.drain(..) {
-                        if let Some(cb) = &mut self.clipboard {
-                            cb.set_text(text).ok();
+            AxonEvent::PtyData(pane_id) => {
+                for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+                    if let Some(pane) = tab.find_pane_mut(pane_id) {
+                        let mut got_bytes = false;
+                        while let Some(bytes) = pane.pty.try_recv_output() {
+                            got_bytes = true;
+                            pane.terminal.process_bytes(&bytes);
                         }
-                    }
-                    if got_bytes {
-                        if pos != self.active_tab_index {
-                            self.tabs[pos].has_unread = true;
+                        for text in pane.terminal.clipboard_queue.drain(..) {
+                            if let Some(cb) = &mut self.clipboard {
+                                cb.set_text(text).ok();
+                            }
                         }
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
+                        if got_bytes {
+                            if tab_idx != self.active_tab_index {
+                                tab.has_unread = true;
+                            }
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
                         }
+                        break;
                     }
                 }
             }
-            AxonEvent::PtyClosed(tab_id) => {
-                crate::logger::log(&format!("PtyClosed recibido para tab_id {}: cerrando tab", tab_id));
-                if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
-                    self.close_tab(pos, event_loop);
-                }
+            AxonEvent::PtyClosed(pane_id) => {
+                crate::logger::log(&format!("PtyClosed recibido para pane_id {}: cerrando pane", pane_id));
+                self.close_pane_by_id(pane_id, event_loop);
             }
         }
     }
@@ -438,7 +934,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             return;
         }
 
-        // Crear icono nativo de Axon (Ghostty Green '>' en fondo oscuro)
+        // Crear icono nativo de Axon (Ghostty Green '>' sin fondo)
         let icon = create_native_icon();
 
         let window_attributes = WindowAttributes::default()
@@ -472,11 +968,18 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         }
 
         let offset = self.sidebar_offset();
-        let (cols, rows) = renderer.compute_grid_size(initial_size.width as usize, initial_size.height as usize, offset);
+        let total_w = (initial_size.width as usize).saturating_sub(offset);
+        let total_h = initial_size.height as usize;
         for tab in &mut self.tabs {
-            tab.last_grid_size = (cols, rows);
-            tab.terminal.resize(cols, rows);
-            tab.pty.resize(cols as u16, rows as u16);
+            let pane_rects = tab.compute_pane_rects(offset, 0, total_w, total_h);
+            for rect in pane_rects {
+                if let Some(pane) = tab.find_pane_mut(rect.pane_id) {
+                    let (cols, rows) = renderer.compute_pane_grid_size(rect.width, rect.height);
+                    pane.last_grid_size = (cols, rows);
+                    pane.terminal.resize(cols, rows);
+                    pane.pty.resize(cols as u16, rows as u16);
+                }
+            }
         }
 
         // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
@@ -488,6 +991,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     title: t.title.clone(),
                     is_active: idx == self.active_tab_index,
                     has_unread: t.has_unread,
+                    pane_count: t.panes.len(),
                 }).collect();
 
                 renderer.render_sidebar(
@@ -500,19 +1004,49 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     self.hovered_close,
                     self.hovered_new_tab,
                     self.hovered_toggle_btn,
+                    &self.theme,
                 );
             }
 
             let active_tab = &self.tabs[self.active_tab_index];
-            renderer.render(
-                &mut buffer,
-                initial_size.width as usize,
-                initial_size.height as usize,
-                offset,
-                &active_tab.terminal,
-                &self.theme,
-                true,
-            );
+            let pane_rects = active_tab.compute_pane_rects(offset, 0, total_w, total_h);
+            let dividers = active_tab.compute_dividers(offset, 0, total_w, total_h);
+            let has_multiple = pane_rects.len() > 1;
+
+            for rect in &pane_rects {
+                if let Some(pane) = active_tab.find_pane(rect.pane_id) {
+                    let is_active = rect.pane_id == active_tab.active_pane_id;
+                    renderer.render_pane(
+                        &mut buffer,
+                        initial_size.width as usize,
+                        initial_size.height as usize,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        &pane.terminal,
+                        &self.theme,
+                        true,
+                        is_active,
+                        has_multiple,
+                    );
+                }
+            }
+
+            let divider_color = crate::theme::Color::from_rgb(38, 38, 43);
+            for (dx, dy, dw, dh) in dividers {
+                TerminalRenderer::render_pane_divider(
+                    &mut buffer,
+                    initial_size.width as usize,
+                    initial_size.height as usize,
+                    dx,
+                    dy,
+                    dw,
+                    dh,
+                    divider_color,
+                );
+            }
+
             buffer.present().ok();
         }
 
@@ -528,6 +1062,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                self.save_session();
                 event_loop.exit();
             }
 
@@ -570,6 +1105,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         title: t.title.clone(),
                         is_active: idx == active_idx,
                         has_unread: t.has_unread,
+                        pane_count: t.panes.len(),
                     }).collect()
                 } else {
                     Vec::new()
@@ -597,25 +1133,57 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 hovered_close,
                                 hovered_new_tab,
                                 hovered_toggle_btn,
+                                &self.theme,
                             );
                         }
 
-                        renderer.render(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            offset,
-                            &active_tab.terminal,
-                            &self.theme,
-                            cursor_visible,
-                        );
+                        let term_area_w = (size.width as usize).saturating_sub(offset);
+                        let term_area_h = size.height as usize;
+                        let pane_rects = active_tab.compute_pane_rects(offset, 0, term_area_w, term_area_h);
+                        let dividers = active_tab.compute_dividers(offset, 0, term_area_w, term_area_h);
+                        let has_multiple = pane_rects.len() > 1;
 
-                        if !sidebar_visible {
+                        for rect in &pane_rects {
+                            if let Some(pane) = active_tab.find_pane(rect.pane_id) {
+                                let is_active = rect.pane_id == active_tab.active_pane_id;
+                                renderer.render_pane(
+                                    &mut buffer,
+                                    size.width as usize,
+                                    size.height as usize,
+                                    rect.x,
+                                    rect.y,
+                                    rect.width,
+                                    rect.height,
+                                    &pane.terminal,
+                                    &self.theme,
+                                    cursor_visible,
+                                    is_active,
+                                    has_multiple,
+                                );
+                            }
+                        }
+
+                        let divider_color = crate::theme::Color::from_rgb(38, 38, 43);
+                        for (dx, dy, dw, dh) in dividers {
+                            TerminalRenderer::render_pane_divider(
+                                &mut buffer,
+                                size.width as usize,
+                                size.height as usize,
+                                dx,
+                                dy,
+                                dw,
+                                dh,
+                                divider_color,
+                            );
+                        }
+
+                        if !sidebar_visible && hovered_toggle_btn {
                             renderer.render_floating_sidebar_toggle(
                                 &mut buffer,
                                 size.width as usize,
                                 size.height as usize,
                                 hovered_toggle_btn,
+                                &self.theme,
                             );
                         }
 
@@ -666,7 +1234,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     if let Some(t) = text {
                         if !t.is_empty() && t != "\r" && t != "\n" && t != "\t" {
                             crate::logger::log(&format!("-> AltGr text: {:?}", t));
-                            self.tabs[self.active_tab_index].pty.write_input(t.as_bytes());
+                            if let Some(active_pane) = self.tabs[self.active_tab_index].active_pane() {
+                                active_pane.pty.write_input(t.as_bytes());
+                            }
                         }
                     }
                     return;
@@ -678,33 +1248,49 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
-                // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
-                let is_backspace = matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
-                    || matches!(&logical_key, Key::Named(NamedKey::Backspace));
-
-                // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
-                //    Activa borrado de palabra (deleteWordLeft / backward-kill-word) en Claude Code (key.meta),
-                //    harnesses como agy, shells POSIX y PowerShell (mediante PSReadLineKeyHandler).
-                if alt && is_backspace {
-                    crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
-                    self.tabs[self.active_tab_index].pty.write_input(b"\x1b\x7f");
+                // --- ATAJOS DE PANELES DIVIDIDOS (SPLIT PANES) ---
+                // 1. División Horizontal: Ctrl + Alt + D
+                if ctrl && alt && key_is_char(&logical_key, 'd') {
+                    crate::logger::log("-> Hotkey: Split Horizontal (Ctrl+Alt+D)");
+                    self.split_active_pane(SplitDirection::Horizontal);
                     return;
                 }
 
-                // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
-                //    Activa BackwardKillWord en PowerShell de forma nativa y deleteWordLeft en Claude Code y agy.
-                if ctrl && is_backspace {
-                    crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
-                    self.tabs[self.active_tab_index].pty.write_input(&[0x17]);
+                // 2. División Vertical: Ctrl + Alt + V o Ctrl + Alt + E
+                if ctrl && alt && (key_is_char(&logical_key, 'v') || key_is_char(&logical_key, 'e')) {
+                    crate::logger::log("-> Hotkey: Split Vertical (Ctrl+Alt+V / Ctrl+Alt+E)");
+                    self.split_active_pane(SplitDirection::Vertical);
                     return;
                 }
 
-                // 3. Backspace normal (o Shift+Backspace):
-                //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
-                if is_backspace {
-                    crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
-                    self.tabs[self.active_tab_index].pty.write_input(&[0x7f]);
+                // 3. Cerrar panel activo en split: Ctrl + Alt + W
+                if ctrl && alt && key_is_char(&logical_key, 'w') {
+                    crate::logger::log("-> Hotkey: Cerrar panel activo (Ctrl+Alt+W)");
+                    self.close_active_pane(event_loop);
                     return;
+                }
+
+                // 4. Navegación direccional entre paneles: Ctrl + Alt + Flechas
+                if ctrl && alt {
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowUp) => {
+                            self.navigate_pane(PaneDirection::Up);
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            self.navigate_pane(PaneDirection::Down);
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            self.navigate_pane(PaneDirection::Left);
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            self.navigate_pane(PaneDirection::Right);
+                            return;
+                        }
+                        _ => {}
+                    }
                 }
 
                 // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) ---
@@ -763,30 +1349,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
-                // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
-                if logical_key != Key::Named(NamedKey::PageUp)
-                    && logical_key != Key::Named(NamedKey::PageDown)
-                    && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
-                {
-                    self.tabs[self.active_tab_index].terminal.reset_scroll();
-                }
-
-                // 1. Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
-                if (ctrl && shift && key_is_char(&logical_key, 'c'))
-                    || (ctrl && !shift && key_is_char(&logical_key, 'c') && self.tabs[self.active_tab_index].terminal.selection.is_some())
-                {
-                    if let Some(sel_text) = self.tabs[self.active_tab_index].terminal.copy_selection_text() {
-                        if let Some(cb) = &mut self.clipboard {
-                            cb.set_text(sel_text).ok();
-                        }
-                        // Deseleccionar y repintar tras copiar exitosamente
-                        self.tabs[self.active_tab_index].terminal.selection = None;
-                        if let Some(w) = &self.window { w.request_redraw(); }
-                    }
-                    return;
-                }
-
-                // 2. Pegar desde el portapapeles (Ctrl + Shift + V, Ctrl + V, Shift + Insert)
+                // 6. Pegar desde el portapapeles (Ctrl + Shift + V, Ctrl + V, Shift + Insert)
                 if (ctrl && shift && key_is_char(&logical_key, 'v'))
                     || (ctrl && !shift && key_is_char(&logical_key, 'v'))
                     || (shift && logical_key == Key::Named(NamedKey::Insert))
@@ -795,51 +1358,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
-                // 3. Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + Flechas)
-                if alt && !ctrl {
-                    if key_is_char(&logical_key, 'v') {
-                        // Enviar Alt + V (\x1bv) para pegado nativo de imágenes en Claude Code
-                        self.tabs[self.active_tab_index].pty.write_input(b"\x1bv");
-                        return;
-                    }
-
-                    match logical_key {
-                        Key::Named(NamedKey::ArrowLeft) => {
-                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bb"); // Salto palabra atrás
-                            return;
-                        }
-                        Key::Named(NamedKey::ArrowRight) => {
-                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bf"); // Salto palabra adelante
-                            return;
-                        }
-                        Key::Named(NamedKey::Delete) => {
-                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bd"); // Borrado de palabra adelante
-                            return;
-                        }
-                        Key::Named(NamedKey::Tab) => {
-                            return; // Prevenir cualquier propagación de Alt+Tab
-                        }
-                        Key::Named(NamedKey::F4) => {
-                            return; // Alt+F4 manejado por el sistema
-                        }
-                        Key::Character(ref s) => {
-                            // Solo enviar secuencias escape Alt+letra para letras ASCII minúsculas/mayúsculas
-                            // para no interferir con combinaciones AltGr de teclados en español (@, #, \, ~, etc.)
-                            if let Some(c) = s.chars().next() {
-                                if c.is_ascii_alphabetic() {
-                                    let mut buf = [0u8; 5];
-                                    buf[0] = 0x1b;
-                                    let len = c.encode_utf8(&mut buf[1..]).len();
-                                    self.tabs[self.active_tab_index].pty.write_input(&buf[..1 + len]);
-                                    return;
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // 3. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
+                // 7. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
                 if ctrl && !shift {
                     if key_is_char(&logical_key, '+') || key_is_char(&logical_key, '=') {
                         self.adjust_font_size(1.0);
@@ -864,15 +1383,109 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
-                // 4. Recarga dinámica de configuración Ghostty (Ctrl + Shift + ,)
+                // 8. Recarga dinámica de configuración Ghostty (Ctrl + Shift + ,)
                 if ctrl && shift && key_is_char(&logical_key, ',') {
                     self.reload_config();
                     return;
                 }
 
-                // 5. Copiar salida del último comando del agente (Ctrl + Shift + O)
+                // Obtener panel activo para entrada de teclado
+                let active = match self.tabs[self.active_tab_index].active_pane_mut() {
+                    Some(p) => p,
+                    None => return,
+                };
+
+                // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
+                let is_backspace = matches!(physical_key, PhysicalKey::Code(KeyCode::Backspace))
+                    || matches!(&logical_key, Key::Named(NamedKey::Backspace));
+
+                // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
+                if alt && is_backspace {
+                    crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
+                    active.pty.write_input(b"\x1b\x7f");
+                    return;
+                }
+
+                // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
+                if ctrl && is_backspace {
+                    crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
+                    active.pty.write_input(&[0x17]);
+                    return;
+                }
+
+                // 3. Backspace normal (o Shift+Backspace):
+                if is_backspace {
+                    crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
+                    active.pty.write_input(&[0x7f]);
+                    return;
+                }
+
+                // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
+                if logical_key != Key::Named(NamedKey::PageUp)
+                    && logical_key != Key::Named(NamedKey::PageDown)
+                    && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
+                {
+                    active.terminal.reset_scroll();
+                }
+
+                // Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
+                if (ctrl && shift && key_is_char(&logical_key, 'c'))
+                    || (ctrl && !shift && key_is_char(&logical_key, 'c') && active.terminal.selection.is_some())
+                {
+                    if let Some(sel_text) = active.terminal.copy_selection_text() {
+                        if let Some(cb) = &mut self.clipboard {
+                            cb.set_text(sel_text).ok();
+                        }
+                        active.terminal.selection = None;
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                    return;
+                }
+
+                // Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + Flechas)
+                if alt && !ctrl {
+                    if key_is_char(&logical_key, 'v') {
+                        active.pty.write_input(b"\x1bv");
+                        return;
+                    }
+
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            active.pty.write_input(b"\x1bb"); // Salto palabra atrás
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            active.pty.write_input(b"\x1bf"); // Salto palabra adelante
+                            return;
+                        }
+                        Key::Named(NamedKey::Delete) => {
+                            active.pty.write_input(b"\x1bd"); // Borrado de palabra adelante
+                            return;
+                        }
+                        Key::Named(NamedKey::Tab) => {
+                            return; // Prevenir cualquier propagación de Alt+Tab
+                        }
+                        Key::Named(NamedKey::F4) => {
+                            return; // Alt+F4 manejado por el sistema
+                        }
+                        Key::Character(ref s) => {
+                            if let Some(c) = s.chars().next() {
+                                if c.is_ascii_alphabetic() {
+                                    let mut buf = [0u8; 5];
+                                    buf[0] = 0x1b;
+                                    let len = c.encode_utf8(&mut buf[1..]).len();
+                                    active.pty.write_input(&buf[..1 + len]);
+                                    return;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Copiar salida del último comando del agente (Ctrl + Shift + O)
                 if ctrl && shift && key_is_char(&logical_key, 'o') {
-                    if let Some(output) = self.tabs[self.active_tab_index].terminal.get_last_output_text() {
+                    if let Some(output) = active.terminal.get_last_output_text() {
                         if let Some(cb) = &mut self.clipboard {
                             cb.set_text(output).ok();
                         }
@@ -880,20 +1493,19 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
-                // 5b. Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
+                // Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
                 if ctrl && shift && (key_is_char(&logical_key, 'k') || key_is_char(&logical_key, 'l')) {
-                    self.tabs[self.active_tab_index].terminal.scrollback.clear();
-                    self.tabs[self.active_tab_index].terminal.reset_scroll();
-                    self.tabs[self.active_tab_index].terminal.command_blocks.clear();
-                    self.tabs[self.active_tab_index].pty.write_input(b"\x0c");
+                    active.terminal.scrollback.clear();
+                    active.terminal.reset_scroll();
+                    active.terminal.command_blocks.clear();
+                    active.pty.write_input(b"\x0c");
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
 
-                // 6. Navegación semántica entre comandos de agentes OSC 133 (Ctrl + Shift + Arriba/Abajo)
+                // Navegación semántica entre comandos de agentes OSC 133 (Ctrl + Shift + Arriba/Abajo)
                 if ctrl && shift {
                     if let Key::Named(NamedKey::ArrowUp) = logical_key {
-                        let active = &mut self.tabs[self.active_tab_index];
                         if let Some(block) = active.terminal.command_blocks.last() {
                             let target = active.terminal.total_lines_count.saturating_sub(block.prompt_line);
                             active.terminal.scroll_offset = target.min(active.terminal.scrollback.len());
@@ -902,35 +1514,38 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         return;
                     }
                     if let Key::Named(NamedKey::ArrowDown) = logical_key {
-                        self.tabs[self.active_tab_index].terminal.reset_scroll();
+                        active.terminal.reset_scroll();
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;
                     }
                 }
 
-                // 7. Navegación de historial y scrollback (Shift + PageUp / PageDown / Home / End)
+                // Navegación de historial y scrollback (Shift + PageUp / PageDown / Home / End)
                 if shift && !ctrl {
-                    let active = &mut self.tabs[self.active_tab_index];
                     match logical_key {
                         Key::Named(NamedKey::PageUp) => {
                             let half = (active.terminal.rows / 2).max(1);
                             active.terminal.scroll_up(half);
+                            self.last_scroll_time = Instant::now();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::PageDown) => {
                             let half = (active.terminal.rows / 2).max(1);
                             active.terminal.scroll_down(half);
+                            self.last_scroll_time = Instant::now();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::Home) => {
                             active.terminal.scroll_offset = active.terminal.scrollback.len();
+                            self.last_scroll_time = Instant::now();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::End) => {
                             active.terminal.reset_scroll();
+                            self.last_scroll_time = Instant::now();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
@@ -938,9 +1553,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
-                // 8. Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Delete)
+                // Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Delete)
                 if ctrl && !shift {
-                    let active = &mut self.tabs[self.active_tab_index];
                     match logical_key {
                         Key::Named(NamedKey::ArrowLeft) => {
                             active.pty.write_input(b"\x1b[1;5D"); // Salto palabra atrás
@@ -974,14 +1588,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
-                // 9. Combinaciones de control clásicas de terminal (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+Z, Ctrl+R, etc.)
+                // Combinaciones de control clásicas de terminal (Ctrl+C, Ctrl+D, Ctrl+L, Ctrl+Z, Ctrl+R, etc.)
                 if ctrl && !shift {
                     match logical_key {
                         Key::Character(ref s) => {
                             let c = s.chars().next().unwrap_or(' ').to_ascii_lowercase();
                             if c >= 'a' && c <= 'z' {
                                 let code = (c as u8) - b'a' + 1;
-                                self.tabs[self.active_tab_index].pty.write_input(&[code]);
+                                active.pty.write_input(&[code]);
                                 return;
                             }
                         }
@@ -989,24 +1603,21 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
-                // 10. Scroll por página directo sin Shift
+                // Scroll por página directo sin Shift
                 if logical_key == Key::Named(NamedKey::PageUp) {
-                    let active = &mut self.tabs[self.active_tab_index];
                     let half = (active.terminal.rows / 2).max(1);
                     active.terminal.scroll_up(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
                 if logical_key == Key::Named(NamedKey::PageDown) {
-                    let active = &mut self.tabs[self.active_tab_index];
                     let half = (active.terminal.rows / 2).max(1);
                     active.terminal.scroll_down(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
 
-                // 11. Teclas especiales y flechas VT estándar
-                let active = &mut self.tabs[self.active_tab_index];
+                // Teclas especiales y flechas VT estándar
                 match logical_key {
                     Key::Named(NamedKey::Enter) => active.pty.write_input(b"\r"),
                     Key::Named(NamedKey::Backspace) => active.pty.write_input(&[0x7f]),
@@ -1057,11 +1668,45 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let mx = position.x as usize;
                 let my = position.y as usize;
 
-                let win_h = if let Some(w) = &self.window {
-                    w.inner_size().height as usize
+                let (win_w, win_h) = if let Some(w) = &self.window {
+                    let s = w.inner_size();
+                    (s.width as usize, s.height as usize)
                 } else {
-                    600
+                    (800, 600)
                 };
+
+                let mut needs_redraw = false;
+
+                // Manejo de arrastre activo del pulgar de la barra de desplazamiento en el panel seleccionado
+                if self.scrollbar_dragging {
+                    if let Some(pid) = self.scrollbar_drag_pane_id {
+                        let active_tab = &mut self.tabs[self.active_tab_index];
+                        let term_area_w = win_w.saturating_sub(offset);
+                        let pane_rects = active_tab.compute_pane_rects(offset, 0, term_area_w, win_h);
+                        if let Some(target_rect) = pane_rects.iter().find(|r| r.pane_id == pid) {
+                            if let Some(pane) = active_tab.find_pane_mut(pid) {
+                                if let Some(renderer) = &self.renderer {
+                                    if !pane.terminal.scrollback.is_empty() {
+                                        let track_y = target_rect.y + renderer.margin_y;
+                                        let track_h = target_rect.height.saturating_sub(renderer.margin_y * 2);
+                                        let total_history = pane.terminal.scrollback.len() + pane.terminal.rows;
+                                        let thumb_h = ((pane.terminal.rows as f32 / total_history as f32) * track_h as f32).max(24.0).min(track_h as f32) as usize;
+                                        let available_travel = track_h.saturating_sub(thumb_h);
+                                        if available_travel > 0 {
+                                            let target_thumb_top = (my as f32 - self.scrollbar_drag_offset_y - track_y as f32).clamp(0.0, available_travel as f32);
+                                            let ratio = target_thumb_top / available_travel as f32;
+                                            let new_offset = ((1.0 - ratio) * pane.terminal.scrollback.len() as f32).round() as usize;
+                                            pane.terminal.scroll_offset = new_offset.min(pane.terminal.scrollback.len());
+                                            self.last_scroll_time = Instant::now();
+                                            if let Some(w) = &self.window { w.request_redraw(); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
 
                 // Comprobar hover en botón inferior de alternar barra lateral
                 let toggle_btn_w = if self.sidebar_visible { SIDEBAR_WIDTH.saturating_sub(16) } else { 32 };
@@ -1074,7 +1719,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     && my >= toggle_btn_y
                     && my < toggle_btn_y + toggle_btn_h;
 
-                let mut needs_redraw = false;
                 if self.hovered_toggle_btn != is_hover_toggle {
                     self.hovered_toggle_btn = is_hover_toggle;
                     needs_redraw = true;
@@ -1140,7 +1784,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                     return;
                 } else if self.sidebar_visible {
-                    // Si el ratón salió de la barra lateral, resetear estados hover
                     if self.hovered_tab.is_some() { self.hovered_tab = None; needs_redraw = true; }
                     if self.hovered_close.is_some() { self.hovered_close = None; needs_redraw = true; }
                     if self.hovered_new_tab { self.hovered_new_tab = false; needs_redraw = true; }
@@ -1151,48 +1794,60 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     if let Some(w) = &self.window { w.request_redraw(); }
                 }
 
-                // 2. Coordenadas relativas a la cuadrícula de la terminal activa
+                // 2. Coordenadas relativas a paneles en la terminal activa
                 let bypass = self.modifiers.shift_key();
-                let active = &mut self.tabs[self.active_tab_index];
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                let active_pane_id = active_tab.active_pane_id;
+                let term_area_w = win_w.saturating_sub(offset);
+                let pane_rects = active_tab.compute_pane_rects(offset, 0, term_area_w, win_h);
 
-                if active.terminal.is_mouse_reporting_active() && !bypass {
-                    // Reportar movimiento/arrastre a Herdr / Ratatui (SGR 1006 / 1002 / 1003)
-                    if (active.terminal.mouse_reporting_button_event && self.mouse_down) || active.terminal.mouse_reporting_any_event {
-                        if let Some(renderer) = &self.renderer {
-                            let term_x = mx.saturating_sub(offset);
-                            let col = if term_x >= renderer.margin_x {
-                                ((term_x - renderer.margin_x) / renderer.char_width) + 1
-                            } else { 1 }.min(active.terminal.cols);
-                            let row = if my >= renderer.margin_y {
-                                ((my - renderer.margin_y) / renderer.row_height) + 1
-                            } else { 1 }.min(active.terminal.rows);
+                let hovered_pane_rect = pane_rects.iter().find(|r| {
+                    mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height
+                }).copied();
 
-                            let mut code = 32; // Flag de arrastre/movimiento
-                            if self.modifiers.shift_key() { code += 4; }
-                            if self.modifiers.alt_key() { code += 8; }
-                            if self.modifiers.control_key() { code += 16; }
+                if let Some(rect) = hovered_pane_rect {
+                    if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                        if pane.terminal.is_mouse_reporting_active() && !bypass {
+                            if (pane.terminal.mouse_reporting_button_event && self.mouse_down) || pane.terminal.mouse_reporting_any_event {
+                                if let Some(renderer) = &self.renderer {
+                                    let term_x = mx.saturating_sub(rect.x);
+                                    let term_y = my.saturating_sub(rect.y);
+                                    let col = if term_x >= renderer.margin_x {
+                                        ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                                    } else { 1 }.min(pane.terminal.cols);
+                                    let row = if term_y >= renderer.margin_y {
+                                        ((term_y - renderer.margin_y) / renderer.row_height) + 1
+                                    } else { 1 }.min(pane.terminal.rows);
 
-                            if active.terminal.mouse_reporting_sgr {
-                                let seq = format!("\x1b[<{};{};{}M", code, col, row);
-                                active.pty.write_input(seq.as_bytes());
-                            } else {
-                                let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                                active.pty.write_input(&seq);
+                                    let mut code = 32;
+                                    if self.modifiers.shift_key() { code += 4; }
+                                    if self.modifiers.alt_key() { code += 8; }
+                                    if self.modifiers.control_key() { code += 16; }
+
+                                    if pane.terminal.mouse_reporting_sgr {
+                                        let seq = format!("\x1b[<{};{};{}M", code, col, row);
+                                        pane.pty.write_input(seq.as_bytes());
+                                    } else {
+                                        let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                                        pane.pty.write_input(&seq);
+                                    }
+                                }
                             }
-                        }
-                    }
-                } else if self.mouse_down {
-                    if let Some(renderer) = &self.renderer {
-                        let term_x = mx.saturating_sub(offset);
-                        if term_x >= renderer.margin_x && my >= renderer.margin_y {
-                            let col = (term_x - renderer.margin_x) / renderer.char_width;
-                            let row = (my - renderer.margin_y) / renderer.row_height;
-                            if let Some(start) = self.drag_start {
-                                active.terminal.selection = Some(SelectionRange {
-                                    start,
-                                    end: (col, row),
-                                });
-                                if let Some(w) = &self.window { w.request_redraw(); }
+                        } else if self.mouse_down && rect.pane_id == active_pane_id {
+                            if let Some(renderer) = &self.renderer {
+                                let term_x = mx.saturating_sub(rect.x);
+                                let term_y = my.saturating_sub(rect.y);
+                                if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
+                                    let col = (term_x - renderer.margin_x) / renderer.char_width;
+                                    let row = (term_y - renderer.margin_y) / renderer.row_height;
+                                    if let Some(start) = self.drag_start {
+                                        pane.terminal.selection = Some(SelectionRange {
+                                            start,
+                                            end: (col, row),
+                                        });
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1203,11 +1858,23 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let mx = self.mouse_pos.x as usize;
                 let my = self.mouse_pos.y as usize;
 
-                let win_h = if let Some(w) = &self.window {
-                    w.inner_size().height as usize
+                let (win_w, win_h) = if let Some(w) = &self.window {
+                    let s = w.inner_size();
+                    (s.width as usize, s.height as usize)
                 } else {
-                    600
+                    (800, 600)
                 };
+
+                // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento
+                if button == MouseButton::Left && state == ElementState::Released {
+                    if self.scrollbar_dragging {
+                        self.scrollbar_dragging = false;
+                        self.scrollbar_drag_pane_id = None;
+                        self.last_scroll_time = Instant::now();
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                        return;
+                    }
+                }
 
                 // Comprobar clic en botón inferior de alternar barra lateral (en ambas modalidades)
                 let toggle_btn_w = if self.sidebar_visible { SIDEBAR_WIDTH.saturating_sub(16) } else { 32 };
@@ -1274,76 +1941,120 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
-                // 2. Clics en la cuadrícula de la terminal activa
+                // 2. Clics en paneles de terminal activa
                 let bypass = self.modifiers.shift_key();
                 let offset = self.sidebar_offset();
-                let active = &mut self.tabs[self.active_tab_index];
+                let term_area_w = win_w.saturating_sub(offset);
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                let pane_rects = active_tab.compute_pane_rects(offset, 0, term_area_w, win_h);
 
-                if active.terminal.is_mouse_reporting_active() && !bypass {
-                    // Transmitir evento de ratón a Herdr / Ratatui
-                    if let Some(renderer) = &self.renderer {
-                        let term_x = mx.saturating_sub(offset);
-                        let col = if term_x >= renderer.margin_x {
-                            ((term_x - renderer.margin_x) / renderer.char_width) + 1
-                        } else { 1 }.min(active.terminal.cols);
-                        let row = if my >= renderer.margin_y {
-                            ((my - renderer.margin_y) / renderer.row_height) + 1
-                        } else { 1 }.min(active.terminal.rows);
+                let clicked_pane_rect = pane_rects.iter().find(|r| {
+                    mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height
+                }).copied();
 
-                        let base_code = match button {
-                            MouseButton::Left => 0,
-                            MouseButton::Middle => 1,
-                            MouseButton::Right => 2,
-                            _ => 0,
-                        };
-
-                        let mut code = base_code;
-                        if self.modifiers.shift_key() { code += 4; }
-                        if self.modifiers.alt_key() { code += 8; }
-                        if self.modifiers.control_key() { code += 16; }
-
-                        let is_pressed = state == ElementState::Pressed;
-                        self.mouse_down = is_pressed && button == MouseButton::Left;
-
-                        if active.terminal.mouse_reporting_sgr {
-                            let suffix = if is_pressed { 'M' } else { 'm' };
-                            let seq = format!("\x1b[<{};{};{}{}", code, col, row, suffix);
-                            active.pty.write_input(seq.as_bytes());
-                        } else {
-                            let btn_byte = if is_pressed { 32 + code as u8 } else { 32 + 3 };
-                            let seq = [0x1b, b'[', b'M', btn_byte, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                            active.pty.write_input(&seq);
-                        }
+                if let Some(rect) = clicked_pane_rect {
+                    // Cambiar foco al panel clickeado si no está activo
+                    if active_tab.active_pane_id != rect.pane_id {
+                        active_tab.active_pane_id = rect.pane_id;
+                        if let Some(w) = &self.window { w.request_redraw(); }
                     }
-                } else {
-                    match button {
-                        MouseButton::Left => {
-                            match state {
-                                ElementState::Pressed => {
-                                    self.mouse_down = true;
-                                    if let Some(renderer) = &self.renderer {
-                                        let term_x = mx.saturating_sub(offset);
-                                        if term_x >= renderer.margin_x && my >= renderer.margin_y {
-                                            let col = (term_x - renderer.margin_x) / renderer.char_width;
-                                            let row = (my - renderer.margin_y) / renderer.row_height;
-                                            self.drag_start = Some((col, row));
-                                            active.terminal.selection = None;
-                                            if let Some(w) = &self.window { w.request_redraw(); }
+
+                    if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                        // Clic en scrollbar de este panel
+                        if let Some(renderer) = &self.renderer {
+                            if let Some((_thumb_x, thumb_y, _thumb_w, thumb_h)) = renderer.pane_scrollbar_geometry(rect.x, rect.y, rect.width, rect.height, &pane.terminal) {
+                                let scroll_margin = 16;
+                                if mx >= (rect.x + rect.width).saturating_sub(scroll_margin) && button == MouseButton::Left && state == ElementState::Pressed {
+                                    if my >= thumb_y && my < thumb_y + thumb_h {
+                                        self.scrollbar_dragging = true;
+                                        self.scrollbar_drag_pane_id = Some(pane.id);
+                                        self.scrollbar_drag_offset_y = (my - thumb_y) as f32;
+                                        self.last_scroll_time = Instant::now();
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                        return;
+                                    } else if my < thumb_y {
+                                        pane.terminal.scroll_up(pane.terminal.rows);
+                                        self.last_scroll_time = Instant::now();
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                        return;
+                                    } else {
+                                        pane.terminal.scroll_down(pane.terminal.rows);
+                                        self.last_scroll_time = Instant::now();
+                                        if let Some(w) = &self.window { w.request_redraw(); }
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+
+                        if pane.terminal.is_mouse_reporting_active() && !bypass {
+                            if let Some(renderer) = &self.renderer {
+                                let term_x = mx.saturating_sub(rect.x);
+                                let term_y = my.saturating_sub(rect.y);
+                                let col = if term_x >= renderer.margin_x {
+                                    ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                                } else { 1 }.min(pane.terminal.cols);
+                                let row = if term_y >= renderer.margin_y {
+                                    ((term_y - renderer.margin_y) / renderer.row_height) + 1
+                                } else { 1 }.min(pane.terminal.rows);
+
+                                let base_code = match button {
+                                    MouseButton::Left => 0,
+                                    MouseButton::Middle => 1,
+                                    MouseButton::Right => 2,
+                                    _ => 0,
+                                };
+
+                                let mut code = base_code;
+                                if self.modifiers.shift_key() { code += 4; }
+                                if self.modifiers.alt_key() { code += 8; }
+                                if self.modifiers.control_key() { code += 16; }
+
+                                let is_pressed = state == ElementState::Pressed;
+                                self.mouse_down = is_pressed && button == MouseButton::Left;
+
+                                if pane.terminal.mouse_reporting_sgr {
+                                    let suffix = if is_pressed { 'M' } else { 'm' };
+                                    let seq = format!("\x1b[<{};{};{}{}", code, col, row, suffix);
+                                    pane.pty.write_input(seq.as_bytes());
+                                } else {
+                                    let btn_byte = if is_pressed { 32 + code as u8 } else { 32 + 3 };
+                                    let seq = [0x1b, b'[', b'M', btn_byte, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                                    pane.pty.write_input(&seq);
+                                }
+                            }
+                        } else {
+                            match button {
+                                MouseButton::Left => {
+                                    match state {
+                                        ElementState::Pressed => {
+                                            self.mouse_down = true;
+                                            if let Some(renderer) = &self.renderer {
+                                                let term_x = mx.saturating_sub(rect.x);
+                                                let term_y = my.saturating_sub(rect.y);
+                                                if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
+                                                    let col = (term_x - renderer.margin_x) / renderer.char_width;
+                                                    let row = (term_y - renderer.margin_y) / renderer.row_height;
+                                                    self.drag_start = Some((col, row));
+                                                    pane.terminal.selection = None;
+                                                    if let Some(w) = &self.window { w.request_redraw(); }
+                                                }
+                                            }
+                                        }
+                                        ElementState::Released => {
+                                            self.mouse_down = false;
+                                            self.drag_start = None;
                                         }
                                     }
                                 }
-                                ElementState::Released => {
-                                    self.mouse_down = false;
-                                    self.drag_start = None;
+                                MouseButton::Right | MouseButton::Middle => {
+                                    if state == ElementState::Pressed {
+                                        self.paste_from_clipboard();
+                                    }
                                 }
+                                _ => {}
                             }
                         }
-                        MouseButton::Right | MouseButton::Middle => {
-                            if state == ElementState::Pressed {
-                                self.paste_from_clipboard();
-                            }
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -1354,55 +2065,76 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 let mx = self.mouse_pos.x as usize;
                 let my = self.mouse_pos.y as usize;
 
-                let active = &mut self.tabs[self.active_tab_index];
+                let (win_w, win_h) = if let Some(w) = &self.window {
+                    let s = w.inner_size();
+                    (s.width as usize, s.height as usize)
+                } else {
+                    (800, 600)
+                };
 
-                if active.terminal.is_mouse_reporting_active() && !bypass {
-                    // Transmitir scroll del ratón al TUI activo (Herdr / Ratatui)
-                    if let Some(renderer) = &self.renderer {
-                        let term_x = mx.saturating_sub(offset);
-                        let col = if term_x >= renderer.margin_x {
-                            ((term_x - renderer.margin_x) / renderer.char_width) + 1
-                        } else { 1 }.min(active.terminal.cols);
-                        let row = if my >= renderer.margin_y {
-                            ((my - renderer.margin_y) / renderer.row_height) + 1
-                        } else { 1 }.min(active.terminal.rows);
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                let term_area_w = win_w.saturating_sub(offset);
+                let pane_rects = active_tab.compute_pane_rects(offset, 0, term_area_w, win_h);
+
+                let target_pane_rect = pane_rects.iter().find(|r| {
+                    mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height
+                }).copied();
+
+                let target_pane_id = target_pane_rect.map(|r| r.pane_id).unwrap_or(active_tab.active_pane_id);
+
+                if let Some(pane) = active_tab.find_pane_mut(target_pane_id) {
+                    let rect_x = target_pane_rect.map(|r| r.x).unwrap_or(offset);
+                    let rect_y = target_pane_rect.map(|r| r.y).unwrap_or(0);
+
+                    if pane.terminal.is_mouse_reporting_active() && !bypass {
+                        if let Some(renderer) = &self.renderer {
+                            let term_x = mx.saturating_sub(rect_x);
+                            let term_y = my.saturating_sub(rect_y);
+                            let col = if term_x >= renderer.margin_x {
+                                ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                            } else { 1 }.min(pane.terminal.cols);
+                            let row = if term_y >= renderer.margin_y {
+                                ((term_y - renderer.margin_y) / renderer.row_height) + 1
+                            } else { 1 }.min(pane.terminal.rows);
+
+                            let is_up = match delta {
+                                MouseScrollDelta::LineDelta(_, y) => y > 0.0,
+                                MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
+                            };
+
+                            let mut code = if is_up { 64 } else { 65 };
+                            if self.modifiers.shift_key() { code += 4; }
+                            if self.modifiers.alt_key() { code += 8; }
+                            if self.modifiers.control_key() { code += 16; }
+
+                            if pane.terminal.mouse_reporting_sgr {
+                                let seq = format!("\x1b[<{};{};{}M", code, col, row);
+                                pane.pty.write_input(seq.as_bytes());
+                            } else {
+                                let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
+                                pane.pty.write_input(&seq);
+                            }
+                        }
+                    } else {
+                        let lines = match delta {
+                            MouseScrollDelta::LineDelta(_, y) => (y.abs() as usize).max(1) * 3,
+                            MouseScrollDelta::PixelDelta(pos) => ((pos.y.abs() / 20.0).ceil() as usize).max(1) * 3,
+                        };
 
                         let is_up = match delta {
                             MouseScrollDelta::LineDelta(_, y) => y > 0.0,
                             MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
                         };
 
-                        let mut code = if is_up { 64 } else { 65 };
-                        if self.modifiers.shift_key() { code += 4; }
-                        if self.modifiers.alt_key() { code += 8; }
-                        if self.modifiers.control_key() { code += 16; }
-
-                        if active.terminal.mouse_reporting_sgr {
-                            let seq = format!("\x1b[<{};{};{}M", code, col, row);
-                            active.pty.write_input(seq.as_bytes());
+                        if is_up {
+                            pane.terminal.scroll_up(lines);
                         } else {
-                            let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                            active.pty.write_input(&seq);
+                            pane.terminal.scroll_down(lines);
                         }
+
+                        self.last_scroll_time = Instant::now();
+                        if let Some(w) = &self.window { w.request_redraw(); }
                     }
-                } else {
-                    let lines = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => (y.abs() as usize).max(1) * 3,
-                        MouseScrollDelta::PixelDelta(pos) => ((pos.y.abs() / 20.0).ceil() as usize).max(1) * 3,
-                    };
-
-                    let is_up = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y > 0.0,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
-                    };
-
-                    if is_up {
-                        active.terminal.scroll_up(lines);
-                    } else {
-                        active.terminal.scroll_down(lines);
-                    }
-
-                    if let Some(w) = &self.window { w.request_redraw(); }
                 }
             }
 
@@ -1410,22 +2142,21 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 crate::logger::log(&format!("FOCUS: {}", focused));
                 self.is_focused = focused;
                 if !focused {
-                    // Al perder el foco (p. ej. al hacer Alt+Tab hacia otra ventana),
-                    // resetear los modificadores para evitar que Alt o Ctrl queden atascados.
                     self.modifiers = ModifiersState::empty();
                     self.mouse_down = false;
                     self.drag_start = None;
                 } else {
-                    // Al retomar foco, también limpiar para partir de un estado limpio
                     self.modifiers = ModifiersState::empty();
                 }
 
                 if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
-                    if active.terminal.focus_event_reporting {
-                        if focused {
-                            active.pty.write_input(b"\x1b[I");
-                        } else {
-                            active.pty.write_input(b"\x1b[O");
+                    if let Some(pane) = active.active_pane_mut() {
+                        if pane.terminal.focus_event_reporting {
+                            if focused {
+                                pane.pty.write_input(b"\x1b[I");
+                            } else {
+                                pane.pty.write_input(b"\x1b[O");
+                            }
                         }
                     }
                 }
@@ -1436,16 +2167,18 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // 1. Revisar si alguna pestaña tiene su proceso terminado
-        let mut exited_indices = Vec::new();
-        for (idx, tab) in self.tabs.iter_mut().enumerate() {
-            if tab.pty.is_child_exited() {
-                exited_indices.push(idx);
+        // 1. Revisar si algún panel tiene su proceso terminado
+        let mut closed_panes = Vec::new();
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.pty.is_child_exited() {
+                    closed_panes.push(pane.id);
+                }
             }
         }
-        for idx in exited_indices.into_iter().rev() {
-            crate::logger::log(&format!("Proceso hijo de tab {} terminado: cerrando pestaña", idx));
-            self.close_tab(idx, event_loop);
+        for pane_id in closed_panes {
+            crate::logger::log(&format!("Proceso hijo de pane {} terminado: cerrando pane", pane_id));
+            self.close_pane_by_id(pane_id, event_loop);
         }
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando Axon");
@@ -1453,18 +2186,24 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             return;
         }
 
-        // 2. Drenar salida de ConPTY de todas las pestañas por si quedó algún byte residual
+        // 2. Drenar salida de ConPTY de todos los paneles por si quedó algún byte residual
         let mut got_bytes = false;
         let active_idx = self.active_tab_index;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             let mut tab_got_bytes = false;
-            while let Some(bytes) = tab.pty.try_recv_output() {
-                tab_got_bytes = true;
-                tab.terminal.process_bytes(&bytes);
-            }
-            for text in tab.terminal.clipboard_queue.drain(..) {
-                if let Some(cb) = &mut self.clipboard {
-                    cb.set_text(text).ok();
+            for pane in &mut tab.panes {
+                let mut pane_got_bytes = false;
+                while let Some(bytes) = pane.pty.try_recv_output() {
+                    pane_got_bytes = true;
+                    pane.terminal.process_bytes(&bytes);
+                }
+                for text in pane.terminal.clipboard_queue.drain(..) {
+                    if let Some(cb) = &mut self.clipboard {
+                        cb.set_text(text).ok();
+                    }
+                }
+                if pane_got_bytes {
+                    tab_got_bytes = true;
                 }
             }
             if tab_got_bytes {
@@ -1502,32 +2241,49 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         } else {
             event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
         }
+
+        // 5. Temporizador de auto-ocultamiento de la barra de desplazamiento
+        let scroll_elapsed = self.last_scroll_time.elapsed().as_millis();
+        if scroll_elapsed < 1250 {
+            let remain = (1250 - scroll_elapsed) as u64;
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::wait_duration(
+                std::time::Duration::from_millis(remain),
+            ));
+        }
     }
 }
 
 fn create_native_icon() -> Icon {
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon-256.png");
+    if let Ok(img) = image::load_from_memory(ICON_BYTES) {
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        if let Ok(icon) = Icon::from_rgba(rgba.into_raw(), w, h) {
+            return icon;
+        }
+    }
+
     let size = 32;
     let mut rgba = vec![0u8; size * size * 4];
     for y in 0..size {
         for x in 0..size {
             let idx = (y * size + x) * 4;
-            let mut r = 0x16;
-            let mut g = 0x16;
-            let mut b = 0x18;
-            let a = 255;
-
             let in_arrow_top = x >= 9 && x <= 16 && (y as i32 - x as i32).abs() <= 1 && y >= 9 && y <= 16;
             let in_arrow_bot = x >= 9 && x <= 16 && (y as i32 + x as i32 - 32).abs() <= 1 && y >= 16 && y <= 23;
             let in_cursor = x >= 18 && x <= 24 && (y == 21 || y == 22);
 
             if in_arrow_top || in_arrow_bot || in_cursor {
-                r = 0x51; g = 0xe2; b = 0x7a; // Verde Ghostty #51e27a
+                rgba[idx] = 0x51;     // Verde Ghostty #51e27a
+                rgba[idx + 1] = 0xe2;
+                rgba[idx + 2] = 0x7a;
+                rgba[idx + 3] = 255;
+            } else {
+                // Totalmente transparente (sin fondo oscuro)
+                rgba[idx] = 0;
+                rgba[idx + 1] = 0;
+                rgba[idx + 2] = 0;
+                rgba[idx + 3] = 0;
             }
-
-            rgba[idx] = r;
-            rgba[idx + 1] = g;
-            rgba[idx + 2] = b;
-            rgba[idx + 3] = a;
         }
     }
     Icon::from_rgba(rgba, size as u32, size as u32).expect("Error al crear icono de ventana")

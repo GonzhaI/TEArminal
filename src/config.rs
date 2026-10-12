@@ -43,7 +43,7 @@ impl Default for AxonConfig {
                 font_path: None,
                 font_size: 13.0,
                 window_opacity: 0.98,
-                theme: "ghostty-dark".to_string(),
+                theme: "Ghostty Default StyleDark".to_string(),
                 line_spacing: 1.0,
             },
             terminal: TerminalConfig {
@@ -122,6 +122,46 @@ fn dirs_or_fallback() -> PathBuf {
         dirs.config_dir().to_path_buf()
     } else {
         PathBuf::from("axon_config")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SessionState {
+    pub active_tab_index: usize,
+    #[serde(default = "default_true")]
+    pub sidebar_visible: bool,
+    pub tabs: Vec<TabSession>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TabSession {
+    pub title: String,
+    pub cwd: Option<String>,
+}
+
+impl SessionState {
+    pub fn session_path() -> PathBuf {
+        let base_dir = dirs_or_fallback();
+        base_dir.join("session.toml")
+    }
+
+    pub fn load() -> Option<Self> {
+        let path = Self::session_path();
+        if let Ok(content) = fs::read_to_string(&path) {
+            toml::from_str::<Self>(&content).ok()
+        } else {
+            None
+        }
+    }
+
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::session_path();
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let content = toml::to_string_pretty(self)?;
+        fs::write(path, content)?;
+        Ok(())
     }
 }
 

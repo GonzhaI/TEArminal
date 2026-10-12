@@ -17,6 +17,7 @@ src/
 ├── renderer.rs   # TerminalRenderer: Rasterizador tipográfico fontdue, caché de glifos y softbuffer.
 ├── theme.rs      # Definiciones de color y paleta de Ghostty.
 ├── config.rs     # AxonConfig: Carga y serialización en TOML.
+├── tools.rs      # Gestor y aprovisionador de herramientas CLI a nivel de aplicación (eza, bat, rg, fd, zoxide, fzf).
 └── logger.rs     # Logger ligero en disco (axon.log) para diagnóstico de I/O y secuencias de escape.
 ```
 
@@ -62,6 +63,23 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
 * En `WindowEvent::Focused(false)` y `WindowEvent::Focused(true)`, `self.modifiers` **debe** resetearse a `ModifiersState::empty()` para evitar modificadores zombis.
 * `NamedKey::Tab` con `Alt` activo debe ignorarse inmediatamente para no emitir `\t` accidental a la shell.
 
+### 6. Video Inverso (SGR 7) y Background Color Erase (BCE) en TUIs
+* **Video Inverso (SGR 7):** Usado por TUIs como OpenCode, lazygit y htop para barras de pestañas, advertencias y selecciones. En [`src/renderer.rs`](file:///C:/Users/gmora/dev/axon/src/renderer.rs), `compute_cell_fg` y `effective_bg` **deben** intercambiar `fg` y `bg`. Si `effective_bg` usa `cell.bg` en lugar de `cell.fg`, el texto y el fondo se vuelven del mismo color, volviendo el texto invisible ("texto gris fantasma").
+* **Background Color Erase (BCE):** Al procesar `ED` (`'J'`), `EL` (`'K'`) y `ECH` (`'X'`) en [`src/terminal.rs`](file:///C:/Users/gmora/dev/axon/src/terminal.rs), las celdas borradas deben rellenarse con `self.state.current_bg` si un fondo SGR está activo, en lugar de resetear indiscriminadamente a `Color::TRANSPARENT`. De lo contrario, se producen cortes visuales o líneas partidas en ventanas modales y banners.
+
+### 7. Entorno de Producción vs Desarrollo y Telemetría de Diagnóstico
+* En compilaciones de Release (`cargo build --release`), [`src/logger.rs`](file:///C:/Users/gmora/dev/axon/src/logger.rs) desactiva completamente la creación y escritura en `axon.log` para maximizar el rendimiento y evitar escrituras en disco en equipos de usuarios finales.
+* Solo se activa el log en Release si el usuario o agente define explícitamente las variables de entorno `AXON_DEBUG=1` o `AXON_LOG=1`.
+* El perfil `[profile.release]` en `Cargo.toml` incluye optimizaciones agresivas (`opt-level = 3`, `lto = true`, `strip = true`, `panic = "abort"`).
+
+### 8. Persistencia de Sesiones y Detección de Directorio (OSC 7 / OSC 9;9)
+* Las pestañas activas, sus títulos, visibilidad del panel lateral y sus directorios de trabajo actuales se persisten automáticamente en `%LOCALAPPDATA%\axon\session.toml` (`SessionState`).
+* El directorio de trabajo se sincroniza dinámicamente mediante el protocolo estándar OSC 7 (`\x1b]7;file://localhost/...`) emitido en cada comando del prompt de PowerShell, y mediante OSC 9;9 (`\x1b]9;9;"..."`).
+
+### 9. Anclaje de Entrada Inferior para Agentes de IA (Claude Code, Gemini, Agy)
+* En terminales tradicionales, los agentes CLI de entrada continua inician su prompt en la parte superior y se desplazan hacia abajo con cada consulta.
+* En [`src/pty.rs`](file:///C:/Users/gmora/dev/axon/src/pty.rs), los wrappers de arranque para `claude`, `gemini` y `agy` limpian la pantalla y posicionan el cursor en la última línea visible (`$Host.UI.RawUI.WindowSize.Height`), garantizando que la caja de entrada permanezca permanentemente anclada al fondo de la terminal.
+
 ---
 
 ## 🧪 Pruebas y Validación
@@ -79,4 +97,4 @@ Antes de dar por completado cualquier cambio:
    cargo build --release
    ```
 4. **Verificar diagnósticos:**
-   Revisa [`axon.log`](file:///C:/Users/gmora/dev/axon/axon.log) si necesitas depurar secuencias de escape recibidas o eventos de hardware emitidos.
+   Revisa [`axon.log`](file:///C:/Users/gmora/dev/axon/axon.log) en modo de desarrollo (`cargo run`) si necesitas depurar secuencias de escape recibidas o eventos de hardware emitidos.

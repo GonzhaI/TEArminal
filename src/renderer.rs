@@ -22,6 +22,8 @@ pub struct SidebarTabItem {
     pub title: String,
     pub is_active: bool,
     pub has_unread: bool,
+    #[allow(dead_code)]
+    pub pane_count: usize,
 }
 
 pub struct TerminalRenderer {
@@ -250,29 +252,42 @@ impl TerminalRenderer {
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
         hovered_toggle_btn: bool,
+        theme: &Theme,
     ) {
         if sidebar_width == 0 || width == 0 || height == 0 {
             return;
         }
 
-        // 1. Fondo de la barra lateral (gris oscuro profundo Ghostty #121214)
+        // 1. Fondo de la barra lateral (gris oscuro profundo Ghostty)
         let sidebar_bg = Color::from_rgb(18, 18, 20);
         Self::draw_rect(buffer, width, height, 0, 0, sidebar_width, height, sidebar_bg);
 
-        // 2. Línea divisoria vertical sutil (#26262b)
+        // 2. Línea divisoria vertical sutil
         let divider_color = Color::from_rgb(38, 38, 43);
         Self::draw_rect(buffer, width, height, sidebar_width.saturating_sub(1), 0, 1, height, divider_color);
 
-        // 3. Encabezado de la barra lateral (Header: "AXON" + Botón "+")
+        // 3. Encabezado de la barra lateral (Header: "> AXON" + Botón "+")
         let header_y = 12;
         let header_baseline = header_y + self.baseline_y.min(16);
-        let title_color = Color::from_rgb(130, 130, 140);
+        let title_color = theme.ansi[8]; // Gris medio Ghostty
+        let logo_color = theme.ansi[2];  // Verde Ghostty sin fondo
         self.draw_text(
             buffer,
             width,
             height,
-            "AXON",
+            ">",
             14,
+            header_baseline,
+            sidebar_width.saturating_sub(40),
+            logo_color,
+            true,
+        );
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            " AXON",
+            14 + self.char_width,
             header_baseline,
             sidebar_width.saturating_sub(40),
             title_color,
@@ -287,14 +302,14 @@ impl TerminalRenderer {
         let plus_bg = if hovered_new_tab {
             Color::from_rgb(45, 45, 52)
         } else {
-            Color::from_rgb(26, 26, 30)
+            theme.ansi[0] // Negro carbón Ghostty
         };
         Self::draw_rect(buffer, width, height, plus_btn_x, plus_btn_y, plus_btn_w, plus_btn_h, plus_bg);
 
         let plus_fg = if hovered_new_tab {
-            Color::from_rgb(81, 226, 122) // Verde Ghostty
+            theme.ansi[2] // Verde Ghostty
         } else {
-            Color::from_rgb(200, 200, 210)
+            theme.ansi[7] // Blanco/gris claro Ghostty
         };
         let plus_baseline = plus_btn_y + self.baseline_y.min(18);
         self.draw_text(
@@ -338,17 +353,17 @@ impl TerminalRenderer {
 
             // Indicador vertical verde en la pestaña activa
             if tab.is_active {
-                let accent_color = Color::from_rgb(81, 226, 122); // Verde Ghostty
+                let accent_color = theme.ansi[2]; // Verde Ghostty
                 Self::draw_rect(buffer, width, height, tab_x, tab_y + 4, 3, tab_item_h.saturating_sub(8), accent_color);
             }
 
             // Título de la pestaña
             let text_color = if tab.is_active {
-                Color::from_rgb(240, 240, 245)
+                theme.foreground // Ghostty foreground
             } else if is_hovered {
-                Color::from_rgb(200, 200, 205)
+                theme.ansi[7] // Ghostty blanco/gris claro
             } else {
-                Color::from_rgb(140, 140, 148)
+                theme.ansi[8] // Ghostty gris
             };
 
             let text_baseline = tab_y + self.baseline_y.min(22);
@@ -361,9 +376,15 @@ impl TerminalRenderer {
                 tab_x + 8,
                 text_baseline,
                 tab_x + tab_w,
-                if tab.is_active { Color::from_rgb(81, 226, 122) } else { text_color },
+                if tab.is_active { theme.ansi[2] } else { text_color },
                 tab.is_active,
             );
+
+            let display_title = if tab.pane_count > 1 {
+                format!("{} [{}]", tab.title, tab.pane_count)
+            } else {
+                tab.title.clone()
+            };
 
             let title_x = tab_x + 8 + (self.char_width * 2);
             let title_max_x = tab_x + tab_w.saturating_sub(26);
@@ -371,7 +392,7 @@ impl TerminalRenderer {
                 buffer,
                 width,
                 height,
-                &tab.title,
+                &display_title,
                 title_x,
                 text_baseline,
                 title_max_x,
@@ -383,7 +404,7 @@ impl TerminalRenderer {
             if tab.has_unread && !tab.is_active {
                 let dot_x = tab_x + tab_w.saturating_sub(32);
                 let dot_y = tab_y + (tab_item_h / 2).saturating_sub(3);
-                let dot_color = Color::from_rgb(78, 146, 249); // Azul Ghostty
+                let dot_color = theme.ansi[4]; // Azul Ghostty
                 Self::draw_rect(buffer, width, height, dot_x, dot_y, 6, 6, dot_color);
             }
 
@@ -395,9 +416,9 @@ impl TerminalRenderer {
 
                 let is_close_hovered = hovered_close == Some(idx);
                 let close_fg = if is_close_hovered {
-                    Color::from_rgb(244, 56, 65) // Rojo Ghostty
+                    theme.ansi[1] // Rojo Ghostty
                 } else {
-                    Color::from_rgb(120, 120, 130)
+                    theme.ansi[8]
                 };
 
                 let close_baseline = close_y + self.baseline_y.min(15);
@@ -432,9 +453,9 @@ impl TerminalRenderer {
         Self::draw_rect(buffer, width, height, toggle_x, toggle_y, toggle_w, toggle_h, toggle_bg);
 
         let toggle_fg = if hovered_toggle_btn {
-            Color::from_rgb(81, 226, 122) // Verde Ghostty
+            theme.ansi[2] // Verde Ghostty
         } else {
-            Color::from_rgb(170, 170, 180)
+            theme.ansi[7]
         };
         let toggle_baseline = toggle_y + self.baseline_y.min(20);
         self.draw_text(
@@ -458,7 +479,7 @@ impl TerminalRenderer {
             toggle_x + toggle_w.saturating_sub(58),
             toggle_baseline,
             toggle_x + toggle_w,
-            Color::from_rgb(100, 100, 112),
+            theme.ansi[8],
             false,
         );
     }
@@ -470,6 +491,7 @@ impl TerminalRenderer {
         width: usize,
         height: usize,
         hovered: bool,
+        theme: &Theme,
     ) {
         if width == 0 || height == 0 {
             return;
@@ -495,9 +517,9 @@ impl TerminalRenderer {
         Self::draw_rect(buffer, width, height, btn_x + btn_w - 1, btn_y, 1, btn_h, border_color);
 
         let icon_fg = if hovered {
-            Color::from_rgb(81, 226, 122) // Verde Ghostty
+            theme.ansi[2] // Verde Ghostty
         } else {
-            Color::from_rgb(180, 180, 190)
+            theme.ansi[7]
         };
 
         let baseline = btn_y + self.baseline_y.min(20);
@@ -514,49 +536,101 @@ impl TerminalRenderer {
         );
     }
 
-    /// Calcula las columnas y filas que caben en el tamaño actual de la ventana
-    pub fn compute_grid_size(&self, window_width: usize, window_height: usize, sidebar_offset: usize) -> (usize, usize) {
-        let avail_w = window_width.saturating_sub(sidebar_offset + self.margin_x * 2);
-        let avail_h = window_height.saturating_sub(self.margin_y * 2);
-        let cols = (avail_w / self.char_width).max(20);
-        let rows = (avail_h / self.row_height).max(5);
+    /// Calcula las columnas y filas que caben en un panel según sus dimensiones en píxeles
+    pub fn compute_pane_grid_size(&self, pane_width: usize, pane_height: usize) -> (usize, usize) {
+        let avail_w = pane_width.saturating_sub(self.margin_x * 2);
+        let avail_h = pane_height.saturating_sub(self.margin_y * 2);
+        let cols = (avail_w / self.char_width).max(10);
+        let rows = (avail_h / self.row_height).max(3);
         (cols, rows)
     }
 
-    /// Renderiza directamente la cuadrícula del terminal al framebuffer de píxeles 32-bit de Windows
-    pub fn render(
+    /// Calcula las columnas y filas que caben en el tamaño actual de la ventana
+    pub fn compute_grid_size(&self, window_width: usize, window_height: usize, sidebar_offset: usize) -> (usize, usize) {
+        let avail_w = window_width.saturating_sub(sidebar_offset);
+        self.compute_pane_grid_size(avail_w, window_height)
+    }
+
+    pub fn pane_scrollbar_geometry(
+        &self,
+        rect_x: usize,
+        rect_y: usize,
+        rect_width: usize,
+        rect_height: usize,
+        terminal: &TerminalState,
+    ) -> Option<(usize, usize, usize, usize)> {
+        if terminal.scrollback.is_empty() {
+            return None;
+        }
+        let track_w = 6;
+        let track_x = (rect_x + rect_width).saturating_sub(track_w + 2);
+        let track_y = rect_y + self.margin_y;
+        let track_h = rect_height.saturating_sub(self.margin_y * 2);
+        if track_h == 0 {
+            return None;
+        }
+
+        let total_history = terminal.scrollback.len() + terminal.rows;
+        let thumb_h = ((terminal.rows as f32 / total_history as f32) * track_h as f32).max(16.0).min(track_h as f32) as usize;
+        let available_travel = track_h.saturating_sub(thumb_h);
+        let ratio = 1.0 - (terminal.scroll_offset as f32 / terminal.scrollback.len() as f32);
+        let thumb_y = track_y + (ratio * available_travel as f32) as usize;
+
+        Some((track_x, thumb_y, track_w, thumb_h))
+    }
+
+    #[allow(dead_code)]
+    pub fn scrollbar_geometry(
+        &self,
+        width: usize,
+        height: usize,
+        terminal: &TerminalState,
+    ) -> Option<(usize, usize, usize, usize)> {
+        self.pane_scrollbar_geometry(0, 0, width, height, terminal)
+    }
+
+    /// Renderiza un panel de terminal en un rectángulo específico del framebuffer
+    pub fn render_pane(
         &mut self,
         buffer: &mut [u32],
         width: usize,
         height: usize,
-        sidebar_offset: usize,
+        rect_x: usize,
+        rect_y: usize,
+        rect_w: usize,
+        rect_h: usize,
         terminal: &TerminalState,
         theme: &Theme,
         cursor_visible: bool,
+        is_active_pane: bool,
+        has_multiple_panes: bool,
     ) {
+        if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
+            return;
+        }
+
         let bg_color = theme.background.to_u32_xrgb();
         let baseline_y = self.baseline_y;
 
-        // 1. Limpieza del área de terminal con el fondo oficial Ghostty (#161618)
-        if sidebar_offset == 0 {
-            buffer.fill(bg_color);
-        } else {
-            for py in 0..height {
-                let row_start = py * width;
-                for px in sidebar_offset..width {
-                    buffer[row_start + px] = bg_color;
-                }
+        // 1. Limpieza del área del panel con el fondo oficial Ghostty (#161618)
+        let max_y = (rect_y + rect_h).min(height);
+        let max_x = (rect_x + rect_w).min(width);
+        for py in rect_y..max_y {
+            let row_start = py * width;
+            for px in rect_x..max_x {
+                buffer[row_start + px] = bg_color;
             }
         }
 
-        let base_x = sidebar_offset + self.margin_x;
+        let base_x = rect_x + self.margin_x;
+        let base_y = rect_y + self.margin_y;
         let visible_rows = terminal.visible_rows();
         let view_start = terminal.visible_line_start();
 
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
-            let cell_y = self.margin_y + (row_idx * self.row_height);
-            if cell_y + self.row_height > height {
+            let cell_y = base_y + (row_idx * self.row_height);
+            if cell_y + self.row_height > max_y {
                 break;
             }
 
@@ -571,7 +645,7 @@ impl TerminalRenderer {
                 let bar_x = base_x.saturating_sub(7);
                 for y in (cell_y + 3)..(cell_y + self.row_height - 3) {
                     for x in bar_x..(bar_x + 3) {
-                        if x < width && y < height {
+                        if x >= rect_x && x < max_x && y >= rect_y && y < max_y {
                             buffer[y * width + x] = dot_color;
                         }
                     }
@@ -580,7 +654,7 @@ impl TerminalRenderer {
 
             for (col_idx, cell) in row.iter().enumerate() {
                 let cell_x = base_x + (col_idx * self.char_width);
-                if cell_x + self.char_width > width {
+                if cell_x + self.char_width > max_x {
                     break;
                 }
 
@@ -592,6 +666,12 @@ impl TerminalRenderer {
 
                 let effective_bg = if is_selected {
                     theme.selection
+                } else if cell.inverse {
+                    if cell.fg != Color::TRANSPARENT {
+                        cell.fg
+                    } else {
+                        theme.foreground
+                    }
                 } else if cell.bg != Color::TRANSPARENT {
                     cell.bg
                 } else {
@@ -603,7 +683,7 @@ impl TerminalRenderer {
                     let fill = effective_bg.to_u32_xrgb();
                     for y in cell_y..(cell_y + self.row_height) {
                         for x in cell_x..(cell_x + self.char_width) {
-                            if x < width && y < height {
+                            if x < max_x && y < max_y {
                                 buffer[y * width + x] = fill;
                             }
                         }
@@ -615,7 +695,7 @@ impl TerminalRenderer {
                     let line_y = cell_y + self.row_height - 2;
                     let fg_u32 = cell.fg.to_u32_xrgb();
                     for x in cell_x..(cell_x + self.char_width) {
-                        if x < width && line_y < height {
+                        if x < max_x && line_y < max_y {
                             buffer[line_y * width + x] = fg_u32;
                         }
                     }
@@ -626,7 +706,7 @@ impl TerminalRenderer {
                     let line_y = cell_y + (self.row_height / 2);
                     let fg_u32 = cell.fg.to_u32_xrgb();
                     for x in cell_x..(cell_x + self.char_width) {
-                        if x < width && line_y < height {
+                        if x < max_x && line_y < max_y {
                             buffer[line_y * width + x] = fg_u32;
                         }
                     }
@@ -649,12 +729,12 @@ impl TerminalRenderer {
 
                 for gy in 0..glyph_h {
                     let py = glyph_y + gy as i32;
-                    if py < 0 || py as usize >= height {
+                    if py < rect_y as i32 || py >= max_y as i32 {
                         continue;
                     }
                     for gx in 0..glyph_w {
                         let px = glyph_x + gx as i32;
-                        if px < 0 || px as usize >= width {
+                        if px < rect_x as i32 || px >= max_x as i32 {
                             continue;
                         }
 
@@ -681,7 +761,7 @@ impl TerminalRenderer {
             && terminal.cursor_x < terminal.cols
         {
             let cx = base_x + (terminal.cursor_x * self.char_width);
-            let cy = self.margin_y + (terminal.cursor_y * self.row_height);
+            let cy = base_y + (terminal.cursor_y * self.row_height);
 
             let active_grid = if terminal.is_alt_screen {
                 &terminal.alt_grid
@@ -703,44 +783,58 @@ impl TerminalRenderer {
                 self.char_width
             };
 
-            let cursor_color = theme.cursor.to_u32_xrgb();
+            if is_active_pane {
+                let cursor_color = theme.cursor.to_u32_xrgb();
 
-            // Dibujar rectángulo del cursor
-            for y in cy..(cy + self.row_height) {
-                for x in cx..(cx + c_width) {
-                    if x < width && y < height {
-                        buffer[y * width + x] = cursor_color;
+                // Dibujar rectángulo del cursor
+                for y in cy..(cy + self.row_height) {
+                    for x in cx..(cx + c_width) {
+                        if x >= rect_x && x < max_x && y >= rect_y && y < max_y {
+                            buffer[y * width + x] = cursor_color;
+                        }
                     }
                 }
-            }
 
-            // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
-            if let Some(cell) = cell_under {
-                if cell.c != ' ' && cell.width > 0 {
-                    let inv_fg = theme.background;
-                    let glyph = self.get_glyph(cell.c, cell.bold);
-                    let glyph_w = glyph.width;
-                    let glyph_h = glyph.height;
-                    let glyph_x = cx as i32 + glyph.x_offset;
-                    let glyph_y = (cy + baseline_y) as i32 - glyph.y_offset - glyph_h as i32;
+                // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
+                if let Some(cell) = cell_under {
+                    if cell.c != ' ' && cell.width > 0 {
+                        let inv_fg = theme.background;
+                        let glyph = self.get_glyph(cell.c, cell.bold);
+                        let glyph_w = glyph.width;
+                        let glyph_h = glyph.height;
+                        let glyph_x = cx as i32 + glyph.x_offset;
+                        let glyph_y = (cy + baseline_y) as i32 - glyph.y_offset - glyph_h as i32;
 
-                    for gy in 0..glyph_h {
-                        let py = glyph_y + gy as i32;
-                        if py < 0 || py as usize >= height {
-                            continue;
-                        }
-                        for gx in 0..glyph_w {
-                            let px = glyph_x + gx as i32;
-                            if px < 0 || px as usize >= width {
+                        for gy in 0..glyph_h {
+                            let py = glyph_y + gy as i32;
+                            if py < rect_y as i32 || py >= max_y as i32 {
                                 continue;
                             }
+                            for gx in 0..glyph_w {
+                                let px = glyph_x + gx as i32;
+                                if px < rect_x as i32 || px >= max_x as i32 {
+                                    continue;
+                                }
 
-                            let alpha = glyph.bitmap[gy * glyph_w + gx];
-                            if alpha > 0 {
-                                let buf_idx = (py as usize) * width + (px as usize);
-                                let bg = theme.cursor;
-                                buffer[buf_idx] = bg.blend_over(inv_fg, alpha);
+                                let alpha = glyph.bitmap[gy * glyph_w + gx];
+                                if alpha > 0 {
+                                    let buf_idx = (py as usize) * width + (px as usize);
+                                    let bg = theme.cursor;
+                                    buffer[buf_idx] = bg.blend_over(inv_fg, alpha);
+                                }
                             }
+                        }
+                    }
+                }
+            } else {
+                // Cursor hueco para terminal inactiva en split
+                let border_c = theme.ansi[8].to_u32_xrgb();
+                for y in cy..(cy + self.row_height) {
+                    for x in cx..(cx + c_width) {
+                        if (y == cy || y == cy + self.row_height - 1 || x == cx || x == cx + c_width - 1)
+                            && x >= rect_x && x < max_x && y >= rect_y && y < max_y
+                        {
+                            buffer[y * width + x] = border_c;
                         }
                     }
                 }
@@ -753,20 +847,20 @@ impl TerminalRenderer {
             if img.line_index + img.height_rows > view_start && img.line_index < view_end {
                 let row_in_view = img.line_index as isize - view_start as isize;
                 let ix = (base_x + (img.col * self.char_width)) as i32;
-                let iy = (self.margin_y + (row_in_view as usize * self.row_height)) as i32;
+                let iy = (base_y + (row_in_view as usize * self.row_height)) as i32;
                 let target_w = img.width_cols * self.char_width;
                 let target_h = img.height_rows * self.row_height;
 
                 for dy in 0..target_h {
                     let py = iy + dy as i32;
-                    if py < 0 || py as usize >= height {
+                    if py < rect_y as i32 || py >= max_y as i32 {
                         continue;
                     }
                     let src_y = (dy * img.height_px as usize) / target_h;
 
                     for dx in 0..target_w {
                         let px = ix + dx as i32;
-                        if px < 0 || px as usize >= width {
+                        if px < rect_x as i32 || px >= max_x as i32 {
                             continue;
                         }
                         let src_x = (dx * img.width_px as usize) / target_w;
@@ -795,23 +889,88 @@ impl TerminalRenderer {
             }
         }
 
-        // 5. Barra indicadora sutil de scrollback en el margen derecho
-        if terminal.scroll_offset > 0 {
-            let total_history = terminal.scrollback.len() + terminal.rows;
-            let bar_height = ((terminal.rows as f32 / total_history as f32) * height as f32).max(24.0) as usize;
-            let ratio = 1.0 - (terminal.scroll_offset as f32 / terminal.scrollback.len() as f32);
-            let bar_y = self.margin_y + (ratio * (height - self.margin_y * 2 - bar_height) as f32) as usize;
-            let bar_x = width.saturating_sub(5);
-            let bar_color = Color::from_rgb(100, 110, 130).to_u32_xrgb();
+        // 5. Scrollbar del panel si tiene historial
+        if !terminal.scrollback.is_empty() {
+            if let Some((thumb_x, thumb_y, thumb_w, thumb_h)) = self.pane_scrollbar_geometry(rect_x, rect_y, rect_w, rect_h, terminal) {
+                let track_y = rect_y + self.margin_y;
+                let track_h = rect_h.saturating_sub(self.margin_y * 2);
+                let track_color = theme.ansi[0].to_u32_xrgb();
 
-            for y in bar_y..(bar_y + bar_height) {
-                for x in bar_x..width {
-                    if x < width && y < height {
-                        buffer[y * width + x] = bar_color;
+                for y in track_y..(track_y + track_h) {
+                    for x in thumb_x..(thumb_x + thumb_w) {
+                        if x < max_x && y < max_y {
+                            buffer[y * width + x] = track_color;
+                        }
+                    }
+                }
+
+                let thumb_color = if is_active_pane {
+                    theme.ansi[12].to_u32_xrgb()
+                } else {
+                    theme.ansi[8].to_u32_xrgb()
+                };
+
+                for y in thumb_y..(thumb_y + thumb_h) {
+                    for x in thumb_x..(thumb_x + thumb_w) {
+                        if x < max_x && y < max_y {
+                            buffer[y * width + x] = thumb_color;
+                        }
                     }
                 }
             }
         }
+
+        // 6. Si hay múltiples paneles, dibujar un borde sutil indicador en el panel activo
+        if has_multiple_panes && is_active_pane {
+            let active_border = theme.ansi[2]; // Verde Ghostty sutil
+            // Línea superior fina indicadora de foco
+            Self::draw_rect(buffer, width, height, rect_x, rect_y, rect_w, 2, active_border);
+        }
+    }
+
+    /// Renderiza un divisor entre paneles de terminal
+    pub fn render_pane_divider(
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        divider_color: Color,
+    ) {
+        Self::draw_rect(buffer, width, height, x, y, w, h, divider_color);
+    }
+
+    /// Renderiza directamente la cuadrícula del terminal al framebuffer de píxeles 32-bit de Windows
+    #[allow(dead_code)]
+    pub fn render(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        sidebar_offset: usize,
+        terminal: &TerminalState,
+        theme: &Theme,
+        cursor_visible: bool,
+        _scrollbar_visible: bool,
+        _scrollbar_hovered: bool,
+    ) {
+        let pane_w = width.saturating_sub(sidebar_offset);
+        self.render_pane(
+            buffer,
+            width,
+            height,
+            sidebar_offset,
+            0,
+            pane_w,
+            height,
+            terminal,
+            theme,
+            cursor_visible,
+            true,
+            false,
+        );
     }
 }
 

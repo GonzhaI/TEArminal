@@ -67,8 +67,8 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Paleta oficial y firma de Ghostty Dark
-    pub fn ghostty_dark() -> Self {
+    /// Paleta oficial y firma de Ghostty Default StyleDark
+    pub fn ghostty_default_styledark() -> Self {
         Self {
             background: Color::from_rgb(22, 22, 24),     // #161618 - Carbón profundo Ghostty
             foreground: Color::from_rgb(230, 230, 235), // #e6e6eb - Texto nítido alto contraste
@@ -95,6 +95,18 @@ impl Theme {
                 Color::from_rgb(255, 255, 255), // 15: Blanco brillante
             ],
         }
+    }
+
+    /// Alias de compatibilidad para la paleta Ghostty
+    #[allow(dead_code)]
+    pub fn ghostty_dark() -> Self {
+        Self::ghostty_default_styledark()
+    }
+
+    /// Resuelve el tema configurado (prioriza Ghostty Default StyleDark)
+    pub fn from_name(_name: &str) -> Self {
+        // Por ahora se unifica toda la interfaz a la paleta Ghostty Default StyleDark
+        Self::ghostty_default_styledark()
     }
 
     /// Resuelve índices de 256 colores estándar ANSI

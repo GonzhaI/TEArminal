@@ -80,6 +80,9 @@ pub struct TerminalState {
     pub command_blocks: Vec<CommandBlock>,
     pub active_block: Option<CommandBlock>,
 
+    // Directorio de trabajo actual notificado vía OSC 7 u OSC 9;9
+    pub current_dir: Option<std::path::PathBuf>,
+
     // Cola de portapapeles OSC 52 (Integración segura bidireccional para túneles SSH)
     pub clipboard_queue: Vec<String>,
 
@@ -147,6 +150,7 @@ impl TerminalState {
             scroll_region_bottom: rows.saturating_sub(1),
             command_blocks: Vec::new(),
             active_block: None,
+            current_dir: None,
             clipboard_queue: Vec::new(),
             bracketed_paste_mode: false,
             mouse_reporting_normal: false,
@@ -575,8 +579,13 @@ impl<'a> Perform for Performer<'a> {
                 let mut iter = params.iter();
                 let top = iter.next().and_then(|p| p.first()).copied().unwrap_or(1).saturating_sub(1) as usize;
                 let bottom = iter.next().and_then(|p| p.first()).copied().unwrap_or(self.state.rows as u16).saturating_sub(1) as usize;
-                self.state.scroll_region_top = top.min(self.state.rows.saturating_sub(1));
-                self.state.scroll_region_bottom = bottom.min(self.state.rows.saturating_sub(1));
+                if top < bottom && bottom < self.state.rows {
+                    self.state.scroll_region_top = top;
+                    self.state.scroll_region_bottom = bottom;
+                } else {
+                    self.state.scroll_region_top = 0;
+                    self.state.scroll_region_bottom = self.state.rows.saturating_sub(1);
+                }
                 self.state.cursor_x = 0;
                 self.state.cursor_y = 0;
             }
@@ -629,6 +638,18 @@ impl<'a> Perform for Performer<'a> {
             'J' => {
                 let mode = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(0);
                 let default_cell = Cell::default_with_theme(&self.state.theme);
+                let erase_cell = Cell {
+                    c: ' ',
+                    width: 1,
+                    fg: self.state.current_fg,
+                    bg: self.state.current_bg,
+                    bold: false,
+                    dim: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false,
+                    inverse: false,
+                };
                 match mode {
                     0 => {
                         // Borrar desde el cursor hasta el final de la pantalla
@@ -639,13 +660,13 @@ impl<'a> Perform for Performer<'a> {
                         if cy < grid.len() {
                             for x in cx..cols {
                                 if x < grid[cy].len() {
-                                    grid[cy][x] = default_cell.clone();
+                                    grid[cy][x] = erase_cell.clone();
                                 }
                             }
                             for y in (cy + 1)..grid.len() {
                                 for x in 0..cols {
                                     if x < grid[y].len() {
-                                        grid[y][x] = default_cell.clone();
+                                        grid[y][x] = erase_cell.clone();
                                     }
                                 }
                             }
@@ -660,14 +681,14 @@ impl<'a> Perform for Performer<'a> {
                         for y in 0..cy.min(grid.len()) {
                             for x in 0..cols {
                                 if x < grid[y].len() {
-                                    grid[y][x] = default_cell.clone();
+                                    grid[y][x] = erase_cell.clone();
                                 }
                             }
                         }
                         if cy < grid.len() {
                             for x in 0..=cx.min(cols.saturating_sub(1)) {
                                 if x < grid[cy].len() {
-                                    grid[cy][x] = default_cell.clone();
+                                    grid[cy][x] = erase_cell.clone();
                                 }
                             }
                         }
@@ -677,7 +698,7 @@ impl<'a> Perform for Performer<'a> {
                         let grid = self.state.active_grid_mut();
                         for row in grid.iter_mut() {
                             for cell in row.iter_mut() {
-                                *cell = default_cell.clone();
+                                *cell = erase_cell.clone();
                             }
                         }
                         self.state.cursor_x = 0;
@@ -710,28 +731,39 @@ impl<'a> Perform for Performer<'a> {
                 let cy = self.state.cursor_y;
                 let cx = self.state.cursor_x;
                 let cols = self.state.cols;
-                let default_cell = Cell::default_with_theme(&self.state.theme);
+                let erase_cell = Cell {
+                    c: ' ',
+                    width: 1,
+                    fg: self.state.current_fg,
+                    bg: self.state.current_bg,
+                    bold: false,
+                    dim: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false,
+                    inverse: false,
+                };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
                     match mode {
                         0 => {
                             for x in cx..cols {
                                 if x < grid[cy].len() {
-                                    grid[cy][x] = default_cell.clone();
+                                    grid[cy][x] = erase_cell.clone();
                                 }
                             }
                         }
                         1 => {
                             for x in 0..=cx.min(cols.saturating_sub(1)) {
                                 if x < grid[cy].len() {
-                                    grid[cy][x] = default_cell.clone();
+                                    grid[cy][x] = erase_cell.clone();
                                 }
                             }
                         }
                         2 => {
                             for x in 0..cols {
                                 if x < grid[cy].len() {
-                                    grid[cy][x] = default_cell.clone();
+                                    grid[cy][x] = erase_cell.clone();
                                 }
                             }
                         }
@@ -746,13 +778,24 @@ impl<'a> Perform for Performer<'a> {
                 let cy = self.state.cursor_y;
                 let cx = self.state.cursor_x;
                 let cols = self.state.cols;
-                let default_cell = Cell::default_with_theme(&self.state.theme);
+                let erase_cell = Cell {
+                    c: ' ',
+                    width: 1,
+                    fg: self.state.current_fg,
+                    bg: self.state.current_bg,
+                    bold: false,
+                    dim: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false,
+                    inverse: false,
+                };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
                     let end_x = (cx + count).min(cols);
                     for x in cx..end_x {
                         if x < grid[cy].len() {
-                            grid[cy][x] = default_cell.clone();
+                            grid[cy][x] = erase_cell.clone();
                         }
                     }
                 }
@@ -823,6 +866,34 @@ impl<'a> Perform for Performer<'a> {
             // Shell Integration y Bloques Semánticos (OSC 133)
             b"133" if params.len() > 1 => {
                 self.handle_osc_133(&params[1..]);
+            }
+            // Notificación de CWD estándar (OSC 7 file://localhost/path)
+            b"7" if params.len() > 1 => {
+                let uri = String::from_utf8_lossy(params[1]);
+                if let Some(path_part) = uri.strip_prefix("file://") {
+                    let path_part = if let Some(after_host) = path_part.strip_prefix("localhost") {
+                        after_host
+                    } else if let Some(slash_pos) = path_part.find('/') {
+                        &path_part[slash_pos..]
+                    } else {
+                        path_part
+                    };
+                    let trimmed = path_part.strip_prefix('/').unwrap_or(path_part);
+                    let decoded = trimmed.replace("%20", " ");
+                    if !decoded.is_empty() {
+                        self.state.current_dir = Some(std::path::PathBuf::from(decoded));
+                    }
+                }
+            }
+            // Notificación de CWD ConEmu / Windows Terminal (OSC 9;9;"path")
+            b"9" if params.len() > 1 => {
+                if params[1] == b"9" && params.len() > 2 {
+                    let raw = String::from_utf8_lossy(params[2]);
+                    let clean = raw.trim().trim_matches('"');
+                    if !clean.is_empty() {
+                        self.state.current_dir = Some(std::path::PathBuf::from(clean));
+                    }
+                }
             }
             _ => {}
         }
@@ -1512,5 +1583,30 @@ mod tests {
         assert_eq!(term.grid[0][5].c, ' ');
         assert_eq!(term.grid[0][6].c, ' ');
         assert_eq!(term.grid[0][10].c, ' ');
+    }
+
+    #[test]
+    fn test_bce_erase_in_line() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Establecer color de fondo azul (44) y borrar línea con \x1b[2K
+        term.process_bytes(b"\x1b[44m\x1b[2K");
+        assert_eq!(term.grid[0][0].bg, term.theme.ansi[4]);
+        assert_eq!(term.grid[0][79].bg, term.theme.ansi[4]);
+    }
+
+    #[test]
+    fn test_osc_cwd_reporting() {
+        let theme = Theme::ghostty_dark();
+        let mut term = TerminalState::new(80, 24, 1000, theme);
+
+        // Test OSC 7
+        term.process_bytes(b"\x1b]7;file://localhost/C:/Users/gmora/dev/axon\x07");
+        assert_eq!(term.current_dir.as_deref(), Some(std::path::Path::new("C:/Users/gmora/dev/axon")));
+
+        // Test OSC 9;9
+        term.process_bytes(b"\x1b]9;9;\"C:\\Users\\gmora\\dev\"\x07");
+        assert_eq!(term.current_dir.as_deref(), Some(std::path::Path::new("C:\\Users\\gmora\\dev")));
     }
 }
