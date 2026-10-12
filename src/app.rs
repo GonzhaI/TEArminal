@@ -462,17 +462,24 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     || matches!(&logical_key, Key::Named(NamedKey::Backspace))
                     || matches!(&logical_key, Key::Character(s) if s == "\u{8}" || s == "\u{7f}" || s == "\u{17}");
 
-                // 1. Si Ctrl o Alt están presionados (Ctrl+Backspace o Alt+Backspace):
-                //    En Windows ConPTY, el byte nativo que emite Windows Terminal para borrar la palabra
-                //    anterior (BackwardKillWord en PSReadLine) es 0x08 (ASCII Backspace). ConPTY lo mapea
-                //    a VK_BACK con Ctrl activado, borrando la palabra completa limpiamente.
-                if (ctrl || alt) && is_backspace {
-                    crate::logger::log("-> Enviando 0x08 (borrado de palabra)");
-                    self.pty.write_input(&[0x08]);
+                // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
+                //    Activa borrado de palabra (deleteWordLeft / backward-kill-word) en Claude Code (key.meta),
+                //    harnesses como agy, shells POSIX y PowerShell (mediante PSReadLineKeyHandler).
+                if alt && is_backspace {
+                    crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
+                    self.pty.write_input(b"\x1b\x7f");
                     return;
                 }
 
-                // 2. Backspace normal (o Shift+Backspace):
+                // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
+                //    Activa BackwardKillWord en PowerShell de forma nativa y deleteWordLeft en Claude Code y agy.
+                if ctrl && is_backspace {
+                    crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
+                    self.pty.write_input(&[0x17]);
+                    return;
+                }
+
+                // 3. Backspace normal (o Shift+Backspace):
                 //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
                 if is_backspace {
                     crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
@@ -519,6 +526,10 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         }
                         Key::Named(NamedKey::ArrowRight) => {
                             self.pty.write_input(b"\x1bf"); // Salto palabra adelante
+                            return;
+                        }
+                        Key::Named(NamedKey::Delete) => {
+                            self.pty.write_input(b"\x1bd"); // Borrado de palabra adelante
                             return;
                         }
                         Key::Named(NamedKey::Tab) => {

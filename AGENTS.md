@@ -35,12 +35,10 @@ src/
 
 Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en cuenta los siguientes descubrimientos**:
 
-### 1. Manejo de Backspace en Windows ConPTY
-* **Borrado de 1 carácter:** ConPTY traduce el byte **`0x7f`** (ASCII DEL) a un evento `VK_BACK` limpio (sin Ctrl). Esto activa `BackwardDeleteChar` en PowerShell (`PSReadLine`).
-* **Borrado de palabra completa:** ConPTY traduce el byte **`0x08`** (ASCII BS) a un evento `VK_BACK` con el flag `LEFT_CTRL_PRESSED` activado. Esto ejecuta `BackwardKillWord`.
-* **¡PELIGRO! Secuencias a evitar:**
-  * **NUNCA** envíes `\x1b\x7f` para borrar palabras en ConPTY: PowerShell no lo reconoce como palabra atrás y lo imprime literalmente en pantalla como el carácter `^H`.
-  * **NUNCA** envíes `0x17` (`^W`): En PowerShell interactivo bajo Windows, `0x17` suele provocar saltos de línea de continuación (`>> `) en vez de borrar palabras.
+### 1. Manejo de Backspace y Borrado de Palabras en Windows ConPTY y Harnesses (Claude Code, Agy)
+* **Borrado de 1 carácter:** El emulador emite el byte **`0x7f`** (ASCII DEL). ConPTY lo traduce a un evento `VK_BACK` limpio (sin modificadores). Esto activa `BackwardDeleteChar` en PowerShell (`PSReadLine`) y borrado de 1 carácter en harnesses.
+* **Borrado de palabra con `Ctrl+Backspace`:** El emulador emite el byte **`0x17`** (ASCII 23 / `Ctrl+W` / `werase`), que es el estándar adoptado por Windows Terminal. En PowerShell, `PSReadLine` tiene `Ctrl+w` enlazado nativamente a `BackwardKillWord`; y en harnesses de agentes de IA (Node.js/Ink en Claude Code, Go en agy), `0x17` activa directamente el borrado de palabra atrás (`kDeleteWordLeft`). *(Evitar enviar `0x08` para borrado de palabra, ya que los entornos en modo raw lo interpretan como un simple Backspace de 1 carácter).*
+* **Borrado de palabra con `Alt+Backspace`:** El emulador emite la secuencia VT estándar **`\x1b\x7f`** (ESC + DEL). En Claude Code activa `key.meta` y ejecuta `kDeleteWordLeft`, en agy activa borrado de palabra, y en PowerShell se soporta limpiamente vinculando `Set-PSReadLineKeyHandler -Chord 'Alt+Backspace' -Function BackwardKillWord` en el script de arranque.
 
 ### 2. El Bug del Control Sintético con `AltGr` en Win32
 * En distribuciones de teclado en español/latinoamericanas, presionar `AltGr` (`VK_RMENU`) inyecta a nivel de driver un `VK_LCONTROL` sintético.

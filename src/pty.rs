@@ -53,6 +53,7 @@ impl PtyManager {
                     "Member = ([char]27 + '[38;2;177;98;134m'); ",
                     "Error = ([char]27 + '[38;2;244;56;65m') ",
                     "} -ErrorAction SilentlyContinue; ",
+                    "Set-PSReadLineKeyHandler -Chord 'Alt+Backspace' -Function BackwardKillWord -ErrorAction SilentlyContinue; ",
                     "function prompt { ",
                     "$p = (Get-Location).Path.Replace($HOME, '~'); ",
                     "$esc = [char]27; ",
@@ -275,6 +276,39 @@ mod tests {
             del2.push_str(&String::from_utf8_lossy(&bytes));
         }
         println!("DEL 2 PTY OUTPUT: {:?}", del2);
+    }
+
+    #[test]
+    fn test_powershell_and_harness_kill_word() {
+        let pty = PtyManager::new("powershell.exe", true, 120, 30, None).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        while let Some(_) = pty.try_recv_output() {}
+
+        // 1. Probar 0x17 (Ctrl+W)
+        pty.write_input(b"echo first second");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        while let Some(_) = pty.try_recv_output() {}
+
+        pty.write_input(&[0x17]); // Ctrl+W / BackwardKillWord
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut del_ctrl_w = String::new();
+        while let Some(bytes) = pty.try_recv_output() {
+            del_ctrl_w.push_str(&String::from_utf8_lossy(&bytes));
+        }
+        println!("CTRL+W (0x17) PTY OUTPUT: {:?}", del_ctrl_w);
+
+        // 2. Probar \x1b\x7f (Alt+Backspace)
+        pty.write_input(b" third");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        while let Some(_) = pty.try_recv_output() {}
+
+        pty.write_input(b"\x1b\x7f"); // Alt+Backspace
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut del_alt_bs = String::new();
+        while let Some(bytes) = pty.try_recv_output() {
+            del_alt_bs.push_str(&String::from_utf8_lossy(&bytes));
+        }
+        println!("ALT+BACKSPACE (\\x1b\\x7f) PTY OUTPUT: {:?}", del_alt_bs);
     }
 
     #[test]
