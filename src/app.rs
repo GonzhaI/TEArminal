@@ -1,6 +1,6 @@
 use crate::config::AxonConfig;
 use crate::pty::PtyManager;
-use crate::renderer::TerminalRenderer;
+use crate::renderer::{SidebarTabItem, TerminalRenderer};
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
 use std::num::NonZeroU32;
@@ -15,15 +15,32 @@ use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum AxonEvent {
-    PtyData,
-    PtyClosed,
+    PtyData(usize),
+    PtyClosed(usize),
 }
+
+pub struct TerminalTab {
+    pub id: usize,
+    pub title: String,
+    pub pty: PtyManager,
+    pub terminal: TerminalState,
+    pub last_grid_size: (usize, usize),
+    pub has_unread: bool,
+}
+
+pub const SIDEBAR_WIDTH: usize = 190;
 
 pub struct AxonApp {
     config: AxonConfig,
     theme: Theme,
-    pty: PtyManager,
-    terminal: TerminalState,
+    proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+    pub tabs: Vec<TerminalTab>,
+    pub active_tab_index: usize,
+    next_tab_id: usize,
+    pub sidebar_visible: bool,
+    hovered_tab: Option<usize>,
+    hovered_close: Option<usize>,
+    hovered_new_tab: bool,
     renderer: Option<TerminalRenderer>,
     window: Option<Arc<Window>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
@@ -34,21 +51,21 @@ pub struct AxonApp {
     mouse_pos: PhysicalPosition<f64>,
     mouse_down: bool,
     cursor_timer: Instant,
-    last_grid_size: (usize, usize),
     is_focused: bool,
 }
 
 impl AxonApp {
     pub fn new(config: AxonConfig, proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>) -> Self {
-        let cols = 120;
+        let cols = 100;
         let rows = 30;
         let theme = Theme::ghostty_dark();
         let pty = PtyManager::new(
+            0,
             &config.terminal.default_shell,
             config.terminal.ghostty_prompt,
             cols as u16,
             rows as u16,
-            proxy,
+            proxy.clone(),
         ).expect("Error al inicializar Windows ConPTY");
 
         let terminal = TerminalState::new(
@@ -58,13 +75,28 @@ impl AxonApp {
             theme.clone(),
         );
 
+        let initial_tab = TerminalTab {
+            id: 0,
+            title: "Terminal 1".to_string(),
+            pty,
+            terminal,
+            last_grid_size: (cols, rows),
+            has_unread: false,
+        };
+
         let clipboard = arboard::Clipboard::new().ok();
 
         Self {
             config,
             theme,
-            pty,
-            terminal,
+            proxy,
+            tabs: vec![initial_tab],
+            active_tab_index: 0,
+            next_tab_id: 1,
+            sidebar_visible: true,
+            hovered_tab: None,
+            hovered_close: None,
+            hovered_new_tab: false,
             renderer: None,
             window: None,
             context: None,
@@ -75,21 +107,159 @@ impl AxonApp {
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
             mouse_down: false,
             cursor_timer: Instant::now(),
-            last_grid_size: (cols, rows),
             is_focused: true,
+        }
+    }
+
+    pub fn sidebar_offset(&self) -> usize {
+        if self.sidebar_visible {
+            SIDEBAR_WIDTH
+        } else {
+            0
+        }
+    }
+
+    pub fn create_new_tab(&mut self) {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let (cols, rows) = if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
+            let size = window.inner_size();
+            renderer.compute_grid_size(size.width as usize, size.height as usize, self.sidebar_offset())
+        } else {
+            (100, 30)
+        };
+
+        let pty = match PtyManager::new(
+            id,
+            &self.config.terminal.default_shell,
+            self.config.terminal.ghostty_prompt,
+            cols as u16,
+            rows as u16,
+            self.proxy.clone(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                crate::logger::log(&format!("Error al spawnear nuevo PTY: {:?}", e));
+                return;
+            }
+        };
+
+        let title = format!("Terminal {}", self.tabs.len() + 1);
+        let terminal = TerminalState::new(
+            cols,
+            rows,
+            self.config.terminal.scrollback_lines,
+            self.theme.clone(),
+        );
+
+        self.tabs.push(TerminalTab {
+            id,
+            title,
+            pty,
+            terminal,
+            last_grid_size: (cols, rows),
+            has_unread: false,
+        });
+
+        self.active_tab_index = self.tabs.len() - 1;
+        self.update_window_title();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize, event_loop: &ActiveEventLoop) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        self.tabs.remove(index);
+        if self.tabs.is_empty() {
+            crate::logger::log("No quedan pestañas activas: cerrando Axon");
+            event_loop.exit();
+            return;
+        }
+
+        if self.active_tab_index >= self.tabs.len() {
+            self.active_tab_index = self.tabs.len() - 1;
+        }
+        self.tabs[self.active_tab_index].has_unread = false;
+        self.update_window_title();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub fn switch_to_tab(&mut self, index: usize) {
+        if index < self.tabs.len() && index != self.active_tab_index {
+            self.active_tab_index = index;
+            self.tabs[index].has_unread = false;
+            self.update_window_title();
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    pub fn next_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            let next = (self.active_tab_index + 1) % self.tabs.len();
+            self.switch_to_tab(next);
+        }
+    }
+
+    pub fn prev_tab(&mut self) {
+        if self.tabs.len() > 1 {
+            let prev = if self.active_tab_index == 0 {
+                self.tabs.len() - 1
+            } else {
+                self.active_tab_index - 1
+            };
+            self.switch_to_tab(prev);
+        }
+    }
+
+    pub fn toggle_sidebar(&mut self) {
+        self.sidebar_visible = !self.sidebar_visible;
+        self.recompute_grid_for_all_tabs();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    fn update_window_title(&self) {
+        if let (Some(w), Some(tab)) = (&self.window, self.tabs.get(self.active_tab_index)) {
+            w.set_title(&format!("Axon - {}", tab.title));
+        }
+    }
+
+    fn recompute_grid_for_all_tabs(&mut self) {
+        if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
+            let size = window.inner_size();
+            let offset = self.sidebar_offset();
+            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize, offset);
+            for tab in &mut self.tabs {
+                if (cols, rows) != tab.last_grid_size {
+                    tab.last_grid_size = (cols, rows);
+                    tab.terminal.resize(cols, rows);
+                    tab.pty.resize(cols as u16, rows as u16);
+                }
+            }
         }
     }
 
     fn paste_text(&self, text: &str) {
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-        if self.terminal.bracketed_paste_mode {
+        let active = &self.tabs[self.active_tab_index];
+        if active.terminal.bracketed_paste_mode {
             let mut payload = Vec::with_capacity(normalized.len() + 16);
             payload.extend_from_slice(b"\x1b[200~");
             payload.extend_from_slice(normalized.as_bytes());
             payload.extend_from_slice(b"\x1b[201~");
-            self.pty.write_input(&payload);
+            active.pty.write_input(&payload);
         } else {
-            self.pty.write_input(normalized.as_bytes());
+            active.pty.write_input(normalized.as_bytes());
         }
     }
 
@@ -117,7 +287,7 @@ impl AxonApp {
             // nativa de pegado de imágenes (Alt + V: \x1bv). Esto hace que Claude Code
             // procese la imagen nativamente y muestre el chip interactivo [Image 1] en el prompt.
             if is_claude_running() {
-                self.pty.write_input(b"\x1bv");
+                self.tabs[self.active_tab_index].pty.write_input(b"\x1bv");
                 return;
             }
 
@@ -192,14 +362,10 @@ impl AxonApp {
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();
                 renderer.update_scale(&self.config, scale_factor);
-                let size = window.inner_size();
-                let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
-                if (cols, rows) != self.last_grid_size {
-                    self.last_grid_size = (cols, rows);
-                    self.terminal.resize(cols, rows);
-                    self.pty.resize(cols as u16, rows as u16);
-                }
-                window.request_redraw();
+            }
+            self.recompute_grid_for_all_tabs();
+            if let Some(w) = &self.window {
+                w.request_redraw();
             }
         }
     }
@@ -211,14 +377,10 @@ impl AxonApp {
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
             renderer.update_scale(&self.config, scale_factor);
-            let size = window.inner_size();
-            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
-            if (cols, rows) != self.last_grid_size {
-                self.last_grid_size = (cols, rows);
-                self.terminal.resize(cols, rows);
-                self.pty.resize(cols as u16, rows as u16);
-            }
-            window.request_redraw();
+        }
+        self.recompute_grid_for_all_tabs();
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 
@@ -227,14 +389,10 @@ impl AxonApp {
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
             renderer.update_scale(&self.config, scale_factor);
-            let size = window.inner_size();
-            let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
-            if (cols, rows) != self.last_grid_size {
-                self.last_grid_size = (cols, rows);
-                self.terminal.resize(cols, rows);
-                self.pty.resize(cols as u16, rows as u16);
-            }
-            window.request_redraw();
+        }
+        self.recompute_grid_for_all_tabs();
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 }
@@ -242,29 +400,33 @@ impl AxonApp {
 impl ApplicationHandler<AxonEvent> for AxonApp {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
         match event {
-            AxonEvent::PtyData => {
-                let mut got_bytes = false;
-                while let Some(bytes) = self.pty.try_recv_output() {
-                    got_bytes = true;
-                    if bytes.contains(&0x1b) {
-                        crate::logger::log(&format!("PTY RECV ESC: {:?}", String::from_utf8_lossy(&bytes)));
+            AxonEvent::PtyData(tab_id) => {
+                if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
+                    let mut got_bytes = false;
+                    while let Some(bytes) = self.tabs[pos].pty.try_recv_output() {
+                        got_bytes = true;
+                        self.tabs[pos].terminal.process_bytes(&bytes);
                     }
-                    self.terminal.process_bytes(&bytes);
-                }
-                for text in self.terminal.clipboard_queue.drain(..) {
-                    if let Some(cb) = &mut self.clipboard {
-                        cb.set_text(text).ok();
+                    for text in self.tabs[pos].terminal.clipboard_queue.drain(..) {
+                        if let Some(cb) = &mut self.clipboard {
+                            cb.set_text(text).ok();
+                        }
                     }
-                }
-                if got_bytes {
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
+                    if got_bytes {
+                        if pos != self.active_tab_index {
+                            self.tabs[pos].has_unread = true;
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
                     }
                 }
             }
-            AxonEvent::PtyClosed => {
-                crate::logger::log("PtyClosed recibido: cerrando Axon");
-                event_loop.exit();
+            AxonEvent::PtyClosed(tab_id) => {
+                crate::logger::log(&format!("PtyClosed recibido para tab_id {}: cerrando tab", tab_id));
+                if let Some(pos) = self.tabs.iter().position(|t| t.id == tab_id) {
+                    self.close_tab(pos, event_loop);
+                }
             }
         }
     }
@@ -280,8 +442,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         let window_attributes = WindowAttributes::default()
             .with_title("Axon")
             .with_visible(false)
-            .with_inner_size(PhysicalSize::new(1020, 680))
-            .with_min_inner_size(PhysicalSize::new(480, 280))
+            .with_inner_size(PhysicalSize::new(1080, 680))
+            .with_min_inner_size(PhysicalSize::new(540, 320))
             .with_window_icon(Some(icon));
 
         let window = Arc::new(
@@ -307,19 +469,44 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             let _ = surface.resize(w, h);
         }
 
-        let (cols, rows) = renderer.compute_grid_size(initial_size.width as usize, initial_size.height as usize);
-        self.last_grid_size = (cols, rows);
-        self.terminal.resize(cols, rows);
-        self.pty.resize(cols as u16, rows as u16);
+        let offset = self.sidebar_offset();
+        let (cols, rows) = renderer.compute_grid_size(initial_size.width as usize, initial_size.height as usize, offset);
+        for tab in &mut self.tabs {
+            tab.last_grid_size = (cols, rows);
+            tab.terminal.resize(cols, rows);
+            tab.pty.resize(cols as u16, rows as u16);
+        }
 
         // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
         // Esto garantiza que el usuario vea la terminal oscura de inmediato sin ningún destello blanco.
         if let Ok(mut buffer) = surface.buffer_mut() {
+            if self.sidebar_visible {
+                let sidebar_tabs: Vec<SidebarTabItem> = self.tabs.iter().enumerate().map(|(idx, t)| SidebarTabItem {
+                    id: t.id,
+                    title: t.title.clone(),
+                    is_active: idx == self.active_tab_index,
+                    has_unread: t.has_unread,
+                }).collect();
+
+                renderer.render_sidebar(
+                    &mut buffer,
+                    initial_size.width as usize,
+                    initial_size.height as usize,
+                    SIDEBAR_WIDTH,
+                    &sidebar_tabs,
+                    self.hovered_tab,
+                    self.hovered_close,
+                    self.hovered_new_tab,
+                );
+            }
+
+            let active_tab = &self.tabs[self.active_tab_index];
             renderer.render(
                 &mut buffer,
                 initial_size.width as usize,
                 initial_size.height as usize,
-                &self.terminal,
+                offset,
+                &active_tab.terminal,
                 &self.theme,
                 true,
             );
@@ -342,34 +529,50 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+                if let (Some(renderer), Some(_window)) = (&mut self.renderer, &self.window) {
                     renderer.update_scale(&self.config, scale_factor);
-                    let size = window.inner_size();
-                    let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
-                    if (cols, rows) != self.last_grid_size {
-                        self.last_grid_size = (cols, rows);
-                        self.terminal.resize(cols, rows);
-                        self.pty.resize(cols as u16, rows as u16);
-                    }
-                    window.request_redraw();
+                }
+                self.recompute_grid_for_all_tabs();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
             WindowEvent::Resized(size) => {
-                if let (Some(surface), Some(renderer)) = (&mut self.surface, &self.renderer) {
+                if let Some(surface) = &mut self.surface {
                     if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
-                        surface.resize(w, h).ok();
-                        let (cols, rows) = renderer.compute_grid_size(size.width as usize, size.height as usize);
-                        if (cols, rows) != self.last_grid_size {
-                            self.last_grid_size = (cols, rows);
-                            self.terminal.resize(cols, rows);
-                            self.pty.resize(cols as u16, rows as u16);
-                        }
+                        let _ = surface.resize(w, h);
                     }
+                }
+                self.recompute_grid_for_all_tabs();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
             }
 
             WindowEvent::RedrawRequested => {
+                let offset = self.sidebar_offset();
+                let sidebar_visible = self.sidebar_visible;
+                let active_idx = self.active_tab_index;
+                let hovered_tab = self.hovered_tab;
+                let hovered_close = self.hovered_close;
+                let hovered_new_tab = self.hovered_new_tab;
+                let cursor_visible = !self.config.terminal.cursor_blink
+                    || (self.cursor_timer.elapsed().as_millis() % 1000) < 600;
+
+                let sidebar_tabs: Vec<SidebarTabItem> = if sidebar_visible {
+                    self.tabs.iter().enumerate().map(|(idx, t)| SidebarTabItem {
+                        id: t.id,
+                        title: t.title.clone(),
+                        is_active: idx == active_idx,
+                        has_unread: t.has_unread,
+                    }).collect()
+                } else {
+                    Vec::new()
+                };
+
+                let active_tab = &self.tabs[active_idx];
+
                 if let (Some(surface), Some(renderer), Some(window)) =
                     (&mut self.surface, &mut self.renderer, &self.window)
                 {
@@ -378,15 +581,26 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         return;
                     }
 
-                    let cursor_visible = !self.config.terminal.cursor_blink
-                        || (self.cursor_timer.elapsed().as_millis() % 1000) < 600;
-
                     if let Ok(mut buffer) = surface.buffer_mut() {
+                        if sidebar_visible {
+                            renderer.render_sidebar(
+                                &mut buffer,
+                                size.width as usize,
+                                size.height as usize,
+                                SIDEBAR_WIDTH,
+                                &sidebar_tabs,
+                                hovered_tab,
+                                hovered_close,
+                                hovered_new_tab,
+                            );
+                        }
+
                         renderer.render(
                             &mut buffer,
                             size.width as usize,
                             size.height as usize,
-                            &self.terminal,
+                            offset,
+                            &active_tab.terminal,
                             &self.theme,
                             cursor_visible,
                         );
@@ -437,7 +651,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     if let Some(t) = text {
                         if !t.is_empty() && t != "\r" && t != "\n" && t != "\t" {
                             crate::logger::log(&format!("-> AltGr text: {:?}", t));
-                            self.pty.write_input(t.as_bytes());
+                            self.tabs[self.active_tab_index].pty.write_input(t.as_bytes());
                         }
                     }
                     return;
@@ -449,12 +663,70 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     return;
                 }
 
+                // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) ---
+                // 1. Nueva pestaña: Ctrl + Shift + T (o Ctrl + T)
+                if (ctrl && shift && key_is_char(&logical_key, 't'))
+                    || (ctrl && !shift && key_is_char(&logical_key, 't'))
+                {
+                    crate::logger::log("-> Hotkey: Nueva pestaña");
+                    self.create_new_tab();
+                    return;
+                }
+
+                // 2. Cerrar pestaña activa: Ctrl + Shift + W
+                if ctrl && shift && key_is_char(&logical_key, 'w') {
+                    crate::logger::log("-> Hotkey: Cerrar pestaña activa");
+                    self.close_tab(self.active_tab_index, event_loop);
+                    return;
+                }
+
+                // 3. Conmutar pestaña siguiente / anterior: Ctrl + Tab / Ctrl + Shift + Tab
+                if ctrl && logical_key == Key::Named(NamedKey::Tab) {
+                    if shift {
+                        crate::logger::log("-> Hotkey: Pestaña anterior");
+                        self.prev_tab();
+                    } else {
+                        crate::logger::log("-> Hotkey: Pestaña siguiente");
+                        self.next_tab();
+                    }
+                    return;
+                }
+
+                // 4. Cambiar directamente a pestaña 1-9: Ctrl + 1..9
+                if ctrl && !shift && !alt {
+                    let tab_num = match &logical_key {
+                        Key::Character(s) if s.len() == 1 => {
+                            let ch = s.chars().next().unwrap();
+                            if ch >= '1' && ch <= '9' {
+                                Some((ch as usize) - ('1' as usize))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(idx) = tab_num {
+                        if idx < self.tabs.len() {
+                            crate::logger::log(&format!("-> Hotkey: Ir a pestaña {}", idx + 1));
+                            self.switch_to_tab(idx);
+                            return;
+                        }
+                    }
+                }
+
+                // 5. Alternar barra lateral (Sidebar toggle): Ctrl + B o Ctrl + Shift + B
+                if ctrl && key_is_char(&logical_key, 'b') {
+                    crate::logger::log("-> Hotkey: Alternar barra lateral");
+                    self.toggle_sidebar();
+                    return;
+                }
+
                 // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
                 if logical_key != Key::Named(NamedKey::PageUp)
                     && logical_key != Key::Named(NamedKey::PageDown)
                     && !(shift && (logical_key == Key::Named(NamedKey::Home) || logical_key == Key::Named(NamedKey::End)))
                 {
-                    self.terminal.reset_scroll();
+                    self.tabs[self.active_tab_index].terminal.reset_scroll();
                 }
 
                 // Detección robusta de tecla Backspace (por physical_key independiente de layout/Alt y por logical_key)
@@ -467,7 +739,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 //    harnesses como agy, shells POSIX y PowerShell (mediante PSReadLineKeyHandler).
                 if alt && is_backspace {
                     crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
-                    self.pty.write_input(b"\x1b\x7f");
+                    self.tabs[self.active_tab_index].pty.write_input(b"\x1b\x7f");
                     return;
                 }
 
@@ -475,7 +747,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 //    Activa BackwardKillWord en PowerShell de forma nativa y deleteWordLeft en Claude Code y agy.
                 if ctrl && is_backspace {
                     crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
-                    self.pty.write_input(&[0x17]);
+                    self.tabs[self.active_tab_index].pty.write_input(&[0x17]);
                     return;
                 }
 
@@ -483,20 +755,20 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 //    Enviar 0x7f para borrar carácter por carácter de forma limpia.
                 if is_backspace {
                     crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
-                    self.pty.write_input(&[0x7f]);
+                    self.tabs[self.active_tab_index].pty.write_input(&[0x7f]);
                     return;
                 }
 
                 // 1. Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
                 if (ctrl && shift && key_is_char(&logical_key, 'c'))
-                    || (ctrl && !shift && key_is_char(&logical_key, 'c') && self.terminal.selection.is_some())
+                    || (ctrl && !shift && key_is_char(&logical_key, 'c') && self.tabs[self.active_tab_index].terminal.selection.is_some())
                 {
-                    if let Some(sel_text) = self.terminal.copy_selection_text() {
+                    if let Some(sel_text) = self.tabs[self.active_tab_index].terminal.copy_selection_text() {
                         if let Some(cb) = &mut self.clipboard {
                             cb.set_text(sel_text).ok();
                         }
                         // Deseleccionar y repintar tras copiar exitosamente
-                        self.terminal.selection = None;
+                        self.tabs[self.active_tab_index].terminal.selection = None;
                         if let Some(w) = &self.window { w.request_redraw(); }
                     }
                     return;
@@ -515,21 +787,21 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 if alt && !ctrl {
                     if key_is_char(&logical_key, 'v') {
                         // Enviar Alt + V (\x1bv) para pegado nativo de imágenes en Claude Code
-                        self.pty.write_input(b"\x1bv");
+                        self.tabs[self.active_tab_index].pty.write_input(b"\x1bv");
                         return;
                     }
 
                     match logical_key {
                         Key::Named(NamedKey::ArrowLeft) => {
-                            self.pty.write_input(b"\x1bb"); // Salto palabra atrás
+                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bb"); // Salto palabra atrás
                             return;
                         }
                         Key::Named(NamedKey::ArrowRight) => {
-                            self.pty.write_input(b"\x1bf"); // Salto palabra adelante
+                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bf"); // Salto palabra adelante
                             return;
                         }
                         Key::Named(NamedKey::Delete) => {
-                            self.pty.write_input(b"\x1bd"); // Borrado de palabra adelante
+                            self.tabs[self.active_tab_index].pty.write_input(b"\x1bd"); // Borrado de palabra adelante
                             return;
                         }
                         Key::Named(NamedKey::Tab) => {
@@ -546,7 +818,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                     let mut buf = [0u8; 5];
                                     buf[0] = 0x1b;
                                     let len = c.encode_utf8(&mut buf[1..]).len();
-                                    self.pty.write_input(&buf[..1 + len]);
+                                    self.tabs[self.active_tab_index].pty.write_input(&buf[..1 + len]);
                                     return;
                                 }
                             }
@@ -588,7 +860,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 5. Copiar salida del último comando del agente (Ctrl + Shift + O)
                 if ctrl && shift && key_is_char(&logical_key, 'o') {
-                    if let Some(output) = self.terminal.get_last_output_text() {
+                    if let Some(output) = self.tabs[self.active_tab_index].terminal.get_last_output_text() {
                         if let Some(cb) = &mut self.clipboard {
                             cb.set_text(output).ok();
                         }
@@ -598,10 +870,10 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 5b. Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
                 if ctrl && shift && (key_is_char(&logical_key, 'k') || key_is_char(&logical_key, 'l')) {
-                    self.terminal.scrollback.clear();
-                    self.terminal.reset_scroll();
-                    self.terminal.command_blocks.clear();
-                    self.pty.write_input(b"\x0c");
+                    self.tabs[self.active_tab_index].terminal.scrollback.clear();
+                    self.tabs[self.active_tab_index].terminal.reset_scroll();
+                    self.tabs[self.active_tab_index].terminal.command_blocks.clear();
+                    self.tabs[self.active_tab_index].pty.write_input(b"\x0c");
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
@@ -609,15 +881,16 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 // 6. Navegación semántica entre comandos de agentes OSC 133 (Ctrl + Shift + Arriba/Abajo)
                 if ctrl && shift {
                     if let Key::Named(NamedKey::ArrowUp) = logical_key {
-                        if let Some(block) = self.terminal.command_blocks.last() {
-                            let target = self.terminal.total_lines_count.saturating_sub(block.prompt_line);
-                            self.terminal.scroll_offset = target.min(self.terminal.scrollback.len());
+                        let active = &mut self.tabs[self.active_tab_index];
+                        if let Some(block) = active.terminal.command_blocks.last() {
+                            let target = active.terminal.total_lines_count.saturating_sub(block.prompt_line);
+                            active.terminal.scroll_offset = target.min(active.terminal.scrollback.len());
                             if let Some(w) = &self.window { w.request_redraw(); }
                         }
                         return;
                     }
                     if let Key::Named(NamedKey::ArrowDown) = logical_key {
-                        self.terminal.reset_scroll();
+                        self.tabs[self.active_tab_index].terminal.reset_scroll();
                         if let Some(w) = &self.window { w.request_redraw(); }
                         return;
                     }
@@ -625,26 +898,27 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 7. Navegación de historial y scrollback (Shift + PageUp / PageDown / Home / End)
                 if shift && !ctrl {
+                    let active = &mut self.tabs[self.active_tab_index];
                     match logical_key {
                         Key::Named(NamedKey::PageUp) => {
-                            let half = (self.terminal.rows / 2).max(1);
-                            self.terminal.scroll_up(half);
+                            let half = (active.terminal.rows / 2).max(1);
+                            active.terminal.scroll_up(half);
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::PageDown) => {
-                            let half = (self.terminal.rows / 2).max(1);
-                            self.terminal.scroll_down(half);
+                            let half = (active.terminal.rows / 2).max(1);
+                            active.terminal.scroll_down(half);
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::Home) => {
-                            self.terminal.scroll_offset = self.terminal.scrollback.len();
+                            active.terminal.scroll_offset = active.terminal.scrollback.len();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
                         Key::Named(NamedKey::End) => {
-                            self.terminal.reset_scroll();
+                            active.terminal.reset_scroll();
                             if let Some(w) = &self.window { w.request_redraw(); }
                             return;
                         }
@@ -652,39 +926,36 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
-                // 8. Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Backspace, Ctrl + Delete)
+                // 8. Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Delete)
                 if ctrl && !shift {
+                    let active = &mut self.tabs[self.active_tab_index];
                     match logical_key {
                         Key::Named(NamedKey::ArrowLeft) => {
-                            self.pty.write_input(b"\x1b[1;5D"); // Salto palabra atrás
+                            active.pty.write_input(b"\x1b[1;5D"); // Salto palabra atrás
                             return;
                         }
                         Key::Named(NamedKey::ArrowRight) => {
-                            self.pty.write_input(b"\x1b[1;5C"); // Salto palabra adelante
+                            active.pty.write_input(b"\x1b[1;5C"); // Salto palabra adelante
                             return;
                         }
                         Key::Named(NamedKey::ArrowUp) => {
-                            self.pty.write_input(b"\x1b[1;5A");
+                            active.pty.write_input(b"\x1b[1;5A");
                             return;
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            self.pty.write_input(b"\x1b[1;5B");
-                            return;
-                        }
-                        Key::Named(NamedKey::Backspace) => {
-                            self.pty.write_input(&[0x08]); // 0x08: Borrar palabra atrás en ConPTY
+                            active.pty.write_input(b"\x1b[1;5B");
                             return;
                         }
                         Key::Named(NamedKey::Delete) => {
-                            self.pty.write_input(b"\x1b[3;5~"); // Borrar palabra adelante
+                            active.pty.write_input(b"\x1b[3;5~"); // Borrar palabra adelante
                             return;
                         }
                         Key::Named(NamedKey::Home) => {
-                            self.pty.write_input(b"\x1b[1;5H");
+                            active.pty.write_input(b"\x1b[1;5H");
                             return;
                         }
                         Key::Named(NamedKey::End) => {
-                            self.pty.write_input(b"\x1b[1;5F");
+                            active.pty.write_input(b"\x1b[1;5F");
                             return;
                         }
                         _ => {}
@@ -698,7 +969,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             let c = s.chars().next().unwrap_or(' ').to_ascii_lowercase();
                             if c >= 'a' && c <= 'z' {
                                 let code = (c as u8) - b'a' + 1;
-                                self.pty.write_input(&[code]);
+                                self.tabs[self.active_tab_index].pty.write_input(&[code]);
                                 return;
                             }
                         }
@@ -708,57 +979,60 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 10. Scroll por página directo sin Shift
                 if logical_key == Key::Named(NamedKey::PageUp) {
-                    let half = (self.terminal.rows / 2).max(1);
-                    self.terminal.scroll_up(half);
+                    let active = &mut self.tabs[self.active_tab_index];
+                    let half = (active.terminal.rows / 2).max(1);
+                    active.terminal.scroll_up(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
                 if logical_key == Key::Named(NamedKey::PageDown) {
-                    let half = (self.terminal.rows / 2).max(1);
-                    self.terminal.scroll_down(half);
+                    let active = &mut self.tabs[self.active_tab_index];
+                    let half = (active.terminal.rows / 2).max(1);
+                    active.terminal.scroll_down(half);
                     if let Some(w) = &self.window { w.request_redraw(); }
                     return;
                 }
 
                 // 11. Teclas especiales y flechas VT estándar
+                let active = &mut self.tabs[self.active_tab_index];
                 match logical_key {
-                    Key::Named(NamedKey::Enter) => self.pty.write_input(b"\r"),
-                    Key::Named(NamedKey::Backspace) => self.pty.write_input(&[0x7f]),
+                    Key::Named(NamedKey::Enter) => active.pty.write_input(b"\r"),
+                    Key::Named(NamedKey::Backspace) => active.pty.write_input(&[0x7f]),
                     Key::Named(NamedKey::Tab) => {
                         if alt {
                             return;
                         }
                         if shift {
-                            self.pty.write_input(b"\x1b[Z");
+                            active.pty.write_input(b"\x1b[Z");
                         } else {
-                            self.pty.write_input(b"\t");
+                            active.pty.write_input(b"\t");
                         }
                     }
-                    Key::Named(NamedKey::Escape) => self.pty.write_input(&[0x1b]),
-                    Key::Named(NamedKey::Delete) => self.pty.write_input(b"\x1b[3~"),
-                    Key::Named(NamedKey::Home) => self.pty.write_input(b"\x1b[H"),
-                    Key::Named(NamedKey::End) => self.pty.write_input(b"\x1b[F"),
-                    Key::Named(NamedKey::ArrowUp) => self.pty.write_input(b"\x1b[A"),
-                    Key::Named(NamedKey::ArrowDown) => self.pty.write_input(b"\x1b[B"),
-                    Key::Named(NamedKey::ArrowRight) => self.pty.write_input(b"\x1b[C"),
-                    Key::Named(NamedKey::ArrowLeft) => self.pty.write_input(b"\x1b[D"),
-                    Key::Named(NamedKey::F1) => self.pty.write_input(b"\x1bOP"),
-                    Key::Named(NamedKey::F2) => self.pty.write_input(b"\x1bOQ"),
-                    Key::Named(NamedKey::F3) => self.pty.write_input(b"\x1bOR"),
-                    Key::Named(NamedKey::F4) => self.pty.write_input(b"\x1bOS"),
-                    Key::Named(NamedKey::F5) => self.pty.write_input(b"\x1b[15~"),
-                    Key::Named(NamedKey::F6) => self.pty.write_input(b"\x1b[17~"),
-                    Key::Named(NamedKey::F7) => self.pty.write_input(b"\x1b[18~"),
-                    Key::Named(NamedKey::F8) => self.pty.write_input(b"\x1b[19~"),
-                    Key::Named(NamedKey::F9) => self.pty.write_input(b"\x1b[20~"),
-                    Key::Named(NamedKey::F10) => self.pty.write_input(b"\x1b[21~"),
-                    Key::Named(NamedKey::F11) => self.pty.write_input(b"\x1b[23~"),
-                    Key::Named(NamedKey::F12) => self.pty.write_input(b"\x1b[24~"),
+                    Key::Named(NamedKey::Escape) => active.pty.write_input(&[0x1b]),
+                    Key::Named(NamedKey::Delete) => active.pty.write_input(b"\x1b[3~"),
+                    Key::Named(NamedKey::Home) => active.pty.write_input(b"\x1b[H"),
+                    Key::Named(NamedKey::End) => active.pty.write_input(b"\x1b[F"),
+                    Key::Named(NamedKey::ArrowUp) => active.pty.write_input(b"\x1b[A"),
+                    Key::Named(NamedKey::ArrowDown) => active.pty.write_input(b"\x1b[B"),
+                    Key::Named(NamedKey::ArrowRight) => active.pty.write_input(b"\x1b[C"),
+                    Key::Named(NamedKey::ArrowLeft) => active.pty.write_input(b"\x1b[D"),
+                    Key::Named(NamedKey::F1) => active.pty.write_input(b"\x1bOP"),
+                    Key::Named(NamedKey::F2) => active.pty.write_input(b"\x1bOQ"),
+                    Key::Named(NamedKey::F3) => active.pty.write_input(b"\x1bOR"),
+                    Key::Named(NamedKey::F4) => active.pty.write_input(b"\x1bOS"),
+                    Key::Named(NamedKey::F5) => active.pty.write_input(b"\x1b[15~"),
+                    Key::Named(NamedKey::F6) => active.pty.write_input(b"\x1b[17~"),
+                    Key::Named(NamedKey::F7) => active.pty.write_input(b"\x1b[18~"),
+                    Key::Named(NamedKey::F8) => active.pty.write_input(b"\x1b[19~"),
+                    Key::Named(NamedKey::F9) => active.pty.write_input(b"\x1b[20~"),
+                    Key::Named(NamedKey::F10) => active.pty.write_input(b"\x1b[21~"),
+                    Key::Named(NamedKey::F11) => active.pty.write_input(b"\x1b[23~"),
+                    Key::Named(NamedKey::F12) => active.pty.write_input(b"\x1b[24~"),
                     _ => {
                         // Entrada de texto regular (letras, números, símbolos, emojis)
                         if let Some(t) = text {
                             if !t.is_empty() && t != "\r" && t != "\n" && t != "\t" {
-                                self.pty.write_input(t.as_bytes());
+                                active.pty.write_input(t.as_bytes());
                             }
                         }
                     }
@@ -767,44 +1041,119 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = position;
-                let bypass = self.modifiers.shift_key();
+                let offset = self.sidebar_offset();
+                let mx = position.x as usize;
+                let my = position.y as usize;
 
-                if self.terminal.is_mouse_reporting_active() && !bypass {
+                // 1. Detección de hover en la barra lateral si está visible
+                if self.sidebar_visible && mx < SIDEBAR_WIDTH {
+                    let mut needs_redraw = false;
+
+                    // Hover en botón "+"
+                    let plus_btn_x = SIDEBAR_WIDTH.saturating_sub(34);
+                    let plus_btn_y = 8;
+                    let plus_btn_w = 24;
+                    let plus_btn_h = 24;
+                    let is_new_tab = mx >= plus_btn_x && mx < plus_btn_x + plus_btn_w && my >= plus_btn_y && my < plus_btn_y + plus_btn_h;
+                    if self.hovered_new_tab != is_new_tab {
+                        self.hovered_new_tab = is_new_tab;
+                        needs_redraw = true;
+                    }
+
+                    // Hover en pestañas y botón de cerrar "x"
+                    let tab_item_h = 34;
+                    let tab_spacing = 4;
+                    let list_start_y = 42;
+                    let tab_x = 8;
+                    let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
+
+                    let mut new_hovered_tab = None;
+                    let mut new_hovered_close = None;
+
+                    if my >= list_start_y {
+                        let rel_y = my - list_start_y;
+                        let item_total = tab_item_h + tab_spacing;
+                        let tab_idx = rel_y / item_total;
+                        let in_item = (rel_y % item_total) < tab_item_h;
+
+                        if in_item && tab_idx < self.tabs.len() && mx >= tab_x && mx < tab_x + tab_w {
+                            new_hovered_tab = Some(tab_idx);
+
+                            if self.tabs.len() > 1 {
+                                let tab_y = list_start_y + tab_idx * item_total;
+                                let close_x = tab_x + tab_w.saturating_sub(22);
+                                let close_y = tab_y + 6;
+                                let close_size = 20;
+
+                                if mx >= close_x && mx < close_x + close_size && my >= close_y && my < close_y + close_size {
+                                    new_hovered_close = Some(tab_idx);
+                                }
+                            }
+                        }
+                    }
+
+                    if self.hovered_tab != new_hovered_tab {
+                        self.hovered_tab = new_hovered_tab;
+                        needs_redraw = true;
+                    }
+                    if self.hovered_close != new_hovered_close {
+                        self.hovered_close = new_hovered_close;
+                        needs_redraw = true;
+                    }
+
+                    if needs_redraw {
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                    return;
+                } else if self.sidebar_visible {
+                    // Si el ratón salió de la barra lateral, resetear estados hover
+                    let mut needs_redraw = false;
+                    if self.hovered_tab.is_some() { self.hovered_tab = None; needs_redraw = true; }
+                    if self.hovered_close.is_some() { self.hovered_close = None; needs_redraw = true; }
+                    if self.hovered_new_tab { self.hovered_new_tab = false; needs_redraw = true; }
+                    if needs_redraw {
+                        if let Some(w) = &self.window { w.request_redraw(); }
+                    }
+                }
+
+                // 2. Coordenadas relativas a la cuadrícula de la terminal activa
+                let bypass = self.modifiers.shift_key();
+                let active = &mut self.tabs[self.active_tab_index];
+
+                if active.terminal.is_mouse_reporting_active() && !bypass {
                     // Reportar movimiento/arrastre a Herdr / Ratatui (SGR 1006 / 1002 / 1003)
-                    if (self.terminal.mouse_reporting_button_event && self.mouse_down) || self.terminal.mouse_reporting_any_event {
+                    if (active.terminal.mouse_reporting_button_event && self.mouse_down) || active.terminal.mouse_reporting_any_event {
                         if let Some(renderer) = &self.renderer {
-                            let mx = position.x as usize;
-                            let my = position.y as usize;
-                            let col = if mx >= renderer.margin_x {
-                                ((mx - renderer.margin_x) / renderer.char_width) + 1
-                            } else { 1 }.min(self.terminal.cols);
+                            let term_x = mx.saturating_sub(offset);
+                            let col = if term_x >= renderer.margin_x {
+                                ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                            } else { 1 }.min(active.terminal.cols);
                             let row = if my >= renderer.margin_y {
                                 ((my - renderer.margin_y) / renderer.row_height) + 1
-                            } else { 1 }.min(self.terminal.rows);
+                            } else { 1 }.min(active.terminal.rows);
 
                             let mut code = 32; // Flag de arrastre/movimiento
                             if self.modifiers.shift_key() { code += 4; }
                             if self.modifiers.alt_key() { code += 8; }
                             if self.modifiers.control_key() { code += 16; }
 
-                            if self.terminal.mouse_reporting_sgr {
+                            if active.terminal.mouse_reporting_sgr {
                                 let seq = format!("\x1b[<{};{};{}M", code, col, row);
-                                self.pty.write_input(seq.as_bytes());
+                                active.pty.write_input(seq.as_bytes());
                             } else {
                                 let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                                self.pty.write_input(&seq);
+                                active.pty.write_input(&seq);
                             }
                         }
                     }
                 } else if self.mouse_down {
                     if let Some(renderer) = &self.renderer {
-                        let mx = position.x as usize;
-                        let my = position.y as usize;
-                        if mx >= renderer.margin_x && my >= renderer.margin_y {
-                            let col = (mx - renderer.margin_x) / renderer.char_width;
+                        let term_x = mx.saturating_sub(offset);
+                        if term_x >= renderer.margin_x && my >= renderer.margin_y {
+                            let col = (term_x - renderer.margin_x) / renderer.char_width;
                             let row = (my - renderer.margin_y) / renderer.row_height;
                             if let Some(start) = self.drag_start {
-                                self.terminal.selection = Some(SelectionRange {
+                                active.terminal.selection = Some(SelectionRange {
                                     start,
                                     end: (col, row),
                                 });
@@ -816,19 +1165,71 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             }
 
             WindowEvent::MouseInput { state, button, .. } => {
-                let bypass = self.modifiers.shift_key();
+                let mx = self.mouse_pos.x as usize;
+                let my = self.mouse_pos.y as usize;
 
-                if self.terminal.is_mouse_reporting_active() && !bypass {
+                // 1. Clics en la barra lateral
+                if self.sidebar_visible && mx < SIDEBAR_WIDTH {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        // Clic en botón "+"
+                        let plus_btn_x = SIDEBAR_WIDTH.saturating_sub(34);
+                        let plus_btn_y = 8;
+                        let plus_btn_w = 24;
+                        let plus_btn_h = 24;
+                        if mx >= plus_btn_x && mx < plus_btn_x + plus_btn_w && my >= plus_btn_y && my < plus_btn_y + plus_btn_h {
+                            crate::logger::log("-> Clic en [+] sidebar: nueva terminal");
+                            self.create_new_tab();
+                            return;
+                        }
+
+                        // Clic en pestañas o botón cerrar "x"
+                        let tab_item_h = 34;
+                        let tab_spacing = 4;
+                        let list_start_y = 42;
+                        let tab_x = 8;
+                        let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
+
+                        if my >= list_start_y {
+                            let rel_y = my - list_start_y;
+                            let item_total = tab_item_h + tab_spacing;
+                            let tab_idx = rel_y / item_total;
+                            let in_item = (rel_y % item_total) < tab_item_h;
+
+                            if in_item && tab_idx < self.tabs.len() && mx >= tab_x && mx < tab_x + tab_w {
+                                let tab_y = list_start_y + tab_idx * item_total;
+                                let close_x = tab_x + tab_w.saturating_sub(22);
+                                let close_y = tab_y + 6;
+                                let close_size = 20;
+
+                                if self.tabs.len() > 1 && mx >= close_x && mx < close_x + close_size && my >= close_y && my < close_y + close_size {
+                                    crate::logger::log(&format!("-> Clic en [x] pestaña {}", tab_idx));
+                                    self.close_tab(tab_idx, event_loop);
+                                } else {
+                                    crate::logger::log(&format!("-> Clic en pestaña {}", tab_idx));
+                                    self.switch_to_tab(tab_idx);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                // 2. Clics en la cuadrícula de la terminal activa
+                let bypass = self.modifiers.shift_key();
+                let offset = self.sidebar_offset();
+                let active = &mut self.tabs[self.active_tab_index];
+
+                if active.terminal.is_mouse_reporting_active() && !bypass {
                     // Transmitir evento de ratón a Herdr / Ratatui
                     if let Some(renderer) = &self.renderer {
-                        let mx = self.mouse_pos.x as usize;
-                        let my = self.mouse_pos.y as usize;
-                        let col = if mx >= renderer.margin_x {
-                            ((mx - renderer.margin_x) / renderer.char_width) + 1
-                        } else { 1 }.min(self.terminal.cols);
+                        let term_x = mx.saturating_sub(offset);
+                        let col = if term_x >= renderer.margin_x {
+                            ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                        } else { 1 }.min(active.terminal.cols);
                         let row = if my >= renderer.margin_y {
                             ((my - renderer.margin_y) / renderer.row_height) + 1
-                        } else { 1 }.min(self.terminal.rows);
+                        } else { 1 }.min(active.terminal.rows);
 
                         let base_code = match button {
                             MouseButton::Left => 0,
@@ -845,14 +1246,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         let is_pressed = state == ElementState::Pressed;
                         self.mouse_down = is_pressed && button == MouseButton::Left;
 
-                        if self.terminal.mouse_reporting_sgr {
+                        if active.terminal.mouse_reporting_sgr {
                             let suffix = if is_pressed { 'M' } else { 'm' };
                             let seq = format!("\x1b[<{};{};{}{}", code, col, row, suffix);
-                            self.pty.write_input(seq.as_bytes());
+                            active.pty.write_input(seq.as_bytes());
                         } else {
                             let btn_byte = if is_pressed { 32 + code as u8 } else { 32 + 3 };
                             let seq = [0x1b, b'[', b'M', btn_byte, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                            self.pty.write_input(&seq);
+                            active.pty.write_input(&seq);
                         }
                     }
                 } else {
@@ -862,13 +1263,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 ElementState::Pressed => {
                                     self.mouse_down = true;
                                     if let Some(renderer) = &self.renderer {
-                                        let mx = self.mouse_pos.x as usize;
-                                        let my = self.mouse_pos.y as usize;
-                                        if mx >= renderer.margin_x && my >= renderer.margin_y {
-                                            let col = (mx - renderer.margin_x) / renderer.char_width;
+                                        let term_x = mx.saturating_sub(offset);
+                                        if term_x >= renderer.margin_x && my >= renderer.margin_y {
+                                            let col = (term_x - renderer.margin_x) / renderer.char_width;
                                             let row = (my - renderer.margin_y) / renderer.row_height;
                                             self.drag_start = Some((col, row));
-                                            self.terminal.selection = None;
+                                            active.terminal.selection = None;
                                             if let Some(w) = &self.window { w.request_redraw(); }
                                         }
                                     }
@@ -891,18 +1291,22 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
             WindowEvent::MouseWheel { delta, .. } => {
                 let bypass = self.modifiers.shift_key();
+                let offset = self.sidebar_offset();
+                let mx = self.mouse_pos.x as usize;
+                let my = self.mouse_pos.y as usize;
 
-                if self.terminal.is_mouse_reporting_active() && !bypass {
+                let active = &mut self.tabs[self.active_tab_index];
+
+                if active.terminal.is_mouse_reporting_active() && !bypass {
                     // Transmitir scroll del ratón al TUI activo (Herdr / Ratatui)
                     if let Some(renderer) = &self.renderer {
-                        let mx = self.mouse_pos.x as usize;
-                        let my = self.mouse_pos.y as usize;
-                        let col = if mx >= renderer.margin_x {
-                            ((mx - renderer.margin_x) / renderer.char_width) + 1
-                        } else { 1 }.min(self.terminal.cols);
+                        let term_x = mx.saturating_sub(offset);
+                        let col = if term_x >= renderer.margin_x {
+                            ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                        } else { 1 }.min(active.terminal.cols);
                         let row = if my >= renderer.margin_y {
                             ((my - renderer.margin_y) / renderer.row_height) + 1
-                        } else { 1 }.min(self.terminal.rows);
+                        } else { 1 }.min(active.terminal.rows);
 
                         let is_up = match delta {
                             MouseScrollDelta::LineDelta(_, y) => y > 0.0,
@@ -914,12 +1318,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         if self.modifiers.alt_key() { code += 8; }
                         if self.modifiers.control_key() { code += 16; }
 
-                        if self.terminal.mouse_reporting_sgr {
+                        if active.terminal.mouse_reporting_sgr {
                             let seq = format!("\x1b[<{};{};{}M", code, col, row);
-                            self.pty.write_input(seq.as_bytes());
+                            active.pty.write_input(seq.as_bytes());
                         } else {
                             let seq = [0x1b, b'[', b'M', 32 + code as u8, 32 + col.min(223) as u8, 32 + row.min(223) as u8];
-                            self.pty.write_input(&seq);
+                            active.pty.write_input(&seq);
                         }
                     }
                 } else {
@@ -934,9 +1338,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     };
 
                     if is_up {
-                        self.terminal.scroll_up(lines);
+                        active.terminal.scroll_up(lines);
                     } else {
-                        self.terminal.scroll_down(lines);
+                        active.terminal.scroll_down(lines);
                     }
 
                     if let Some(w) = &self.window { w.request_redraw(); }
@@ -957,11 +1361,13 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     self.modifiers = ModifiersState::empty();
                 }
 
-                if self.terminal.focus_event_reporting {
-                    if focused {
-                        self.pty.write_input(b"\x1b[I");
-                    } else {
-                        self.pty.write_input(b"\x1b[O");
+                if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
+                    if active.terminal.focus_event_reporting {
+                        if focused {
+                            active.pty.write_input(b"\x1b[I");
+                        } else {
+                            active.pty.write_input(b"\x1b[O");
+                        }
                     }
                 }
             }
@@ -971,23 +1377,42 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.pty.is_child_exited() {
-            crate::logger::log("Proceso hijo terminado: cerrando Axon");
+        // 1. Revisar si alguna pestaña tiene su proceso terminado
+        let mut exited_indices = Vec::new();
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+            if tab.pty.is_child_exited() {
+                exited_indices.push(idx);
+            }
+        }
+        for idx in exited_indices.into_iter().rev() {
+            crate::logger::log(&format!("Proceso hijo de tab {} terminado: cerrando pestaña", idx));
+            self.close_tab(idx, event_loop);
+        }
+        if self.tabs.is_empty() {
+            crate::logger::log("No quedan pestañas activas: cerrando Axon");
             event_loop.exit();
             return;
         }
 
-        // 1. Drenar salida de ConPTY por si quedó algún byte residual
+        // 2. Drenar salida de ConPTY de todas las pestañas por si quedó algún byte residual
         let mut got_bytes = false;
-        while let Some(bytes) = self.pty.try_recv_output() {
-            got_bytes = true;
-            self.terminal.process_bytes(&bytes);
-        }
-
-        // 2. Drenar comandos OSC 52 hacia el portapapeles de Windows
-        for text in self.terminal.clipboard_queue.drain(..) {
-            if let Some(cb) = &mut self.clipboard {
-                cb.set_text(text).ok();
+        let active_idx = self.active_tab_index;
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+            let mut tab_got_bytes = false;
+            while let Some(bytes) = tab.pty.try_recv_output() {
+                tab_got_bytes = true;
+                tab.terminal.process_bytes(&bytes);
+            }
+            for text in tab.terminal.clipboard_queue.drain(..) {
+                if let Some(cb) = &mut self.clipboard {
+                    cb.set_text(text).ok();
+                }
+            }
+            if tab_got_bytes {
+                got_bytes = true;
+                if idx != active_idx {
+                    tab.has_unread = true;
+                }
             }
         }
 

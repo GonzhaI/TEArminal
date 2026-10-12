@@ -7,6 +7,8 @@ use winit::event_loop::EventLoopProxy;
 use crate::app::AxonEvent;
 
 pub struct PtyManager {
+    #[allow(dead_code)]
+    pub id: usize,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     to_pty_tx: Sender<Vec<u8>>,
@@ -15,6 +17,7 @@ pub struct PtyManager {
 
 impl PtyManager {
     pub fn new(
+        id: usize,
         shell: &str,
         ghostty_prompt: bool,
         cols: u16,
@@ -156,11 +159,11 @@ impl PtyManager {
                         break;
                     }
                     if let Some(p) = &proxy_clone {
-                        let _ = p.send_event(AxonEvent::PtyData);
+                        let _ = p.send_event(AxonEvent::PtyData(id));
                     }
                 }
                 if let Some(p) = &proxy_clone {
-                    let _ = p.send_event(AxonEvent::PtyClosed);
+                    let _ = p.send_event(AxonEvent::PtyClosed(id));
                 }
             })?;
 
@@ -177,6 +180,7 @@ impl PtyManager {
             })?;
 
         Ok(Self {
+            id,
             master: Arc::new(Mutex::new(pair.master)),
             child,
             to_pty_tx,
@@ -214,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
-        let pty = PtyManager::new("powershell.exe", false, 80, 24, None).unwrap();
+        let pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None).unwrap();
         let mut total_output = String::new();
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -280,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_powershell_and_harness_kill_word() {
-        let pty = PtyManager::new("powershell.exe", true, 120, 30, None).unwrap();
+        let pty = PtyManager::new(0, "powershell.exe", true, 120, 30, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         while let Some(_) = pty.try_recv_output() {}
 
@@ -313,7 +317,7 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_exit_detection() {
-        let mut pty = PtyManager::new("powershell.exe", false, 80, 24, None).unwrap();
+        let mut pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         assert!(!pty.is_child_exited(), "El proceso debería estar corriendo inicialmente");
         pty.write_input(b"exit\r\n");

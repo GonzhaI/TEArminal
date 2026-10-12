@@ -15,6 +15,15 @@ pub struct CachedGlyph {
     pub bitmap: Vec<u8>, // Grayscale 8-bit alpha (0-255)
 }
 
+#[derive(Debug, Clone)]
+pub struct SidebarTabItem {
+    #[allow(dead_code)]
+    pub id: usize,
+    pub title: String,
+    pub is_active: bool,
+    pub has_unread: bool,
+}
+
 pub struct TerminalRenderer {
     regular_font: fontdue::Font,
     bold_font: fontdue::Font,
@@ -155,9 +164,259 @@ impl TerminalRenderer {
         })
     }
 
+    /// Rellena un rectángulo de color sólido directamente en el buffer
+    pub fn draw_rect(
+        buffer: &mut [u32],
+        buf_width: usize,
+        buf_height: usize,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        color: Color,
+    ) {
+        let c = color.to_u32_xrgb();
+        let x_end = (x + w).min(buf_width);
+        let y_end = (y + h).min(buf_height);
+        for py in y..y_end {
+            let row_start = py * buf_width;
+            for px in x..x_end {
+                buffer[row_start + px] = c;
+            }
+        }
+    }
+
+    /// Dibuja una cadena de texto en el buffer con rasterización y mezcla alpha
+    pub fn draw_text(
+        &mut self,
+        buffer: &mut [u32],
+        buf_width: usize,
+        buf_height: usize,
+        text: &str,
+        start_x: usize,
+        baseline_y: usize,
+        max_x: usize,
+        color: Color,
+        bold: bool,
+    ) -> usize {
+        let mut cur_x = start_x;
+        for c in text.chars() {
+            if cur_x >= max_x {
+                break;
+            }
+            let glyph = self.get_glyph(c, bold);
+            let glyph_w = glyph.width;
+            let glyph_h = glyph.height;
+            let glyph_x = cur_x as i32 + glyph.x_offset;
+            let glyph_y = baseline_y as i32 - glyph.y_offset - glyph_h as i32;
+
+            for gy in 0..glyph_h {
+                let py = glyph_y + gy as i32;
+                if py < 0 || py as usize >= buf_height {
+                    continue;
+                }
+                for gx in 0..glyph_w {
+                    let px = glyph_x + gx as i32;
+                    if px < 0 || px as usize >= buf_width || px as usize >= max_x {
+                        continue;
+                    }
+
+                    let alpha = glyph.bitmap[gy * glyph_w + gx];
+                    if alpha > 0 {
+                        let idx = (py as usize) * buf_width + (px as usize);
+                        let bg = Color::from_rgb(
+                            ((buffer[idx] >> 16) & 0xFF) as u8,
+                            ((buffer[idx] >> 8) & 0xFF) as u8,
+                            (buffer[idx] & 0xFF) as u8,
+                        );
+                        buffer[idx] = bg.blend_over(color, alpha);
+                    }
+                }
+            }
+            cur_x += self.char_width;
+        }
+        cur_x
+    }
+
+    /// Renderiza la barra lateral vertical con la lista de instancias / pestañas al estilo Ghostty
+    pub fn render_sidebar(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        sidebar_width: usize,
+        tabs: &[SidebarTabItem],
+        hovered_tab: Option<usize>,
+        hovered_close: Option<usize>,
+        hovered_new_tab: bool,
+    ) {
+        if sidebar_width == 0 || width == 0 || height == 0 {
+            return;
+        }
+
+        // 1. Fondo de la barra lateral (gris oscuro profundo Ghostty #121214)
+        let sidebar_bg = Color::from_rgb(18, 18, 20);
+        Self::draw_rect(buffer, width, height, 0, 0, sidebar_width, height, sidebar_bg);
+
+        // 2. Línea divisoria vertical sutil (#26262b)
+        let divider_color = Color::from_rgb(38, 38, 43);
+        Self::draw_rect(buffer, width, height, sidebar_width.saturating_sub(1), 0, 1, height, divider_color);
+
+        // 3. Encabezado de la barra lateral (Header: "AXON" + Botón "+")
+        let header_y = 12;
+        let header_baseline = header_y + self.baseline_y.min(16);
+        let title_color = Color::from_rgb(130, 130, 140);
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            "AXON",
+            14,
+            header_baseline,
+            sidebar_width.saturating_sub(40),
+            title_color,
+            true,
+        );
+
+        // Botón "+" para crear nueva terminal
+        let plus_btn_x = sidebar_width.saturating_sub(34);
+        let plus_btn_y = 8;
+        let plus_btn_w = 24;
+        let plus_btn_h = 24;
+        let plus_bg = if hovered_new_tab {
+            Color::from_rgb(45, 45, 52)
+        } else {
+            Color::from_rgb(26, 26, 30)
+        };
+        Self::draw_rect(buffer, width, height, plus_btn_x, plus_btn_y, plus_btn_w, plus_btn_h, plus_bg);
+
+        let plus_fg = if hovered_new_tab {
+            Color::from_rgb(81, 226, 122) // Verde Ghostty
+        } else {
+            Color::from_rgb(200, 200, 210)
+        };
+        let plus_baseline = plus_btn_y + self.baseline_y.min(18);
+        self.draw_text(
+            buffer,
+            width,
+            height,
+            "+",
+            plus_btn_x + (plus_btn_w.saturating_sub(self.char_width) / 2),
+            plus_baseline,
+            plus_btn_x + plus_btn_w,
+            plus_fg,
+            true,
+        );
+
+        // 4. Lista de pestañas verticales
+        let tab_item_h = 34;
+        let tab_spacing = 4;
+        let list_start_y = 42;
+
+        for (idx, tab) in tabs.iter().enumerate() {
+            let tab_y = list_start_y + idx * (tab_item_h + tab_spacing);
+            if tab_y + tab_item_h > height {
+                break;
+            }
+
+            let is_hovered = hovered_tab == Some(idx);
+            let tab_w = sidebar_width.saturating_sub(16);
+            let tab_x = 8;
+
+            // Fondo del ítem de pestaña
+            let item_bg = if tab.is_active {
+                Color::from_rgb(32, 32, 36)
+            } else if is_hovered {
+                Color::from_rgb(25, 25, 29)
+            } else {
+                sidebar_bg
+            };
+
+            Self::draw_rect(buffer, width, height, tab_x, tab_y, tab_w, tab_item_h, item_bg);
+
+            // Indicador vertical verde en la pestaña activa
+            if tab.is_active {
+                let accent_color = Color::from_rgb(81, 226, 122); // Verde Ghostty
+                Self::draw_rect(buffer, width, height, tab_x, tab_y + 4, 3, tab_item_h.saturating_sub(8), accent_color);
+            }
+
+            // Título de la pestaña
+            let text_color = if tab.is_active {
+                Color::from_rgb(240, 240, 245)
+            } else if is_hovered {
+                Color::from_rgb(200, 200, 205)
+            } else {
+                Color::from_rgb(140, 140, 148)
+            };
+
+            let text_baseline = tab_y + self.baseline_y.min(22);
+            let icon_text = "> ";
+            self.draw_text(
+                buffer,
+                width,
+                height,
+                icon_text,
+                tab_x + 8,
+                text_baseline,
+                tab_x + tab_w,
+                if tab.is_active { Color::from_rgb(81, 226, 122) } else { text_color },
+                tab.is_active,
+            );
+
+            let title_x = tab_x + 8 + (self.char_width * 2);
+            let title_max_x = tab_x + tab_w.saturating_sub(26);
+            self.draw_text(
+                buffer,
+                width,
+                height,
+                &tab.title,
+                title_x,
+                text_baseline,
+                title_max_x,
+                text_color,
+                tab.is_active,
+            );
+
+            // Indicador de actividad / no leído si la pestaña tiene salida pendiente en segundo plano
+            if tab.has_unread && !tab.is_active {
+                let dot_x = tab_x + tab_w.saturating_sub(32);
+                let dot_y = tab_y + (tab_item_h / 2).saturating_sub(3);
+                let dot_color = Color::from_rgb(78, 146, 249); // Azul Ghostty
+                Self::draw_rect(buffer, width, height, dot_x, dot_y, 6, 6, dot_color);
+            }
+
+            // Botón cerrar "x"
+            if tabs.len() > 1 && (tab.is_active || is_hovered) {
+                let close_x = tab_x + tab_w.saturating_sub(22);
+                let close_y = tab_y + 6;
+                let close_size = 20;
+
+                let is_close_hovered = hovered_close == Some(idx);
+                let close_fg = if is_close_hovered {
+                    Color::from_rgb(244, 56, 65) // Rojo Ghostty
+                } else {
+                    Color::from_rgb(120, 120, 130)
+                };
+
+                let close_baseline = close_y + self.baseline_y.min(15);
+                self.draw_text(
+                    buffer,
+                    width,
+                    height,
+                    "x",
+                    close_x + 5,
+                    close_baseline,
+                    close_x + close_size,
+                    close_fg,
+                    is_close_hovered,
+                );
+            }
+        }
+    }
+
     /// Calcula las columnas y filas que caben en el tamaño actual de la ventana
-    pub fn compute_grid_size(&self, window_width: usize, window_height: usize) -> (usize, usize) {
-        let avail_w = window_width.saturating_sub(self.margin_x * 2);
+    pub fn compute_grid_size(&self, window_width: usize, window_height: usize, sidebar_offset: usize) -> (usize, usize) {
+        let avail_w = window_width.saturating_sub(sidebar_offset + self.margin_x * 2);
         let avail_h = window_height.saturating_sub(self.margin_y * 2);
         let cols = (avail_w / self.char_width).max(20);
         let rows = (avail_h / self.row_height).max(5);
@@ -170,6 +429,7 @@ impl TerminalRenderer {
         buffer: &mut [u32],
         width: usize,
         height: usize,
+        sidebar_offset: usize,
         terminal: &TerminalState,
         theme: &Theme,
         cursor_visible: bool,
@@ -177,9 +437,19 @@ impl TerminalRenderer {
         let bg_color = theme.background.to_u32_xrgb();
         let baseline_y = self.baseline_y;
 
-        // 1. Limpieza del framebuffer con el fondo oficial Ghostty (#161618)
-        buffer.fill(bg_color);
+        // 1. Limpieza del área de terminal con el fondo oficial Ghostty (#161618)
+        if sidebar_offset == 0 {
+            buffer.fill(bg_color);
+        } else {
+            for py in 0..height {
+                let row_start = py * width;
+                for px in sidebar_offset..width {
+                    buffer[row_start + px] = bg_color;
+                }
+            }
+        }
 
+        let base_x = sidebar_offset + self.margin_x;
         let visible_rows = terminal.visible_rows();
         let view_start = terminal.visible_line_start();
 
@@ -198,7 +468,7 @@ impl TerminalRenderer {
                     Some(_) => Color::from_rgb(244, 56, 65).to_u32_xrgb(),   // Rojo Ghostty #f43841
                     None => Color::from_rgb(78, 146, 249).to_u32_xrgb(),     // Azul Ghostty #4e92f9
                 };
-                let bar_x = self.margin_x.saturating_sub(7);
+                let bar_x = base_x.saturating_sub(7);
                 for y in (cell_y + 3)..(cell_y + self.row_height - 3) {
                     for x in bar_x..(bar_x + 3) {
                         if x < width && y < height {
@@ -209,7 +479,7 @@ impl TerminalRenderer {
             }
 
             for (col_idx, cell) in row.iter().enumerate() {
-                let cell_x = self.margin_x + (col_idx * self.char_width);
+                let cell_x = base_x + (col_idx * self.char_width);
                 if cell_x + self.char_width > width {
                     break;
                 }
@@ -310,7 +580,7 @@ impl TerminalRenderer {
             && terminal.cursor_y < terminal.rows
             && terminal.cursor_x < terminal.cols
         {
-            let cx = self.margin_x + (terminal.cursor_x * self.char_width);
+            let cx = base_x + (terminal.cursor_x * self.char_width);
             let cy = self.margin_y + (terminal.cursor_y * self.row_height);
 
             let active_grid = if terminal.is_alt_screen {
@@ -382,7 +652,7 @@ impl TerminalRenderer {
         for img in &terminal.images {
             if img.line_index + img.height_rows > view_start && img.line_index < view_end {
                 let row_in_view = img.line_index as isize - view_start as isize;
-                let ix = (self.margin_x + (img.col * self.char_width)) as i32;
+                let ix = (base_x + (img.col * self.char_width)) as i32;
                 let iy = (self.margin_y + (row_in_view as usize * self.row_height)) as i32;
                 let target_w = img.width_cols * self.char_width;
                 let target_h = img.height_rows * self.row_height;

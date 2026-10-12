@@ -23,8 +23,14 @@ Inspirado en la estética y rendimiento de [Ghostty](https://ghostty.org), Axon 
   * **Bracketed Paste Mode:** Evita la ejecución accidental de comandos multilínea pegados.
   * **Anti-Flicker:** Soporte para renderizado sincronizado DEC 2026.
   * **TUI Mouse Tracking:** Compatible con herramientas interactivas (Ratatui, Lazygit, Herdr, btop) usando SGR 1006 / 1002.
+* **📑 Pestañas Verticales y Múltiples Sesiones (Sidebar):**
+  * Barra lateral izquierda nativa para abrir y alternar entre múltiples instancias de terminal simultáneas.
+  * Botón interactivo `+` para spawnear nuevas sesiones independientes con su propio proceso ConPTY.
+  * Botón `×` en pestañas inactivas/activas para cerrar sesiones.
+  * Indicador de foco activo con acento verde Ghostty (`#51e27a`) y punto azul de actividad (`#4e92f9`) cuando una terminal en segundo plano recibe nueva salida de un comando.
+  * Barra lateral colapsable dinámicamente con `Ctrl + B`.
 * **⌨️ Teclado Preciso en Windows:**
-  * Borrado de 1 carácter con `Backspace` (`0x7f`) y borrado de palabra con `Ctrl+Backspace` / `Alt+Backspace` (`0x08`).
+  * Borrado de 1 carácter con `Backspace` (`0x7f`) y borrado de palabra con `Ctrl+Backspace` (`0x17`) / `Alt+Backspace` (`\x1b\x7f`).
   * Aislamiento de hardware para `AltGr` (`VK_RMENU`), impidiendo que el Control sintético de Windows quede atascado.
   * Protección total contra `Alt+Tab`, evitando que se dispare el tabulador al alternar ventanas.
 
@@ -34,6 +40,11 @@ Inspirado en la estética y rendimiento de [Ghostty](https://ghostty.org), Axon 
 
 | Atajo | Acción |
 | :--- | :--- |
+| `Ctrl + Shift + T` / `Ctrl + T` | **Nueva pestaña / terminal** |
+| `Ctrl + Shift + W` | **Cerrar pestaña activa** |
+| `Ctrl + Tab` / `Ctrl + Shift + Tab` | **Pestaña siguiente / anterior** |
+| `Ctrl + 1` .. `Ctrl + 9` | **Cambiar directamente a pestaña 1-9** |
+| `Ctrl + B` | **Alternar visibilidad de la barra lateral** |
 | `Ctrl + Shift + C` / `Ctrl + C` | Copiar texto seleccionado |
 | `Ctrl + Shift + V` / `Ctrl + V` | Pegar texto o imagen desde el portapapeles |
 | `Alt + V` | Enviar secuencia Alt+V para imágenes en Claude Code |

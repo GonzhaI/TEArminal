@@ -63,7 +63,7 @@ mod tests {
         terminal.process_bytes(colored_seq);
 
         let mut buffer = vec![0u32; 800 * 600];
-        renderer.render(&mut buffer, 800, 600, &terminal, &terminal.theme, false);
+        renderer.render(&mut buffer, 800, 600, 0, &terminal, &terminal.theme, false);
 
         // Comprobar que en el buffer hay píxeles coloreados con verde (canal G alto, canal R y B bajos)
         let mut has_green_pixels = false;
@@ -123,6 +123,83 @@ mod tests {
 
         // Limpiar archivo de prueba
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_sidebar_rendering_and_layout() {
+        use crate::renderer::SidebarTabItem;
+
+        let config = AxonConfig::load_or_default();
+        let mut renderer = renderer::TerminalRenderer::new(&config, 1.0);
+
+        // 1. Validar cómputo de columnas con y sin barra lateral
+        let (cols_no_sidebar, rows_no_sidebar) = renderer.compute_grid_size(1000, 600, 0);
+        let (cols_with_sidebar, rows_with_sidebar) = renderer.compute_grid_size(1000, 600, 190);
+
+        assert_eq!(rows_no_sidebar, rows_with_sidebar, "La altura de filas debe ser idéntica");
+        assert!(cols_no_sidebar > cols_with_sidebar, "Sin barra lateral debe caber más columnas");
+
+        // 2. Probar renderizado de la barra lateral en el buffer
+        let mut buffer = vec![0u32; 1000 * 600];
+        let tabs = vec![
+            SidebarTabItem {
+                id: 1,
+                title: "Terminal 1".to_string(),
+                is_active: true,
+                has_unread: false,
+            },
+            SidebarTabItem {
+                id: 2,
+                title: "Terminal 2".to_string(),
+                is_active: false,
+                has_unread: true,
+            },
+        ];
+
+        renderer.render_sidebar(
+            &mut buffer,
+            1000,
+            600,
+            190,
+            &tabs,
+            Some(1),
+            None,
+            false,
+        );
+
+        // Validar que la región de la barra lateral (0..190) fue pintada con el fondo oscuro del sidebar
+        let sidebar_bg_pixel = theme::Color::from_rgb(18, 18, 20).to_u32_xrgb();
+        let border_pixel = theme::Color::from_rgb(38, 38, 43).to_u32_xrgb();
+
+        assert_eq!(buffer[50 * 1000 + 2], sidebar_bg_pixel, "El fondo del sidebar debe ser #121214");
+        assert_eq!(buffer[50 * 1000 + 189], border_pixel, "El borde del sidebar debe ser #26262b");
+
+        // 3. Renderizar el área de terminal con offset
+        let term = terminal::TerminalState::new(cols_with_sidebar, rows_with_sidebar, 100, theme::Theme::ghostty_dark());
+        renderer.render(&mut buffer, 1000, 600, 190, &term, &term.theme, false);
+
+        let term_bg_pixel = term.theme.background.to_u32_xrgb();
+        assert_eq!(buffer[50 * 1000 + 195], term_bg_pixel, "El área de terminal después del offset debe tener fondo Ghostty");
+    }
+
+    #[test]
+    fn test_app_tab_switching_and_toggle() {
+        let config = AxonConfig::load_or_default();
+        let mut app = AxonApp::new(config, None);
+
+        assert_eq!(app.tabs.len(), 1, "Debe inicializar con 1 pestaña por defecto");
+        assert_eq!(app.active_tab_index, 0);
+        assert!(app.sidebar_visible, "La barra lateral debe estar visible inicialmente");
+        assert_eq!(app.sidebar_offset(), 190);
+
+        // Conmutar visibilidad de la barra lateral
+        app.toggle_sidebar();
+        assert!(!app.sidebar_visible);
+        assert_eq!(app.sidebar_offset(), 0);
+
+        app.toggle_sidebar();
+        assert!(app.sidebar_visible);
+        assert_eq!(app.sidebar_offset(), 190);
     }
 }
 
