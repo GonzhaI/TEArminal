@@ -16,6 +16,7 @@ use winit::window::{Icon, Window, WindowAttributes, WindowId};
 #[derive(Debug, Clone, Copy)]
 pub enum AxonEvent {
     PtyData,
+    PtyClosed,
 }
 
 pub struct AxonApp {
@@ -239,7 +240,7 @@ impl AxonApp {
 }
 
 impl ApplicationHandler<AxonEvent> for AxonApp {
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: AxonEvent) {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
         match event {
             AxonEvent::PtyData => {
                 let mut got_bytes = false;
@@ -260,6 +261,10 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         w.request_redraw();
                     }
                 }
+            }
+            AxonEvent::PtyClosed => {
+                crate::logger::log("PtyClosed recibido: cerrando Axon");
+                event_loop.exit();
             }
         }
     }
@@ -939,6 +944,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pty.is_child_exited() {
+            crate::logger::log("Proceso hijo terminado: cerrando Axon");
+            event_loop.exit();
+            return;
+        }
+
         // 1. Drenar salida de ConPTY por si quedó algún byte residual
         let mut got_bytes = false;
         while let Some(bytes) = self.pty.try_recv_output() {

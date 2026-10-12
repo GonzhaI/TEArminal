@@ -8,7 +8,7 @@ use crate::app::AxonEvent;
 
 pub struct PtyManager {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    _child: Box<dyn Child + Send + Sync>,
+    child: Box<dyn Child + Send + Sync>,
     to_pty_tx: Sender<Vec<u8>>,
     from_pty_rx: Receiver<Vec<u8>>,
 }
@@ -158,6 +158,9 @@ impl PtyManager {
                         let _ = p.send_event(AxonEvent::PtyData);
                     }
                 }
+                if let Some(p) = &proxy_clone {
+                    let _ = p.send_event(AxonEvent::PtyClosed);
+                }
             })?;
 
         // Hilo escritor del PTY (toma inputs del teclado y los manda al shell)
@@ -174,10 +177,14 @@ impl PtyManager {
 
         Ok(Self {
             master: Arc::new(Mutex::new(pair.master)),
-            _child: child,
+            child,
             to_pty_tx,
             from_pty_rx,
         })
+    }
+
+    pub fn is_child_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     pub fn write_input(&self, data: &[u8]) {
@@ -268,5 +275,22 @@ mod tests {
             del2.push_str(&String::from_utf8_lossy(&bytes));
         }
         println!("DEL 2 PTY OUTPUT: {:?}", del2);
+    }
+
+    #[test]
+    fn test_pty_powershell_exit_detection() {
+        let mut pty = PtyManager::new("powershell.exe", false, 80, 24, None).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert!(!pty.is_child_exited(), "El proceso debería estar corriendo inicialmente");
+        pty.write_input(b"exit\r\n");
+        let mut exited = false;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if pty.is_child_exited() {
+                exited = true;
+                break;
+            }
+        }
+        assert!(exited, "El proceso hijo debe detectarse como finalizado al recibir exit");
     }
 }
