@@ -41,13 +41,15 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
 * **Borrado de palabra con `Ctrl+Backspace`:** El emulador emite el byte **`0x17`** (ASCII 23 / `Ctrl+W` / `werase`), que es el estándar adoptado por Windows Terminal. En PowerShell, `PSReadLine` tiene `Ctrl+w` enlazado nativamente a `BackwardKillWord`; y en harnesses de agentes de IA (Node.js/Ink en Claude Code, Go en agy), `0x17` activa directamente el borrado de palabra atrás (`kDeleteWordLeft`). *(Evitar enviar `0x08` para borrado de palabra, ya que los entornos en modo raw lo interpretan como un simple Backspace de 1 carácter).*
 * **Borrado de palabra con `Alt+Backspace`:** El emulador emite la secuencia VT estándar **`\x1b\x7f`** (ESC + DEL). En Claude Code activa `key.meta` y ejecuta `kDeleteWordLeft`, en agy activa borrado de palabra, y en PowerShell se soporta limpiamente vinculando `Set-PSReadLineKeyHandler -Chord 'Alt+Backspace' -Function BackwardKillWord` en el script de arranque.
 
-### 2. El Bug del Control Sintético con `AltGr` en Win32
+### 2. El Bug del Control Sintético con `AltGr` en Win32 y Atajos con `Alt` (WM_SYSKEYDOWN)
 * En distribuciones de teclado en español/latinoamericanas, presionar `AltGr` (`VK_RMENU`) inyecta a nivel de driver un `VK_LCONTROL` sintético.
 * Al soltar `AltGr`, Windows frecuentemente pierde o no emite el evento *Key-Up* de ese Control sintético, dejando el modificador `Ctrl` atascado permanentemente en los frameworks de ventanas como `winit`.
 * **Regla obligatoria:** En [`src/app.rs`](file:///C:/Users/gmora/dev/axon/src/app.rs), la consulta de teclas modificadoras se realiza mediante [`get_physical_modifiers()`](file:///C:/Users/gmora/dev/axon/src/app.rs) con `GetAsyncKeyState`:
   * `VK_LMENU` = Alt izquierdo real.
   * `VK_RMENU` = AltGr.
   * `Ctrl` solo se considera activo si `VK_RCONTROL` está presionado, o si `VK_LCONTROL` está activo **sin** que `VK_RMENU` (AltGr) esté presente.
+  * Si `AltGr` no genera texto imprimible (teclas como D, V, W), en Windows equivale por driver a `Ctrl + Alt`, permitiendo activar los atajos de split correspondientes.
+* **Atajos con `Alt` y `WM_SYSKEYDOWN`:** En Windows, cuando `Alt` está activo, `ToUnicodeEx` no genera caracteres y `winit` reporta `logical_key` como `Key::Unidentified`. Por ello, la detección de atajos (ej. `Ctrl+Alt+D`, `Alt+V`) **debe** verificar la tecla de hardware física [`PhysicalKey::Code(KeyCode)`](file:///C:/Users/gmora/dev/axon/src/app.rs) mediante [`key_is_char`](file:///C:/Users/gmora/dev/axon/src/app.rs).
 
 ### 3. Secuencia ECH (`\x1b[PnX`) y Texto Fantasma
 * Al borrar palabras o caracteres con `Ctrl+Backspace`, PowerShell mueve el cursor hacia atrás y envía **`\x1b[PnX` (ECH - Erase Character)** para limpiar los `Pn` caracteres a la derecha del cursor.
@@ -79,6 +81,35 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
 ### 9. Anclaje de Entrada Inferior para Agentes de IA (Claude Code, Gemini, Agy)
 * En terminales tradicionales, los agentes CLI de entrada continua inician su prompt en la parte superior y se desplazan hacia abajo con cada consulta.
 * En [`src/pty.rs`](file:///C:/Users/gmora/dev/axon/src/pty.rs), los wrappers de arranque para `claude`, `gemini` y `agy` limpian la pantalla y posicionan el cursor en la última línea visible (`$Host.UI.RawUI.WindowSize.Height`), garantizando que la caja de entrada permanezca permanentemente anclada al fondo de la terminal.
+
+### 10. Soporte Extendido para Conexiones SSH (Clonación de Paneles, SCP de Imágenes y OSC 1337)
+* **Detección transparente de sesión:** El wrapper `function ssh` en el script de arranque de PowerShell emite `OSC 1337 AxonSSH=start;dest=<host>` al conectar y `AxonSSH=end` dentro de un bloque `try ... finally`. Adicionalmente, títulos emitidos vía `OSC 0` / `OSC 2` (`ssh: user@host`) y secuencias de directorio de trabajo `OSC 7` (`file://remotehost/path`) identifican y rastrean automáticamente el destino y directorio remoto.
+* **Clonación de paneles divididos (`Ctrl+Alt+D` / `Ctrl+Alt+V`):** Al realizar un split sobre una terminal con sesión SSH activa, `split_active_pane` propaga la información mediante [`PtyManager::new_ssh()`](file:///C:/Users/gmora/dev/axon/src/pty.rs), conectando instantáneamente el nuevo panel al mismo host y ruta remota, con retorno limpio a la shell local de Windows cuando el usuario finaliza la sesión SSH (`exit`).
+* **Pegado inteligente de imágenes en SSH (`Ctrl+V`):** Al detectar una imagen en el portapapeles durante una sesión SSH activa, Axon evalúa si corre Claude Code remoto (emitiendo `\x1bv` / `Alt+V`). Para shells remotas convencionales, Axon guarda el PNG en la caché local y lo transfiere al servidor remoto usando `scp.exe` nativo de Windows (OpenSSH) hacia `/tmp/axon_img_<timestamp>.png`, inyectando la ruta remota en la consola remota de forma totalmente transparente para el usuario o agentes CLI remotos.
+* **Portapapeles remoto bidireccional (OSC 52):** Soporte para que herramientas remotas (Neovim, tmux, vim) copien texto directamente al portapapeles del sistema operativo anfitrión en Windows mediante el protocolo OSC 52 en base64.
+
+### 11. Pestaña Dedicada de Ajustes, Tema Catppuccin Frappé y Atajos Canónicos (`Ctrl + ,`)
+* **Pestaña nativa de página completa (`TerminalTab::new_settings`):** En lugar de un popup modal superpuesto con riesgo de desbordamiento, los Ajustes residen en una pestaña dedicada accesible vía `Ctrl + ,` o con el botón `⚙` del encabezado del sidebar o barra superior. Cuenta con 4 secciones conmutables: `◈ Apariencia`, `◈ Terminal`, `◈ Atajos de Teclado` e `◈ Acerca de`.
+* **Tema Catppuccin Frappé y elevaciones de UI:** Se integra el tema `Catppuccin Frappé` junto a Ghostty Dark, One Dark, Tokyo Night, Monokai Pro, Nord, Solarized Dark y Catppuccin Latte. La barra lateral y componentes de UI usan colores dinámicos (`theme.sidebar_bg()`, `theme.surface_bg()`, `theme.surface_hover()`, `theme.border_color()`, `theme.accent_color()`), proporcionando contraste y elevación visual limpia en cualquier tema.
+* **Geometría compartida (`SettingsPageRects`):** La estructura [`SettingsPageRects::compute()`](file:///C:/Users/gmora/dev/axon/src/renderer.rs) centraliza la posición de las píldoras de navegación de pestañas y botones interactivos tanto para el renderizado como para `CursorMoved` y `MouseInput`, garantizando detección precisa de clics y estados hover.
+* **Aislamiento de entrada y PTY:** La pestaña de ajustes se inicializa sin procesos ConPTY (`panes: vec![]`). La pulsación de teclas y clics son absorbidos limpiamente por la interfaz de ajustes sin emitir bytes accidentales a terminales en segundo plano.
+* **Atajos Canónicos Unificados:** Se eliminaron las combinaciones duplicadas para una misma acción; cada comando tiene un único atajo canónico estándar (`Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Alt+D`, `Ctrl+Alt+V`, `Ctrl+Alt+W`, `Ctrl+B`, `Ctrl+,`, `Ctrl+V`, `Ctrl+Shift+C`, `Ctrl+Shift+K`, `Ctrl+Shift+O`).
+
+### 12. Identidad Dev-First, Pestañas Horizontales/Verticales, Status Bar y Tema de Sistema
+* **Cero Emojis y Motivo Unificado `◈`:** Regla estética estricta: ninguna parte de la interfaz de Axon debe utilizar emojis visuales de mensajería. Se utiliza el rombo de desarrollador `◈` como motivo de diseño insignia que se extiende de manera uniforme en pestañas, botones de navegación, rutas y status bar, junto a los glifos de ingeniería `⎇` (Git branch), `⚙` (Ajustes), `●` / `○` (estado de agentes).
+* **Disposición de Pestañas Intercambiable (`tab_layout`):** Soporte tanto para barra lateral vertical (default, espaciado generoso de 36px por pestaña) como para barra horizontal superior tradicional estilo Chrome/Zed (38px de altura, línea de acento superior de 2px, renderizado en [`render_top_tab_bar`](file:///C:/Users/gmora/dev/axon/src/renderer.rs)), conmutable dinámicamente desde Ajustes o `axon.toml`.
+* **Barra de Estado Inferior Informativa (Status Bar - 26px):** Proporciona contexto continuo para desarrolladores:
+  - *Izquierda:* Ruta de trabajo actual (`◈ C:\...`) o sesión remota (`◈ ssh: user@host`) y rama Git activa (`⎇ main`, consultada de forma no bloqueante a nivel de archivo `<0.02ms`).
+  - *Derecha:* Dimensiones de grilla activa (`cols×rows`) y badge en tiempo real del agente de IA activo (`● CLAUDE`, `● AGY`, `● GEMINI`, `● AIDER`, `● COPILOT`, `● OLLAMA` o `○ LOCAL`).
+* **Soporte de Modo Claro (Catppuccin Latte) y Sincronización con Windows 11:**
+  - Integración del tema claro oficial Catppuccin Latte (`#eff1f5`, `#4c4f69`).
+  - Con `theme_mode = "system"`, Axon consulta dinámicamente el Registro de Windows (`HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\AppsUseLightTheme`) actualizando la interfaz y la barra de título DWM en tiempo real cuando el sistema operativo cambia entre tema claro y oscuro.
+
+### 13. Explorador Lateral Derecho de Archivos (Dev-First, Click-to-Prompt y Ctrl+Shift+E)
+* **Panel derecho integrado (`FILE_EXPLORER_WIDTH = 240`):** Implementado en [`src/explorer.rs`](file:///C:/Users/gmora/dev/axon/src/explorer.rs) y renderizado en [`render_file_explorer`](file:///C:/Users/gmora/dev/axon/src/renderer.rs). Muestra el árbol de archivos y carpetas del proyecto activo sin emojis, utilizando glifos `◈`, `▸`, `▾`, `↻`, `x`, `..`.
+* **Click-to-Prompt:** Al hacer clic en cualquier archivo, su ruta relativa (o entre comillas si contiene espacios) se inyecta directamente en el prompt del PTY activo, permitiendo interacción instantánea con shells o agentes CLI (Claude Code, agy, gemini).
+* **Navegación completa y scroll:** Clic en directorios expande/colapsa carpetas conservando el árbol, `..` sube al directorio padre, `↻` recarga el disco y la rueda del ratón permite scroll suave en repositorios grandes.
+* **Control y persistencia unificada:** Conmutable mediante el atajo canónico `Ctrl + Shift + E`, el botón `◈ ARCHIVOS` de la barra de estado inferior, el botón `◈` de la barra superior horizontal, o la opción en Ajustes (`Ctrl + ,`). Su visibilidad se persiste en `%LOCALAPPDATA%\axon\session.toml`.
 
 ---
 

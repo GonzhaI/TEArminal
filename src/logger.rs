@@ -25,7 +25,11 @@ pub fn log(msg: &str) {
 
     // Guardar en axon.log en el directorio local
     if let Ok(_lock) = LOG_MUTEX.lock() {
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("axon.log") {
+        if let Ok(mut file) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("axon.log")
+        {
             let _ = file.write_all(line.as_bytes());
         }
     }

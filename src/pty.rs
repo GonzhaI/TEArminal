@@ -1,10 +1,10 @@
+use crate::app::AxonEvent;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use winit::event_loop::EventLoopProxy;
-use crate::app::AxonEvent;
 
 pub struct PtyManager {
     #[allow(dead_code)]
@@ -198,6 +198,39 @@ impl PtyManager {
                     "& $cmd @args ",
                     "} else { Write-Error \"El comando 'opencode' no se encuentra en PATH.\" } ",
                     "}; ",
+                    "function ssh { ",
+                    "$rawArgs = $args; ",
+                    "$dest = ''; ",
+                    "for ($i = 0; $i -lt $rawArgs.Count; $i++) { ",
+                    "  $arg = $rawArgs[$i]; ",
+                    "  if ($arg.StartsWith('-')) { ",
+                    "    if ($arg -in @('-p', '-i', '-l', '-o', '-c', '-b', '-J', '-F', '-D', '-R', '-L', '-W') -and ($i + 1 -lt $rawArgs.Count)) { $i++ }; ",
+                    "    continue; ",
+                    "  }; ",
+                    "  $dest = $arg; ",
+                    "  break; ",
+                    "}; ",
+                    "if (-not $dest) { $dest = 'remote' }; ",
+                    "$esc = [char]27; ",
+                    "[Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + [char]7); ",
+                    "[Console]::Write($esc + ']0;ssh: ' + $dest + [char]7); ",
+                    "$prevTerm = $env:TERM; ",
+                    "$prevColor = $env:COLORTERM; ",
+                    "$env:TERM = 'xterm-256color'; ",
+                    "$env:COLORTERM = 'truecolor'; ",
+                    "$sshCmd = (Get-Command -CommandType Application -Name ssh.exe, ssh -ErrorAction SilentlyContinue | Select-Object -First 1); ",
+                    "if ($sshCmd) { ",
+                    "  try { & $sshCmd @rawArgs } finally { ",
+                    "    [Console]::Write($esc + ']1337;AxonSSH=end' + [char]7); ",
+                    "    [Console]::Write($esc + ']0;powershell' + [char]7); ",
+                    "    if ($prevTerm) { $env:TERM = $prevTerm } else { Remove-Item env:TERM -ErrorAction SilentlyContinue }; ",
+                    "    if ($prevColor) { $env:COLORTERM = $prevColor } else { Remove-Item env:COLORTERM -ErrorAction SilentlyContinue }; ",
+                    "  } ",
+                    "} else { ",
+                    "  Write-Error \"El comando 'ssh' no se encuentra en PATH.\"; ",
+                    "  [Console]::Write($esc + ']1337;AxonSSH=end' + [char]7); ",
+                    "} ",
+                    "}; ",
                     "Write-Host ([char]27 + '[2J' + [char]27 + '[H') -NoNewline"
                 );
                 cmd.arg(init_script);
@@ -268,6 +301,99 @@ impl PtyManager {
         })
     }
 
+    /// Crea un nuevo PTY reconectando automáticamente a una sesión SSH remota
+    pub fn new_ssh(
+        id: usize,
+        destination: &str,
+        remote_dir: Option<&str>,
+        cols: u16,
+        rows: u16,
+        proxy: Option<EventLoopProxy<AxonEvent>>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let pty_system = native_pty_system();
+        let pair = pty_system.openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+
+        let mut cmd = CommandBuilder::new("powershell.exe");
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+
+        let tools_dir = crate::tools::get_bin_dir();
+        let path_env = if let Ok(current_path) = std::env::var("PATH") {
+            format!("{};{}", tools_dir.display(), current_path)
+        } else {
+            tools_dir.display().to_string()
+        };
+        cmd.env("PATH", &path_env);
+
+        cmd.arg("-NoLogo");
+        cmd.arg("-NoExit");
+        cmd.arg("-Command");
+
+        let ssh_command = if let Some(dir) = remote_dir {
+            format!(
+                "ssh -t {} \"cd '{}' 2>/dev/null; exec \\$SHELL -l\"",
+                destination, dir
+            )
+        } else {
+            format!("ssh {}", destination)
+        };
+
+        cmd.arg(ssh_command);
+
+        let child = pair.slave.spawn_command(cmd)?;
+
+        let mut reader = pair.master.try_clone_reader()?;
+        let mut writer = pair.master.take_writer()?;
+
+        let (from_pty_tx, from_pty_rx) = channel::<Vec<u8>>();
+        let (to_pty_tx, to_pty_rx) = channel::<Vec<u8>>();
+
+        let proxy_clone = proxy;
+        thread::Builder::new()
+            .name("axon-pty-reader-ssh".into())
+            .spawn(move || {
+                let mut buffer = [0u8; 8192];
+                while let Ok(n) = reader.read(&mut buffer) {
+                    if n == 0 {
+                        break;
+                    }
+                    if from_pty_tx.send(buffer[..n].to_vec()).is_err() {
+                        break;
+                    }
+                    if let Some(p) = &proxy_clone {
+                        let _ = p.send_event(AxonEvent::PtyData(id));
+                    }
+                }
+                if let Some(p) = &proxy_clone {
+                    let _ = p.send_event(AxonEvent::PtyClosed(id));
+                }
+            })?;
+
+        thread::Builder::new()
+            .name("axon-pty-writer-ssh".into())
+            .spawn(move || {
+                while let Ok(input) = to_pty_rx.recv() {
+                    if writer.write_all(&input).is_err() {
+                        break;
+                    }
+                    let _ = writer.flush();
+                }
+            })?;
+
+        Ok(Self {
+            id,
+            master: Arc::new(Mutex::new(pair.master)),
+            child,
+            to_pty_tx,
+            from_pty_rx,
+        })
+    }
+
     pub fn is_child_exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
@@ -307,7 +433,11 @@ mod tests {
                 total_output.push_str(&s);
             }
         }
-        println!("TOTAL PTY OUTPUT (len {}):\n{:?}", total_output.len(), total_output);
+        println!(
+            "TOTAL PTY OUTPUT (len {}):\n{:?}",
+            total_output.len(),
+            total_output
+        );
 
         // Enviar un comando "echo hello\r\n" a ver si responde
         pty.write_input(b"echo hello\r\n");
@@ -322,8 +452,15 @@ mod tests {
                 break;
             }
         }
-        println!("ECHO OUTPUT (len {}):\n{:?}", echo_output.len(), echo_output);
-        assert!(echo_output.contains("hello"), "El shell debe responder al input del usuario");
+        println!(
+            "ECHO OUTPUT (len {}):\n{:?}",
+            echo_output.len(),
+            echo_output
+        );
+        assert!(
+            echo_output.contains("hello"),
+            "El shell debe responder al input del usuario"
+        );
 
         // Probar Backspace con 0x7f (debe borrar solo 1 carácter)
         pty.write_input(b"wordX\x7f\r\n");
@@ -339,7 +476,9 @@ mod tests {
             }
         }
         // Probar exactamente el texto de la captura del usuario
-        pty.write_input(b"asldkflsdkflsdkflsadkf lasdkflsdkflasfksadlfk alsdkflsakdflasdkf laskdflksdlf");
+        pty.write_input(
+            b"asldkflsdkflsdkflsadkf lasdkflsdkflasfksadlfk alsdkflsakdflasdkf laskdflksdlf",
+        );
         std::thread::sleep(std::time::Duration::from_millis(200));
         while let Some(_) = pty.try_recv_output() {}
 
@@ -399,7 +538,10 @@ mod tests {
     fn test_pty_powershell_exit_detection() {
         let mut pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
-        assert!(!pty.is_child_exited(), "El proceso debería estar corriendo inicialmente");
+        assert!(
+            !pty.is_child_exited(),
+            "El proceso debería estar corriendo inicialmente"
+        );
         pty.write_input(b"exit\r\n");
         let mut exited = false;
         for _ in 0..40 {
@@ -409,6 +551,9 @@ mod tests {
                 break;
             }
         }
-        assert!(exited, "El proceso hijo debe detectarse como finalizado al recibir exit");
+        assert!(
+            exited,
+            "El proceso hijo debe detectarse como finalizado al recibir exit"
+        );
     }
 }

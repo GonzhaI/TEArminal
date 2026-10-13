@@ -17,6 +17,14 @@ pub struct AppearanceConfig {
     pub window_opacity: f32,
     pub theme: String,
     pub line_spacing: f32,
+    #[serde(default = "default_tab_layout")]
+    pub tab_layout: String,
+    #[serde(default = "default_theme_mode")]
+    pub theme_mode: String,
+    #[serde(default = "default_true")]
+    pub show_status_bar: bool,
+    #[serde(default = "default_false")]
+    pub show_file_explorer: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -34,6 +42,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
+fn default_tab_layout() -> String {
+    "vertical".to_string()
+}
+
+fn default_theme_mode() -> String {
+    "system".to_string()
+}
+
 impl Default for AxonConfig {
     fn default() -> Self {
         let shell = detect_preferred_shell();
@@ -43,8 +63,12 @@ impl Default for AxonConfig {
                 font_path: None,
                 font_size: 13.0,
                 window_opacity: 0.98,
-                theme: "Ghostty Default StyleDark".to_string(),
+                theme: "Catppuccin Frappé".to_string(),
                 line_spacing: 1.0,
+                tab_layout: "vertical".to_string(),
+                theme_mode: "system".to_string(),
+                show_status_bar: true,
+                show_file_explorer: false,
             },
             terminal: TerminalConfig {
                 default_shell: shell,
@@ -130,6 +154,8 @@ pub struct SessionState {
     pub active_tab_index: usize,
     #[serde(default = "default_true")]
     pub sidebar_visible: bool,
+    #[serde(default = "default_false")]
+    pub file_explorer_visible: bool,
     pub tabs: Vec<TabSession>,
 }
 
@@ -164,4 +190,3 @@ impl SessionState {
         Ok(())
     }
 }
-

@@ -1,9 +1,13 @@
 [appearance]
 font_family = "JetBrains Mono Nerd Font"
 font_size = 13.0
-window_opacity = 0.98
-theme = "Ghostty Default StyleDark"
-line_spacing = 1.0
+window_opacity = 0.5
+theme = "Nord"
+line_spacing = 2.0
+tab_layout = "vertical"
+theme_mode = "system"
+show_status_bar = true
+show_file_explorer = false
 
 [terminal]
 default_shell = "powershell.exe"
