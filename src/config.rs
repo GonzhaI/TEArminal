@@ -13,6 +13,7 @@ pub struct AppearanceConfig {
     pub font_family: String,
     #[serde(default)]
     pub font_path: Option<String>,
+    #[serde(default = "default_font_size")]
     pub font_size: f32,
     pub window_opacity: f32,
     pub theme: String,
@@ -38,6 +39,10 @@ pub struct TerminalConfig {
     pub copy_on_select: bool,
 }
 
+fn default_font_size() -> f32 {
+    14.0
+}
+
 fn default_true() -> bool {
     true
 }
@@ -61,7 +66,7 @@ impl Default for AxonConfig {
             appearance: AppearanceConfig {
                 font_family: "JetBrains Mono Nerd Font".to_string(),
                 font_path: None,
-                font_size: 13.0,
+                font_size: 14.0,
                 window_opacity: 0.98,
                 theme: "Catppuccin Frappé".to_string(),
                 line_spacing: 1.0,

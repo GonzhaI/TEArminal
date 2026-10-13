@@ -1,8 +1,8 @@
 [appearance]
 font_family = "JetBrains Mono Nerd Font"
-font_size = 13.0
+font_size = 14.0
 window_opacity = 0.5
-theme = "Nord"
+theme = "Solarized Dark"
 line_spacing = 2.0
 tab_layout = "vertical"
 theme_mode = "system"
@@ -11,8 +11,8 @@ show_file_explorer = false
 
 [terminal]
 default_shell = "powershell.exe"
-ghostty_prompt = true
+ghostty_prompt = false
 scrollback_lines = 50000
 bracketed_paste = true
-cursor_blink = true
+cursor_blink = false
 copy_on_select = false
