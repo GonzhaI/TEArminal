@@ -1,4 +1,9 @@
+# Compilación y empaquetado
 /target
-**/*.rs.bk
-*.log
 /dist
+/tools/*/target
+**/*.rs.bk
+
+# Local de cada desarrollador (la configuración de ejemplo está en examples/axon.toml)
+/axon.toml
+*.log

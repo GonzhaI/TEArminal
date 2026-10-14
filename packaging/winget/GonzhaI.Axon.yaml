@@ -1,0 +1,7 @@
+# Plantilla de manifiesto de winget (versión). scripts/winget-manifest.ps1 rellena <VERSION> y <SHA256>.
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+PackageIdentifier: GonzhaI.Axon
+PackageVersion: <VERSION>
+DefaultLocale: es-ES
+ManifestType: version
+ManifestVersion: 1.6.0

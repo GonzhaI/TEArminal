@@ -1,3 +1,6 @@
+// Primitivas planas de dibujo: coordenadas y color explícitos (ver el mismo criterio en `renderer`).
+#![allow(clippy::too_many_arguments)]
+
 use crate::theme::Color;
 
 /// Dibuja un rectángulo con esquinas redondeadas y antialiasing subpíxel perfecto (SDF 2D)

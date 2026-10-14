@@ -1,0 +1,4 @@
+# CRT enlazado estáticamente: axon.exe no necesita el Visual C++ Redistributable instalado
+# (sin esto importa vcruntime140.dll y no arranca en un Windows limpio).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

@@ -15,6 +15,8 @@ pub struct AppearanceConfig {
     pub font_path: Option<String>,
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: f32,
     pub window_opacity: f32,
     pub theme: String,
     pub line_spacing: f32,
@@ -42,7 +44,11 @@ pub struct TerminalConfig {
 }
 
 fn default_font_size() -> f32 {
-    14.0
+    15.0
+}
+
+fn default_ui_font_size() -> f32 {
+    13.0
 }
 
 fn default_true() -> bool {
@@ -68,9 +74,10 @@ impl Default for AxonConfig {
             appearance: AppearanceConfig {
                 font_family: "JetBrains Mono Nerd Font".to_string(),
                 font_path: None,
-                font_size: 14.0,
-                window_opacity: 0.98,
-                theme: "Ghostty".to_string(),
+                font_size: 15.0,
+                ui_font_size: 13.0,
+                window_opacity: 1.0,
+                theme: "frappe".to_string(),
                 line_spacing: 1.0,
                 tab_layout: "horizontal".to_string(),
                 theme_mode: "dark".to_string(),
@@ -80,7 +87,7 @@ impl Default for AxonConfig {
             terminal: TerminalConfig {
                 default_shell: shell,
                 ghostty_prompt: true,
-                scrollback_lines: 50_000,
+                scrollback_lines: 10_000,
                 bracketed_paste: true,
                 cursor_blink: true,
                 copy_on_select: false,
@@ -102,6 +109,11 @@ fn detect_preferred_shell() -> String {
 
 impl AxonConfig {
     pub fn config_path() -> PathBuf {
+        // Los tests no leen ni escriben la configuración real del usuario ni el axon.toml del repositorio
+        if cfg!(test) {
+            return dirs_or_fallback().join("axon.toml");
+        }
+
         // 1. Prioridad: axon.toml en el directorio de trabajo actual
         let local = PathBuf::from("axon.toml");
         if local.exists() {
@@ -149,7 +161,11 @@ impl AxonConfig {
     }
 }
 
+/// Carpeta de configuración y sesión del usuario (`%APPDATA%\axon\axon\config`)
 fn dirs_or_fallback() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("axon-test-{}", std::process::id()));
+    }
     if let Some(dirs) = directories::ProjectDirs::from("com", "axon", "axon") {
         dirs.config_dir().to_path_buf()
     } else {

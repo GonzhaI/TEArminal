@@ -1,0 +1,83 @@
+{
+  "tools": [
+    {
+      "name": "eza",
+      "version": "0.23.5",
+      "license": "MIT",
+      "homepage": "https://github.com/eza-community/eza",
+      "url": "https://github.com/eza-community/eza/releases/download/v0.23.5/eza.exe_x86_64-pc-windows-gnu.zip",
+      "sha256": "c830638c844a5b89d39ba662b5549903a71fa539018e813880f5b8afa77bac2e",
+      "exe": "eza.exe",
+      "licenseFiles": [],
+      "licenseUrl": "https://raw.githubusercontent.com/eza-community/eza/v0.23.5/LICENSE.txt",
+      "licenseSha256": "57fb42fbcd0b037ce528ed8f72f1ec095d67bc6825ecf1448ff39be1fe68a4b4"
+    },
+    {
+      "name": "bat",
+      "version": "0.26.1",
+      "license": "MIT OR Apache-2.0",
+      "homepage": "https://github.com/sharkdp/bat",
+      "url": "https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-pc-windows-msvc.zip",
+      "sha256": "0f729b4b6f5f28d395c641eacc2e9ff68d0096b85aa0eec344aa62425144b69b",
+      "exe": "bat.exe",
+      "licenseFiles": [
+        "LICENSE-MIT",
+        "LICENSE-APACHE"
+      ],
+      "appLocalDlls": [
+        "vcruntime140.dll"
+      ]
+    },
+    {
+      "name": "ripgrep",
+      "version": "15.2.0",
+      "license": "MIT OR Unlicense",
+      "homepage": "https://github.com/BurntSushi/ripgrep",
+      "url": "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "71b2fef860abe467217a538ff31de02f5258807c0129f771846f87bd029aafc5",
+      "exe": "rg.exe",
+      "licenseFiles": [
+        "LICENSE-MIT",
+        "UNLICENSE",
+        "COPYING"
+      ]
+    },
+    {
+      "name": "fd",
+      "version": "10.5.0",
+      "license": "MIT OR Apache-2.0",
+      "homepage": "https://github.com/sharkdp/fd",
+      "url": "https://github.com/sharkdp/fd/releases/download/v10.5.0/fd-v10.5.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "a227701b8551c35a9931d9f6da75503cf86d88e182d71fb849a70864c5d57cd7",
+      "exe": "fd.exe",
+      "licenseFiles": [
+        "LICENSE-MIT",
+        "LICENSE-APACHE"
+      ]
+    },
+    {
+      "name": "zoxide",
+      "version": "0.10.0",
+      "license": "MIT",
+      "homepage": "https://github.com/ajeetdsouza/zoxide",
+      "url": "https://github.com/ajeetdsouza/zoxide/releases/download/v0.10.0/zoxide-0.10.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "f465ae548f8754c8e7edbc60b45fbf58c92bfe123db83d790252d6810fa5daf1",
+      "exe": "zoxide.exe",
+      "licenseFiles": [
+        "LICENSE"
+      ]
+    },
+    {
+      "name": "fzf",
+      "version": "0.74.5",
+      "license": "MIT",
+      "homepage": "https://github.com/junegunn/fzf",
+      "url": "https://github.com/junegunn/fzf/releases/download/v0.74.5/fzf-0.74.5-windows_amd64.zip",
+      "sha256": "01f854ec8b9b47c99a7d78023638f7d2056cfb0af56b72dabd112032eed3993e",
+      "exe": "fzf.exe",
+      "licenseFiles": [],
+      "licenseUrl": "https://raw.githubusercontent.com/junegunn/fzf/v0.74.5/LICENSE",
+      "licenseSha256": "a296f423c0d30ce3581435e78e7e36c5fe73984a882d8720c72e713b4593588b"
+    }
+  ]
+}

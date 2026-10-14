@@ -1,0 +1,452 @@
+//! Bucle de eventos de winit: despacha cada evento al método que lo trata.
+
+use super::*;
+
+impl ApplicationHandler<AxonEvent> for AxonApp {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
+        match event {
+            AxonEvent::PtyData(pane_id) => {
+                let mut redraw = false;
+                for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+                    if let Some(pane) = tab.find_pane_mut(pane_id) {
+                        let mut got_bytes = false;
+                        while let Some(bytes) = pane.pty.try_recv_output() {
+                            got_bytes = true;
+                            pane.terminal.process_bytes(&bytes);
+                        }
+                        for text in pane.terminal.clipboard_queue.drain(..) {
+                            if let Some(cb) = &mut self.clipboard {
+                                cb.set_text(text).ok();
+                            }
+                        }
+                        if got_bytes {
+                            if tab_idx != self.active_tab_index {
+                                tab.has_unread = true;
+                            } else {
+                                self.sync_file_explorer_root();
+                                self.update_window_title();
+                            }
+                            redraw = true;
+                        }
+                        break;
+                    }
+                }
+                if redraw && !self.occluded {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            AxonEvent::PtyClosed(pane_id) => {
+                crate::logger::log(&format!(
+                    "PtyClosed recibido para pane_id {}: cerrando pane",
+                    pane_id
+                ));
+                self.close_pane_by_id(pane_id, event_loop);
+            }
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        // Crear icono nativo de Axon (Ghostty Green '>' sin fondo)
+        let icon = create_native_icon();
+
+        let window_attributes = WindowAttributes::default()
+            .with_title("Axon")
+            .with_visible(false)
+            .with_inner_size(PhysicalSize::new(1080, 680))
+            .with_min_inner_size(PhysicalSize::new(540, 320))
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_window_icon(Some(icon));
+
+        let window = Arc::new(
+            event_loop
+                .create_window(window_attributes)
+                .expect("Error al crear ventana nativa de Windows"),
+        );
+
+        // Configurar tema nativo inmersivo de Windows 11 (DWM Dark/Light Mode y Mica)
+        update_windows_theme(&window, &self.theme);
+        apply_window_opacity_native(&window, self.config.appearance.window_opacity);
+
+        let context = softbuffer::Context::new(window.clone())
+            .expect("Error al inicializar contexto de aceleración gráfica de pantalla");
+        let mut surface = softbuffer::Surface::new(&context, window.clone())
+            .expect("Error al inicializar superficie de renderizado nativo");
+
+        let scale_factor = window.scale_factor();
+        let mut renderer = TerminalRenderer::new(&self.config, scale_factor);
+
+        let target_cols = 100;
+        let target_rows = 35;
+        let offset = self.sidebar_offset();
+        let right_offset = self.file_explorer_offset();
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
+
+        let target_pane_w = (target_cols * renderer.char_width) + (renderer.margin_x * 2);
+        let target_pane_h = (target_rows * renderer.row_height) + (renderer.margin_y * 2);
+        let init_win_w = (target_pane_w + offset + right_offset) as u32;
+        let init_win_h = (target_pane_h + top_offset + status_bar_h) as u32;
+
+        let _ = window.request_inner_size(PhysicalSize::new(init_win_w, init_win_h));
+        let initial_size = window.inner_size();
+        if let (Some(w), Some(h)) = (
+            NonZeroU32::new(initial_size.width),
+            NonZeroU32::new(initial_size.height),
+        ) {
+            let _ = surface.resize(w, h);
+        }
+
+        let total_w = (initial_size.width as usize).saturating_sub(offset + right_offset);
+        let total_h = (initial_size.height as usize).saturating_sub(top_offset + status_bar_h);
+        for tab in &mut self.tabs {
+            let pane_rects = tab.compute_pane_rects(offset, top_offset, total_w, total_h);
+            for rect in pane_rects {
+                if let Some(pane) = tab.find_pane_mut(rect.pane_id) {
+                    let (cols, rows) = renderer.compute_pane_grid_size(rect.width, rect.height);
+                    pane.last_grid_size = (cols, rows);
+                    pane.terminal.resize(cols, rows);
+                    pane.pty.resize(cols as u16, rows as u16);
+                }
+            }
+        }
+
+        // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
+        // Esto garantiza que el usuario vea la terminal oscura de inmediato sin ningún destello blanco.
+        if let Ok(mut buffer) = surface.buffer_mut() {
+            buffer.fill(self.theme.background.to_u32_xrgb());
+            if self.sidebar_visible {
+                let sidebar_tabs: Vec<SidebarTabItem> = self
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, t)| SidebarTabItem {
+                        id: t.id,
+                        title: t.display_title(),
+                        is_active: idx == self.active_tab_index,
+                        has_unread: t.has_unread,
+                        pane_count: t.panes.len(),
+                        is_settings: t.is_settings,
+                    })
+                    .collect();
+
+                renderer.render_sidebar(
+                    &mut buffer,
+                    initial_size.width as usize,
+                    initial_size.height as usize,
+                    SIDEBAR_WIDTH,
+                    status_bar_h,
+                    &sidebar_tabs,
+                    self.sidebar_scroll_offset,
+                    self.hovered_tab,
+                    self.hovered_close,
+                    self.hovered_new_tab,
+                    self.hovered_settings_btn,
+                    self.hovered_toggle_btn,
+                    &self.theme,
+                );
+            }
+
+            let active_tab = &self.tabs[self.active_tab_index];
+            let pane_rects = active_tab.compute_pane_rects(offset, top_offset, total_w, total_h);
+            let dividers = active_tab.compute_dividers(offset, top_offset, total_w, total_h);
+            let has_multiple = pane_rects.len() > 1;
+
+            for rect in &pane_rects {
+                if let Some(pane) = active_tab.find_pane(rect.pane_id) {
+                    let is_active = rect.pane_id == active_tab.active_pane_id;
+                    renderer.render_pane(
+                        &mut buffer,
+                        initial_size.width as usize,
+                        initial_size.height as usize,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        &pane.terminal,
+                        &self.theme,
+                        true,
+                        is_active,
+                        has_multiple,
+                    );
+                }
+            }
+
+            let divider_color = crate::theme::Color::from_rgb(38, 38, 43);
+            for (dx, dy, dw, dh) in dividers {
+                TerminalRenderer::render_pane_divider(
+                    &mut buffer,
+                    initial_size.width as usize,
+                    initial_size.height as usize,
+                    dx,
+                    dy,
+                    dw,
+                    dh,
+                    divider_color,
+                );
+            }
+
+            buffer.present().ok();
+        }
+
+        // Mostrar la ventana una vez que el primer frame oscuro ya está listo y dibujado
+        window.set_visible(true);
+
+        self.window = Some(window);
+        self.context = Some(context);
+        self.surface = Some(surface);
+        self.renderer = Some(renderer);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        match event {
+            WindowEvent::CloseRequested => {
+                self.save_session();
+                event_loop.exit();
+            }
+
+            WindowEvent::Moved(_) => {
+                self.last_window_move = Instant::now();
+            }
+
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.last_window_move = Instant::now();
+                if let (Some(renderer), Some(_window)) = (&mut self.renderer, &self.window) {
+                    renderer.update_scale(&self.config, scale_factor);
+                }
+                self.clamp_sidebar_scroll();
+                self.recompute_grid_for_all_tabs();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::Resized(size) => {
+                self.last_window_move = Instant::now();
+                if let Some(surface) = &mut self.surface {
+                    if let (Some(w), Some(h)) =
+                        (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+                    {
+                        let _ = surface.resize(w, h);
+                    }
+                }
+                self.clamp_sidebar_scroll();
+                self.recompute_grid_for_all_tabs();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+
+            WindowEvent::Occluded(occluded) => {
+                self.occluded = occluded;
+                if !occluded {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+
+            WindowEvent::RedrawRequested => self.on_redraw(),
+
+            WindowEvent::ModifiersChanged(mods) => {
+                self.modifiers = mods.state();
+            }
+
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key,
+                        text,
+                        state: ElementState::Pressed,
+                        physical_key,
+                        ..
+                    },
+                ..
+            } => self.on_key_pressed(event_loop, logical_key, text, physical_key),
+
+            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                self.on_mouse_input(event_loop, state, button)
+            }
+
+            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
+
+            WindowEvent::Focused(focused) => {
+                crate::logger::log(&format!("FOCUS: {}", focused));
+                self.is_focused = focused;
+                if !focused {
+                    self.modifiers = ModifiersState::empty();
+                    self.mouse_down = false;
+                    self.drag_start = None;
+                } else {
+                    self.modifiers = ModifiersState::empty();
+                    self.last_focus_gained = Instant::now();
+                }
+
+                // En Windows ConPTY, las secuencias de foco VT (\x1b[I / \x1b[O) no son reconocidas
+                // en la entrada de la consola y ConPTY las traduce erróneamente a eventos de teclado (Enter/Escape),
+                // provocando prompts vacíos adicionales en PowerShell cada vez que se cambia de ventana.
+                #[cfg(not(target_os = "windows"))]
+                {
+                    if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
+                        if let Some(pane) = active.active_pane_mut() {
+                            if pane.terminal.focus_event_reporting {
+                                if focused {
+                                    pane.pty.write_input(b"\x1b[I");
+                                } else {
+                                    pane.pty.write_input(b"\x1b[O");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // 1. Revisar si algún panel tiene su proceso terminado
+        let mut closed_panes = Vec::new();
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.pty.is_child_exited() {
+                    closed_panes.push(pane.id);
+                }
+            }
+        }
+        for pane_id in closed_panes {
+            crate::logger::log(&format!(
+                "Proceso hijo de pane {} terminado: cerrando pane",
+                pane_id
+            ));
+            self.close_pane_by_id(pane_id, event_loop);
+        }
+        if self.tabs.is_empty() {
+            crate::logger::log("No quedan pestañas activas: cerrando Axon");
+            event_loop.exit();
+            return;
+        }
+
+        // 2. Drenar salida de ConPTY de todos los paneles por si quedó algún byte residual
+        let mut got_bytes = false;
+        let active_idx = self.active_tab_index;
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+            let mut tab_got_bytes = false;
+            for pane in &mut tab.panes {
+                let mut pane_got_bytes = false;
+                while let Some(bytes) = pane.pty.try_recv_output() {
+                    pane_got_bytes = true;
+                    pane.terminal.process_bytes(&bytes);
+                }
+                for text in pane.terminal.clipboard_queue.drain(..) {
+                    if let Some(cb) = &mut self.clipboard {
+                        cb.set_text(text).ok();
+                    }
+                }
+                if pane_got_bytes {
+                    tab_got_bytes = true;
+                }
+            }
+            if tab_got_bytes {
+                got_bytes = true;
+                if idx != active_idx {
+                    tab.has_unread = true;
+                }
+            }
+        }
+
+        // 3. Solicitar repintado si llegaron nuevos bytes del PTY
+        if got_bytes && !self.occluded {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+
+        // 4. Próximo despertar = el más cercano entre parpadeo del cursor, auto-ocultado de la barra de scroll y sondeo del tema del sistema. Sin temporizadores
+        //    activos el bucle duerme indefinidamente (ControlFlow::Wait): 0 % CPU en reposo.
+        fn earliest(slot: &mut Option<Instant>, t: Instant) {
+            *slot = Some(slot.map_or(t, |w| w.min(t)));
+        }
+        let mut wake: Option<Instant> = None;
+        let now = Instant::now();
+
+        // Parpadeo del cursor: solo con foco y ventana visible
+        if self.config.terminal.cursor_blink && self.is_focused && !self.occluded {
+            const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
+            if self.cursor_timer.elapsed() >= BLINK {
+                self.cursor_timer = Instant::now();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            earliest(&mut wake, self.cursor_timer + BLINK);
+        }
+
+        // Auto-ocultamiento de la barra de desplazamiento: un repintado exacto al expirar
+        let hide_at = self.last_scroll_time + std::time::Duration::from_millis(1250);
+        if now < hide_at {
+            self.scroll_hide_armed = true;
+            earliest(&mut wake, hide_at);
+        } else if self.scroll_hide_armed {
+            self.scroll_hide_armed = false;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+
+        // Tema del sistema (cada 2 s) si theme_mode es "system"
+        if self
+            .config
+            .appearance
+            .theme_mode
+            .eq_ignore_ascii_case("system")
+        {
+            if self.last_system_theme_check.elapsed().as_secs() >= 2 {
+                self.last_system_theme_check = Instant::now();
+                let is_sys_light = crate::theme::is_windows_system_light_mode();
+                let currently_light = self.theme.is_light();
+                if is_sys_light != currently_light {
+                    crate::logger::log(&format!("-> Cambio de tema del sistema Windows detectado (light={}): actualizando interfaz", is_sys_light));
+                    let new_theme = if is_sys_light {
+                        Theme::catppuccin_latte()
+                    } else {
+                        Theme::from_name(&self.config.appearance.theme)
+                    };
+                    self.theme = new_theme.clone();
+                    for tab in &mut self.tabs {
+                        for pane in &mut tab.panes {
+                            pane.terminal.theme = new_theme.clone();
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        update_windows_theme(w, &self.theme);
+                        w.request_redraw();
+                    }
+                }
+            }
+            earliest(
+                &mut wake,
+                self.last_system_theme_check + std::time::Duration::from_secs(2),
+            );
+        }
+
+        event_loop.set_control_flow(match wake {
+            Some(t) => winit::event_loop::ControlFlow::WaitUntil(t),
+            None => winit::event_loop::ControlFlow::Wait,
+        });
+    }
+}

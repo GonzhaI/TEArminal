@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: GonzhaI.Axon
+PackageVersion: <VERSION>
+PackageLocale: es-ES
+Publisher: Axon Team
+PublisherUrl: https://github.com/GonzhaI
+PackageName: Axon
+PackageUrl: https://github.com/GonzhaI/axon
+License: MIT
+ShortDescription: Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI.
+Tags:
+  - terminal
+  - powershell
+  - conpty
+  - rust
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

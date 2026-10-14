@@ -1,0 +1,13 @@
+[package]
+name = "subset-fonts"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Herramienta de desarrollo, fuera del árbol de dependencias de axon
+[workspace]
+
+[dependencies]
+skera = "0.8"
+write-fonts = "0.54"
+ttf-parser = "0.25"

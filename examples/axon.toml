@@ -1,0 +1,25 @@
+# Configuración de ejemplo de Axon. Copia este archivo a la carpeta de configuración del usuario
+# (%APPDATA%\axon\axon\config\axon.toml), junto a axon.exe o al directorio desde el que lo lanzas.
+# Axon lo genera con estos valores si no existe; todas las claves son opcionales.
+
+[appearance]
+font_family = "JetBrains Mono Nerd Font"
+# font_path = 'C:\ruta\a\mi-fuente.ttf'   # opcional: sustituye a la fuente embebida
+font_size = 15.0
+ui_font_size = 13.0
+window_opacity = 1.0        # < 1.0 activa ventana en capas (WS_EX_LAYERED): algo más de coste de composición
+theme = "frappe"            # frappe, latte, ghostty, one dark, tokyo night, monokai pro, nord, solarized dark
+theme_mode = "dark"         # "dark" | "light" | "system"
+line_spacing = 1.0
+tab_layout = "horizontal"   # "horizontal" | "vertical"
+show_status_bar = true
+show_file_explorer = false
+
+[terminal]
+default_shell = "powershell.exe"   # por defecto: pwsh.exe 7 (Program Files) si existe, si no powershell.exe
+ghostty_prompt = true              # inyecta el prompt de Axon (OSC 7/133, rama git, ls con iconos, agentes)
+scrollback_lines = 10000           # la memoria crece con las líneas escritas, no con el máximo
+bracketed_paste = true
+cursor_blink = true
+copy_on_select = false
+restore_session = false

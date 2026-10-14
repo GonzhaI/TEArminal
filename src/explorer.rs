@@ -22,6 +22,8 @@ pub struct FileExplorer {
     pub hovered_close_btn: bool,
     pub hovered_up_btn: bool,
     pub hovered_refresh_btn: bool,
+    pub selected_index: Option<usize>,
+    pub selected_path: Option<PathBuf>,
     pub visible: bool,
 }
 
@@ -29,6 +31,23 @@ impl FileExplorer {
     pub const HEADER_HEIGHT: usize = 36;
     pub const SUBHEADER_HEIGHT: usize = 28;
     pub const ITEM_HEIGHT: usize = 24;
+
+    /// Calcula la geometría exacta del panel flotante del explorador de archivos
+    #[inline]
+    pub fn panel_geometry(
+        win_w: usize,
+        win_h: usize,
+        top_offset: usize,
+        status_bar_h: usize,
+    ) -> (usize, usize, usize, usize) {
+        let margin_top = top_offset + 8;
+        let margin_bottom = status_bar_h + 8;
+        let panel_x = win_w.saturating_sub(FILE_EXPLORER_WIDTH + 8);
+        let panel_y = margin_top;
+        let panel_w = FILE_EXPLORER_WIDTH;
+        let panel_h = win_h.saturating_sub(margin_top + margin_bottom);
+        (panel_x, panel_y, panel_w, panel_h)
+    }
 
     pub fn new(initial_dir: Option<PathBuf>, visible: bool) -> Self {
         let root_dir = initial_dir
@@ -43,6 +62,8 @@ impl FileExplorer {
             hovered_close_btn: false,
             hovered_up_btn: false,
             hovered_refresh_btn: false,
+            selected_index: None,
+            selected_path: None,
             visible,
         };
 
@@ -55,6 +76,7 @@ impl FileExplorer {
         if new_root != self.root_dir && new_root.is_dir() {
             self.root_dir = new_root;
             self.scroll_offset = 0;
+            self.selected_index = None;
             self.refresh();
         }
     }
@@ -103,8 +125,8 @@ impl FileExplorer {
         }
 
         // Ordenar alfabéticamente sin distinguir mayúsculas/minúsculas
-        dirs.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
-        files.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+        dirs.sort_by_key(|a| a.1.to_lowercase());
+        files.sort_by_key(|a| a.1.to_lowercase());
 
         // Directorios primero
         for (path, name) in dirs {

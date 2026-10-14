@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Mínimo privilegio: CI solo lee el repositorio
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # windows-2022 (base Windows 10/Server 2022) y windows-latest (Windows Server 2025): ambos traen
+    # powershell.exe 5.1 y pwsh 7, y los tests de PTY ejercitan el script de inicio en cada uno.
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Versiones de PowerShell disponibles
+        shell: pwsh
+        run: |
+          powershell.exe -NoProfile -Command '"Windows PowerShell " + $PSVersionTable.PSVersion'
+          "PowerShell " + $PSVersionTable.PSVersion
+
+      - name: Tests (incluye ConPTY real con powershell.exe 5.1 y pwsh 7)
+        run: cargo test
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: axon.exe no debe depender del Visual C++ Redistributable
+        shell: pwsh
+        run: |
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('target/release/axon.exe'))
+          if ($text -match '(?i)vcruntime140|msvcp140') { throw 'axon.exe importa el runtime de Visual C++ (falta crt-static)' }
+          "OK: ejecutable autónomo ({0:N1} MB)" -f ((Get-Item target/release/axon.exe).Length / 1MB)
+
+  lint:
+    name: Formato y lints
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  package:
+    # El empaquetado depende de descargas externas (herramientas con hash fijo) e Inno Setup: se prueba
+    # en cada cambio para que un enlace roto no se descubra el día de la release.
+    name: Package (instalador + ZIP)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+
+      - name: Empaquetar
+        shell: pwsh
+        run: ./packaging/package.ps1
+
+      - name: Probar el instalador (instalar, ejecutar, desinstalar)
+        shell: pwsh
+        run: ./packaging/test-installer.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: axon-windows-x64
+          path: |
+            dist/axon-setup-*.exe
+            dist/axon-*-windows-x64.zip
+            dist/SHA256SUMS.txt

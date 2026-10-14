@@ -58,7 +58,7 @@ impl Color {
 
     /// Convierte a formato de pixel 32-bit XRGB nativo de Windows (0x00RRGGBB)
     #[inline(always)]
-    pub fn to_u32_xrgb(&self) -> u32 {
+    pub fn to_u32_xrgb(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
@@ -446,14 +446,54 @@ impl Theme {
         "Solarized Dark",
     ];
 
+    /// Comprueba de forma flexible si dos nombres de tema corresponden al mismo tema visual
+    pub fn is_same_theme(cfg_theme: &str, display_name: &str) -> bool {
+        let c1 = cfg_theme.trim().to_lowercase().replace(['-', '_'], " ");
+        let c2 = display_name.trim().to_lowercase().replace(['-', '_'], " ");
+        if c1 == c2 {
+            return true;
+        }
+        if (c1.contains("frappe") || c1.contains("frappé") || c1 == "dark" || c1 == "default")
+            && (c2.contains("frappe") || c2.contains("frappé"))
+        {
+            return true;
+        }
+        if c1.contains("latte") && c2.contains("latte") {
+            return true;
+        }
+        if c1.contains("ghostty") && c2.contains("ghostty") {
+            return true;
+        }
+        if c1.contains("one") && c2.contains("one") {
+            return true;
+        }
+        if c1.contains("tokyo") && c2.contains("tokyo") {
+            return true;
+        }
+        if c1.contains("monokai") && c2.contains("monokai") {
+            return true;
+        }
+        if c1.contains("nord") && c2.contains("nord") {
+            return true;
+        }
+        if c1.contains("solarized") && c2.contains("solarized") {
+            return true;
+        }
+        false
+    }
+
     /// Resuelve el tema configurado por nombre
     pub fn from_name(name: &str) -> Self {
         let clean = name.trim().to_lowercase().replace(['-', '_'], " ");
-        if clean.contains("latte") {
+        if clean.contains("ghostty") {
+            Self::ghostty_default_styledark()
+        } else if clean.contains("latte") {
             Self::catppuccin_latte()
         } else if clean.contains("catppuccin")
             || clean.contains("frappe")
             || clean.contains("frappé")
+            || clean == "dark"
+            || clean == "default"
         {
             Self::catppuccin_frappe()
         } else if clean.contains("one") {
@@ -467,7 +507,7 @@ impl Theme {
         } else if clean.contains("solarized") {
             Self::solarized_dark()
         } else {
-            Self::ghostty_default_styledark()
+            Self::catppuccin_frappe()
         }
     }
 
@@ -528,4 +568,36 @@ pub fn is_windows_system_light_mode() -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_catppuccin_latte_and_light_mode() {
+        let latte = crate::theme::Theme::catppuccin_latte();
+        assert!(
+            latte.is_light(),
+            "Catppuccin Latte debe reportar is_light() == true"
+        );
+        assert_eq!(
+            latte.background,
+            crate::theme::Color::from_rgb(0xef, 0xf1, 0xf5)
+        );
+        assert_eq!(
+            latte.foreground,
+            crate::theme::Color::from_rgb(0x4c, 0x4f, 0x69)
+        );
+
+        let frappe = crate::theme::Theme::catppuccin_frappe();
+        assert!(
+            !frappe.is_light(),
+            "Catppuccin Frappé debe reportar is_light() == false"
+        );
+
+        assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Latte"));
+        assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Frappé"));
+
+        let resolved_latte = crate::theme::Theme::from_name("latte");
+        assert!(resolved_latte.is_light());
+    }
 }

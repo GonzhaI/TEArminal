@@ -1,0 +1,13 @@
+# Normaliza finales de línea en el repositorio; los binarios no se tocan
+* text=auto
+*.rs text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+
+*.ttf binary
+*.ico binary
+*.png binary
+*.exe binary

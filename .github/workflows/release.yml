@@ -13,27 +13,39 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
 
-      - name: Build release binary
-        run: cargo build --release
-
-      - name: Package Release
+      - name: La etiqueta debe coincidir con la versión de Cargo.toml
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $zipName = "axon-$tag-windows-x64.zip"
-          Compress-Archive -Path "target/release/axon.exe", "axon.toml", "README.md" -DestinationPath $zipName
-          Write-Host "Created asset: $zipName"
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ('${{ github.ref_name }}' -ne "v$cargo") { throw "Etiqueta ${{ github.ref_name }} != v$cargo (Cargo.toml)" }
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Tests
+        run: cargo test
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup --no-progress -y }
+
+      - name: Empaquetar (ZIP portable + instalador + herramientas verificadas)
+        shell: pwsh
+        run: ./packaging/package.ps1
+
+      - name: Probar el instalador (instalar, ejecutar, desinstalar)
+        shell: pwsh
+        run: ./packaging/test-installer.ps1
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
-            target/release/axon.exe
-            axon-*-windows-x64.zip
+            dist/axon-setup-*.exe
+            dist/axon-*-windows-x64.zip
+            dist/SHA256SUMS.txt
           generate_release_notes: true
