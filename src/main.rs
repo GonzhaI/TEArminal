@@ -9,6 +9,7 @@ mod renderer;
 mod terminal;
 mod theme;
 pub mod tools;
+pub mod ui;
 
 use app::{AxonApp, AxonEvent};
 use config::AxonConfig;
@@ -268,6 +269,7 @@ mod tests {
             &mut buffer,
             1000,
             600,
+            0,
             true,
             false,
             &ghostty_theme,
@@ -528,6 +530,55 @@ mod tests {
         assert_eq!(
             detect_ai_agent(Some("ollama run llama3")),
             AiAgentStatus::Ollama
+        );
+
+        // Validar que render_status_bar respeta sidebar_offset y no sobreescribe la barra lateral
+        let config = AxonConfig::load_or_default();
+        let mut renderer = renderer::TerminalRenderer::new(&config, 1.0);
+        let theme = theme::Theme::ghostty_default_styledark();
+        let mut buffer = vec![0xCAFEBABE; 1000 * 600];
+
+        let sidebar_offset = 180;
+        renderer.render_status_bar(
+            &mut buffer,
+            1000,
+            600,
+            sidebar_offset,
+            Some("C:\\Users\\test"),
+            Some("main"),
+            None,
+            80,
+            24,
+            AiAgentStatus::Claude,
+            false,
+            &theme,
+        );
+
+        // La zona inferior bajo la barra lateral (0..180) debe permanecer intacta (0xCAFEBABE)
+        for y in (600 - 26)..600 {
+            for x in 0..sidebar_offset {
+                assert_eq!(
+                    buffer[y * 1000 + x],
+                    0xCAFEBABE,
+                    "La zona inferior en x={} y={} no debe ser sobreescrita por el status bar",
+                    x,
+                    y
+                );
+            }
+        }
+
+        // El status bar debe dibujarse a partir de sidebar_offset
+        let status_bg = theme.sidebar_bg().to_u32_xrgb();
+        let border_c = theme.border_color().to_u32_xrgb();
+        assert_eq!(
+            buffer[(600 - 26) * 1000 + sidebar_offset + 5],
+            border_c,
+            "El borde superior del status bar debe comenzar en sidebar_offset"
+        );
+        assert_eq!(
+            buffer[(600 - 20) * 1000 + sidebar_offset + 5],
+            status_bg,
+            "El fondo del status bar debe dibujarse en el área de trabajo"
         );
     }
 

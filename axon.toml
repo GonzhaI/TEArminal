@@ -2,7 +2,7 @@
 font_family = "JetBrains Mono Nerd Font"
 font_size = 14.0
 window_opacity = 0.5
-theme = "Solarized Dark"
+theme = "Monokai Pro"
 line_spacing = 2.0
 tab_layout = "vertical"
 theme_mode = "system"

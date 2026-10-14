@@ -109,7 +109,21 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
 * **Panel derecho integrado (`FILE_EXPLORER_WIDTH = 240`):** Implementado en [`src/explorer.rs`](file:///C:/Users/gmora/dev/axon/src/explorer.rs) y renderizado en [`render_file_explorer`](file:///C:/Users/gmora/dev/axon/src/renderer.rs). Muestra el árbol de archivos y carpetas del proyecto activo sin emojis, utilizando glifos `◈`, `▸`, `▾`, `↻`, `x`, `..`.
 * **Click-to-Prompt:** Al hacer clic en cualquier archivo, su ruta relativa (o entre comillas si contiene espacios) se inyecta directamente en el prompt del PTY activo, permitiendo interacción instantánea con shells o agentes CLI (Claude Code, agy, gemini).
 * **Navegación completa y scroll:** Clic en directorios expande/colapsa carpetas conservando el árbol, `..` sube al directorio padre, `↻` recarga el disco y la rueda del ratón permite scroll suave en repositorios grandes.
-* **Control y persistencia unificada:** Conmutable mediante el atajo canónico `Ctrl + Shift + E`, el botón `◈ ARCHIVOS` de la barra de estado inferior, el botón `◈` de la barra superior horizontal, o la opción en Ajustes (`Ctrl + ,`). Su visibilidad se persiste en `%LOCALAPPDATA%\axon\session.toml`.
+* **Control y persistencia unificada:** Conmutable mediante el atajo canónico `Ctrl + Shift + E`, el botón `ARCHIVOS` de la barra de estado inferior, el botón de archivos de la barra superior horizontal, o la opción en Ajustes (`Ctrl + ,`). Su visibilidad se persiste en `%LOCALAPPDATA%\axon\session.toml`.
+
+### 14. Diseño Minimalista Floating Island, Iconografía Lucide y Tipografía Inter
+* **Sub-sistema UI Nativo (`src/ui/`):**
+  - [`src/ui/paint.rs`](file:///C:/Users/gmora/dev/axon/src/ui/paint.rs): Primitivas de dibujo 2D aceleradas por CPU para `softbuffer`: `draw_rounded_rect` (con antialiasing suave y mezcla alpha 0-255) y `stroke_rounded_rect`.
+  - [`src/ui/icons.rs`](file:///C:/Users/gmora/dev/axon/src/ui/icons.rs): Catálogo y mapeo estricto del enum `LucideIcon` a los puntos de código Unicode de la tipografía vectorial embebida [`assets/fonts/lucide.ttf`](file:///C:/Users/gmora/dev/axon/assets/fonts/lucide.ttf).
+* **Tipografía Dual de Alta Fidelidad:**
+  - *Área de terminal:* **JetBrains Mono Nerd Font** (monoespaciada con métricas precisas para la grilla VT y programación).
+  - *Interfaz gráfica:* **Inter** ([`Inter-500.ttf`](file:///C:/Users/gmora/dev/axon/assets/fonts/Inter-500.ttf) y [`Inter-600.ttf`](file:///C:/Users/gmora/dev/axon/assets/fonts/Inter-600.ttf)), proporcionando una legibilidad moderna, limpia y proporcionada en pestañas, explorador, barra de estado y página de ajustes.
+* **Barra Flotante de Pestañas (Floating Island Capsule):**
+  - La barra superior centra una cápsula flotante con esquinas redondeadas (radio 14px), fondo translúcido y borde sutil.
+  - Pestañas con icono Lucide semántico (`Sparkles` para agentes IA, `Server` para SSH, `Terminal` para PowerShell/shells, `Settings` para ajustes), título en Inter, botón de cierre `X` y botón `+` integrado.
+* **Explorador y Paneles Overlay:**
+  - El explorador de archivos se muestra como un panel flotante overlay translúcido con esquinas redondeadas, sin fragmentar abruptamente la grilla del terminal.
+  - Iconos Lucide adaptados a la extensión del archivo (`FileCode` para `.rs`, `FileJson` para `.toml`/`.json`, `FileText` para `.md`, etc.) y jerarquía con chevrons vectoriales.
 
 ---
 

@@ -658,7 +658,12 @@ impl AxonApp {
     }
 
     pub fn status_bar_height(&self) -> usize {
-        if self.config.appearance.show_status_bar {
+        if self.config.appearance.show_status_bar
+            && self
+                .tabs
+                .get(self.active_tab_index)
+                .map_or(true, |t| !t.is_settings)
+        {
             26
         } else {
             0
@@ -1846,6 +1851,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 &mut buffer,
                                 size.width as usize,
                                 size.height as usize,
+                                status_bar_h,
                                 hovered_toggle_btn,
                                 self.hovered_floating_settings,
                                 &self.theme,
@@ -1889,6 +1895,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 &mut buffer,
                                 size.width as usize,
                                 size.height as usize,
+                                offset,
                                 cwd.as_deref(),
                                 git_branch.as_deref(),
                                 ssh_host.as_deref(),
@@ -2817,6 +2824,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 } else {
                     // Comprobar hover en botón inferior de alternar barra lateral
+                    let status_bar_h = self.status_bar_height();
                     let toggle_btn_w = if self.sidebar_visible {
                         SIDEBAR_WIDTH.saturating_sub(16)
                     } else {
@@ -2824,7 +2832,11 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     };
                     let toggle_btn_h = 30;
                     let toggle_btn_x = 8;
-                    let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8);
+                    let toggle_btn_y = if self.sidebar_visible {
+                        win_h.saturating_sub(toggle_btn_h + 10)
+                    } else {
+                        win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h)
+                    };
 
                     let is_hover_toggle = mx >= toggle_btn_x
                         && mx < toggle_btn_x + toggle_btn_w
@@ -3200,6 +3212,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // Modalidad vertical: comprobación de botones de alternar barra lateral y clics en el sidebar
                 if !self.is_horizontal_tabs() {
+                    let status_bar_h = self.status_bar_height();
                     let toggle_btn_w = if self.sidebar_visible {
                         SIDEBAR_WIDTH.saturating_sub(16)
                     } else {
@@ -3207,7 +3220,11 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     };
                     let toggle_btn_h = 30;
                     let toggle_btn_x = 8;
-                    let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8);
+                    let toggle_btn_y = if self.sidebar_visible {
+                        win_h.saturating_sub(toggle_btn_h + 10)
+                    } else {
+                        win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h)
+                    };
 
                     let is_click_toggle = mx >= toggle_btn_x
                         && mx < toggle_btn_x + toggle_btn_w
@@ -3503,24 +3520,28 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         if let Some(renderer) = &self.renderer {
-                            let char_w = renderer.char_width;
-                            let badge_text = "● CLAUDE";
-                            let badge_len = badge_text.chars().count() * char_w;
-                            let badge_x = win_w.saturating_sub(badge_len + 16);
-                            let grid_str = "120x35";
-                            let grid_len = grid_str.chars().count() * char_w;
-                            let grid_x = badge_x.saturating_sub(grid_len + 20);
+                            let ai_name = "CLAUDE";
+                            let ai_text_w = renderer.measure_ui_text(ai_name, 11.0, true);
+                            let badge_x = win_w.saturating_sub(ai_text_w + 32);
 
-                            let files_badge = if self.file_explorer.visible {
-                                "◈ ARCHIVOS [ON]"
+                            let grid_str = "120×35";
+                            let grid_w = renderer.measure_ui_text(grid_str, 11.0, false);
+                            let grid_x = badge_x.saturating_sub(grid_w + 20);
+
+                            let files_label = if self.file_explorer.visible {
+                                "ARCHIVOS [ON]"
                             } else {
-                                "◈ ARCHIVOS"
+                                "ARCHIVOS"
                             };
-                            let files_len = files_badge.chars().count() * char_w;
-                            let files_x = grid_x.saturating_sub(files_len + 20);
+                            let files_w = renderer.measure_ui_text(
+                                files_label,
+                                11.0,
+                                self.file_explorer.visible,
+                            );
+                            let files_x = grid_x.saturating_sub(files_w + 34);
 
-                            if mx >= files_x && mx < grid_x.saturating_sub(10) {
-                                crate::logger::log("-> Clic en badge ◈ ARCHIVOS de status bar");
+                            if mx >= files_x && mx < grid_x.saturating_sub(6) {
+                                crate::logger::log("-> Clic en badge ARCHIVOS de status bar");
                                 self.toggle_file_explorer();
                                 return;
                             }
