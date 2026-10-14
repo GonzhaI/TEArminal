@@ -34,9 +34,12 @@ pub enum LucideIcon {
     Bot,
     Palette,
     Command,
+    Keyboard,
     Info,
     Sliders,
     Check,
+    Maximize2,
+    Minimize2,
 }
 
 impl LucideIcon {
@@ -74,11 +77,14 @@ impl LucideIcon {
             Self::PanelLeft => '\u{e430}',
             Self::Dot => '\u{e44f}',
             Self::Bot => '\u{e1bb}',
-            Self::Palette => '\u{e133}',
-            Self::Command => '\u{e099}',
-            Self::Info => '\u{e0f8}',
-            Self::Sliders => '\u{e15c}',
-            Self::Check => '\u{e06b}',
+            Self::Palette => '\u{e1dd}',
+            Self::Command => '\u{e09a}',
+            Self::Keyboard => '\u{e284}',
+            Self::Info => '\u{e0f9}',
+            Self::Sliders => '\u{e29a}',
+            Self::Check => '\u{e06c}',
+            Self::Maximize2 => '\u{e113}',
+            Self::Minimize2 => '\u{e11b}',
         }
     }
 }
@@ -127,9 +133,12 @@ mod tests {
             LucideIcon::Bot,
             LucideIcon::Palette,
             LucideIcon::Command,
+            LucideIcon::Keyboard,
             LucideIcon::Info,
             LucideIcon::Sliders,
             LucideIcon::Check,
+            LucideIcon::Maximize2,
+            LucideIcon::Minimize2,
         ];
 
         for icon in all_icons {

@@ -347,6 +347,16 @@ impl TerminalState {
             self.is_alt_screen = false;
             self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
             self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
+            self.scroll_region_top = 0;
+            self.scroll_region_bottom = self.rows.saturating_sub(1);
+            self.current_fg = Color::TRANSPARENT;
+            self.current_bg = Color::TRANSPARENT;
+            self.current_bold = false;
+            self.current_dim = false;
+            self.current_italic = false;
+            self.current_underline = false;
+            self.current_strikethrough = false;
+            self.current_inverse = false;
         }
     }
 

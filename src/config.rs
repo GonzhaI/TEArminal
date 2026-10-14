@@ -37,6 +37,8 @@ pub struct TerminalConfig {
     pub bracketed_paste: bool,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
+    #[serde(default = "default_false")]
+    pub restore_session: bool,
 }
 
 fn default_font_size() -> f32 {
@@ -52,11 +54,11 @@ fn default_false() -> bool {
 }
 
 fn default_tab_layout() -> String {
-    "vertical".to_string()
+    "horizontal".to_string()
 }
 
 fn default_theme_mode() -> String {
-    "system".to_string()
+    "dark".to_string()
 }
 
 impl Default for AxonConfig {
@@ -68,10 +70,10 @@ impl Default for AxonConfig {
                 font_path: None,
                 font_size: 14.0,
                 window_opacity: 0.98,
-                theme: "Catppuccin Frappé".to_string(),
+                theme: "Ghostty".to_string(),
                 line_spacing: 1.0,
-                tab_layout: "vertical".to_string(),
-                theme_mode: "system".to_string(),
+                tab_layout: "horizontal".to_string(),
+                theme_mode: "dark".to_string(),
                 show_status_bar: true,
                 show_file_explorer: false,
             },
@@ -82,6 +84,7 @@ impl Default for AxonConfig {
                 bracketed_paste: true,
                 cursor_blink: true,
                 copy_on_select: false,
+                restore_session: false,
             },
         }
     }

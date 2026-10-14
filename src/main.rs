@@ -214,6 +214,7 @@ mod tests {
             1000,
             600,
             190,
+            26,
             &tabs,
             Some(1),
             None,
@@ -223,19 +224,18 @@ mod tests {
             &ghostty_theme,
         );
 
-        // Validar que la región de la barra lateral (0..190) fue pintada con el fondo oscuro del sidebar
-        let sidebar_bg_pixel = theme::Color::from_rgb(18, 18, 20).to_u32_xrgb();
-        let border_pixel = theme::Color::from_rgb(38, 38, 43).to_u32_xrgb();
+        let sidebar_bg_pixel = ghostty_theme.sidebar_bg().to_u32_xrgb();
+        let border_pixel = ghostty_theme.border_color().to_u32_xrgb();
 
         assert_eq!(
             buffer[50 * 1000 + 2],
             sidebar_bg_pixel,
-            "El fondo del sidebar debe ser #121214"
+            "El fondo del sidebar debe coincidir con sidebar_bg"
         );
         assert_eq!(
             buffer[50 * 1000 + 189],
             border_pixel,
-            "El borde del sidebar debe ser #26262b"
+            "El borde del sidebar debe coincidir con border_color"
         );
 
         // 3. Renderizar el área de terminal con offset
@@ -289,16 +289,28 @@ mod tests {
             1000,
             600,
             190,
+            0,
             &config,
             &settings_state,
             &ghostty_theme,
         );
         let rects = renderer::SettingsPageRects::compute(190, 0, 1000 - 190, 600);
-        assert_eq!(rects.nav_appearance.0, 190 + 36);
+        let expected_margin = ((1000 - 190) - 680) / 2;
+        assert_eq!(rects.nav_appearance.0, 190 + expected_margin);
     }
 
     #[test]
     fn test_settings_tab_actions_and_theme_switching() {
+        struct ConfigRestorer(Option<String>);
+        impl Drop for ConfigRestorer {
+            fn drop(&mut self) {
+                if let Some(content) = &self.0 {
+                    let _ = std::fs::write(AxonConfig::config_path(), content);
+                }
+            }
+        }
+        let _restorer = ConfigRestorer(std::fs::read_to_string(AxonConfig::config_path()).ok());
+
         let config = AxonConfig::load_or_default();
         let mut app = AxonApp::new(config, None);
 
@@ -336,6 +348,39 @@ mod tests {
     }
 
     #[test]
+    fn test_settings_reset_to_defaults() {
+        struct ConfigRestorer(Option<String>);
+        impl Drop for ConfigRestorer {
+            fn drop(&mut self) {
+                if let Some(content) = &self.0 {
+                    let _ = std::fs::write(AxonConfig::config_path(), content);
+                }
+            }
+        }
+        let _restorer = ConfigRestorer(std::fs::read_to_string(AxonConfig::config_path()).ok());
+
+        let config = AxonConfig::load_or_default();
+        let mut app = AxonApp::new(config, None);
+
+        // Modificar varios parámetros a valores no predeterminados
+        app.config.appearance.font_size = 22.0;
+        app.config.appearance.window_opacity = 0.65;
+        app.config.appearance.theme = "Nord".to_string();
+        app.config.appearance.tab_layout = "vertical".to_string();
+        app.config.terminal.cursor_blink = false;
+
+        // Restablecer valores por defecto
+        app.reset_to_defaults();
+
+        // Validar que se restauraron los valores por defecto (Ghostty Island)
+        assert_eq!(app.config.appearance.font_size, 14.0);
+        assert_eq!(app.config.appearance.window_opacity, 0.98);
+        assert_eq!(app.config.appearance.theme, "Ghostty");
+        assert_eq!(app.config.appearance.tab_layout, "horizontal");
+        assert!(app.config.terminal.cursor_blink);
+    }
+
+    #[test]
     fn test_app_tab_switching_and_toggle() {
         let config = AxonConfig::load_or_default();
         let mut app = AxonApp::new(config, None);
@@ -346,6 +391,7 @@ mod tests {
         );
 
         // Forzar estado conocido para validar transición y cálculo de offset
+        app.config.appearance.tab_layout = "vertical".to_string();
         app.sidebar_visible = true;
         assert_eq!(app.sidebar_offset(), 190);
 
@@ -522,7 +568,7 @@ mod tests {
             AiAgentStatus::Ollama
         );
 
-        // Validar que render_status_bar respeta sidebar_offset y no sobreescribe la barra lateral
+        // Validar que render_status_bar cubre todo el ancho inferior (0..width)
         let config = AxonConfig::load_or_default();
         let mut renderer = renderer::TerminalRenderer::new(&config, 1.0);
         let theme = theme::Theme::ghostty_default_styledark();
@@ -544,26 +590,18 @@ mod tests {
             &theme,
         );
 
-        // La zona inferior bajo la barra lateral (0..180) debe permanecer intacta (0xCAFEBABE)
-        for y in (600 - 26)..600 {
-            for x in 0..sidebar_offset {
-                assert_eq!(
-                    buffer[y * 1000 + x],
-                    0xCAFEBABE,
-                    "La zona inferior en x={} y={} no debe ser sobreescrita por el status bar",
-                    x,
-                    y
-                );
-            }
-        }
-
-        // El status bar debe dibujarse a partir de sidebar_offset
+        // El status bar cubre todo el ancho inferior (0..width), por encima del cual reposa el sidebar
         let status_bg = theme.sidebar_bg().to_u32_xrgb();
         let border_c = theme.border_color().to_u32_xrgb();
         assert_eq!(
-            buffer[(600 - 26) * 1000 + sidebar_offset + 5],
+            buffer[(600 - 26) * 1000 + 5],
             border_c,
-            "El borde superior del status bar debe comenzar en sidebar_offset"
+            "El borde superior del status bar debe extenderse por todo el ancho"
+        );
+        assert_eq!(
+            buffer[(600 - 20) * 1000 + 5],
+            status_bg,
+            "El fondo del status bar debe dibujarse a todo lo ancho"
         );
         assert_eq!(
             buffer[(600 - 20) * 1000 + sidebar_offset + 5],
@@ -578,22 +616,25 @@ mod tests {
 
         let rects = TopTabBarRects::compute(1200, 3);
         assert_eq!(rects.bar_h, 38);
-        assert_eq!(rects.tabs_start_x, 72);
+        assert_eq!(rects.tabs_start_x, 273);
         assert_eq!(rects.tab_w, 160);
 
         let tab0 = rects.tab_rect(0);
-        assert_eq!(tab0, (72, 4, 160, 30));
+        assert_eq!(tab0, (273, 4, 160, 30));
 
         let close0 = rects.close_btn_rect(0);
-        assert_eq!(close0.0, 72 + 160 - 22);
+        assert_eq!(close0.0, 273 + 160 - 22);
         assert_eq!(close0.1, 10);
         assert_eq!(close0.2, 18);
         assert_eq!(close0.3, 18);
 
         // Plus button debe situarse después de las 3 pestañas
         assert!(rects.plus_btn.0 > tab0.0 + (3 * 160));
-        // Settings button debe ubicarse al extremo derecho
-        assert_eq!(rects.settings_btn.0, 1200 - 36);
+        // Settings button y controles de ventana al extremo derecho
+        assert_eq!(rects.settings_btn.0, 1200 - 160);
+        assert_eq!(rects.win_min_btn.0, 1200 - 126);
+        assert_eq!(rects.win_max_btn.0, 1200 - 84);
+        assert_eq!(rects.win_close_btn.0, 1200 - 42);
     }
 
     #[test]

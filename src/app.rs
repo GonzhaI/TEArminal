@@ -2,7 +2,7 @@ use crate::config::AxonConfig;
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, SettingsPageRects, SettingsPageState, SettingsSection, SidebarTabItem,
-    TerminalRenderer, TopTabBarRects,
+    TerminalRenderer, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -81,6 +81,14 @@ impl TerminalPane {
             cached_git_dir: None,
         }
     }
+
+    pub fn get_git_branch(&mut self) -> Option<String> {
+        if self.terminal.current_dir != self.cached_git_dir {
+            self.cached_git_branch = get_git_branch(self.terminal.current_dir.as_deref());
+            self.cached_git_dir = self.terminal.current_dir.clone();
+        }
+        self.cached_git_branch.clone()
+    }
 }
 
 pub struct TerminalTab {
@@ -127,15 +135,51 @@ impl TerminalTab {
         if let Some(active) = self.active_pane() {
             if let Some(ref ssh) = active.terminal.ssh_session {
                 if ssh.is_active {
-                    return format!("SSH: {}", ssh.destination);
+                    return format!("ssh: {}", ssh.destination);
                 }
             }
-            if let Some(ref title) = active.terminal.window_title {
-                return title.clone();
+            let raw = active.terminal.window_title.as_deref().unwrap_or(&self.title);
+            return Self::clean_display_title(raw, active.terminal.current_dir.as_deref());
+        }
+        Self::clean_display_title(&self.title, None)
+    }
+
+    pub fn clean_display_title(raw: &str, cwd: Option<&std::path::Path>) -> String {
+        let raw_lower = raw.trim().to_lowercase();
+        let is_shell_or_path = raw_lower.ends_with("pwsh.exe")
+            || raw_lower.ends_with("powershell.exe")
+            || raw_lower.ends_with("cmd.exe")
+            || raw_lower == "powershell"
+            || raw_lower == "pwsh"
+            || raw_lower == "cmd"
+            || raw_lower == "windows powershell"
+            || raw_lower.contains("powershell\\7\\pwsh.exe")
+            || raw_lower.contains("system32\\cmd.exe")
+            || raw_lower.contains("windowspowershell");
+
+        if is_shell_or_path {
+            if let Some(path) = cwd {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !name.is_empty() {
+                        return name.to_string();
+                    }
+                }
+                return path.display().to_string();
+            }
+            return "PowerShell".to_string();
+        }
+
+    if raw.contains('\\') || raw.contains('/') {
+        let p = std::path::Path::new(raw);
+        if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+            if !stem.is_empty() {
+                return stem.to_string();
             }
         }
-        self.title.clone()
     }
+
+    raw.trim().to_string()
+}
 
     pub fn active_pane(&self) -> Option<&TerminalPane> {
         self.panes
@@ -416,8 +460,10 @@ pub struct AxonApp {
     scrollbar_drag_pane_id: Option<usize>,
     scrollbar_drag_offset_y: f32,
     last_scroll_time: Instant,
-    #[allow(dead_code)]
-    hovered_scrollbar: bool,
+    hovered_win_min: bool,
+    hovered_win_max: bool,
+    hovered_win_close: bool,
+    last_titlebar_click: Instant,
     last_system_theme_check: Instant,
 }
 
@@ -440,8 +486,12 @@ impl AxonApp {
             Theme::from_name(&config.appearance.theme)
         };
 
-        // Restaurar estado de sesiones previas si existe
-        let saved_session = crate::config::SessionState::load();
+        // Restaurar estado de sesiones previas solo si está habilitado en configuración
+        let saved_session = if config.terminal.restore_session {
+            crate::config::SessionState::load()
+        } else {
+            None
+        };
         let explorer_visible = saved_session
             .as_ref()
             .map(|s| s.file_explorer_visible)
@@ -450,62 +500,37 @@ impl AxonApp {
         let (tabs, active_tab_index, next_tab_id, sidebar_visible) = if let Some(session) =
             saved_session
         {
-            if !session.tabs.is_empty() {
-                let mut restored_tabs = Vec::new();
-                for (idx, tab_info) in session.tabs.into_iter().enumerate() {
-                    let pane_id = next_pane_id;
-                    next_pane_id += 1;
-                    let cwd_path = tab_info.cwd.as_ref().map(std::path::PathBuf::from);
-                    let cwd_ref = cwd_path.as_deref();
-                    let pty = PtyManager::new(
-                        pane_id,
-                        &config.terminal.default_shell,
-                        config.terminal.ghostty_prompt,
-                        cols as u16,
-                        rows as u16,
-                        cwd_ref,
-                        proxy.clone(),
-                    )
-                    .expect("Error al inicializar Windows ConPTY");
+            let cwd_path = session
+                .tabs
+                .into_iter()
+                .next()
+                .and_then(|t| t.cwd.map(std::path::PathBuf::from));
+            let cwd_ref = cwd_path.as_deref();
 
-                    let mut terminal = TerminalState::new(
-                        cols,
-                        rows,
-                        config.terminal.scrollback_lines,
-                        theme.clone(),
-                    );
-                    terminal.current_dir = cwd_path;
+            let pane_id = next_pane_id;
+            next_pane_id += 1;
+            let pty = PtyManager::new(
+                pane_id,
+                &config.terminal.default_shell,
+                config.terminal.ghostty_prompt,
+                cols as u16,
+                rows as u16,
+                cwd_ref,
+                proxy.clone(),
+            )
+            .expect("Error al inicializar Windows ConPTY");
 
-                    let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
+            let mut terminal =
+                TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
+            terminal.current_dir = cwd_path;
 
-                    restored_tabs.push(TerminalTab::new(idx, tab_info.title, pane));
-                }
-                let active = session.active_tab_index.min(restored_tabs.len() - 1);
-                let next_id = restored_tabs.len();
-                (restored_tabs, active, next_id, session.sidebar_visible)
-            } else {
-                let pane_id = next_pane_id;
-                next_pane_id += 1;
-                let pty = PtyManager::new(
-                    pane_id,
-                    &config.terminal.default_shell,
-                    config.terminal.ghostty_prompt,
-                    cols as u16,
-                    rows as u16,
-                    None,
-                    proxy.clone(),
-                )
-                .expect("Error al inicializar Windows ConPTY");
-                let terminal =
-                    TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
-                let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
-                (
-                    vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
-                    0,
-                    1,
-                    true,
-                )
-            }
+            let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
+            (
+                vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
+                0,
+                1,
+                session.sidebar_visible,
+            )
         } else {
             let pane_id = next_pane_id;
             next_pane_id += 1;
@@ -569,7 +594,10 @@ impl AxonApp {
             scrollbar_drag_pane_id: None,
             scrollbar_drag_offset_y: 0.0,
             last_scroll_time: Instant::now(),
-            hovered_scrollbar: false,
+            hovered_win_min: false,
+            hovered_win_max: false,
+            hovered_win_close: false,
+            last_titlebar_click: Instant::now(),
             last_system_theme_check: Instant::now(),
         }
     }
@@ -627,6 +655,10 @@ impl AxonApp {
 
         self.last_terminal_tab_index = self.active_tab_index;
 
+        if !self.is_horizontal_tabs() && !self.sidebar_visible {
+            self.sidebar_visible = true;
+        }
+
         if let Some(pos) = self.tabs.iter().position(|t| t.is_settings) {
             self.switch_to_tab(pos);
         } else {
@@ -634,6 +666,14 @@ impl AxonApp {
             self.next_tab_id += 1;
             self.tabs.push(TerminalTab::new_settings(tab_id));
             self.switch_to_tab(self.tabs.len() - 1);
+        }
+    }
+
+    pub fn toggle_restore_session(&mut self) {
+        self.config.terminal.restore_session = !self.config.terminal.restore_session;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 
@@ -658,7 +698,7 @@ impl AxonApp {
         if self.is_horizontal_tabs() {
             TopTabBarRects::HEIGHT
         } else {
-            0
+            TopTitleBarRects::HEIGHT
         }
     }
 
@@ -1041,16 +1081,7 @@ impl AxonApp {
                 w.set_title("Axon - ⚙ Ajustes");
                 return;
             }
-            let active_pane = tab.active_pane();
-            let ssh_tag = active_pane
-                .and_then(|p| p.terminal.ssh_session.as_ref())
-                .filter(|s| s.is_active)
-                .map(|s| format!(" [SSH: {}]", s.destination));
-
-            let title_text = active_pane
-                .and_then(|p| p.terminal.window_title.as_ref())
-                .cloned()
-                .unwrap_or_else(|| tab.title.clone());
+            let title_text = tab.display_title();
 
             let pane_info = if tab.panes.len() > 1 {
                 format!(" ({} paneles)", tab.panes.len())
@@ -1058,10 +1089,7 @@ impl AxonApp {
                 String::new()
             };
 
-            let full_title = match ssh_tag {
-                Some(tag) => format!("Axon - {}{}{}", title_text, tag, pane_info),
-                None => format!("Axon - {}{}", title_text, pane_info),
-            };
+            let full_title = format!("Axon - {}{}", title_text, pane_info);
 
             w.set_title(&full_title);
         }
@@ -1375,12 +1403,12 @@ impl AxonApp {
         self.config.appearance.theme_mode = mode.to_string();
         if mode.eq_ignore_ascii_case("system") {
             let is_light = crate::theme::is_windows_system_light_mode();
-            self.apply_theme(if is_light { "latte" } else { "frappe" });
+            self.apply_theme(if is_light { "latte" } else { "ghostty" });
         } else if mode.eq_ignore_ascii_case("light") {
             self.apply_theme("latte");
         } else {
             if self.theme.is_light() {
-                self.apply_theme("frappe");
+                self.apply_theme("ghostty");
             }
         }
         let _ = self.config.save();
@@ -1469,6 +1497,37 @@ impl AxonApp {
             let _ = std::process::Command::new("notepad.exe").arg(&path).spawn();
         }
     }
+
+    pub fn reset_to_defaults(&mut self) {
+        crate::logger::log("-> Restableciendo configuración a valores por defecto");
+        self.config = AxonConfig::default();
+        let _ = self.config.save();
+        self.theme = if self.config.appearance.theme_mode.eq_ignore_ascii_case("system") {
+            if crate::theme::is_windows_system_light_mode() {
+                Theme::catppuccin_latte()
+            } else {
+                Theme::from_name(&self.config.appearance.theme)
+            }
+        } else if self.config.appearance.theme_mode.eq_ignore_ascii_case("light") {
+            Theme::catppuccin_latte()
+        } else {
+            Theme::from_name(&self.config.appearance.theme)
+        };
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.theme = self.theme.clone();
+            }
+        }
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            let scale_factor = window.scale_factor();
+            renderer.update_scale(&self.config, scale_factor);
+            update_windows_theme(window, &self.theme);
+        }
+        self.recompute_grid_for_all_tabs();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
 }
 
 impl ApplicationHandler<AxonEvent> for AxonApp {
@@ -1524,6 +1583,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             .with_visible(false)
             .with_inner_size(PhysicalSize::new(1080, 680))
             .with_min_inner_size(PhysicalSize::new(540, 320))
+            .with_decorations(false)
+            .with_resizable(true)
             .with_window_icon(Some(icon));
 
         let window = Arc::new(
@@ -1543,6 +1604,19 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         let scale_factor = window.scale_factor();
         let mut renderer = TerminalRenderer::new(&self.config, scale_factor);
 
+        let target_cols = 100;
+        let target_rows = 35;
+        let offset = self.sidebar_offset();
+        let right_offset = self.file_explorer_offset();
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
+
+        let target_pane_w = (target_cols * renderer.char_width) + (renderer.margin_x * 2);
+        let target_pane_h = (target_rows * renderer.row_height) + (renderer.margin_y * 2);
+        let init_win_w = (target_pane_w + offset + right_offset) as u32;
+        let init_win_h = (target_pane_h + top_offset + status_bar_h) as u32;
+
+        let _ = window.request_inner_size(PhysicalSize::new(init_win_w, init_win_h));
         let initial_size = window.inner_size();
         if let (Some(w), Some(h)) = (
             NonZeroU32::new(initial_size.width),
@@ -1551,10 +1625,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             let _ = surface.resize(w, h);
         }
 
-        let offset = self.sidebar_offset();
-        let right_offset = self.file_explorer_offset();
-        let top_offset = self.top_offset();
-        let status_bar_h = self.status_bar_height();
         let total_w = (initial_size.width as usize).saturating_sub(offset + right_offset);
         let total_h = (initial_size.height as usize).saturating_sub(top_offset + status_bar_h);
         for tab in &mut self.tabs {
@@ -1572,6 +1642,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
         // Esto garantiza que el usuario vea la terminal oscura de inmediato sin ningún destello blanco.
         if let Ok(mut buffer) = surface.buffer_mut() {
+            buffer.fill(self.theme.background.to_u32_xrgb());
             if self.sidebar_visible {
                 let sidebar_tabs: Vec<SidebarTabItem> = self
                     .tabs
@@ -1592,6 +1663,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     initial_size.width as usize,
                     initial_size.height as usize,
                     SIDEBAR_WIDTH,
+                    status_bar_h,
                     &sidebar_tabs,
                     self.hovered_tab,
                     self.hovered_close,
@@ -1731,7 +1803,10 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         return;
                     }
 
+                    let is_maximized = window.is_maximized();
                     if let Ok(mut buffer) = surface.buffer_mut() {
+                        buffer.fill(self.theme.background.to_u32_xrgb());
+
                         if is_horizontal {
                             renderer.render_top_tab_bar(
                                 &mut buffer,
@@ -1743,23 +1818,46 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 hovered_new_tab,
                                 hovered_files_btn,
                                 hovered_settings_btn,
+                                self.hovered_win_min,
+                                self.hovered_win_max,
+                                self.hovered_win_close,
+                                is_maximized,
                                 explorer_visible,
                                 &self.theme,
                             );
-                        } else if sidebar_visible {
-                            renderer.render_sidebar(
+                        } else {
+                            let active_title = active_tab.display_title();
+                            let git_branch = active_tab.active_pane_mut().and_then(|p| p.get_git_branch());
+                            renderer.render_top_title_bar(
                                 &mut buffer,
                                 size.width as usize,
                                 size.height as usize,
-                                SIDEBAR_WIDTH,
-                                &tab_items,
-                                hovered_tab,
-                                hovered_close,
-                                hovered_new_tab,
+                                &active_title,
+                                git_branch.as_deref(),
                                 hovered_settings_btn,
-                                hovered_toggle_btn,
+                                self.hovered_win_min,
+                                self.hovered_win_max,
+                                self.hovered_win_close,
+                                is_maximized,
                                 &self.theme,
                             );
+
+                            if sidebar_visible {
+                                renderer.render_sidebar(
+                                    &mut buffer,
+                                    size.width as usize,
+                                    size.height as usize,
+                                    SIDEBAR_WIDTH,
+                                    status_bar_h,
+                                    &tab_items,
+                                    hovered_tab,
+                                    hovered_close,
+                                    hovered_new_tab,
+                                    hovered_settings_btn,
+                                    hovered_toggle_btn,
+                                    &self.theme,
+                                );
+                            }
                         }
 
                         if active_tab.is_settings {
@@ -1768,6 +1866,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 size.width as usize,
                                 size.height as usize,
                                 offset,
+                                top_offset,
                                 &self.config,
                                 &self.settings_page_state,
                                 &self.theme,
@@ -2511,6 +2610,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_pos = position;
                 let offset = self.sidebar_offset();
+                let top_offset = self.top_offset();
                 let mx = position.x as usize;
                 let my = position.y as usize;
 
@@ -2522,170 +2622,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 };
 
                 let mut needs_redraw = false;
+                let mut is_pointer = false;
+                let mut is_text = false;
 
                 let is_settings_active = self.tabs[self.active_tab_index].is_settings;
-                if is_settings_active && mx >= offset {
-                    let page_w = win_w.saturating_sub(offset);
-                    let rects = SettingsPageRects::compute(offset, 0, page_w, win_h);
-
-                    let h_sec = if SettingsPageRects::inside(mx, my, rects.nav_appearance) {
-                        Some(SettingsSection::Appearance)
-                    } else if SettingsPageRects::inside(mx, my, rects.nav_terminal) {
-                        Some(SettingsSection::Terminal)
-                    } else if SettingsPageRects::inside(mx, my, rects.nav_shortcuts) {
-                        Some(SettingsSection::Shortcuts)
-                    } else if SettingsPageRects::inside(mx, my, rects.nav_about) {
-                        Some(SettingsSection::About)
-                    } else {
-                        None
-                    };
-
-                    let mut h_theme = None;
-                    let mut h_tm = None;
-                    let mut h_tl = None;
-                    let mut h_fm = false;
-                    let mut h_fp = false;
-                    let mut h_sm = false;
-                    let mut h_sp = false;
-                    let mut h_om = false;
-                    let mut h_op = false;
-                    let mut h_cb = false;
-                    let mut h_gp = false;
-                    let mut h_cs = false;
-                    let mut h_sb = false;
-                    let mut h_fe = false;
-                    let mut h_of = false;
-
-                    match self.settings_page_state.section {
-                        SettingsSection::Appearance => {
-                            for (idx, r) in rects.theme_buttons.iter().enumerate() {
-                                if SettingsPageRects::inside(mx, my, *r) {
-                                    h_theme = Some(idx);
-                                    break;
-                                }
-                            }
-                            if SettingsPageRects::inside(mx, my, rects.theme_mode_system_btn) {
-                                h_tm = Some(0);
-                            } else if SettingsPageRects::inside(mx, my, rects.theme_mode_dark_btn) {
-                                h_tm = Some(1);
-                            } else if SettingsPageRects::inside(mx, my, rects.theme_mode_light_btn)
-                            {
-                                h_tm = Some(2);
-                            }
-
-                            if SettingsPageRects::inside(mx, my, rects.tab_layout_vertical_btn) {
-                                h_tl = Some(0);
-                            } else if SettingsPageRects::inside(
-                                mx,
-                                my,
-                                rects.tab_layout_horizontal_btn,
-                            ) {
-                                h_tl = Some(1);
-                            }
-
-                            h_fm = SettingsPageRects::inside(mx, my, rects.font_minus_btn);
-                            h_fp = SettingsPageRects::inside(mx, my, rects.font_plus_btn);
-                            h_sm = SettingsPageRects::inside(mx, my, rects.spacing_minus_btn);
-                            h_sp = SettingsPageRects::inside(mx, my, rects.spacing_plus_btn);
-                            h_om = SettingsPageRects::inside(mx, my, rects.opacity_minus_btn);
-                            h_op = SettingsPageRects::inside(mx, my, rects.opacity_plus_btn);
-                        }
-                        SettingsSection::Terminal => {
-                            h_cb = SettingsPageRects::inside(mx, my, rects.cursor_blink_btn);
-                            h_gp = SettingsPageRects::inside(mx, my, rects.ghostty_prompt_btn);
-                            h_cs = SettingsPageRects::inside(mx, my, rects.copy_on_select_btn);
-                            h_sb = SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn);
-                            h_fe =
-                                SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn);
-                            h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
-                        }
-                        SettingsSection::About => {
-                            h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
-                        }
-                        SettingsSection::Shortcuts => {}
-                    }
-
-                    let st = &mut self.settings_page_state;
-                    if st.hovered_section != h_sec
-                        || st.hovered_theme != h_theme
-                        || st.hovered_theme_mode != h_tm
-                        || st.hovered_tab_layout != h_tl
-                        || st.hovered_font_minus != h_fm
-                        || st.hovered_font_plus != h_fp
-                        || st.hovered_spacing_minus != h_sm
-                        || st.hovered_spacing_plus != h_sp
-                        || st.hovered_opacity_minus != h_om
-                        || st.hovered_opacity_plus != h_op
-                        || st.hovered_cursor_blink != h_cb
-                        || st.hovered_ghostty_prompt != h_gp
-                        || st.hovered_copy_on_select != h_cs
-                        || st.hovered_status_bar != h_sb
-                        || st.hovered_file_explorer != h_fe
-                        || st.hovered_open_file != h_of
-                    {
-                        st.hovered_section = h_sec;
-                        st.hovered_theme = h_theme;
-                        st.hovered_theme_mode = h_tm;
-                        st.hovered_tab_layout = h_tl;
-                        st.hovered_font_minus = h_fm;
-                        st.hovered_font_plus = h_fp;
-                        st.hovered_spacing_minus = h_sm;
-                        st.hovered_spacing_plus = h_sp;
-                        st.hovered_opacity_minus = h_om;
-                        st.hovered_opacity_plus = h_op;
-                        st.hovered_cursor_blink = h_cb;
-                        st.hovered_ghostty_prompt = h_gp;
-                        st.hovered_copy_on_select = h_cs;
-                        st.hovered_status_bar = h_sb;
-                        st.hovered_file_explorer = h_fe;
-                        st.hovered_open_file = h_of;
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                    }
-                } else {
-                    let st = &mut self.settings_page_state;
-                    if st.hovered_section.is_some()
-                        || st.hovered_theme.is_some()
-                        || st.hovered_theme_mode.is_some()
-                        || st.hovered_tab_layout.is_some()
-                        || st.hovered_font_minus
-                        || st.hovered_font_plus
-                        || st.hovered_spacing_minus
-                        || st.hovered_spacing_plus
-                        || st.hovered_opacity_minus
-                        || st.hovered_opacity_plus
-                        || st.hovered_cursor_blink
-                        || st.hovered_ghostty_prompt
-                        || st.hovered_copy_on_select
-                        || st.hovered_status_bar
-                        || st.hovered_file_explorer
-                        || st.hovered_open_file
-                    {
-                        st.hovered_section = None;
-                        st.hovered_theme = None;
-                        st.hovered_theme_mode = None;
-                        st.hovered_tab_layout = None;
-                        st.hovered_font_minus = false;
-                        st.hovered_font_plus = false;
-                        st.hovered_spacing_minus = false;
-                        st.hovered_spacing_plus = false;
-                        st.hovered_opacity_minus = false;
-                        st.hovered_opacity_plus = false;
-                        st.hovered_cursor_blink = false;
-                        st.hovered_ghostty_prompt = false;
-                        st.hovered_copy_on_select = false;
-                        st.hovered_status_bar = false;
-                        st.hovered_file_explorer = false;
-                        st.hovered_open_file = false;
-                        needs_redraw = true;
-                    }
-                }
 
                 // Manejo de arrastre activo del pulgar de la barra de desplazamiento en el panel seleccionado
                 if self.scrollbar_dragging {
                     if let Some(pid) = self.scrollbar_drag_pane_id {
-                        let top_offset = self.top_offset();
                         let status_bar_h = self.status_bar_height();
                         let right_offset = self.file_explorer_offset();
                         let active_tab = &mut self.tabs[self.active_tab_index];
@@ -2736,8 +2680,15 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             }
                         }
                     }
+                    if let Some(w) = &self.window {
+                        w.set_cursor(winit::window::CursorIcon::Pointer);
+                    }
                     return;
                 }
+
+                let mut new_hovered_min = false;
+                let mut new_hovered_max = false;
+                let mut new_hovered_close_win = false;
 
                 if self.is_horizontal_tabs() {
                     let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
@@ -2745,10 +2696,23 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     let mut new_hovered_close = None;
                     let mut new_hovered_new_tab = false;
                     let mut new_hovered_settings = false;
-
                     let mut new_hovered_files = false;
 
                     if my < TopTabBarRects::HEIGHT {
+                        // Check window controls
+                        if TopTabBarRects::inside(mx, my, top_rects.win_min_btn) {
+                            new_hovered_min = true;
+                            is_pointer = true;
+                        }
+                        if TopTabBarRects::inside(mx, my, top_rects.win_max_btn) {
+                            new_hovered_max = true;
+                            is_pointer = true;
+                        }
+                        if TopTabBarRects::inside(mx, my, top_rects.win_close_btn) {
+                            new_hovered_close_win = true;
+                            is_pointer = true;
+                        }
+
                         // Check plus button
                         if mx >= top_rects.plus_btn.0
                             && mx < top_rects.plus_btn.0 + top_rects.plus_btn.2
@@ -2756,6 +2720,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             && my < top_rects.plus_btn.1 + top_rects.plus_btn.3
                         {
                             new_hovered_new_tab = true;
+                            is_pointer = true;
                         }
                         // Check files button
                         if mx >= top_rects.files_btn.0
@@ -2764,6 +2729,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             && my < top_rects.files_btn.1 + top_rects.files_btn.3
                         {
                             new_hovered_files = true;
+                            is_pointer = true;
                         }
                         // Check settings button
                         if mx >= top_rects.settings_btn.0
@@ -2772,12 +2738,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             && my < top_rects.settings_btn.1 + top_rects.settings_btn.3
                         {
                             new_hovered_settings = true;
+                            is_pointer = true;
                         }
                         // Check tabs
                         for idx in 0..self.tabs.len() {
                             let tr = top_rects.tab_rect(idx);
                             if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                                 new_hovered_tab = Some(idx);
+                                is_pointer = true;
                                 if self.tabs.len() > 1 {
                                     let cr = top_rects.close_btn_rect(idx);
                                     if mx >= cr.0
@@ -2813,17 +2781,31 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         self.hovered_settings_btn = new_hovered_settings;
                         needs_redraw = true;
                     }
-
-                    if needs_redraw {
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
+                } else {
+                    let title_rects = TopTitleBarRects::compute(win_w);
+                    let mut new_hovered_settings = false;
+                    if my < TopTitleBarRects::HEIGHT {
+                        if TopTabBarRects::inside(mx, my, title_rects.win_min_btn) {
+                            new_hovered_min = true;
+                            is_pointer = true;
+                        }
+                        if TopTabBarRects::inside(mx, my, title_rects.win_max_btn) {
+                            new_hovered_max = true;
+                            is_pointer = true;
+                        }
+                        if TopTabBarRects::inside(mx, my, title_rects.win_close_btn) {
+                            new_hovered_close_win = true;
+                            is_pointer = true;
+                        }
+                        if TopTabBarRects::inside(mx, my, title_rects.settings_btn) {
+                            new_hovered_settings = true;
+                            is_pointer = true;
                         }
                     }
-
-                    if my < TopTabBarRects::HEIGHT {
-                        return;
+                    if self.hovered_settings_btn != new_hovered_settings {
+                        self.hovered_settings_btn = new_hovered_settings;
+                        needs_redraw = true;
                     }
-                } else {
                     // Comprobar hover en botón inferior de alternar barra lateral
                     let status_bar_h = self.status_bar_height();
                     let toggle_btn_w = if self.sidebar_visible {
@@ -2833,16 +2815,16 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     };
                     let toggle_btn_h = 30;
                     let toggle_btn_x = 8;
-                    let toggle_btn_y = if self.sidebar_visible {
-                        win_h.saturating_sub(toggle_btn_h + 10)
-                    } else {
-                        win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h)
-                    };
+                    let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h);
 
                     let is_hover_toggle = mx >= toggle_btn_x
                         && mx < toggle_btn_x + toggle_btn_w
                         && my >= toggle_btn_y
                         && my < toggle_btn_y + toggle_btn_h;
+
+                    if is_hover_toggle {
+                        is_pointer = true;
+                    }
 
                     if self.hovered_toggle_btn != is_hover_toggle {
                         self.hovered_toggle_btn = is_hover_toggle;
@@ -2856,6 +2838,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             && mx < float_set_x + float_set_w
                             && my >= toggle_btn_y
                             && my < toggle_btn_y + toggle_btn_h;
+                        if is_hover_float_set {
+                            is_pointer = true;
+                        }
                         if self.hovered_floating_settings != is_hover_float_set {
                             self.hovered_floating_settings = is_hover_float_set;
                             needs_redraw = true;
@@ -2873,6 +2858,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             && mx < plus_btn_x + plus_btn_w
                             && my >= plus_btn_y
                             && my < plus_btn_y + plus_btn_h;
+                        if is_new_tab {
+                            is_pointer = true;
+                        }
                         if self.hovered_new_tab != is_new_tab {
                             self.hovered_new_tab = is_new_tab;
                             needs_redraw = true;
@@ -2882,6 +2870,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         let settings_btn_x = SIDEBAR_WIDTH.saturating_sub(62);
                         let is_hover_set =
                             mx >= settings_btn_x && mx < settings_btn_x + 24 && my >= 8 && my < 32;
+                        if is_hover_set {
+                            is_pointer = true;
+                        }
                         if self.hovered_settings_btn != is_hover_set {
                             self.hovered_settings_btn = is_hover_set;
                             needs_redraw = true;
@@ -2910,6 +2901,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 && mx < tab_x + tab_w
                             {
                                 new_hovered_tab = Some(tab_idx);
+                                is_pointer = true;
 
                                 if self.tabs.len() > 1 {
                                     let tab_y = list_start_y + tab_idx * item_total;
@@ -2936,13 +2928,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             self.hovered_close = new_hovered_close;
                             needs_redraw = true;
                         }
-
-                        if needs_redraw {
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
-                        }
-                        return;
                     } else if self.sidebar_visible {
                         if self.hovered_tab.is_some() {
                             self.hovered_tab = None;
@@ -2960,26 +2945,204 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             self.hovered_settings_btn = false;
                             needs_redraw = true;
                         }
-                        if needs_redraw {
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
-                        }
-                    } else if needs_redraw {
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
                     }
                 }
 
-                if is_settings_active {
-                    return;
+                // Detección de hover en la pestaña de Ajustes (si está activa)
+                if is_settings_active && mx >= offset && my >= top_offset {
+                    let page_w = win_w.saturating_sub(offset);
+                    let page_h = win_h.saturating_sub(top_offset);
+                    let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
+
+                    let h_sec = if SettingsPageRects::inside(mx, my, rects.nav_appearance) {
+                        Some(SettingsSection::Appearance)
+                    } else if SettingsPageRects::inside(mx, my, rects.nav_terminal) {
+                        Some(SettingsSection::Terminal)
+                    } else if SettingsPageRects::inside(mx, my, rects.nav_shortcuts) {
+                        Some(SettingsSection::Shortcuts)
+                    } else if SettingsPageRects::inside(mx, my, rects.nav_about) {
+                        Some(SettingsSection::About)
+                    } else {
+                        None
+                    };
+
+                    if h_sec.is_some() {
+                        is_pointer = true;
+                    }
+
+                    let mut h_theme = None;
+                    let mut h_tm = None;
+                    let mut h_tl = None;
+                    let mut h_fm = false;
+                    let mut h_fp = false;
+                    let mut h_sm = false;
+                    let mut h_sp = false;
+                    let mut h_om = false;
+                    let mut h_op = false;
+                    let mut h_cb = false;
+                    let mut h_gp = false;
+                    let mut h_cs = false;
+                    let mut h_sb = false;
+                    let mut h_fe = false;
+                    let mut h_rs = false;
+                    let mut h_of = false;
+                    let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
+
+                    match self.settings_page_state.section {
+                        SettingsSection::Appearance => {
+                            for (idx, r) in rects.theme_buttons.iter().enumerate() {
+                                if SettingsPageRects::inside(mx, my, *r) {
+                                    h_theme = Some(idx);
+                                    break;
+                                }
+                            }
+                            if SettingsPageRects::inside(mx, my, rects.theme_mode_system_btn) {
+                                h_tm = Some(0);
+                            } else if SettingsPageRects::inside(mx, my, rects.theme_mode_dark_btn) {
+                                h_tm = Some(1);
+                            } else if SettingsPageRects::inside(mx, my, rects.theme_mode_light_btn) {
+                                h_tm = Some(2);
+                            }
+
+                            if SettingsPageRects::inside(mx, my, rects.tab_layout_vertical_btn) {
+                                h_tl = Some(0);
+                            } else if SettingsPageRects::inside(
+                                mx,
+                                my,
+                                rects.tab_layout_horizontal_btn,
+                            ) {
+                                h_tl = Some(1);
+                            }
+
+                            h_fm = SettingsPageRects::inside(mx, my, rects.font_minus_btn);
+                            h_fp = SettingsPageRects::inside(mx, my, rects.font_plus_btn);
+                            h_sm = SettingsPageRects::inside(mx, my, rects.spacing_minus_btn);
+                            h_sp = SettingsPageRects::inside(mx, my, rects.spacing_plus_btn);
+                            h_om = SettingsPageRects::inside(mx, my, rects.opacity_minus_btn);
+                            h_op = SettingsPageRects::inside(mx, my, rects.opacity_plus_btn);
+                        }
+                        SettingsSection::Terminal => {
+                            h_cb = SettingsPageRects::inside(mx, my, rects.cursor_blink_btn);
+                            h_gp = SettingsPageRects::inside(mx, my, rects.ghostty_prompt_btn);
+                            h_cs = SettingsPageRects::inside(mx, my, rects.copy_on_select_btn);
+                            h_sb = SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn);
+                            h_fe = SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn);
+                            h_rs = SettingsPageRects::inside(mx, my, rects.restore_session_btn);
+                            h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
+                            h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
+                        }
+                        SettingsSection::About => {
+                            h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
+                            h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
+                        }
+                        SettingsSection::Shortcuts => {}
+                    }
+
+                    if h_theme.is_some()
+                        || h_tm.is_some()
+                        || h_tl.is_some()
+                        || h_fm
+                        || h_fp
+                        || h_sm
+                        || h_sp
+                        || h_om
+                        || h_op
+                        || h_cb
+                        || h_gp
+                        || h_cs
+                        || h_sb
+                        || h_fe
+                        || h_rs
+                        || h_of
+                        || h_reset
+                    {
+                        is_pointer = true;
+                    }
+
+                    let st = &mut self.settings_page_state;
+                    if st.hovered_section != h_sec
+                        || st.hovered_theme != h_theme
+                        || st.hovered_theme_mode != h_tm
+                        || st.hovered_tab_layout != h_tl
+                        || st.hovered_font_minus != h_fm
+                        || st.hovered_font_plus != h_fp
+                        || st.hovered_spacing_minus != h_sm
+                        || st.hovered_spacing_plus != h_sp
+                        || st.hovered_opacity_minus != h_om
+                        || st.hovered_opacity_plus != h_op
+                        || st.hovered_cursor_blink != h_cb
+                        || st.hovered_ghostty_prompt != h_gp
+                        || st.hovered_copy_on_select != h_cs
+                        || st.hovered_status_bar != h_sb
+                        || st.hovered_file_explorer != h_fe
+                        || st.hovered_restore_session != h_rs
+                        || st.hovered_open_file != h_of
+                        || st.hovered_reset_defaults != h_reset
+                    {
+                        st.hovered_section = h_sec;
+                        st.hovered_theme = h_theme;
+                        st.hovered_theme_mode = h_tm;
+                        st.hovered_tab_layout = h_tl;
+                        st.hovered_font_minus = h_fm;
+                        st.hovered_font_plus = h_fp;
+                        st.hovered_spacing_minus = h_sm;
+                        st.hovered_spacing_plus = h_sp;
+                        st.hovered_opacity_minus = h_om;
+                        st.hovered_opacity_plus = h_op;
+                        st.hovered_cursor_blink = h_cb;
+                        st.hovered_ghostty_prompt = h_gp;
+                        st.hovered_copy_on_select = h_cs;
+                        st.hovered_status_bar = h_sb;
+                        st.hovered_file_explorer = h_fe;
+                        st.hovered_restore_session = h_rs;
+                        st.hovered_open_file = h_of;
+                        st.hovered_reset_defaults = h_reset;
+                        needs_redraw = true;
+                    }
+                } else if is_settings_active {
+                    let st = &mut self.settings_page_state;
+                    if st.hovered_section.is_some()
+                        || st.hovered_theme.is_some()
+                        || st.hovered_theme_mode.is_some()
+                        || st.hovered_tab_layout.is_some()
+                        || st.hovered_font_minus
+                        || st.hovered_font_plus
+                        || st.hovered_spacing_minus
+                        || st.hovered_spacing_plus
+                        || st.hovered_opacity_minus
+                        || st.hovered_opacity_plus
+                        || st.hovered_cursor_blink
+                        || st.hovered_ghostty_prompt
+                        || st.hovered_copy_on_select
+                        || st.hovered_status_bar
+                        || st.hovered_file_explorer
+                        || st.hovered_open_file
+                        || st.hovered_reset_defaults
+                    {
+                        st.hovered_section = None;
+                        st.hovered_theme = None;
+                        st.hovered_theme_mode = None;
+                        st.hovered_tab_layout = None;
+                        st.hovered_font_minus = false;
+                        st.hovered_font_plus = false;
+                        st.hovered_spacing_minus = false;
+                        st.hovered_spacing_plus = false;
+                        st.hovered_opacity_minus = false;
+                        st.hovered_opacity_plus = false;
+                        st.hovered_cursor_blink = false;
+                        st.hovered_ghostty_prompt = false;
+                        st.hovered_copy_on_select = false;
+                        st.hovered_status_bar = false;
+                        st.hovered_file_explorer = false;
+                        st.hovered_open_file = false;
+                        st.hovered_reset_defaults = false;
+                        needs_redraw = true;
+                    }
                 }
 
-                // Detección de hover dentro del explorador lateral de archivos
-                if self.file_explorer.visible {
+                // Detección de hover dentro del explorador lateral de archivos (si no es settings)
+                if !is_settings_active && self.file_explorer.visible {
                     let panel_w = crate::explorer::FILE_EXPLORER_WIDTH;
-                    let top_offset = self.top_offset();
                     if mx >= win_w.saturating_sub(panel_w) {
                         let panel_x = win_w.saturating_sub(panel_w);
                         let close_x = panel_x + panel_w.saturating_sub(28);
@@ -3001,6 +3164,10 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                         let item_hover = self.file_explorer.item_at_y(my, top_offset);
 
+                        if is_close_hover || is_refresh_hover || is_up_hover || item_hover.is_some() {
+                            is_pointer = true;
+                        }
+
                         if self.file_explorer.hovered_close_btn != is_close_hover
                             || self.file_explorer.hovered_refresh_btn != is_refresh_hover
                             || self.file_explorer.hovered_up_btn != is_up_hover
@@ -3010,9 +3177,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             self.file_explorer.hovered_refresh_btn = is_refresh_hover;
                             self.file_explorer.hovered_up_btn = is_up_hover;
                             self.file_explorer.hovered_index = item_hover;
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
+                            needs_redraw = true;
                         }
                     } else if self.file_explorer.hovered_close_btn
                         || self.file_explorer.hovered_refresh_btn
@@ -3023,97 +3188,176 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         self.file_explorer.hovered_refresh_btn = false;
                         self.file_explorer.hovered_up_btn = false;
                         self.file_explorer.hovered_index = None;
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
+                        needs_redraw = true;
                     }
                 }
 
-                // 2. Coordenadas relativas a paneles en la terminal activa
-                let bypass = self.modifiers.shift_key();
-                let top_offset = self.top_offset();
-                let status_bar_h = self.status_bar_height();
-                let right_offset = self.file_explorer_offset();
-                let term_area_w = win_w.saturating_sub(offset + right_offset);
-                let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
-                let active_tab = &mut self.tabs[self.active_tab_index];
-                let active_pane_id = active_tab.active_pane_id;
-                let pane_rects =
-                    active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
-                let hovered_pane_rect = pane_rects
-                    .iter()
-                    .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height)
-                    .copied();
+                // Coordenadas relativas a paneles en la terminal activa
+                if !is_settings_active {
+                    let bypass = self.modifiers.shift_key();
+                    let status_bar_h = self.status_bar_height();
+                    let right_offset = self.file_explorer_offset();
+                    let term_area_w = win_w.saturating_sub(offset + right_offset);
+                    let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
+                    let active_tab = &mut self.tabs[self.active_tab_index];
+                    let active_pane_id = active_tab.active_pane_id;
+                    let pane_rects =
+                        active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
-                if let Some(rect) = hovered_pane_rect {
-                    if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
-                        if pane.terminal.is_mouse_reporting_active() && !bypass {
-                            if (pane.terminal.mouse_reporting_button_event && self.mouse_down)
-                                || pane.terminal.mouse_reporting_any_event
-                            {
+                    let hovered_pane_rect = pane_rects
+                        .iter()
+                        .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height)
+                        .copied();
+
+                    if let Some(rect) = hovered_pane_rect {
+                        if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                            let is_over_scrollbar = if let Some(renderer) = &self.renderer {
+                                if let Some((_tx, ty, _tw, th)) = renderer.pane_scrollbar_geometry(
+                                    rect.x,
+                                    rect.y,
+                                    rect.width,
+                                    rect.height,
+                                    &pane.terminal,
+                                ) {
+                                    let scroll_margin = 16;
+                                    mx >= (rect.x + rect.width).saturating_sub(scroll_margin)
+                                        && my >= ty
+                                        && my < ty + th
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+
+                            if is_over_scrollbar {
+                                is_pointer = true;
+                            } else if !pane.terminal.is_mouse_reporting_active() || bypass {
+                                is_text = true;
+                            }
+
+                            if pane.terminal.is_mouse_reporting_active() && !bypass {
+                                if (pane.terminal.mouse_reporting_button_event && self.mouse_down)
+                                    || pane.terminal.mouse_reporting_any_event
+                                {
+                                    if let Some(renderer) = &self.renderer {
+                                        let term_x = mx.saturating_sub(rect.x);
+                                        let term_y = my.saturating_sub(rect.y);
+                                        let col = if term_x >= renderer.margin_x {
+                                            ((term_x - renderer.margin_x) / renderer.char_width) + 1
+                                        } else {
+                                            1
+                                        }
+                                        .min(pane.terminal.cols);
+                                        let row = if term_y >= renderer.margin_y {
+                                            ((term_y - renderer.margin_y) / renderer.row_height) + 1
+                                        } else {
+                                            1
+                                        }
+                                        .min(pane.terminal.rows);
+
+                                        let mut code = 32;
+                                        if self.modifiers.shift_key() {
+                                            code += 4;
+                                        }
+                                        if self.modifiers.alt_key() {
+                                            code += 8;
+                                        }
+                                        if self.modifiers.control_key() {
+                                            code += 16;
+                                        }
+
+                                        if pane.terminal.mouse_reporting_sgr {
+                                            let seq = format!("\x1b[<{};{};{}M", code, col, row);
+                                            pane.pty.write_input(seq.as_bytes());
+                                        } else {
+                                            let seq = [
+                                                0x1b,
+                                                b'[',
+                                                b'M',
+                                                32 + code as u8,
+                                                32 + col.min(223) as u8,
+                                                32 + row.min(223) as u8,
+                                            ];
+                                            pane.pty.write_input(&seq);
+                                        }
+                                    }
+                                }
+                            } else if self.mouse_down && rect.pane_id == active_pane_id {
                                 if let Some(renderer) = &self.renderer {
                                     let term_x = mx.saturating_sub(rect.x);
                                     let term_y = my.saturating_sub(rect.y);
-                                    let col = if term_x >= renderer.margin_x {
-                                        ((term_x - renderer.margin_x) / renderer.char_width) + 1
-                                    } else {
-                                        1
-                                    }
-                                    .min(pane.terminal.cols);
-                                    let row = if term_y >= renderer.margin_y {
-                                        ((term_y - renderer.margin_y) / renderer.row_height) + 1
-                                    } else {
-                                        1
-                                    }
-                                    .min(pane.terminal.rows);
-
-                                    let mut code = 32;
-                                    if self.modifiers.shift_key() {
-                                        code += 4;
-                                    }
-                                    if self.modifiers.alt_key() {
-                                        code += 8;
-                                    }
-                                    if self.modifiers.control_key() {
-                                        code += 16;
-                                    }
-
-                                    if pane.terminal.mouse_reporting_sgr {
-                                        let seq = format!("\x1b[<{};{};{}M", code, col, row);
-                                        pane.pty.write_input(seq.as_bytes());
-                                    } else {
-                                        let seq = [
-                                            0x1b,
-                                            b'[',
-                                            b'M',
-                                            32 + code as u8,
-                                            32 + col.min(223) as u8,
-                                            32 + row.min(223) as u8,
-                                        ];
-                                        pane.pty.write_input(&seq);
-                                    }
-                                }
-                            }
-                        } else if self.mouse_down && rect.pane_id == active_pane_id {
-                            if let Some(renderer) = &self.renderer {
-                                let term_x = mx.saturating_sub(rect.x);
-                                let term_y = my.saturating_sub(rect.y);
-                                if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
-                                    let col = (term_x - renderer.margin_x) / renderer.char_width;
-                                    let row = (term_y - renderer.margin_y) / renderer.row_height;
-                                    if let Some(start) = self.drag_start {
-                                        pane.terminal.selection = Some(SelectionRange {
-                                            start,
-                                            end: (col, row),
-                                        });
-                                        if let Some(w) = &self.window {
-                                            w.request_redraw();
+                                    if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
+                                        let col = (term_x - renderer.margin_x) / renderer.char_width;
+                                        let row = (term_y - renderer.margin_y) / renderer.row_height;
+                                        if let Some(start) = self.drag_start {
+                                            pane.terminal.selection = Some(SelectionRange {
+                                                start,
+                                                end: (col, row),
+                                            });
+                                            if let Some(w) = &self.window {
+                                                w.request_redraw();
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
+                    }
+                }
+
+                if self.hovered_win_min != new_hovered_min {
+                    self.hovered_win_min = new_hovered_min;
+                    needs_redraw = true;
+                }
+                if self.hovered_win_max != new_hovered_max {
+                    self.hovered_win_max = new_hovered_max;
+                    needs_redraw = true;
+                }
+                if self.hovered_win_close != new_hovered_close_win {
+                    self.hovered_win_close = new_hovered_close_win;
+                    needs_redraw = true;
+                }
+
+                // Detección de bordes para cursor de redimensionamiento (ventana frameless)
+                let border_resize_cursor = {
+                    let border_margin = 6;
+                    let at_left = mx < border_margin;
+                    let at_right = mx >= win_w.saturating_sub(border_margin);
+                    let at_top = my < border_margin;
+                    let at_bottom = my >= win_h.saturating_sub(border_margin);
+
+                    if at_top && at_left {
+                        Some(winit::window::CursorIcon::NwseResize)
+                    } else if at_top && at_right {
+                        Some(winit::window::CursorIcon::NeswResize)
+                    } else if at_bottom && at_left {
+                        Some(winit::window::CursorIcon::NeswResize)
+                    } else if at_bottom && at_right {
+                        Some(winit::window::CursorIcon::NwseResize)
+                    } else if at_left || at_right {
+                        Some(winit::window::CursorIcon::EwResize)
+                    } else if at_top || at_bottom {
+                        Some(winit::window::CursorIcon::NsResize)
+                    } else {
+                        None
+                    }
+                };
+
+                let cursor_icon = if let Some(resize_cur) = border_resize_cursor {
+                    resize_cur
+                } else if is_pointer {
+                    winit::window::CursorIcon::Pointer
+                } else if is_text {
+                    winit::window::CursorIcon::Text
+                } else {
+                    winit::window::CursorIcon::Default
+                };
+                if let Some(w) = &self.window {
+                    w.set_cursor(cursor_icon);
+                    if needs_redraw {
+                        w.request_redraw();
                     }
                 }
             }
@@ -3145,39 +3389,86 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
 
+                // Redimensionamiento de ventana al arrastrar bordes (ventana frameless)
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let border_margin = 6;
+                    let at_left = mx < border_margin;
+                    let at_right = mx >= win_w.saturating_sub(border_margin);
+                    let at_top = my < border_margin;
+                    let at_bottom = my >= win_h.saturating_sub(border_margin);
+
+                    let resize_direction = if at_top && at_left {
+                        Some(winit::window::ResizeDirection::NorthWest)
+                    } else if at_top && at_right {
+                        Some(winit::window::ResizeDirection::NorthEast)
+                    } else if at_bottom && at_left {
+                        Some(winit::window::ResizeDirection::SouthWest)
+                    } else if at_bottom && at_right {
+                        Some(winit::window::ResizeDirection::SouthEast)
+                    } else if at_left {
+                        Some(winit::window::ResizeDirection::West)
+                    } else if at_right {
+                        Some(winit::window::ResizeDirection::East)
+                    } else if at_top {
+                        Some(winit::window::ResizeDirection::North)
+                    } else if at_bottom {
+                        Some(winit::window::ResizeDirection::South)
+                    } else {
+                        None
+                    };
+
+                    if let Some(dir) = resize_direction {
+                        if let Some(w) = &self.window {
+                            let _ = w.drag_resize_window(dir);
+                            return;
+                        }
+                    }
+                }
+
                 // Si estamos en modo de pestañas horizontales superiores
                 if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
                     if state == ElementState::Pressed && button == MouseButton::Left {
                         let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
 
+                        // Clic en [-] Minimizar
+                        if TopTabBarRects::inside(mx, my, top_rects.win_min_btn) {
+                            if let Some(w) = &self.window {
+                                w.set_minimized(true);
+                            }
+                            return;
+                        }
+
+                        // Clic en [□] Maximizar / Restaurar
+                        if TopTabBarRects::inside(mx, my, top_rects.win_max_btn) {
+                            if let Some(w) = &self.window {
+                                w.set_maximized(!w.is_maximized());
+                            }
+                            return;
+                        }
+
+                        // Clic en [✕] Cerrar ventana
+                        if TopTabBarRects::inside(mx, my, top_rects.win_close_btn) {
+                            self.save_session();
+                            event_loop.exit();
+                            return;
+                        }
+
                         // Clic en [+] nueva pestaña
-                        if mx >= top_rects.plus_btn.0
-                            && mx < top_rects.plus_btn.0 + top_rects.plus_btn.2
-                            && my >= top_rects.plus_btn.1
-                            && my < top_rects.plus_btn.1 + top_rects.plus_btn.3
-                        {
+                        if TopTabBarRects::inside(mx, my, top_rects.plus_btn) {
                             crate::logger::log("-> Clic en [+] top bar: nueva terminal");
                             self.create_new_tab();
                             return;
                         }
 
                         // Clic en [◈] Explorador de archivos
-                        if mx >= top_rects.files_btn.0
-                            && mx < top_rects.files_btn.0 + top_rects.files_btn.2
-                            && my >= top_rects.files_btn.1
-                            && my < top_rects.files_btn.1 + top_rects.files_btn.3
-                        {
+                        if TopTabBarRects::inside(mx, my, top_rects.files_btn) {
                             crate::logger::log("-> Clic en [◈] top bar: Explorador de archivos");
                             self.toggle_file_explorer();
                             return;
                         }
 
                         // Clic en [⚙] Ajustes
-                        if mx >= top_rects.settings_btn.0
-                            && mx < top_rects.settings_btn.0 + top_rects.settings_btn.2
-                            && my >= top_rects.settings_btn.1
-                            && my < top_rects.settings_btn.1 + top_rects.settings_btn.3
-                        {
+                        if TopTabBarRects::inside(mx, my, top_rects.settings_btn) {
                             crate::logger::log("-> Clic en [⚙] top bar: Ajustes");
                             self.open_or_switch_settings_tab();
                             return;
@@ -3207,6 +3498,65 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                 return;
                             }
                         }
+
+                        // Arrastrar ventana o doble clic para maximizar
+                            let now = Instant::now();
+                            if now.duration_since(self.last_titlebar_click).as_millis() < 300 {
+                                if let Some(w) = &self.window {
+                                    w.set_maximized(!w.is_maximized());
+                                }
+                            } else {
+                                self.last_titlebar_click = now;
+                                if let Some(w) = &self.window {
+                                    let _ = w.drag_window();
+                                }
+                            }
+                    }
+                    return;
+                }
+
+                // Modalidad vertical: comprobación de barra de título superior
+                if !self.is_horizontal_tabs() && my < TopTitleBarRects::HEIGHT {
+                    if state == ElementState::Pressed && button == MouseButton::Left {
+                        let title_rects = TopTitleBarRects::compute(win_w);
+
+                        if TopTabBarRects::inside(mx, my, title_rects.win_min_btn) {
+                            if let Some(w) = &self.window {
+                                w.set_minimized(true);
+                            }
+                            return;
+                        }
+
+                        if TopTabBarRects::inside(mx, my, title_rects.win_max_btn) {
+                            if let Some(w) = &self.window {
+                                w.set_maximized(!w.is_maximized());
+                            }
+                            return;
+                        }
+
+                        if TopTabBarRects::inside(mx, my, title_rects.win_close_btn) {
+                            self.save_session();
+                            event_loop.exit();
+                            return;
+                        }
+
+                        if TopTabBarRects::inside(mx, my, title_rects.settings_btn) {
+                            self.open_or_switch_settings_tab();
+                            return;
+                        }
+
+                        // Arrastrar ventana o doble clic para maximizar
+                        let now = Instant::now();
+                        if now.duration_since(self.last_titlebar_click).as_millis() < 300 {
+                            if let Some(w) = &self.window {
+                                w.set_maximized(!w.is_maximized());
+                            }
+                        } else {
+                            self.last_titlebar_click = now;
+                            if let Some(w) = &self.window {
+                                let _ = w.drag_window();
+                            }
+                        }
                     }
                     return;
                 }
@@ -3221,11 +3571,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     };
                     let toggle_btn_h = 30;
                     let toggle_btn_x = 8;
-                    let toggle_btn_y = if self.sidebar_visible {
-                        win_h.saturating_sub(toggle_btn_h + 10)
-                    } else {
-                        win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h)
-                    };
+                    let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h);
 
                     let is_click_toggle = mx >= toggle_btn_x
                         && mx < toggle_btn_x + toggle_btn_w
@@ -3341,10 +3687,22 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                 // 2. Clics en la pestaña de Ajustes (si está activa)
                 if is_settings_active {
-                    if mx >= offset && state == ElementState::Pressed && button == MouseButton::Left
+                    let top_offset = self.top_offset();
+                    if mx >= offset
+                        && my >= top_offset
+                        && state == ElementState::Pressed
+                        && button == MouseButton::Left
                     {
                         let page_w = win_w.saturating_sub(offset);
-                        let rects = SettingsPageRects::compute(offset, 0, page_w, win_h);
+                        let page_h = win_h.saturating_sub(top_offset);
+                        let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
+
+                        // Botón Restablecer valores por defecto (Header)
+                        if SettingsPageRects::inside(mx, my, rects.reset_defaults_btn) {
+                            crate::logger::log("-> Clic en restablecer valores por defecto (Header)");
+                            self.reset_to_defaults();
+                            return;
+                        }
 
                         // Pestañas de navegación
                         if SettingsPageRects::inside(mx, my, rects.nav_appearance) {
@@ -3493,9 +3851,21 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                     crate::logger::log("-> Clic en alternar explorador lateral de archivos (Settings)");
                                     self.toggle_file_explorer();
                                     return;
+                                } else if SettingsPageRects::inside(
+                                    mx,
+                                    my,
+                                    rects.restore_session_btn,
+                                ) {
+                                    crate::logger::log("-> Clic en alternar restaurar pestañas al iniciar");
+                                    self.toggle_restore_session();
+                                    return;
                                 } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
                                     crate::logger::log("-> Clic en abrir archivo axon.toml");
                                     self.open_config_file();
+                                    return;
+                                } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
+                                    crate::logger::log("-> Clic en restablecer valores por defecto (Terminal)");
+                                    self.reset_to_defaults();
                                     return;
                                 }
                             }
@@ -3506,48 +3876,16 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                     );
                                     self.open_config_file();
                                     return;
+                                } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
+                                    crate::logger::log("-> Clic en restablecer valores por defecto (About)");
+                                    self.reset_to_defaults();
+                                    return;
                                 }
                             }
                             SettingsSection::Shortcuts => {}
                         }
                     }
                     return;
-                }
-
-                // Clic en badge ◈ ARCHIVOS en la barra de estado inferior
-                if self.config.appearance.show_status_bar
-                    && !is_settings_active
-                    && my >= win_h.saturating_sub(26)
-                {
-                    if state == ElementState::Pressed && button == MouseButton::Left {
-                        if let Some(renderer) = &self.renderer {
-                            let ai_name = "CLAUDE";
-                            let ai_text_w = renderer.measure_ui_text(ai_name, 11.0, true);
-                            let badge_x = win_w.saturating_sub(ai_text_w + 32);
-
-                            let grid_str = "120×35";
-                            let grid_w = renderer.measure_ui_text(grid_str, 11.0, false);
-                            let grid_x = badge_x.saturating_sub(grid_w + 20);
-
-                            let files_label = if self.file_explorer.visible {
-                                "ARCHIVOS [ON]"
-                            } else {
-                                "ARCHIVOS"
-                            };
-                            let files_w = renderer.measure_ui_text(
-                                files_label,
-                                11.0,
-                                self.file_explorer.visible,
-                            );
-                            let files_x = grid_x.saturating_sub(files_w + 34);
-
-                            if mx >= files_x && mx < grid_x.saturating_sub(6) {
-                                crate::logger::log("-> Clic en badge ARCHIVOS de status bar");
-                                self.toggle_file_explorer();
-                                return;
-                            }
-                        }
-                    }
                 }
 
                 // Clics dentro del panel del explorador lateral de archivos (a la derecha)
@@ -4500,9 +4838,6 @@ pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {
         if lower.contains("ollama") {
             return AiAgentStatus::Ollama;
         }
-    }
-    if is_claude_running() {
-        return AiAgentStatus::Claude;
     }
     AiAgentStatus::None
 }

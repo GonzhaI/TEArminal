@@ -1,18 +1,18 @@
 [appearance]
 font_family = "JetBrains Mono Nerd Font"
 font_size = 14.0
-window_opacity = 0.5
-theme = "Catppuccin Frappé"
-line_spacing = 2.0
-tab_layout = "vertical"
-theme_mode = "system"
+window_opacity = 0.98
+theme = "Ghostty"
+line_spacing = 1.0
+tab_layout = "horizontal"
+theme_mode = "dark"
 show_status_bar = true
 show_file_explorer = false
 
 [terminal]
 default_shell = "powershell.exe"
-ghostty_prompt = false
+ghostty_prompt = true
 scrollback_lines = 50000
 bracketed_paste = true
-cursor_blink = false
+cursor_blink = true
 copy_on_select = false

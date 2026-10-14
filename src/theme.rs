@@ -211,22 +211,22 @@ impl Theme {
     /// Color divisorio sutil y fino acorde al tema
     pub fn border_color(&self) -> Color {
         if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(204, 208, 218) // #ccd0da Catppuccin Surface 0 (Latte)
+            Color::from_rgb(188, 192, 204) // Catppuccin Surface 1 (Latte)
         } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(54, 58, 79) // Catppuccin Surface 0 border
+            Color::from_rgb(71, 76, 100) // Catppuccin Surface 1 border (Frappé)
         } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(38, 38, 43)
+            Color::from_rgb(48, 48, 56) // Ghostty border nítido
         } else if self.is_light() {
             Color::from_rgb(
-                self.background.r.saturating_sub(25),
-                self.background.g.saturating_sub(25),
-                self.background.b.saturating_sub(25),
+                self.background.r.saturating_sub(35),
+                self.background.g.saturating_sub(35),
+                self.background.b.saturating_sub(35),
             )
         } else {
             Color::from_rgb(
-                self.background.r.saturating_add(18),
-                self.background.g.saturating_add(18),
-                self.background.b.saturating_add(22),
+                self.background.r.saturating_add(26),
+                self.background.g.saturating_add(26),
+                self.background.b.saturating_add(32),
             )
         }
     }
@@ -236,20 +236,20 @@ impl Theme {
         if self.background == Color::from_rgb(239, 241, 245) {
             Color::from_rgb(220, 224, 232) // #dce0e8 Catppuccin Crust / Surface 0 (Latte)
         } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(65, 69, 89) // Catppuccin Surface 0
+            Color::from_rgb(62, 66, 88) // Catppuccin Surface 0
         } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(32, 32, 36)
+            Color::from_rgb(34, 34, 39) // Ghostty surface
         } else if self.is_light() {
             Color::from_rgb(
-                self.background.r.saturating_sub(16),
-                self.background.g.saturating_sub(16),
-                self.background.b.saturating_sub(16),
+                self.background.r.saturating_sub(20),
+                self.background.g.saturating_sub(20),
+                self.background.b.saturating_sub(20),
             )
         } else {
             Color::from_rgb(
-                self.background.r.saturating_add(14),
-                self.background.g.saturating_add(14),
-                self.background.b.saturating_add(18),
+                self.background.r.saturating_add(18),
+                self.background.g.saturating_add(18),
+                self.background.b.saturating_add(24),
             )
         }
     }
@@ -257,22 +257,22 @@ impl Theme {
     /// Color de superficie para estados hover
     pub fn surface_hover(&self) -> Color {
         if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(188, 192, 204) // #bcc0cc Catppuccin Surface 1 (Latte)
+            Color::from_rgb(172, 176, 190) // Catppuccin Surface 1 (Latte)
         } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(81, 87, 109) // Catppuccin Surface 1
+            Color::from_rgb(86, 92, 116) // Catppuccin Surface 1 (Frappé)
         } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(42, 42, 48)
+            Color::from_rgb(46, 46, 54) // Ghostty hover
         } else if self.is_light() {
             Color::from_rgb(
-                self.background.r.saturating_sub(32),
-                self.background.g.saturating_sub(32),
-                self.background.b.saturating_sub(32),
+                self.background.r.saturating_sub(40),
+                self.background.g.saturating_sub(40),
+                self.background.b.saturating_sub(40),
             )
         } else {
             Color::from_rgb(
-                self.background.r.saturating_add(26),
-                self.background.g.saturating_add(26),
-                self.background.b.saturating_add(32),
+                self.background.r.saturating_add(32),
+                self.background.g.saturating_add(32),
+                self.background.b.saturating_add(40),
             )
         }
     }
