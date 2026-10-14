@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/icon-256.png" width="120" height="120" alt="Axon" />
+  <img src="assets/logo.png" width="120" height="120" alt="Axon" />
   <h1>Axon</h1>
   <p><em>Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI</em></p>
 </div>
