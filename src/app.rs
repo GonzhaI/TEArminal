@@ -61,6 +61,26 @@ pub struct TerminalPane {
     pub pty: PtyManager,
     pub terminal: TerminalState,
     pub last_grid_size: (usize, usize),
+    pub cached_git_branch: Option<String>,
+    pub cached_git_dir: Option<std::path::PathBuf>,
+}
+
+impl TerminalPane {
+    pub fn new(
+        id: usize,
+        pty: PtyManager,
+        terminal: TerminalState,
+        last_grid_size: (usize, usize),
+    ) -> Self {
+        Self {
+            id,
+            pty,
+            terminal,
+            last_grid_size,
+            cached_git_branch: None,
+            cached_git_dir: None,
+        }
+    }
 }
 
 pub struct TerminalTab {
@@ -456,12 +476,7 @@ impl AxonApp {
                     );
                     terminal.current_dir = cwd_path;
 
-                    let pane = TerminalPane {
-                        id: pane_id,
-                        pty,
-                        terminal,
-                        last_grid_size: (cols, rows),
-                    };
+                    let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
 
                     restored_tabs.push(TerminalTab::new(idx, tab_info.title, pane));
                 }
@@ -483,12 +498,7 @@ impl AxonApp {
                 .expect("Error al inicializar Windows ConPTY");
                 let terminal =
                     TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
-                let pane = TerminalPane {
-                    id: pane_id,
-                    pty,
-                    terminal,
-                    last_grid_size: (cols, rows),
-                };
+                let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
                 (
                     vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
                     0,
@@ -511,12 +521,7 @@ impl AxonApp {
             .expect("Error al inicializar Windows ConPTY");
             let terminal =
                 TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
-            let pane = TerminalPane {
-                id: pane_id,
-                pty,
-                terminal,
-                last_grid_size: (cols, rows),
-            };
+            let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
             (
                 vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
                 0,
@@ -728,12 +733,7 @@ impl AxonApp {
             self.theme.clone(),
         );
 
-        let pane = TerminalPane {
-            id: pane_id,
-            pty,
-            terminal,
-            last_grid_size: (cols, rows),
-        };
+        let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
 
         self.tabs.push(TerminalTab::new(tab_id, title, pane));
 
@@ -878,12 +878,7 @@ impl AxonApp {
         terminal.current_dir = cwd_path;
         terminal.ssh_session = initial_ssh;
 
-        let new_pane = TerminalPane {
-            id: new_pane_id,
-            pty,
-            terminal,
-            last_grid_size: (cols, rows),
-        };
+        let new_pane = TerminalPane::new(new_pane_id, pty, terminal, (cols, rows));
 
         let active_tab = &mut self.tabs[self.active_tab_index];
         active_tab.split_active_pane(new_pane_id, new_pane, direction);
@@ -1726,7 +1721,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     })
                     .collect();
 
-                let active_tab = &self.tabs[active_idx];
+                let active_tab = &mut self.tabs[active_idx];
 
                 if let (Some(surface), Some(renderer), Some(window)) =
                     (&mut self.surface, &mut self.renderer, &self.window)
@@ -1860,7 +1855,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
 
                         if self.config.appearance.show_status_bar && !active_tab.is_settings {
                             let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
-                                if let Some(pane) = active_tab.active_pane() {
+                                if let Some(pane) = active_tab.active_pane_mut() {
                                     let c_dir = pane.terminal.current_dir.as_ref().map(|p| {
                                         let s = p.to_string_lossy().to_string();
                                         if let Ok(userprofile) = std::env::var("USERPROFILE") {
@@ -1870,8 +1865,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                                         }
                                         s
                                     });
-                                    let g_branch =
-                                        get_git_branch(pane.terminal.current_dir.as_deref());
+                                    let g_branch = if pane.terminal.current_dir != pane.cached_git_dir {
+                                        pane.cached_git_branch =
+                                            get_git_branch(pane.terminal.current_dir.as_deref());
+                                        pane.cached_git_dir = pane.terminal.current_dir.clone();
+                                        pane.cached_git_branch.clone()
+                                    } else {
+                                        pane.cached_git_branch.clone()
+                                    };
                                     let s_host = pane
                                         .terminal
                                         .ssh_session
@@ -4024,8 +4025,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             }
         }
 
-        // 4. Temporizador de parpadeo de cursor cuando la terminal está inactiva
-        if self.config.terminal.cursor_blink {
+        // 4. Temporizador de parpadeo de cursor cuando la terminal está inactiva y tiene foco
+        if self.config.terminal.cursor_blink && self.is_focused {
             let elapsed = self.cursor_timer.elapsed().as_millis();
             if elapsed >= 500 {
                 self.cursor_timer = Instant::now();

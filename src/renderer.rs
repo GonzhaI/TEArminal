@@ -276,6 +276,7 @@ pub struct TerminalRenderer {
     pub row_height: usize,
     pub baseline_y: usize,
     glyph_cache: HashMap<(char, bool), CachedGlyph>,
+    ascii_cache: Box<[Option<CachedGlyph>; 256]>,
     ui_glyph_cache: HashMap<(char, u32, bool), (CachedGlyph, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     icon_glyph_cache: HashMap<(char, u32), CachedGlyph>,            // (c, size_bits) -> glyph
     pub margin_x: usize,
@@ -346,6 +347,7 @@ impl TerminalRenderer {
             row_height,
             baseline_y,
             glyph_cache: HashMap::new(),
+            ascii_cache: Box::new([(); 256].map(|_| None)),
             ui_glyph_cache: HashMap::new(),
             icon_glyph_cache: HashMap::new(),
             margin_x,
@@ -375,6 +377,9 @@ impl TerminalRenderer {
         self.margin_x = (10.0 * scale_factor as f32).round() as usize;
         self.margin_y = (8.0 * scale_factor as f32).round() as usize;
         self.glyph_cache.clear();
+        for slot in self.ascii_cache.iter_mut() {
+            *slot = None;
+        }
         self.ui_glyph_cache.clear();
         self.icon_glyph_cache.clear();
     }
@@ -404,8 +409,7 @@ impl TerminalRenderer {
         (regular, bold)
     }
 
-    /// Obtiene o rasteriza un glifo a través de la caché SIMD de fontdue con soporte completo de Nerd Fonts
-    pub fn get_glyph(&mut self, c: char, bold: bool) -> &CachedGlyph {
+    fn rasterize_glyph(&self, c: char, bold: bool) -> CachedGlyph {
         let (font_size, has_regular_glyph, has_bold_glyph, has_fallback_glyph) = (
             self.font_size,
             self.regular_font.has_glyph(c),
@@ -418,6 +422,50 @@ impl TerminalRenderer {
         let regular_ref = &self.regular_font;
         let bold_ref = &self.bold_font;
         let fallback_ref = self.fallback_font.as_ref();
+
+        let font = if bold && has_bold_glyph {
+            bold_ref
+        } else if has_regular_glyph {
+            regular_ref
+        } else if has_fallback_glyph {
+            fallback_ref.unwrap()
+        } else if bold {
+            bold_ref
+        } else {
+            regular_ref
+        };
+
+        let (metrics, bitmap) = font.rasterize(c, font_size);
+        CachedGlyph {
+            width: metrics.width,
+            height: metrics.height,
+            x_offset: metrics.xmin,
+            y_offset: metrics.ymin,
+            bitmap,
+        }
+    }
+
+    /// Obtiene o rasteriza un glifo a través de la caché SIMD de fontdue con soporte completo de Nerd Fonts y tabla plana O(1) para ASCII
+    pub fn get_glyph(&mut self, c: char, bold: bool) -> &CachedGlyph {
+        let code = c as u32;
+        if code < 128 {
+            let idx = code as usize + if bold { 128 } else { 0 };
+            if self.ascii_cache[idx].is_none() {
+                let glyph = self.rasterize_glyph(c, bold);
+                self.ascii_cache[idx] = Some(glyph);
+            }
+            return self.ascii_cache[idx].as_ref().unwrap();
+        }
+
+        let regular_ref = &self.regular_font;
+        let bold_ref = &self.bold_font;
+        let fallback_ref = self.fallback_font.as_ref();
+        let (font_size, has_regular_glyph, has_bold_glyph, has_fallback_glyph) = (
+            self.font_size,
+            regular_ref.has_glyph(c),
+            bold_ref.has_glyph(c),
+            fallback_ref.map_or(false, |f| f.has_glyph(c)),
+        );
 
         self.glyph_cache.entry((c, bold)).or_insert_with(|| {
             let font = if bold && has_bold_glyph {
@@ -3219,7 +3267,7 @@ impl TerminalRenderer {
 
                 let effective_bg = if is_selected {
                     theme.selection
-                } else if cell.inverse {
+                } else if cell.inverse() {
                     if cell.fg != Color::TRANSPARENT {
                         cell.fg
                     } else {
@@ -3244,7 +3292,7 @@ impl TerminalRenderer {
                 }
 
                 // Subrayado (SGR 4)
-                if cell.underline {
+                if cell.underline() {
                     let line_y = cell_y + self.row_height - 2;
                     let fg_u32 = cell.fg.to_u32_xrgb();
                     for x in cell_x..(cell_x + self.char_width) {
@@ -3255,7 +3303,7 @@ impl TerminalRenderer {
                 }
 
                 // Tachado (SGR 9)
-                if cell.strikethrough {
+                if cell.strikethrough() {
                     let line_y = cell_y + (self.row_height / 2);
                     let fg_u32 = cell.fg.to_u32_xrgb();
                     for x in cell_x..(cell_x + self.char_width) {
@@ -3272,9 +3320,13 @@ impl TerminalRenderer {
 
                 // Calcular color final de texto
                 let fg_color = compute_cell_fg(cell, theme);
+                let fg_u32 = fg_color.to_u32_xrgb();
+                let fg_r = fg_color.r as u32;
+                let fg_g = fg_color.g as u32;
+                let fg_b = fg_color.b as u32;
 
                 // Obtener y mezclar glifo (con soporte completo de Nerd Fonts)
-                let glyph = self.get_glyph(cell.c, cell.bold);
+                let glyph = self.get_glyph(cell.c, cell.bold());
                 let glyph_w = glyph.width;
                 let glyph_h = glyph.height;
                 let glyph_x = cell_x as i32 + glyph.x_offset;
@@ -3285,6 +3337,7 @@ impl TerminalRenderer {
                     if py < rect_y as i32 || py >= max_y as i32 {
                         continue;
                     }
+                    let row_buf_idx = (py as usize) * width;
                     for gx in 0..glyph_w {
                         let px = glyph_x + gx as i32;
                         if px < rect_x as i32 || px >= max_x as i32 {
@@ -3292,14 +3345,20 @@ impl TerminalRenderer {
                         }
 
                         let alpha = glyph.bitmap[gy * glyph_w + gx];
-                        if alpha > 0 {
-                            let buf_idx = (py as usize) * width + (px as usize);
-                            let bg = Color::from_rgb(
-                                ((buffer[buf_idx] >> 16) & 0xFF) as u8,
-                                ((buffer[buf_idx] >> 8) & 0xFF) as u8,
-                                (buffer[buf_idx] & 0xFF) as u8,
-                            );
-                            buffer[buf_idx] = bg.blend_over(fg_color, alpha);
+                        if alpha == 255 {
+                            buffer[row_buf_idx + (px as usize)] = fg_u32;
+                        } else if alpha > 0 {
+                            let buf_idx = row_buf_idx + (px as usize);
+                            let bg_val = buffer[buf_idx];
+                            let bg_r = (bg_val >> 16) & 0xFF;
+                            let bg_g = (bg_val >> 8) & 0xFF;
+                            let bg_b = bg_val & 0xFF;
+                            let a = alpha as u32;
+                            let inv_a = 255 - a;
+                            let r = (fg_r * a + bg_r * inv_a) / 255;
+                            let g = (fg_g * a + bg_g * inv_a) / 255;
+                            let b = (fg_b * a + bg_b * inv_a) / 255;
+                            buffer[buf_idx] = (r << 16) | (g << 8) | b;
                         }
                     }
                 }
@@ -3356,7 +3415,15 @@ impl TerminalRenderer {
                 if let Some(cell) = cell_under {
                     if cell.c != ' ' && cell.width > 0 {
                         let inv_fg = theme.background;
-                        let glyph = self.get_glyph(cell.c, cell.bold);
+                        let inv_fg_u32 = inv_fg.to_u32_xrgb();
+                        let inv_fg_r = inv_fg.r as u32;
+                        let inv_fg_g = inv_fg.g as u32;
+                        let inv_fg_b = inv_fg.b as u32;
+                        let bg = theme.cursor;
+                        let bg_r = bg.r as u32;
+                        let bg_g = bg.g as u32;
+                        let bg_b = bg.b as u32;
+                        let glyph = self.get_glyph(cell.c, cell.bold());
                         let glyph_w = glyph.width;
                         let glyph_h = glyph.height;
                         let glyph_x = cx as i32 + glyph.x_offset;
@@ -3367,6 +3434,7 @@ impl TerminalRenderer {
                             if py < rect_y as i32 || py >= max_y as i32 {
                                 continue;
                             }
+                            let row_buf_idx = (py as usize) * width;
                             for gx in 0..glyph_w {
                                 let px = glyph_x + gx as i32;
                                 if px < rect_x as i32 || px >= max_x as i32 {
@@ -3374,10 +3442,16 @@ impl TerminalRenderer {
                                 }
 
                                 let alpha = glyph.bitmap[gy * glyph_w + gx];
-                                if alpha > 0 {
-                                    let buf_idx = (py as usize) * width + (px as usize);
-                                    let bg = theme.cursor;
-                                    buffer[buf_idx] = bg.blend_over(inv_fg, alpha);
+                                if alpha == 255 {
+                                    buffer[row_buf_idx + (px as usize)] = inv_fg_u32;
+                                } else if alpha > 0 {
+                                    let buf_idx = row_buf_idx + (px as usize);
+                                    let a = alpha as u32;
+                                    let inv_a = 255 - a;
+                                    let r = (inv_fg_r * a + bg_r * inv_a) / 255;
+                                    let g = (inv_fg_g * a + bg_g * inv_a) / 255;
+                                    let b = (inv_fg_b * a + bg_b * inv_a) / 255;
+                                    buffer[buf_idx] = (r << 16) | (g << 8) | b;
                                 }
                             }
                         }
@@ -3558,7 +3632,7 @@ fn is_cell_selected(col: usize, row: usize, sel: SelectionRange) -> bool {
 }
 
 fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
-    let base = if cell.inverse {
+    let base = if cell.inverse() {
         if cell.bg != Color::TRANSPARENT {
             cell.bg
         } else {
@@ -3568,7 +3642,7 @@ fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
         cell.fg
     };
 
-    if cell.dim {
+    if cell.dim() {
         Color::from_rgb(
             (base.r as f32 * 0.65) as u8,
             (base.g as f32 * 0.65) as u8,

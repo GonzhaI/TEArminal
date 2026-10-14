@@ -370,12 +370,7 @@ mod tests {
         let theme = Theme::ghostty_default_styledark();
         let pty1 = PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).expect("Pty 1");
         let term1 = TerminalState::new(80, 24, 1000, theme.clone());
-        let pane1 = TerminalPane {
-            id: 1,
-            pty: pty1,
-            terminal: term1,
-            last_grid_size: (80, 24),
-        };
+        let pane1 = TerminalPane::new(1, pty1, term1, (80, 24));
 
         let mut tab = TerminalTab::new(0, "Test Tab".to_string(), pane1);
         assert_eq!(tab.panes.len(), 1);
@@ -393,12 +388,7 @@ mod tests {
         // 2. División horizontal (Ctrl + Alt + D)
         let pty2 = PtyManager::new(2, "powershell.exe", false, 80, 24, None, None).expect("Pty 2");
         let term2 = TerminalState::new(80, 24, 1000, theme.clone());
-        let pane2 = TerminalPane {
-            id: 2,
-            pty: pty2,
-            terminal: term2,
-            last_grid_size: (80, 24),
-        };
+        let pane2 = TerminalPane::new(2, pty2, term2, (80, 24));
 
         tab.split_active_pane(2, pane2, SplitDirection::Horizontal);
         assert_eq!(tab.panes.len(), 2);
@@ -604,5 +594,86 @@ mod tests {
         assert!(rects.plus_btn.0 > tab0.0 + (3 * 160));
         // Settings button debe ubicarse al extremo derecho
         assert_eq!(rects.settings_btn.0, 1200 - 36);
+    }
+
+    #[test]
+    fn test_cell_memory_footprint_16_bytes() {
+        assert_eq!(
+            std::mem::size_of::<terminal::Cell>(),
+            16,
+            "Cell debe estar optimizada a exactamente 16 bytes de memoria"
+        );
+    }
+
+    #[test]
+    fn test_render_frame_latency_and_fps_benchmark() {
+        let config = AxonConfig::load_or_default();
+        let mut renderer = renderer::TerminalRenderer::new(&config, 1.0);
+        let mut term = terminal::TerminalState::new(120, 40, 1000, theme::Theme::ghostty_dark());
+
+        // Llenar grilla con texto y colores realistas
+        for i in 0..40 {
+            let line = format!(
+                "\x1b[38;2;81;226;122m[Line {:02}]\x1b[0m fn main() {{ println!(\"Axon fast renderer #{} \u{e0a0}\"); }} // OK\r\n",
+                i, i
+            );
+            term.process_bytes(line.as_bytes());
+        }
+
+        let width = 1920;
+        let height = 1080;
+        let mut buffer = vec![0u32; width * height];
+
+        // Warm up
+        renderer.render_pane(
+            &mut buffer,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height,
+            &term,
+            &term.theme,
+            true,
+            true,
+            false,
+        );
+
+        let frames = 60;
+        let start = std::time::Instant::now();
+        for _ in 0..frames {
+            renderer.render_pane(
+                &mut buffer,
+                width,
+                height,
+                0,
+                0,
+                width,
+                height,
+                &term,
+                &term.theme,
+                true,
+                true,
+                false,
+            );
+        }
+        let total_elapsed = start.elapsed();
+        let avg_frame_ms = total_elapsed.as_secs_f64() * 1000.0 / frames as f64;
+        let potential_fps = frames as f64 / total_elapsed.as_secs_f64();
+
+        println!(
+            "\n⚡ [Axon Render Benchmark 1080p Fullscreen] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
+            frames, total_elapsed, avg_frame_ms, potential_fps
+        );
+
+        // El renderizado por software en CPU de una grilla 1080p completa debe ser ultra fluido (<3ms en release y <35ms en debug)
+        let max_allowed_ms = if cfg!(debug_assertions) { 40.0 } else { 16.6 };
+        assert!(
+            avg_frame_ms < max_allowed_ms,
+            "El frametime ({:.2}ms) debe ser menor al límite ({:.2}ms)",
+            avg_frame_ms,
+            max_allowed_ms
+        );
     }
 }

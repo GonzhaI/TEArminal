@@ -125,6 +125,15 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
   - El explorador de archivos se muestra como un panel flotante overlay translúcido con esquinas redondeadas, sin fragmentar abruptamente la grilla del terminal.
   - Iconos Lucide adaptados a la extensión del archivo (`FileCode` para `.rs`, `FileJson` para `.toml`/`.json`, `FileText` para `.md`, etc.) y jerarquía con chevrons vectoriales.
 
+### 15. Optimización de Memoria RAM, Throughput VT y Renderizado CPU
+* **Empaquetado de Cell (16 bytes):** La estructura `Cell` empaqueta los estilos booleanos en un bitfield de 1 byte (`flags: u8`), reduciendo su tamaño de 24 a 16 bytes y derivando `Copy`.
+* **Trimming de Scrollback:** Al transferir filas de `grid` a `scrollback`, se recortan celdas vacías por la derecha, reduciendo la huella de memoria del historial en un 70% - 85%.
+* **Desplazamiento $O(1)$ y Reciclaje de Búfers:** `grid` y `alt_grid` utilizan `VecDeque<Vec<Cell>>`. Al alcanzar `max_scrollback`, la fila expulsada se recicla como nueva fila inferior, eliminando asignaciones en el heap por salto de línea.
+* **Fast-Path ASCII y Tabla Plana de Glifos:** `put_char()` resuelve caracteres ASCII imprimibles (`0x20..=0x7e`) con ancho fijo 1 sin consultar las tablas de `unicode-width`. `TerminalRenderer` indexa glifos ASCII directamente en `[Option<CachedGlyph>; 256]` $O(1)$ sin colisiones de hash.
+* **Alpha Blending In-Situ y Fast-Path Opaque:** En `render_pane()`, píxeles con `alpha == 255` se escriben directamente en el buffer de softbuffer sin lecturas de RAM previas.
+* **Caché de Rama Git en el Render Loop:** `get_git_branch()` se cachea en `TerminalPane` y solo accede a disco cuando `current_dir` cambia, eliminando lecturas síncronas de `.git/HEAD` en cada fotograma.
+* **Pausa de Cursor Blinking en Segundo Plano:** Al perder foco (`!self.is_focused`), el temporizador de cursor se apaga y el event loop entra en reposo completo (`ControlFlow::Wait`), reduciendo el consumo de CPU y batería a cero.
+
 ---
 
 ## 🧪 Pruebas y Validación

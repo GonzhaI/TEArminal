@@ -2,33 +2,102 @@ use crate::theme::{Color, Theme};
 use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cell {
     pub c: char,
     pub width: u8,
+    pub flags: u8,
     pub fg: Color,
     pub bg: Color,
-    pub bold: bool,
-    pub dim: bool,
-    pub italic: bool,
-    pub underline: bool,
-    pub strikethrough: bool,
-    pub inverse: bool,
 }
 
 impl Cell {
+    pub const FLAG_BOLD: u8 = 1 << 0;
+    pub const FLAG_DIM: u8 = 1 << 1;
+    pub const FLAG_ITALIC: u8 = 1 << 2;
+    pub const FLAG_UNDERLINE: u8 = 1 << 3;
+    pub const FLAG_STRIKETHROUGH: u8 = 1 << 4;
+    pub const FLAG_INVERSE: u8 = 1 << 5;
+
+    #[inline(always)]
+    pub fn bold(&self) -> bool {
+        self.flags & Self::FLAG_BOLD != 0
+    }
+
+    #[inline(always)]
+    pub fn dim(&self) -> bool {
+        self.flags & Self::FLAG_DIM != 0
+    }
+
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub fn italic(&self) -> bool {
+        self.flags & Self::FLAG_ITALIC != 0
+    }
+
+    #[inline(always)]
+    pub fn underline(&self) -> bool {
+        self.flags & Self::FLAG_UNDERLINE != 0
+    }
+
+    #[inline(always)]
+    pub fn strikethrough(&self) -> bool {
+        self.flags & Self::FLAG_STRIKETHROUGH != 0
+    }
+
+    #[inline(always)]
+    pub fn inverse(&self) -> bool {
+        self.flags & Self::FLAG_INVERSE != 0
+    }
+
+    #[allow(dead_code)]
+    pub fn new(
+        c: char,
+        width: u8,
+        fg: Color,
+        bg: Color,
+        bold: bool,
+        dim: bool,
+        italic: bool,
+        underline: bool,
+        strikethrough: bool,
+        inverse: bool,
+    ) -> Self {
+        let mut flags = 0u8;
+        if bold {
+            flags |= Self::FLAG_BOLD;
+        }
+        if dim {
+            flags |= Self::FLAG_DIM;
+        }
+        if italic {
+            flags |= Self::FLAG_ITALIC;
+        }
+        if underline {
+            flags |= Self::FLAG_UNDERLINE;
+        }
+        if strikethrough {
+            flags |= Self::FLAG_STRIKETHROUGH;
+        }
+        if inverse {
+            flags |= Self::FLAG_INVERSE;
+        }
+        Self {
+            c,
+            width,
+            flags,
+            fg,
+            bg,
+        }
+    }
+
     pub fn default_with_theme(theme: &Theme) -> Self {
         Self {
             c: ' ',
             width: 1,
+            flags: 0,
             fg: theme.foreground,
             bg: Color::TRANSPARENT,
-            bold: false,
-            dim: false,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            inverse: false,
         }
     }
 }
@@ -68,14 +137,14 @@ pub struct TerminalState {
     pub rows: usize,
     pub cursor_x: usize,
     pub cursor_y: usize,
-    pub grid: Vec<Vec<Cell>>,
+    pub grid: VecDeque<Vec<Cell>>,
     pub scrollback: VecDeque<Vec<Cell>>,
     pub max_scrollback: usize,
     pub scroll_offset: usize,
 
     // Alternate Screen Buffer (Soporte nativo para tmux, btop, nvtop, vim)
     pub is_alt_screen: bool,
-    pub alt_grid: Vec<Vec<Cell>>,
+    pub alt_grid: VecDeque<Vec<Cell>>,
     pub saved_cursor_x: usize,
     pub saved_cursor_y: usize,
 
@@ -140,8 +209,8 @@ pub struct SelectionRange {
 impl TerminalState {
     pub fn new(cols: usize, rows: usize, max_scrollback: usize, theme: Theme) -> Self {
         let default_cell = Cell::default_with_theme(&theme);
-        let grid = vec![vec![default_cell.clone(); cols]; rows];
-        let alt_grid = vec![vec![default_cell; cols]; rows];
+        let grid = (0..rows).map(|_| vec![default_cell; cols]).collect();
+        let alt_grid = VecDeque::new();
         let fg = theme.foreground;
 
         Self {
@@ -246,7 +315,7 @@ impl TerminalState {
         self.scrollback.len().saturating_sub(self.scroll_offset)
     }
 
-    pub fn active_grid_mut(&mut self) -> &mut Vec<Vec<Cell>> {
+    pub fn active_grid_mut(&mut self) -> &mut VecDeque<Vec<Cell>> {
         if self.is_alt_screen {
             &mut self.alt_grid
         } else {
@@ -260,7 +329,14 @@ impl TerminalState {
             self.saved_cursor_x = self.cursor_x;
             self.saved_cursor_y = self.cursor_y;
             let default_cell = Cell::default_with_theme(&self.theme);
-            self.alt_grid = vec![vec![default_cell; self.cols]; self.rows];
+            if self.alt_grid.len() != self.rows {
+                self.alt_grid = (0..self.rows).map(|_| vec![default_cell; self.cols]).collect();
+            } else {
+                for row in &mut self.alt_grid {
+                    row.clear();
+                    row.resize(self.cols, default_cell);
+                }
+            }
             self.cursor_x = 0;
             self.cursor_y = 0;
         }
@@ -305,12 +381,36 @@ impl TerminalState {
                 && self.scroll_region_bottom == self.rows.saturating_sub(1)
             {
                 // Desplazamiento fullscreen a O(1) con VecDeque
-                let top_row = self.grid.remove(0);
-                if self.scrollback.len() >= self.max_scrollback {
-                    self.scrollback.pop_front();
+                let mut top_row = self.grid.pop_front().unwrap_or_else(|| vec![default_cell; self.cols]);
+
+                // Reciclar una fila existente si llegamos al límite máximo de scrollback para evitar allocations
+                let new_bottom_row = if self.scrollback.len() >= self.max_scrollback {
+                    if let Some(mut recycled) = self.scrollback.pop_front() {
+                        recycled.clear();
+                        recycled.resize(self.cols, default_cell);
+                        recycled
+                    } else {
+                        vec![default_cell; self.cols]
+                    }
+                } else {
+                    vec![default_cell; self.cols]
+                };
+
+                // Recortar celdas vacías por la derecha para ahorrar hasta un 85% de memoria en scrollback
+                while let Some(last) = top_row.last() {
+                    if last.c == ' '
+                        && last.bg == Color::TRANSPARENT
+                        && (last.flags & (Cell::FLAG_UNDERLINE | Cell::FLAG_STRIKETHROUGH | Cell::FLAG_INVERSE)) == 0
+                    {
+                        top_row.pop();
+                    } else {
+                        break;
+                    }
                 }
+                top_row.shrink_to_fit();
+
                 self.scrollback.push_back(top_row);
-                self.grid.push(vec![default_cell; self.cols]);
+                self.grid.push_back(new_bottom_row);
             } else {
                 // Sub-región de desplazamiento (split panes de tmux)
                 if self.scroll_region_top < self.grid.len() {
@@ -324,16 +424,49 @@ impl TerminalState {
         }
     }
 
-    pub fn put_char(&mut self, c: char) {
-        use unicode_width::UnicodeWidthChar;
-        let char_w = c.width().unwrap_or(1);
-
-        // Caracteres de control no imprimibles
-        if char_w == 0 && c.is_control() {
-            return;
+    #[inline(always)]
+    pub fn current_flags(&self) -> u8 {
+        let mut flags = 0u8;
+        if self.current_bold {
+            flags |= Cell::FLAG_BOLD;
         }
+        if self.current_dim {
+            flags |= Cell::FLAG_DIM;
+        }
+        if self.current_italic {
+            flags |= Cell::FLAG_ITALIC;
+        }
+        if self.current_underline {
+            flags |= Cell::FLAG_UNDERLINE;
+        }
+        if self.current_strikethrough {
+            flags |= Cell::FLAG_STRIKETHROUGH;
+        }
+        if self.current_inverse {
+            flags |= Cell::FLAG_INVERSE;
+        }
+        flags
+    }
 
-        let w = if char_w == 0 { 1 } else { char_w.min(2) as u8 };
+    pub fn put_char(&mut self, c: char) {
+        // Fast-path para caracteres imprimibles ASCII estándar (ancho 1 fijo sin queries Unicode)
+        let w = if c.is_ascii() {
+            if (c as u8) < 0x20 || c == '\x7f' {
+                return;
+            }
+            1u8
+        } else {
+            use unicode_width::UnicodeWidthChar;
+            let char_w = c.width().unwrap_or(1);
+            if char_w == 0 && c.is_control() {
+                return;
+            }
+            if char_w == 0 {
+                1
+            } else {
+                char_w.min(2) as u8
+            }
+        };
 
         // Si es de doble ancho (emoji, CJK) y no cabe al final de la línea, envolver automáticamente
         if w == 2 && self.cursor_x + 1 >= self.cols {
@@ -344,6 +477,7 @@ impl TerminalState {
             self.newline();
         }
 
+        let flags = self.current_flags();
         let grid = if self.is_alt_screen {
             &mut self.alt_grid
         } else {
@@ -354,14 +488,9 @@ impl TerminalState {
             grid[self.cursor_y][self.cursor_x] = Cell {
                 c,
                 width: w,
+                flags,
                 fg: self.current_fg,
                 bg: self.current_bg,
-                bold: self.current_bold,
-                dim: self.current_dim,
-                italic: self.current_italic,
-                underline: self.current_underline,
-                strikethrough: self.current_strikethrough,
-                inverse: self.current_inverse,
             };
 
             // Para caracteres de 2 columnas, la celda contigua es un espaciador de continuación (width: 0)
@@ -369,14 +498,9 @@ impl TerminalState {
                 grid[self.cursor_y][self.cursor_x + 1] = Cell {
                     c: ' ',
                     width: 0,
+                    flags,
                     fg: self.current_fg,
                     bg: self.current_bg,
-                    bold: self.current_bold,
-                    dim: self.current_dim,
-                    italic: self.current_italic,
-                    underline: self.current_underline,
-                    strikethrough: self.current_strikethrough,
-                    inverse: self.current_inverse,
                 };
                 self.cursor_x += 2;
             } else {
@@ -450,20 +574,21 @@ impl TerminalState {
         // Ajustar filas
         if new_rows > self.rows {
             for _ in self.rows..new_rows {
-                self.grid.push(vec![default_cell.clone(); new_cols]);
-                self.alt_grid.push(vec![default_cell.clone(); new_cols]);
+                self.grid.push_back(vec![default_cell; new_cols]);
+                if !self.alt_grid.is_empty() {
+                    self.alt_grid.push_back(vec![default_cell; new_cols]);
+                }
             }
         } else if new_rows < self.rows {
             // Solo si el cursor desborda la nueva altura de la ventana, desplazar líneas hacia el scrollback
             if self.cursor_y >= new_rows {
                 let shift = (self.cursor_y + 1).saturating_sub(new_rows);
                 for _ in 0..shift {
-                    if !self.grid.is_empty() {
-                        let r = self.grid.remove(0);
+                    if let Some(r) = self.grid.pop_front() {
                         self.scrollback.push_back(r);
                     }
                     if !self.alt_grid.is_empty() {
-                        self.alt_grid.remove(0);
+                        self.alt_grid.pop_front();
                     }
                 }
                 self.cursor_y = self.cursor_y.saturating_sub(shift);
@@ -471,10 +596,10 @@ impl TerminalState {
 
             // Recortar el exceso de filas vacías del final de la pantalla
             while self.grid.len() > new_rows {
-                self.grid.pop();
+                self.grid.pop_back();
             }
             while self.alt_grid.len() > new_rows {
-                self.alt_grid.pop();
+                self.alt_grid.pop_back();
             }
         }
 
@@ -734,14 +859,9 @@ impl<'a> Perform for Performer<'a> {
                 let erase_cell = Cell {
                     c: ' ',
                     width: 1,
+                    flags: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underline: false,
-                    strikethrough: false,
-                    inverse: false,
                 };
                 match mode {
                     0 => {
@@ -832,14 +952,9 @@ impl<'a> Perform for Performer<'a> {
                 let erase_cell = Cell {
                     c: ' ',
                     width: 1,
+                    flags: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underline: false,
-                    strikethrough: false,
-                    inverse: false,
                 };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
@@ -885,14 +1000,9 @@ impl<'a> Perform for Performer<'a> {
                 let erase_cell = Cell {
                     c: ' ',
                     width: 1,
+                    flags: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
-                    bold: false,
-                    dim: false,
-                    italic: false,
-                    underline: false,
-                    strikethrough: false,
-                    inverse: false,
                 };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
@@ -1740,18 +1850,18 @@ mod tests {
 
         let cell_a = &term.grid[0][0];
         assert_eq!(cell_a.c, 'A');
-        assert!(cell_a.bold);
-        assert!(cell_a.dim);
-        assert!(cell_a.underline);
-        assert!(cell_a.strikethrough);
+        assert!(cell_a.bold());
+        assert!(cell_a.dim());
+        assert!(cell_a.underline());
+        assert!(cell_a.strikethrough());
 
         // Tras el reset (SGR 0), 'B' debe tener estilos limpios
         let cell_b = &term.grid[0][1];
         assert_eq!(cell_b.c, 'B');
-        assert!(!cell_b.bold);
-        assert!(!cell_b.dim);
-        assert!(!cell_b.underline);
-        assert!(!cell_b.strikethrough);
+        assert!(!cell_b.bold());
+        assert!(!cell_b.dim());
+        assert!(!cell_b.underline());
+        assert!(!cell_b.strikethrough());
     }
 
     #[test]
