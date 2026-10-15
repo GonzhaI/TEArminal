@@ -102,7 +102,7 @@ impl TerminalRenderer {
                 crate::ui::LucideIcon::GitBranch,
                 cur_x + 6,
                 center_y,
-                12.0,
+                11.0,
                 theme.accent_color(),
             );
             cur_x += 16;
@@ -147,7 +147,7 @@ impl TerminalRenderer {
             ai_icon,
             badge_x + 6,
             center_y,
-            12.0,
+            11.0,
             ai_fg,
         );
         self.draw_ui_text(

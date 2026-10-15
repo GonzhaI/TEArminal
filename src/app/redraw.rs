@@ -36,6 +36,7 @@ impl AxonApp {
                 has_unread: t.has_unread,
                 pane_count: t.panes.len(),
                 is_settings: t.is_settings,
+                is_file_viewer: t.file_viewer.is_some(),
             })
             .collect();
 
@@ -122,6 +123,34 @@ impl AxonApp {
                         &self.settings_page_state,
                         &self.theme,
                     );
+                } else if let Some(ref viewer) = active_tab.file_viewer {
+                    let term_area_w = (size.width as usize).saturating_sub(offset + right_offset);
+                    let term_area_h =
+                        (size.height as usize).saturating_sub(top_offset + status_bar_h);
+
+                    renderer.render_file_viewer(
+                        &mut buffer,
+                        size.width as usize,
+                        size.height as usize,
+                        offset,
+                        top_offset,
+                        term_area_w,
+                        term_area_h,
+                        viewer,
+                        &self.theme,
+                    );
+
+                    if self.file_explorer.visible {
+                        renderer.render_file_explorer(
+                            &mut buffer,
+                            size.width as usize,
+                            size.height as usize,
+                            top_offset,
+                            status_bar_h,
+                            &self.file_explorer,
+                            &self.theme,
+                        );
+                    }
                 } else {
                     let term_area_w = (size.width as usize).saturating_sub(offset + right_offset);
                     let term_area_h =
@@ -196,7 +225,17 @@ impl AxonApp {
 
                 if self.config.appearance.show_status_bar && !active_tab.is_settings {
                     let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
-                        if let Some(pane) = active_tab.active_pane_mut() {
+                        if let Some(ref viewer) = active_tab.file_viewer {
+                            let path_str = viewer.path.to_string_lossy().to_string();
+                            (
+                                Some(path_str),
+                                None,
+                                None,
+                                0,
+                                viewer.lines.len(),
+                                AiAgentStatus::None,
+                            )
+                        } else if let Some(pane) = active_tab.active_pane_mut() {
                             let c_dir = pane.terminal.current_dir.as_ref().map(|p| {
                                 static HOME: std::sync::OnceLock<Option<String>> =
                                     std::sync::OnceLock::new();

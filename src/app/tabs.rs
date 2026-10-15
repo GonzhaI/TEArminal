@@ -38,10 +38,46 @@ impl AxonApp {
         }
     }
 
+    pub fn open_file_in_viewer(&mut self, path: &std::path::Path) {
+        if !path.exists() {
+            return;
+        }
+
+        // Si ya existe una pestaña con este archivo, alternar a ella
+        if let Some(pos) = self.tabs.iter().position(|t| {
+            t.file_viewer
+                .as_ref()
+                .map(|v| v.path == path)
+                .unwrap_or(false)
+        }) {
+            self.switch_to_tab(pos);
+            return;
+        }
+
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+        self.tabs
+            .push(TerminalTab::new_file_viewer(tab_id, path.to_path_buf()));
+        self.switch_to_tab(self.tabs.len() - 1);
+        self.update_window_title();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub fn toggle_file_explorer(&mut self) {
         self.file_explorer.toggle();
         if self.file_explorer.visible {
             self.sync_file_explorer_root();
+            self.file_explorer.is_focused = true;
+            if self.file_explorer.selected_index.is_none() && !self.file_explorer.items.is_empty()
+            {
+                self.file_explorer.selected_index = Some(0);
+                self.file_explorer.selected_path =
+                    Some(self.file_explorer.items[0].path.clone());
+            }
+        } else {
+            self.file_explorer.is_focused = false;
         }
         self.recompute_grid_for_all_tabs();
         self.save_session();
@@ -129,7 +165,9 @@ impl AxonApp {
     }
 
     pub fn split_active_pane(&mut self, direction: SplitDirection) {
-        if self.tabs[self.active_tab_index].is_settings {
+        if self.tabs[self.active_tab_index].is_settings
+            || self.tabs[self.active_tab_index].file_viewer.is_some()
+        {
             return;
         }
         let new_pane_id = self.next_pane_id;
@@ -248,7 +286,7 @@ impl AxonApp {
 
     pub fn close_active_pane(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
-            if active_tab.is_settings {
+            if active_tab.is_settings || active_tab.file_viewer.is_some() {
                 self.close_tab(self.active_tab_index, event_loop);
                 return;
             }
@@ -281,7 +319,9 @@ impl AxonApp {
     }
 
     pub fn navigate_pane(&mut self, dir: PaneDirection) {
-        if self.tabs[self.active_tab_index].is_settings {
+        if self.tabs[self.active_tab_index].is_settings
+            || self.tabs[self.active_tab_index].file_viewer.is_some()
+        {
             return;
         }
         if let (Some(window), Some(_renderer)) = (&self.window, &self.renderer) {

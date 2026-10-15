@@ -82,17 +82,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         let scale_factor = window.scale_factor();
         let mut renderer = TerminalRenderer::new(&self.config, scale_factor);
 
-        let target_cols = 100;
-        let target_rows = 35;
-        let offset = self.sidebar_offset();
-        let right_offset = self.file_explorer_offset();
-        let top_offset = self.top_offset();
-        let status_bar_h = self.status_bar_height();
-
-        let target_pane_w = (target_cols * renderer.char_width) + (renderer.margin_x * 2);
-        let target_pane_h = (target_rows * renderer.row_height) + (renderer.margin_y * 2);
-        let init_win_w = (target_pane_w + offset + right_offset) as u32;
-        let init_win_h = (target_pane_h + top_offset + status_bar_h) as u32;
+        let init_win_w = 1080;
+        let init_win_h = 680;
 
         let _ = window.request_inner_size(PhysicalSize::new(init_win_w, init_win_h));
         let initial_size = window.inner_size();
@@ -102,6 +93,11 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         ) {
             let _ = surface.resize(w, h);
         }
+
+        let offset = self.sidebar_offset();
+        let right_offset = self.file_explorer_offset();
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
 
         let total_w = (initial_size.width as usize).saturating_sub(offset + right_offset);
         let total_h = (initial_size.height as usize).saturating_sub(top_offset + status_bar_h);
@@ -133,6 +129,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         has_unread: t.has_unread,
                         pane_count: t.panes.len(),
                         is_settings: t.is_settings,
+                        is_file_viewer: t.file_viewer.is_some(),
                     })
                     .collect();
 

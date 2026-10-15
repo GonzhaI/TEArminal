@@ -121,18 +121,7 @@ impl TerminalRenderer {
             }
 
             // Icono representativo de la pestaña
-            let icon = if tab.is_settings {
-                crate::ui::LucideIcon::Settings
-            } else if tab.title.to_lowercase().contains("claude")
-                || tab.title.to_lowercase().contains("agent")
-                || tab.title.to_lowercase().contains("ai")
-            {
-                crate::ui::LucideIcon::Sparkles
-            } else if tab.title.to_lowercase().contains("ssh") {
-                crate::ui::LucideIcon::Server
-            } else {
-                crate::ui::LucideIcon::Terminal
-            };
+            let icon = tab_icon(tab);
 
             let is_compact = rects.tab_w < 55;
             let icon_center_x = if is_compact {
@@ -148,7 +137,7 @@ impl TerminalRenderer {
             } else {
                 theme.ansi[8]
             };
-            let icon_sz = if rects.tab_w < 26 { 10.5 } else { 12.5 };
+            let icon_sz = if rects.tab_w < 26 { 10.0 } else { 11.5 };
 
             self.draw_lucide_icon(
                 buffer,

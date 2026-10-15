@@ -175,7 +175,32 @@ Al trabajar con eventos de teclado o emulación VT en Windows, **debes tener en 
 * **Caché de Rama Git en el Render Loop:** `get_git_branch()` se cachea en `TerminalPane` y solo accede a disco cuando `current_dir` cambia, eliminando lecturas síncronas de `.git/HEAD` en cada fotograma.
 * **Pausa de Cursor Blinking en Segundo Plano:** Al perder foco (`!self.is_focused`), el temporizador de cursor se apaga y el event loop entra en reposo completo (`ControlFlow::Wait`), reduciendo el consumo de CPU y batería a cero.
 
-### 16. Reglas de Recursos (RAM / CPU / Binario) — Puntos Únicos a Respetar
+### 17. Visor/Editor de Archivos en Pestaña Dedicada, Soporte Git y Navegación en el Explorador
+* **Pestaña de visor y editor de archivos (`TerminalTab::new_file_viewer` / `FileViewerState`):**
+  - Permite abrir archivos de código o texto instantáneamente sin crear subprocesos ni instancias ConPTY.
+  - **Edición en vivo en pestaña dedicada**:
+    - Inserción de texto, borrado (`Backspace`, `Delete`), salto de línea (`Enter`), indentación (`Tab` = 4 espacios).
+    - Deshacer (`Ctrl + Z`) y Rehacer (`Ctrl + Y` o `Ctrl + Shift + Z`) con pila de instantáneas `ViewerSnapshot`.
+    - Copiar línea actual al portapapeles con `Ctrl + C` y pegar texto multilínea con `Ctrl + V`.
+    - Salto de cursor por palabras completas (`Ctrl + Flecha Izquierda` / `Ctrl + Flecha Derecha`) y borrado por palabras (`Ctrl + Backspace` / `Ctrl + Delete`).
+    - Desplazamiento horizontal con `Shift + Rueda del Ratón`, ruedas horizontales y ajuste automático con `ensure_cursor_visible`.
+    - Resaltado sintáctico multilenguaje ligero de alto rendimiento (palabras clave, tipos, strings, números, comentarios, atributos, llamadas a función).
+    - Indicadores de cambios Git en el gutter: barra vertical de 3px junto al número de línea en verde (`Added`) y amarillo (`Modified`).
+    - Presentación minimalista y sin distracciones: eliminación de la barra resaltada que tapaba texto; se resalta el número de línea activo en el gutter.
+    - Clic directo en el área de texto para posicionar el cursor de edición en cualquier línea y columna considerando el scroll horizontal.
+    - Badges de estado en el encabezado: `EDITABLE` (verde) / `MODIFICADO` (amarillo) / `SOLO LECTURA` (binario), contador de línea y columna (`Ln X, Col Y`), tamaño y recuento de líneas.
+    - Indicador de archivo modificado `●` en el título de la pestaña.
+    - Guardado rápido con `Ctrl + S`: escribe en disco de forma atómica y refresca automáticamente el estado Git del explorador.
+    - Barra de desplazamiento interactiva en el visor: arrastre con ratón y salto con clic en la pista de scroll (`file_viewer_scrollbar_geometry`).
+    - Cierre rápido con `Escape`, `Ctrl+W` o botón `x`.
+* **Navegación e Integración Git en el Explorador de Archivos:**
+  - **Apertura con un solo clic**: Clic simple sobre cualquier archivo lo abre y visualiza instantáneamente en una pestaña de visor/editor.
+  - **Flechas de navegación en el subencabezado**: Botones `<` (`ChevronLeft`) y `>` (`ChevronRight`) junto a `^` (`ArrowUp`) para navegar el historial de carpetas hacia atrás y adelante.
+  - **Soporte de Git en tiempo real**: Colores de texto y distintivos visuales a la derecha (`M` modificado en amarillo, `U`/`A` sin seguimiento o agregado en verde, `D` borrado en rojo, `R` renombrado en cian) consultados sin abrir consolas con `CREATE_NO_WINDOW`.
+  - `Alt + E` / `Ctrl + Shift + E`: alternan y enfocan el panel explorador. Cuando está enfocado, su borde se ilumina con `theme.accent_color()`.
+  - Navegación con teclado: `Flecha Arriba` / `Flecha Abajo` con `ensure_visible`, `Flecha Derecha` para expandir/abrir, `Flecha Izquierda` para colapsar/subir, `Enter` para abrir y `Escape` para devolver el foco a la terminal.
+
+### 18. Reglas de Recursos (RAM / CPU / Binario) — Puntos Únicos a Respetar
 * **fontdue guarda TODOS los contornos de una fuente en RAM** (JetBrains Nerd completa = ~50 MB, Lucide completa = ~15 MB). Por eso las fuentes embebidas están reducidas con [`tools/subset-fonts`](tools/subset-fonts/src/main.rs) (Rust, crate `skera`) (fuentes completas en `assets/fonts/src/`, no se embeben): `JetBrainsMono-{Regular,Bold}-Core.ttf` (sin PUA), iconos Nerd en dos bloques cargados bajo demanda (`Regular-Nerd` U+E000–F8FF, `Regular-NerdMd` U+F0000+), y `lucide.ttf` solo con los iconos de `src/ui/icons.rs`.
   * **Al añadir un `LucideIcon` nuevo: ejecutar `cargo run --release --manifest-path tools/subset-fonts/Cargo.toml`** (si no, el test `test_all_lucide_glyphs_exist_in_font` falla). No volver a embeber las fuentes completas.
   * Negrita, bloques Nerd y fallback `seguisym.ttf` son `OnceCell` perezosos en `TerminalRenderer`; nunca parsearlos en `new()`.

@@ -48,7 +48,7 @@ fn default_font_size() -> f32 {
 }
 
 fn default_ui_font_size() -> f32 {
-    13.0
+    15.0
 }
 
 fn default_true() -> bool {
@@ -75,7 +75,7 @@ impl Default for AxonConfig {
                 font_family: "JetBrains Mono Nerd Font".to_string(),
                 font_path: None,
                 font_size: 15.0,
-                ui_font_size: 13.0,
+                ui_font_size: 15.0,
                 window_opacity: 1.0,
                 theme: "frappe".to_string(),
                 line_spacing: 1.0,

@@ -189,18 +189,7 @@ impl TerminalRenderer {
             }
 
             // Icono representativo de la pestaña
-            let icon = if tab.is_settings {
-                crate::ui::LucideIcon::Settings
-            } else if tab.title.to_lowercase().contains("claude")
-                || tab.title.to_lowercase().contains("agent")
-                || tab.title.to_lowercase().contains("ai")
-            {
-                crate::ui::LucideIcon::Sparkles
-            } else if tab.title.to_lowercase().contains("ssh") {
-                crate::ui::LucideIcon::Server
-            } else {
-                crate::ui::LucideIcon::Terminal
-            };
+            let icon = tab_icon(tab);
 
             let item_cy = tab_y + (tab_item_h / 2);
             let icon_cx = tab_x + 18;
@@ -212,7 +201,7 @@ impl TerminalRenderer {
                 theme.ansi[8]
             };
             self.draw_lucide_icon(
-                buffer, width, height, icon, icon_cx, item_cy, 12.5, icon_color,
+                buffer, width, height, icon, icon_cx, item_cy, 11.5, icon_color,
             );
 
             // Título de la pestaña en Inter
@@ -286,7 +275,7 @@ impl TerminalRenderer {
 
         // Barra de desplazamiento de pestañas si la lista excede el espacio visible
         if tabs.len() > visible_items && visible_items > 0 {
-            let track_w = 3;
+            let track_w = 6;
             let track_x = sidebar_width.saturating_sub(track_w + 3);
             let track_y = list_start_y;
             let track_h = list_max_y.saturating_sub(list_start_y);
@@ -298,7 +287,7 @@ impl TerminalRenderer {
                 100,
             );
             crate::ui::draw_rounded_rect(
-                buffer, width, height, track_x, track_y, track_w, track_h, 2, track_bg,
+                buffer, width, height, track_x, track_y, track_w, track_h, 3, track_bg,
             );
 
             let total_tabs = tabs.len();
@@ -320,7 +309,7 @@ impl TerminalRenderer {
                 thumb_y,
                 track_w,
                 thumb_h,
-                2,
+                3,
                 theme.ansi[8],
             );
         }

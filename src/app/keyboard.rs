@@ -338,10 +338,35 @@ impl AxonApp {
             return;
         }
 
-        // Alternar explorador lateral de archivos: Ctrl + Shift + E
-        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'e') {
-            crate::logger::log("-> Hotkey: Alternar explorador de archivos (Ctrl+Shift+E)");
-            self.toggle_file_explorer();
+        // Alternar / enfocar explorador lateral de archivos: Ctrl + Shift + E o Alt + E
+        let is_e = key_is_char(&logical_key, physical_key, 'e');
+        if (ctrl && shift && !alt && is_e) || (alt && !ctrl && !shift && is_e) {
+            crate::logger::log("-> Hotkey: Alternar / enfocar explorador de archivos");
+            if !self.file_explorer.visible {
+                self.toggle_file_explorer();
+                self.file_explorer.is_focused = true;
+                if self.file_explorer.selected_index.is_none()
+                    && !self.file_explorer.items.is_empty()
+                {
+                    self.file_explorer.selected_index = Some(0);
+                    self.file_explorer.selected_path =
+                        Some(self.file_explorer.items[0].path.clone());
+                }
+            } else if !self.file_explorer.is_focused {
+                self.file_explorer.is_focused = true;
+                if self.file_explorer.selected_index.is_none()
+                    && !self.file_explorer.items.is_empty()
+                {
+                    self.file_explorer.selected_index = Some(0);
+                    self.file_explorer.selected_path =
+                        Some(self.file_explorer.items[0].path.clone());
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            } else {
+                self.toggle_file_explorer();
+            }
             return;
         }
 
@@ -392,6 +417,381 @@ impl AxonApp {
 
         // Si estamos en la pestaña de Ajustes, absorber el resto de teclas
         if active_is_settings {
+            return;
+        }
+
+        // Navegación con teclado en el explorador de archivos cuando tiene foco
+        if self.file_explorer.visible && self.file_explorer.is_focused && !ctrl && !alt {
+            let win_h = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().height as usize)
+                .unwrap_or(600);
+            let top_offset = self.top_offset();
+            let status_bar_h = self.status_bar_height();
+            let (_, _, _, panel_h) = crate::explorer::FileExplorer::panel_geometry(
+                800,
+                win_h,
+                top_offset,
+                status_bar_h,
+            );
+            let list_h = panel_h.saturating_sub(
+                crate::explorer::FileExplorer::HEADER_HEIGHT
+                    + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
+            );
+            let max_visible = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
+
+            match logical_key {
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.file_explorer.navigate_selection(-1, max_visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.file_explorer.navigate_selection(1, max_visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowLeft) => {
+                    self.file_explorer.handle_arrow_left(max_visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowRight) => {
+                    if let Some(path) = self.file_explorer.handle_arrow_right(max_visible) {
+                        self.open_file_in_viewer(&path);
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if let Some(path) = self.file_explorer.handle_enter(max_visible) {
+                        self.open_file_in_viewer(&path);
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Backspace) => {
+                    self.file_explorer.navigate_up();
+                    self.file_explorer.selected_index = if self.file_explorer.items.is_empty() {
+                        None
+                    } else {
+                        Some(0)
+                    };
+                    self.file_explorer.selected_path = self
+                        .file_explorer
+                        .selected_index
+                        .map(|i| self.file_explorer.items[i].path.clone());
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Escape) => {
+                    self.file_explorer.is_focused = false;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        // Si la pestaña activa es un visor de archivos, gestionar edición, navegación y atajos
+        let is_viewer_active = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|t| t.file_viewer.is_some())
+            .unwrap_or(false);
+        if is_viewer_active {
+            let win_h = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().height as usize)
+                .unwrap_or(600);
+            let top_offset = self.top_offset();
+            let status_bar_h = self.status_bar_height();
+            let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
+            let visible_lines =
+                ((win_h.saturating_sub(top_offset + status_bar_h + 38)) / row_h.max(16)).max(1);
+
+            // 1. Guardar archivo: Ctrl + S
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 's') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    match viewer.save_to_disk() {
+                        Ok(()) => {
+                            crate::logger::log(&format!("-> Archivo guardado con éxito: {}", viewer.file_name));
+                            // Refrescar git status en el explorador
+                            self.file_explorer.refresh_git_status();
+                            self.file_explorer.refresh();
+                        }
+                        Err(e) => {
+                            crate::logger::log(&format!("-> Error al guardar archivo: {}", e));
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                return;
+            }
+
+            // 2. Cerrar visor: Ctrl + W o Escape
+            if (ctrl && !shift && key_is_char(&logical_key, physical_key, 'w'))
+                || matches!(logical_key, Key::Named(NamedKey::Escape))
+            {
+                self.close_tab(self.active_tab_index, event_loop);
+                return;
+            }
+
+            // Deshacer: Ctrl + Z
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'z') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    viewer.undo();
+                    viewer.ensure_cursor_visible(visible_lines);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                return;
+            }
+
+            // Rehacer: Ctrl + Y o Ctrl + Shift + Z
+            if (ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'y'))
+                || (ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'z'))
+            {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    viewer.redo();
+                    viewer.ensure_cursor_visible(visible_lines);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                return;
+            }
+
+            // Copiar línea actual: Ctrl + C
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'c') {
+                if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    if let Some(line) = viewer.lines.get(viewer.cursor_line) {
+                        if self.clipboard.is_none() {
+                            self.clipboard = arboard::Clipboard::new().ok();
+                        }
+                        if let Some(cb) = &mut self.clipboard {
+                            let _ = cb.set_text(format!("{}\n", line));
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Pegar texto del portapapeles: Ctrl + V
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'v') {
+                if self.clipboard.is_none() {
+                    self.clipboard = arboard::Clipboard::new().ok();
+                }
+                let text_to_paste = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
+                if let Some(text) = text_to_paste {
+                    if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                        viewer.insert_text(&text);
+                        viewer.ensure_cursor_visible(visible_lines);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+                return;
+            }
+
+            // 3. Edición de texto y navegación de cursor
+            if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                if !viewer.is_binary {
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowUp) => {
+                            if viewer.cursor_line > 0 {
+                                viewer.cursor_line -= 1;
+                                let line_len = viewer.lines[viewer.cursor_line].chars().count();
+                                if viewer.cursor_col > line_len {
+                                    viewer.cursor_col = line_len;
+                                }
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            if viewer.cursor_line + 1 < viewer.lines.len() {
+                                viewer.cursor_line += 1;
+                                let line_len = viewer.lines[viewer.cursor_line].chars().count();
+                                if viewer.cursor_col > line_len {
+                                    viewer.cursor_col = line_len;
+                                }
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            if ctrl {
+                                viewer.cursor_col = viewer.find_word_boundary_left();
+                            } else if viewer.cursor_col > 0 {
+                                viewer.cursor_col -= 1;
+                            } else if viewer.cursor_line > 0 {
+                                viewer.cursor_line -= 1;
+                                viewer.cursor_col = viewer.lines[viewer.cursor_line].chars().count();
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            if ctrl {
+                                viewer.cursor_col = viewer.find_word_boundary_right();
+                            } else {
+                                let line_len = viewer.lines.get(viewer.cursor_line).map(|l| l.chars().count()).unwrap_or(0);
+                                if viewer.cursor_col < line_len {
+                                    viewer.cursor_col += 1;
+                                } else if viewer.cursor_line + 1 < viewer.lines.len() {
+                                    viewer.cursor_line += 1;
+                                    viewer.cursor_col = 0;
+                                }
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            viewer.cursor_col = 0;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            let line_len = viewer.lines.get(viewer.cursor_line).map(|l| l.chars().count()).unwrap_or(0);
+                            viewer.cursor_col = line_len;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::PageUp) => {
+                            let page = visible_lines.saturating_sub(2).max(1);
+                            viewer.cursor_line = viewer.cursor_line.saturating_sub(page);
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::PageDown) => {
+                            let page = visible_lines.saturating_sub(2).max(1);
+                            viewer.cursor_line = (viewer.cursor_line + page).min(viewer.lines.len().saturating_sub(1));
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Enter) => {
+                            viewer.insert_newline();
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Backspace) => {
+                            if ctrl {
+                                viewer.delete_word_left();
+                            } else {
+                                viewer.backspace();
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Delete) => {
+                            if ctrl {
+                                viewer.delete_word_right();
+                            } else {
+                                viewer.delete();
+                            }
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::Tab) => {
+                            viewer.insert_tab();
+                            viewer.ensure_cursor_visible(visible_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        _ => {
+                            // Insertar caracteres de texto imprimible
+                            if !ctrl && !alt {
+                                if let Some(ref t) = text {
+                                    for ch in t.chars() {
+                                        if !ch.is_control() {
+                                            viewer.insert_char(ch);
+                                        }
+                                    }
+                                    viewer.ensure_cursor_visible(visible_lines);
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Modo de solo lectura binario
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowUp) => {
+                            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            viewer.scroll_offset =
+                                (viewer.scroll_offset + 1).min(viewer.lines.len().saturating_sub(1));
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             return;
         }
 

@@ -9,6 +9,7 @@
 
 mod draw;
 mod explorer_panel;
+mod file_viewer;
 mod geometry;
 mod glyphs;
 mod pane;

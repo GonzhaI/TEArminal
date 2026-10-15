@@ -211,8 +211,8 @@ impl TerminalRenderer {
         );
 
         // 2. Encabezado principal con icono Lucide Sliders y tipografía Inter
-        let content_x = rects.nav_appearance.0;
-        let card_w = 680.min(page_w.saturating_sub(72));
+        let content_x = rects.content_x;
+        let card_w = rects.card_w;
 
         self.draw_lucide_icon(
             buffer,
@@ -221,7 +221,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::Sliders,
             content_x + 8,
             page_y + 38,
-            15.0,
+            14.5,
             theme.accent_color(),
         );
         self.draw_ui_text(
@@ -284,7 +284,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::RefreshCw,
             r_btn.0 + 16,
             r_cy,
-            12.0,
+            11.5,
             r_fg,
         );
         self.draw_ui_text(
@@ -374,7 +374,7 @@ impl TerminalRenderer {
                 icon,
                 r.0 + 16,
                 cy,
-                12.5,
+                11.5,
                 if is_active { theme.accent_color() } else { fg },
             );
             self.draw_ui_text(
@@ -477,20 +477,16 @@ impl TerminalRenderer {
                 theme.ansi[7]
             };
 
-            let display_name = if is_current {
-                format!("● {}", theme_name)
-            } else {
-                theme_name.to_string()
-            };
+            let display_name = theme_name;
             let cy = r.1 + (r.3 / 2);
             let base_y = cy + 4;
-            let text_w = self.measure_ui_text(&display_name, 11.0, is_current);
+            let text_w = self.measure_ui_text(display_name, 11.0, is_current);
             let tx = r.0 + (r.2.saturating_sub(text_w) / 2);
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                &display_name,
+                display_name,
                 tx,
                 base_y,
                 r.0 + r.2,
@@ -500,26 +496,29 @@ impl TerminalRenderer {
             );
         }
 
-        // Paleta de chips de color del tema activo
+        // Paleta de chips de color del tema activo (ocupa todo el ancho de la tarjeta)
         let swatch_y = card_y + 116;
-        let swatch_w = 26;
         let swatch_h = 18;
-        let swatch_start_x = content_x + 20;
+        let pad_x = 20;
+        let avail_w = card_w.saturating_sub(pad_x * 2);
+        let gap = 4;
+        let total_gaps = 15 * gap;
+        let swatch_w = (avail_w.saturating_sub(total_gaps)) / 16;
+        let extra = (avail_w.saturating_sub(total_gaps)) % 16;
+        let start_x = content_x + pad_x + extra / 2;
         for i in 0..16 {
-            let sx = swatch_start_x + i * (swatch_w + 4);
-            if sx + swatch_w < content_x + card_w {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    sx,
-                    swatch_y,
-                    swatch_w,
-                    swatch_h,
-                    4,
-                    theme.ansi[i],
-                );
-            }
+            let sx = start_x + i * (swatch_w + gap);
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                sx,
+                swatch_y,
+                swatch_w,
+                swatch_h,
+                4,
+                theme.ansi[i],
+            );
         }
 
         // Tarjeta 2: Modo de Tema y Disposición de Pestañas

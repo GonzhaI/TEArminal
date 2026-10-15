@@ -55,7 +55,7 @@ impl TerminalRenderer {
             return None;
         }
         let track_w = 6;
-        let track_x = (rect_x + rect_width).saturating_sub(track_w + 2);
+        let track_x = (rect_x + rect_width).saturating_sub(track_w + 3);
         let track_y = rect_y + self.margin_y;
         let track_h = rect_height.saturating_sub(self.margin_y * 2);
         if track_h == 0 {
@@ -64,7 +64,7 @@ impl TerminalRenderer {
 
         let total_history = terminal.scrollback.len() + terminal.rows;
         let thumb_h = ((terminal.rows as f32 / total_history as f32) * track_h as f32)
-            .max(16.0)
+            .max(18.0)
             .min(track_h as f32) as usize;
         let available_travel = track_h.saturating_sub(thumb_h);
         let ratio = 1.0 - (terminal.scroll_offset as f32 / terminal.scrollback.len() as f32);
@@ -108,32 +108,6 @@ impl TerminalRenderer {
         let base_y = rect_y + self.margin_y;
         let visible_rows = terminal.visible_rows();
         let view_start = terminal.visible_line_start();
-
-        // Indicador semántico de comandos de agentes CLI (OSC 133 / Estilo Ghostty)
-        for block in &terminal.command_blocks {
-            let Some(row_idx) = block.prompt_line.checked_sub(view_start) else {
-                continue;
-            };
-            let cell_y = base_y + row_idx * self.row_height;
-            if row_idx >= visible_rows.len() || cell_y + self.row_height > max_y {
-                continue;
-            }
-            let dot_color = match block.exit_code {
-                Some(0) => Color::from_rgb(81, 226, 122).to_u32_xrgb(), // Verde Ghostty #51e27a
-                Some(_) => Color::from_rgb(244, 56, 65).to_u32_xrgb(),  // Rojo Ghostty #f43841
-                None => Color::from_rgb(78, 146, 249).to_u32_xrgb(),    // Azul Ghostty #4e92f9
-            };
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                base_x.saturating_sub(7),
-                cell_y + 3,
-                3,
-                self.row_height.saturating_sub(6),
-                dot_color,
-            );
-        }
 
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
@@ -377,7 +351,7 @@ impl TerminalRenderer {
                     100,
                 );
                 crate::ui::draw_rounded_rect(
-                    buffer, width, height, thumb_x, track_y, thumb_w, track_h, 2, track_bg,
+                    buffer, width, height, thumb_x, track_y, thumb_w, track_h, 3, track_bg,
                 );
 
                 let thumb_color = theme.ansi[8];
@@ -389,7 +363,7 @@ impl TerminalRenderer {
                     thumb_y,
                     thumb_w,
                     thumb_h,
-                    2,
+                    3,
                     thumb_color,
                 );
             }

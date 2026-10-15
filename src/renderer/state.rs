@@ -10,6 +10,36 @@ pub struct SidebarTabItem {
     #[allow(dead_code)]
     pub pane_count: usize,
     pub is_settings: bool,
+    pub is_file_viewer: bool,
+}
+
+pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
+    if tab.is_settings {
+        crate::ui::LucideIcon::Settings
+    } else if tab.is_file_viewer {
+        let ext = std::path::Path::new(&tab.title)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        match ext.as_str() {
+            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "cs" | "html" | "css" => {
+                crate::ui::LucideIcon::FileCode
+            }
+            "toml" | "json" | "yaml" | "yml" => crate::ui::LucideIcon::FileJson,
+            "md" | "txt" | "log" => crate::ui::LucideIcon::FileText,
+            _ => crate::ui::LucideIcon::File,
+        }
+    } else if tab.title.to_lowercase().contains("claude")
+        || tab.title.to_lowercase().contains("agent")
+        || tab.title.to_lowercase().contains("ai")
+    {
+        crate::ui::LucideIcon::Sparkles
+    } else if tab.title.to_lowercase().contains("ssh") {
+        crate::ui::LucideIcon::Server
+    } else {
+        crate::ui::LucideIcon::Terminal
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

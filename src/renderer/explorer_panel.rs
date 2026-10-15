@@ -24,7 +24,11 @@ impl TerminalRenderer {
             return;
         }
 
-        let border_color = theme.border_color();
+        let border_color = if explorer.is_focused {
+            theme.accent_color()
+        } else {
+            theme.border_color()
+        };
 
         // 1. Fondo del panel con esquinas redondeadas y translucidez suave
         let bg_color = Color::from_rgba(
@@ -60,7 +64,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::FolderTree,
             panel_x + 20,
             header_center_y,
-            13.5,
+            11.5,
             theme.accent_color(),
         );
 
@@ -135,31 +139,73 @@ impl TerminalRenderer {
             close_fg,
         );
 
-        // 3. Sub-encabezado con ruta actual y botón [..] (28px)
+        // 3. Sub-encabezado con botones de navegación [<] [>] [^] y ruta actual (28px)
         let sub_y = panel_y + header_h;
         let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
         let sub_center_y = sub_y + (sub_h / 2);
         let up_base = sub_center_y + 4;
 
-        let up_x = panel_x + 10;
-        let up_bg = if explorer.hovered_up_btn {
+        // Botón [<] Atrás
+        let back_x = panel_x + 8;
+        let can_back = explorer.can_go_back();
+        let back_bg = if explorer.hovered_back_btn && can_back {
             theme.surface_hover()
         } else {
-            Color::from_rgba(255, 255, 255, 8)
+            Color::from_rgba(255, 255, 255, 6)
         };
-        crate::ui::draw_rounded_rect(buffer, width, height, up_x, sub_y + 4, 26, 20, 6, up_bg);
-        crate::ui::stroke_rounded_rect(
+        crate::ui::draw_rounded_rect(buffer, width, height, back_x, sub_y + 4, 22, 20, 5, back_bg);
+        crate::ui::stroke_rounded_rect(buffer, width, height, back_x, sub_y + 4, 22, 20, 5, border_color);
+        let back_fg = if can_back {
+            if explorer.hovered_back_btn { theme.accent_color() } else { theme.ansi[7] }
+        } else {
+            theme.ansi[8]
+        };
+        self.draw_lucide_icon(
             buffer,
             width,
             height,
-            up_x,
-            sub_y + 4,
-            26,
-            20,
-            6,
-            border_color,
+            crate::ui::LucideIcon::ChevronLeft,
+            back_x + 11,
+            sub_y + 14,
+            11.0,
+            back_fg,
         );
 
+        // Botón [>] Adelante
+        let fwd_x = back_x + 24;
+        let can_fwd = explorer.can_go_forward();
+        let fwd_bg = if explorer.hovered_forward_btn && can_fwd {
+            theme.surface_hover()
+        } else {
+            Color::from_rgba(255, 255, 255, 6)
+        };
+        crate::ui::draw_rounded_rect(buffer, width, height, fwd_x, sub_y + 4, 22, 20, 5, fwd_bg);
+        crate::ui::stroke_rounded_rect(buffer, width, height, fwd_x, sub_y + 4, 22, 20, 5, border_color);
+        let fwd_fg = if can_fwd {
+            if explorer.hovered_forward_btn { theme.accent_color() } else { theme.ansi[7] }
+        } else {
+            theme.ansi[8]
+        };
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::ChevronRight,
+            fwd_x + 11,
+            sub_y + 14,
+            11.0,
+            fwd_fg,
+        );
+
+        // Botón [^] Subir directorio
+        let up_x = fwd_x + 24;
+        let up_bg = if explorer.hovered_up_btn {
+            theme.surface_hover()
+        } else {
+            Color::from_rgba(255, 255, 255, 6)
+        };
+        crate::ui::draw_rounded_rect(buffer, width, height, up_x, sub_y + 4, 22, 20, 5, up_bg);
+        crate::ui::stroke_rounded_rect(buffer, width, height, up_x, sub_y + 4, 22, 20, 5, border_color);
         let up_fg = if explorer.hovered_up_btn {
             theme.accent_color()
         } else {
@@ -170,9 +216,9 @@ impl TerminalRenderer {
             width,
             height,
             crate::ui::LucideIcon::ArrowUp,
-            up_x + 13,
+            up_x + 11,
             sub_y + 14,
-            11.5,
+            11.0,
             up_fg,
         );
 
@@ -188,7 +234,7 @@ impl TerminalRenderer {
             width,
             height,
             &dir_label,
-            up_x + 34,
+            up_x + 28,
             up_base,
             panel_x + panel_w - 8,
             theme.ansi[8],
@@ -218,6 +264,8 @@ impl TerminalRenderer {
             return;
         }
 
+        let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
+
         for (rel_idx, item) in explorer
             .items
             .iter()
@@ -234,19 +282,35 @@ impl TerminalRenderer {
             let is_selected = explorer.selected_index == Some(actual_idx)
                 || explorer.selected_path.as_ref() == Some(&item.path);
 
+            let has_scrollbar = explorer.items.len() > visible_items;
+            let row_w = if has_scrollbar {
+                panel_w.saturating_sub(18)
+            } else {
+                panel_w.saturating_sub(12)
+            };
+
             if is_selected {
-                let sel_bg = theme.surface_hover();
+                let sel_bg = if explorer.is_focused {
+                    theme.surface_hover()
+                } else {
+                    Color::from_rgba(255, 255, 255, 10)
+                };
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
                     height,
                     panel_x + 6,
                     item_y,
-                    panel_w.saturating_sub(12),
+                    row_w,
                     item_h,
                     6,
                     sel_bg,
                 );
+                let pill_color = if explorer.is_focused {
+                    theme.accent_color()
+                } else {
+                    theme.ansi[8]
+                };
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
@@ -256,7 +320,7 @@ impl TerminalRenderer {
                     3,
                     item_h.saturating_sub(6),
                     2,
-                    theme.accent_color(),
+                    pill_color,
                 );
             } else if is_hovered {
                 let hover_row_bg = Color::from_rgba(255, 255, 255, 12);
@@ -266,7 +330,7 @@ impl TerminalRenderer {
                     height,
                     panel_x + 6,
                     item_y,
-                    panel_w.saturating_sub(12),
+                    row_w,
                     item_h,
                     6,
                     hover_row_bg,
@@ -277,6 +341,10 @@ impl TerminalRenderer {
             let item_center_y = item_y + (item_h / 2);
             let item_base = item_center_y + 4;
             let content_x = panel_x + 12 + indent;
+
+            // Insignia de Git si el archivo/carpeta tiene estado
+            let badge_w = if item.git_status.is_some() { 16 } else { 0 };
+            let max_name_x = panel_x + row_w.saturating_sub(badge_w + 6);
 
             if item.is_dir {
                 // Directorio: Lucide Chevron + Folder/FolderOpen
@@ -308,11 +376,18 @@ impl TerminalRenderer {
                     folder_icon,
                     content_x + 18,
                     item_center_y,
-                    12.5,
+                    11.5,
                     theme.accent_color(),
                 );
 
-                let dir_color = if is_selected {
+                let dir_color = if let Some(git) = item.git_status {
+                    match git {
+                        crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
+                        crate::explorer::GitFileStatus::Untracked | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
+                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1], // Rojo
+                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6], // Cian
+                    }
+                } else if is_selected {
                     theme.accent_color()
                 } else if is_hovered {
                     theme.foreground
@@ -327,7 +402,7 @@ impl TerminalRenderer {
                     &label,
                     content_x + 28,
                     item_base,
-                    panel_x + panel_w - 8,
+                    max_name_x,
                     dir_color,
                     11.5,
                     is_hovered || is_selected,
@@ -353,11 +428,18 @@ impl TerminalRenderer {
                     file_icon,
                     content_x + 10,
                     item_center_y,
-                    12.0,
+                    11.5,
                     file_fg,
                 );
 
-                let text_color = if is_selected {
+                let text_color = if let Some(git) = item.git_status {
+                    match git {
+                        crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
+                        crate::explorer::GitFileStatus::Untracked | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
+                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1], // Rojo
+                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6], // Cian
+                    }
+                } else if is_selected {
                     theme.accent_color()
                 } else if is_hovered {
                     theme.foreground
@@ -371,10 +453,34 @@ impl TerminalRenderer {
                     &item.name,
                     content_x + 22,
                     item_base,
-                    panel_x + panel_w.saturating_sub(14),
+                    max_name_x,
                     text_color,
                     11.5,
                     is_selected,
+                );
+            }
+
+            // Renderizar insignia de Git a la derecha (M, U, A, D)
+            if let Some(git) = item.git_status {
+                let (badge_letter, badge_color) = match git {
+                    crate::explorer::GitFileStatus::Modified => ("M", theme.ansi[3]),
+                    crate::explorer::GitFileStatus::Untracked => ("U", theme.ansi[2]),
+                    crate::explorer::GitFileStatus::Added => ("A", theme.ansi[2]),
+                    crate::explorer::GitFileStatus::Deleted => ("D", theme.ansi[1]),
+                    crate::explorer::GitFileStatus::Renamed => ("R", theme.ansi[6]),
+                };
+                let badge_x = panel_x + row_w.saturating_sub(14);
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    badge_letter,
+                    badge_x,
+                    item_base,
+                    panel_x + panel_w,
+                    badge_color,
+                    10.5,
+                    true,
                 );
             }
         }
@@ -382,25 +488,25 @@ impl TerminalRenderer {
         // 5. Barra de desplazamiento del explorador si la lista excede el área visible
         let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
         if explorer.items.len() > visible_items && visible_items > 0 {
-            let track_w = 4;
-            let track_x = panel_x + panel_w.saturating_sub(track_w + 5);
+            let track_w = 6;
+            let track_x = panel_x + panel_w.saturating_sub(track_w + 3);
             let track_y = list_y;
             let track_h = list_max_y.saturating_sub(list_y);
 
-            // Pista sutil
+            // Pista sutil unificada
             let track_bg = Color::from_rgba(
                 theme.surface_hover().r(),
                 theme.surface_hover().g(),
                 theme.surface_hover().b(),
-                120,
+                100,
             );
             crate::ui::draw_rounded_rect(
-                buffer, width, height, track_x, track_y, track_w, track_h, 2, track_bg,
+                buffer, width, height, track_x, track_y, track_w, track_h, 3, track_bg,
             );
 
             // Pulgar claramente visible
             let total_items = explorer.items.len();
-            let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(20.0)
+            let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(18.0)
                 as usize)
                 .min(track_h);
             let max_offset = total_items.saturating_sub(visible_items);
@@ -412,7 +518,11 @@ impl TerminalRenderer {
                 track_y
             };
 
-            let thumb_color = theme.ansi[8];
+            let thumb_color = if explorer.hovered_scrollbar {
+                theme.accent_color()
+            } else {
+                theme.ansi[8]
+            };
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,
@@ -421,7 +531,7 @@ impl TerminalRenderer {
                 thumb_y,
                 track_w,
                 thumb_h,
-                2,
+                3,
                 thumb_color,
             );
         }
@@ -452,11 +562,11 @@ impl TerminalRenderer {
         }
 
         let track_w = 6;
-        let track_x = panel_x + panel_w.saturating_sub(track_w + 5);
+        let track_x = panel_x + panel_w.saturating_sub(track_w + 3);
         let track_y = list_y;
         let track_h = list_max_y.saturating_sub(list_y);
 
-        let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(20.0)
+        let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(18.0)
             as usize)
             .min(track_h);
         let max_offset = total_items.saturating_sub(visible_items);

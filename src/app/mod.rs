@@ -90,6 +90,8 @@ pub struct AxonApp {
     sidebar_scrollbar_drag_offset_y: f32,
     explorer_scrollbar_dragging: bool,
     explorer_scrollbar_drag_offset_y: f32,
+    viewer_scrollbar_dragging: bool,
+    viewer_scrollbar_drag_offset_y: f32,
     last_window_move: Instant,
     last_scroll_time: Instant,
     hovered_win_min: bool,
@@ -235,6 +237,8 @@ impl AxonApp {
             sidebar_scrollbar_drag_offset_y: 0.0,
             explorer_scrollbar_dragging: false,
             explorer_scrollbar_drag_offset_y: 0.0,
+            viewer_scrollbar_dragging: false,
+            viewer_scrollbar_drag_offset_y: 0.0,
             last_window_move: Instant::now(),
             last_scroll_time: Instant::now(),
             hovered_win_min: false,
@@ -254,7 +258,7 @@ impl AxonApp {
         let tab_sessions = self
             .tabs
             .iter()
-            .filter(|tab| !tab.is_settings)
+            .filter(|tab| !tab.is_settings && tab.file_viewer.is_none())
             .map(|tab| {
                 let cwd = tab
                     .active_pane()
@@ -275,7 +279,7 @@ impl AxonApp {
             active_tab_index: self.last_terminal_tab_index.min(
                 self.tabs
                     .iter()
-                    .filter(|t| !t.is_settings)
+                    .filter(|t| !t.is_settings && t.file_viewer.is_none())
                     .count()
                     .saturating_sub(1),
             ),
@@ -336,6 +340,8 @@ impl AxonApp {
         if let (Some(w), Some(tab)) = (&self.window, self.tabs.get(self.active_tab_index)) {
             let full_title = if tab.is_settings {
                 "Axon - ⚙ Ajustes".to_string()
+            } else if let Some(ref v) = tab.file_viewer {
+                format!("Axon - ◈ {}", v.file_name)
             } else if tab.panes.len() > 1 {
                 format!(
                     "Axon - {} ({} paneles)",
@@ -368,7 +374,7 @@ impl AxonApp {
             }
 
             for tab in &mut self.tabs {
-                if tab.is_settings {
+                if tab.is_settings || tab.file_viewer.is_some() {
                     continue;
                 }
                 let pane_rects = tab.compute_pane_rects(offset, top_offset, total_w, total_h);

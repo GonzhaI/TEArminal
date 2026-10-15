@@ -167,6 +167,55 @@ impl AxonApp {
             return;
         }
 
+        // Manejo de arrastre de la barra de desplazamiento del visor de archivos
+        if self.viewer_scrollbar_dragging {
+            let offset = self.sidebar_offset();
+            let top_offset = self.top_offset();
+            let status_bar_h = self.status_bar_height();
+            let right_offset = self.file_explorer_offset();
+            let viewer_w = win_w.saturating_sub(offset + right_offset);
+            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
+
+            if let Some(ref mut tab) = self.tabs.get_mut(self.active_tab_index) {
+                if let Some(ref mut viewer) = tab.file_viewer {
+                    if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
+                        offset,
+                        top_offset,
+                        viewer_w,
+                        viewer_h,
+                        viewer,
+                        row_h,
+                    ) {
+                        let track_y = track.1;
+                        let track_h = track.3;
+                        let thumb_h = thumb.3;
+                        let available_travel = track_h.saturating_sub(thumb_h);
+                        let content_h = viewer_h.saturating_sub(38);
+                        let visible_lines = (content_h / row_h.max(16)).max(1);
+                        let max_offset = viewer.lines.len().saturating_sub(visible_lines);
+
+                        if available_travel > 0 && max_offset > 0 {
+                            let target_thumb_top = (my as f32
+                                - self.viewer_scrollbar_drag_offset_y
+                                - track_y as f32)
+                                .clamp(0.0, available_travel as f32);
+                            let ratio = target_thumb_top / available_travel as f32;
+                            viewer.scroll_offset =
+                                ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::Pointer);
+            }
+            return;
+        }
+
         let mut new_hovered_min = false;
         let mut new_hovered_max = false;
         let mut new_hovered_close_win = false;
@@ -677,42 +726,86 @@ impl AxonApp {
                     && my < panel_y + 29;
 
                 let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
-                let up_x = panel_x + 10;
+                let back_x = panel_x + 8;
+                let is_back_hover =
+                    mx >= back_x && mx < back_x + 22 && my >= sub_y + 4 && my < sub_y + 24;
+
+                let fwd_x = back_x + 24;
+                let is_fwd_hover =
+                    mx >= fwd_x && mx < fwd_x + 22 && my >= sub_y + 4 && my < sub_y + 24;
+
+                let up_x = fwd_x + 24;
                 let is_up_hover =
-                    mx >= up_x && mx < up_x + 26 && my >= sub_y + 4 && my < sub_y + 24;
+                    mx >= up_x && mx < up_x + 22 && my >= sub_y + 4 && my < sub_y + 24;
 
-                let item_hover = self.file_explorer.item_at_y(my, panel_y);
+                let is_over_scrollbar = if let Some((track, _thumb)) =
+                    TerminalRenderer::explorer_scrollbar_geometry(
+                        win_w,
+                        win_h,
+                        top_offset,
+                        status_bar_h,
+                        &self.file_explorer,
+                    )
+                {
+                    mx >= track.0 && mx < track.0 + track.2 && my >= track.1 && my < track.1 + track.3
+                } else {
+                    false
+                };
 
-                if is_close_hover || is_refresh_hover || is_up_hover || item_hover.is_some() {
+                let item_hover = if is_over_scrollbar {
+                    None
+                } else {
+                    self.file_explorer.item_at_y(my, panel_y)
+                };
+
+                if is_close_hover
+                    || is_refresh_hover
+                    || is_back_hover
+                    || is_fwd_hover
+                    || is_up_hover
+                    || item_hover.is_some()
+                {
                     is_pointer = true;
                 }
 
                 if self.file_explorer.hovered_close_btn != is_close_hover
                     || self.file_explorer.hovered_refresh_btn != is_refresh_hover
+                    || self.file_explorer.hovered_back_btn != is_back_hover
+                    || self.file_explorer.hovered_forward_btn != is_fwd_hover
                     || self.file_explorer.hovered_up_btn != is_up_hover
                     || self.file_explorer.hovered_index != item_hover
+                    || self.file_explorer.hovered_scrollbar != is_over_scrollbar
                 {
                     self.file_explorer.hovered_close_btn = is_close_hover;
                     self.file_explorer.hovered_refresh_btn = is_refresh_hover;
+                    self.file_explorer.hovered_back_btn = is_back_hover;
+                    self.file_explorer.hovered_forward_btn = is_fwd_hover;
                     self.file_explorer.hovered_up_btn = is_up_hover;
                     self.file_explorer.hovered_index = item_hover;
+                    self.file_explorer.hovered_scrollbar = is_over_scrollbar;
                     needs_redraw = true;
                 }
             } else if self.file_explorer.hovered_close_btn
                 || self.file_explorer.hovered_refresh_btn
+                || self.file_explorer.hovered_back_btn
+                || self.file_explorer.hovered_forward_btn
                 || self.file_explorer.hovered_up_btn
                 || self.file_explorer.hovered_index.is_some()
+                || self.file_explorer.hovered_scrollbar
             {
                 self.file_explorer.hovered_close_btn = false;
                 self.file_explorer.hovered_refresh_btn = false;
+                self.file_explorer.hovered_back_btn = false;
+                self.file_explorer.hovered_forward_btn = false;
                 self.file_explorer.hovered_up_btn = false;
                 self.file_explorer.hovered_index = None;
+                self.file_explorer.hovered_scrollbar = false;
                 needs_redraw = true;
             }
         }
 
         // Coordenadas relativas a paneles en la terminal activa
-        if !is_settings_active {
+        if !is_settings_active && self.tabs[self.active_tab_index].file_viewer.is_none() {
             let bypass = self.modifiers.shift_key();
             let status_bar_h = self.status_bar_height();
             let right_offset = self.file_explorer_offset();
@@ -820,6 +913,34 @@ impl AxonApp {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // Si la pestaña activa es un visor de archivos, mostrar cursor de texto (I-Beam) sobre el área editable
+        if !is_settings_active && self.tabs[self.active_tab_index].file_viewer.is_some() {
+            let offset = self.sidebar_offset();
+            let top_offset = self.top_offset();
+            let status_bar_h = self.status_bar_height();
+            let right_offset = self.file_explorer_offset();
+            let viewer_w = win_w.saturating_sub(offset + right_offset);
+            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let content_y = top_offset + 38;
+            let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
+
+            if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
+                if !viewer.is_binary && mx >= offset && mx < offset + viewer_w && my >= content_y && my < top_offset + viewer_h {
+                    // Si no está sobre la barra de desplazamiento lateral derecha
+                    let scrollbar_margin = 16;
+                    let text_max_x = (offset + viewer_w).saturating_sub(scrollbar_margin);
+                    let total_lines = viewer.lines.len();
+                    let digits = format!("{}", total_lines).len().max(3);
+                    let gutter_w = digits * char_w.max(7) + 24;
+                    let text_start_x = offset + gutter_w;
+
+                    if mx >= text_start_x && mx < text_max_x {
+                        is_text = true;
                     }
                 }
             }

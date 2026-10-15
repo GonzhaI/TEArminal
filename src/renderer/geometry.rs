@@ -175,15 +175,19 @@ pub struct SettingsPageRects {
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
     pub term_reset_btn: (usize, usize, usize, usize),
+    pub card_w: usize,
+    pub content_x: usize,
 }
 
 impl SettingsPageRects {
     pub fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
-        let card_w = 680.min(page_w.saturating_sub(72));
+        let max_card_w = 980;
+        let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
+        let card_w = (page_w.saturating_sub(side_padding * 2)).min(max_card_w).max(460);
         let margin_x = if page_w > card_w {
             (page_w - card_w) / 2
         } else {
-            36
+            side_padding
         };
         let content_x = page_x + margin_x;
         let reset_defaults_btn = (content_x + card_w.saturating_sub(210), page_y + 36, 210, 28);
@@ -217,7 +221,7 @@ impl SettingsPageRects {
 
         // Tarjeta 2: Modo y Disposición de Pestañas
         let card2_y = card_y + 160;
-        let label_col_w = 200;
+        let label_col_w = (card_w as f32 * 0.35).clamp(180.0, 260.0) as usize;
         let ctrl_x = content_x + 20 + label_col_w;
         let ctrl_w = card_w.saturating_sub(label_col_w + 40);
 
@@ -327,6 +331,8 @@ impl SettingsPageRects {
             open_file_btn,
             reset_defaults_btn,
             term_reset_btn,
+            card_w,
+            content_x,
         }
     }
 

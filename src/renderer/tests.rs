@@ -159,6 +159,7 @@ fn test_sidebar_rendering_and_layout() {
             has_unread: false,
             pane_count: 1,
             is_settings: false,
+            is_file_viewer: false,
         },
         SidebarTabItem {
             id: 2,
@@ -167,6 +168,7 @@ fn test_sidebar_rendering_and_layout() {
             has_unread: true,
             pane_count: 2,
             is_settings: false,
+            is_file_viewer: false,
         },
     ];
 
@@ -250,8 +252,8 @@ fn test_sidebar_rendering_and_layout() {
         &ghostty_theme,
     );
     let rects = crate::renderer::SettingsPageRects::compute(190, 0, 1000 - 190, 600);
-    let expected_margin = ((1000 - 190) - 680) / 2;
-    assert_eq!(rects.nav_appearance.0, 190 + expected_margin);
+    assert_eq!(rects.nav_appearance.0, rects.content_x);
+    assert!(rects.card_w >= 460 && rects.card_w <= (1000 - 190));
 }
 
 #[test]
@@ -428,3 +430,33 @@ fn test_render_frame_latency_and_fps_benchmark() {
         max_allowed_ms
     );
 }
+
+#[test]
+fn test_ui_font_size_scaling() {
+    let mut config = AxonConfig::load_or_default();
+    config.appearance.ui_font_size = 13.0;
+    let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+
+    let text = "Configuración y Ajustes de Axon";
+    let w_13 = renderer.measure_ui_text(text, 11.5, false);
+
+    // Ajustar a 16.0 pt
+    config.appearance.ui_font_size = 16.0;
+    renderer.update_scale(&config, 1.0);
+    let w_16 = renderer.measure_ui_text(text, 11.5, false);
+
+    // Ajustar a 10.0 pt
+    config.appearance.ui_font_size = 10.0;
+    renderer.update_scale(&config, 1.0);
+    let w_10 = renderer.measure_ui_text(text, 11.5, false);
+
+    assert!(
+        w_16 > w_13,
+        "El ancho a 16pt ({w_16}px) debe ser mayor que a 13pt ({w_13}px)"
+    );
+    assert!(
+        w_10 < w_13,
+        "El ancho a 10pt ({w_10}px) debe ser menor que a 13pt ({w_13}px)"
+    );
+}
+

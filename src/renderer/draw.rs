@@ -26,6 +26,47 @@ pub(super) fn fill_rect(
     }
 }
 
+/// Mezcla un rectángulo con color y alpha sobre el framebuffer existente
+#[allow(dead_code)]
+pub(super) fn blend_rect(
+    buffer: &mut [u32],
+    buf_w: usize,
+    clip: Clip,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    color: Color,
+) {
+    if color.a == 0 {
+        return;
+    }
+    if color.a == 255 {
+        fill_rect(buffer, buf_w, clip, x, y, w, h, color.to_u32_xrgb());
+        return;
+    }
+    let (x0, x1) = (x.max(clip.0), (x + w).min(clip.2));
+    let (y0, y1) = (y.max(clip.1), (y + h).min(clip.3));
+    if x0 >= x1 {
+        return;
+    }
+    let a = color.a as u32;
+    let inv_a = 255 - a;
+    let (cr, cg, cb) = (color.r as u32 * a, color.g as u32 * a, color.b as u32 * a);
+
+    for py in y0..y1 {
+        let row_start = py * buf_w + x0;
+        let row_end = py * buf_w + x1;
+        for px in &mut buffer[row_start..row_end] {
+            let orig = *px;
+            let r = (cr + ((orig >> 16) & 0xFF) * inv_a) / 255;
+            let g = (cg + ((orig >> 8) & 0xFF) * inv_a) / 255;
+            let b = (cb + (orig & 0xFF) * inv_a) / 255;
+            *px = (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 /// Mezcla un glifo (mapa de cobertura 8-bit) sobre el framebuffer recortado. Único punto de
 /// composición de texto: terminal, UI Inter e iconos Lucide pasan por aquí.
 pub(super) fn blit_glyph(
@@ -93,6 +134,17 @@ impl TerminalRenderer {
         );
     }
 
+    /// Ratio de escalado para la tipografía e iconografía de la UI basado en ui_font_size
+    #[inline]
+    pub fn ui_scale_ratio(&self) -> f32 {
+        let base = 13.0 * self.scale_factor as f32;
+        if base > 0.0 {
+            (self.ui_font_size / base).clamp(0.6, 2.5)
+        } else {
+            1.0
+        }
+    }
+
     /// Mide el ancho en píxeles de un texto renderizado con Inter
     pub fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
         let font = if semibold {
@@ -100,14 +152,15 @@ impl TerminalRenderer {
         } else {
             &self.inter_font
         };
-        let size_bits = size_px.to_bits();
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
             .chars()
             .map(|c| {
                 *cache
                     .entry((c, size_bits, semibold))
-                    .or_insert_with(|| font.metrics(c, size_px).advance_width)
+                    .or_insert_with(|| font.metrics(c, effective_size).advance_width)
             })
             .sum();
         width.round() as usize
@@ -127,7 +180,8 @@ impl TerminalRenderer {
         size_px: f32,
         semibold: bool,
     ) -> usize {
-        let size_bits = size_px.to_bits();
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let size_bits = effective_size.to_bits();
         let mut cur_x = start_x as f32;
 
         for c in text.chars() {
@@ -146,7 +200,7 @@ impl TerminalRenderer {
                         .filter(|f| f.has_glyph(c))
                         .unwrap_or(&self.inter_font)
                 };
-                let (metrics, bitmap) = font.rasterize(c, size_px);
+                let (metrics, bitmap) = font.rasterize(c, effective_size);
                 let glyph = CachedGlyph {
                     width: metrics.width,
                     height: metrics.height,
@@ -188,15 +242,16 @@ impl TerminalRenderer {
         size_px: f32,
         color: Color,
     ) {
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let c = icon.as_char();
-        let size_bits = size_px.to_bits();
+        let size_bits = effective_size.to_bits();
         let lucide_ref = &self.lucide_font;
 
         let glyph = self
             .icon_glyph_cache
             .entry((c, size_bits))
             .or_insert_with(|| {
-                let (metrics, bitmap) = lucide_ref.rasterize(c, size_px);
+                let (metrics, bitmap) = lucide_ref.rasterize(c, effective_size);
                 CachedGlyph {
                     width: metrics.width,
                     height: metrics.height,

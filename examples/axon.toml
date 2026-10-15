@@ -6,7 +6,7 @@
 font_family = "JetBrains Mono Nerd Font"
 # font_path = 'C:\ruta\a\mi-fuente.ttf'   # opcional: sustituye a la fuente embebida
 font_size = 15.0
-ui_font_size = 13.0
+ui_font_size = 15.0
 window_opacity = 1.0        # < 1.0 activa ventana en capas (WS_EX_LAYERED): algo más de coste de composición
 theme = "frappe"            # frappe, latte, ghostty, one dark, tokyo night, monokai pro, nord, solarized dark
 theme_mode = "dark"         # "dark" | "light" | "system"

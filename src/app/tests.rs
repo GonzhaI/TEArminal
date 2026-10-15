@@ -124,7 +124,7 @@ fn test_settings_reset_to_defaults() {
 
     // Validar que se restauraron los valores por defecto
     assert_eq!(app.config.appearance.font_size, 15.0);
-    assert_eq!(app.config.appearance.ui_font_size, 13.0);
+    assert_eq!(app.config.appearance.ui_font_size, 15.0);
     assert_eq!(app.config.appearance.window_opacity, 1.0);
     assert_eq!(app.config.appearance.theme, "frappe");
     assert_eq!(app.config.appearance.tab_layout, "horizontal");
@@ -281,4 +281,133 @@ fn test_paste_is_sanitized_against_escape_injection() {
         "saltos de línea normalizados a CR: {out:?}"
     );
     assert_eq!(out, "ls[201~]0;xrm -rf /\rfin\tñ");
+}
+
+#[test]
+fn test_file_viewer_tab_creation_and_title() {
+    let cargo_toml = std::path::PathBuf::from("Cargo.toml");
+    assert!(cargo_toml.exists());
+
+    let tab = TerminalTab::new_file_viewer(42, cargo_toml.clone());
+    assert_eq!(tab.id, 42);
+    assert!(!tab.is_settings);
+    assert!(tab.file_viewer.is_some());
+    assert_eq!(tab.display_title(), "Cargo.toml");
+
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    assert_eq!(viewer.file_name, "Cargo.toml");
+    assert!(!viewer.is_binary);
+    assert!(!viewer.lines.is_empty());
+    assert!(viewer.file_size > 0);
+
+    // Panes debe ser vacío y active_pane debe devolver None
+    assert!(tab.panes.is_empty());
+    assert!(tab.active_pane().is_none());
+    assert!(tab.compute_pane_rects(0, 0, 800, 600).is_empty());
+    assert!(tab.compute_dividers(0, 0, 800, 600).is_empty());
+}
+
+#[test]
+fn test_file_viewer_editing_and_dirty_state() {
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("axon_test_edit_{}.rs", std::process::id()));
+    let _ = std::fs::write(&temp_file, "");
+
+    let mut tab = TerminalTab::new_file_viewer(99, temp_file.clone());
+
+    assert_eq!(tab.display_title(), temp_file.file_name().unwrap().to_str().unwrap());
+
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    assert!(!viewer.is_dirty);
+    viewer.insert_char('f');
+    viewer.insert_char('n');
+    assert!(viewer.is_dirty);
+    assert_eq!(viewer.cursor_col, 2);
+
+    viewer.backspace();
+    assert_eq!(viewer.cursor_col, 1);
+    assert_eq!(viewer.lines[0], "f");
+
+    viewer.insert_newline();
+    assert_eq!(viewer.cursor_line, 1);
+    assert_eq!(viewer.cursor_col, 0);
+    assert_eq!(viewer.lines.len(), 2);
+
+    assert_eq!(tab.display_title(), format!("● {}", temp_file.file_name().unwrap().to_str().unwrap()));
+
+    let _ = std::fs::remove_file(temp_file);
+}
+
+#[test]
+fn test_file_viewer_undo_redo() {
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("axon_test_undo_{}.txt", std::process::id()));
+    let _ = std::fs::write(&temp_file, "hello world");
+
+    let mut tab = TerminalTab::new_file_viewer(100, temp_file.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+
+    viewer.cursor_col = 5;
+    viewer.insert_text(" beautiful");
+    assert_eq!(viewer.lines[0], "hello beautiful world");
+
+    viewer.undo();
+    assert_eq!(viewer.lines[0], "hello world");
+    assert_eq!(viewer.cursor_col, 5);
+
+    viewer.redo();
+    assert_eq!(viewer.lines[0], "hello beautiful world");
+
+    let _ = std::fs::remove_file(temp_file);
+}
+
+#[test]
+fn test_file_viewer_word_navigation_and_deletion() {
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("axon_test_words_{}.txt", std::process::id()));
+    let _ = std::fs::write(&temp_file, "foo bar_baz  qux");
+
+    let mut tab = TerminalTab::new_file_viewer(101, temp_file.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+
+    // cursor at end
+    viewer.cursor_col = viewer.lines[0].chars().count();
+    let left1 = viewer.find_word_boundary_left();
+    assert_eq!(left1, 13); // inicio de "qux"
+    viewer.cursor_col = left1;
+
+    let left2 = viewer.find_word_boundary_left();
+    assert_eq!(left2, 4); // inicio de "bar_baz"
+    viewer.cursor_col = left2;
+
+    let right1 = viewer.find_word_boundary_right();
+    assert_eq!(right1, 13); // después de "bar_baz  "
+
+    // Borrado de palabra hacia la izquierda
+    viewer.cursor_col = 7; // después de "foo bar"
+    viewer.delete_word_left();
+    assert_eq!(viewer.lines[0], "foo _baz  qux");
+
+    let _ = std::fs::remove_file(temp_file);
+}
+
+#[test]
+fn test_file_viewer_git_diff_status() {
+    let temp_dir = std::env::temp_dir();
+    let temp_file = temp_dir.join(format!("axon_test_diff_{}.txt", std::process::id()));
+    let _ = std::fs::write(&temp_file, "line1\nline2\nline3");
+
+    let mut tab = TerminalTab::new_file_viewer(102, temp_file.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+
+    assert_eq!(viewer.get_line_git_diff_status(0), None);
+    assert_eq!(viewer.get_line_git_diff_status(1), None);
+
+    viewer.lines[1] = "line2 modified".to_string();
+    assert_eq!(viewer.get_line_git_diff_status(1), Some(crate::app::layout::GitLineStatus::Modified));
+
+    viewer.lines.push("line4 added".to_string());
+    assert_eq!(viewer.get_line_git_diff_status(3), Some(crate::app::layout::GitLineStatus::Added));
+
+    let _ = std::fs::remove_file(temp_file);
 }

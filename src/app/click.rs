@@ -27,12 +27,14 @@ impl AxonApp {
         if button == MouseButton::Left && state == ElementState::Released {
             let was_dragging = self.scrollbar_dragging
                 || self.sidebar_scrollbar_dragging
-                || self.explorer_scrollbar_dragging;
+                || self.explorer_scrollbar_dragging
+                || self.viewer_scrollbar_dragging;
             if was_dragging {
                 self.scrollbar_dragging = false;
                 self.scrollbar_drag_pane_id = None;
                 self.sidebar_scrollbar_dragging = false;
                 self.explorer_scrollbar_dragging = false;
+                self.viewer_scrollbar_dragging = false;
                 self.last_scroll_time = Instant::now();
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -670,9 +672,33 @@ impl AxonApp {
                     }
 
                     let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
-                    let up_x = panel_x + 10;
-                    if mx >= up_x && mx < up_x + 26 && my >= sub_y + 4 && my < sub_y + 24 {
-                        crate::logger::log("-> Clic en [..] subir nivel en explorador");
+                    let back_x = panel_x + 8;
+                    if mx >= back_x && mx < back_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                        if self.file_explorer.can_go_back() {
+                            crate::logger::log("-> Clic en [<] atrás en explorador");
+                            self.file_explorer.go_back();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
+                    let fwd_x = back_x + 24;
+                    if mx >= fwd_x && mx < fwd_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                        if self.file_explorer.can_go_forward() {
+                            crate::logger::log("-> Clic en [>] adelante en explorador");
+                            self.file_explorer.go_forward();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
+                    let up_x = fwd_x + 24;
+                    if mx >= up_x && mx < up_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                        crate::logger::log("-> Clic en [^] subir nivel en explorador");
                         self.file_explorer.navigate_up();
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -680,13 +706,17 @@ impl AxonApp {
                         return;
                     }
 
+                    // Al interactuar con el explorador gana el foco de teclado
+                    self.file_explorer.is_focused = true;
+
                     // Solo procesar clics en elementos si estamos a la izquierda de la barra de desplazamiento
                     if mx < panel_x + panel_w.saturating_sub(16) {
                         if let Some(idx) = self.file_explorer.item_at_y(my, panel_y) {
                             if idx < self.file_explorer.items.len() {
                                 self.file_explorer.selected_index = Some(idx);
-                                let item = &self.file_explorer.items[idx];
+                                let item = self.file_explorer.items[idx].clone();
                                 self.file_explorer.selected_path = Some(item.path.clone());
+
                                 if item.is_dir {
                                     crate::logger::log(&format!(
                                         "-> Clic en carpeta: {}",
@@ -694,32 +724,105 @@ impl AxonApp {
                                     ));
                                     self.file_explorer.toggle_expand(idx);
                                 } else {
+                                    // Con solo un clic se abre y visualiza el archivo inmediatamente
                                     crate::logger::log(&format!(
-                                        "-> Clic en archivo: {}",
+                                        "-> Abrir visor de archivos: {}",
                                         item.name
                                     ));
-                                    let path_str = if let Ok(rel) =
-                                        item.path.strip_prefix(&self.file_explorer.root_dir)
-                                    {
-                                        rel.to_string_lossy().replace('\\', "/")
-                                    } else {
-                                        item.path.to_string_lossy().to_string()
-                                    };
-                                    let to_insert = if path_str.contains(' ') {
-                                        format!("\"{}\" ", path_str)
-                                    } else {
-                                        format!("{} ", path_str)
-                                    };
-                                    if let Some(active_pane) =
-                                        self.tabs[self.active_tab_index].active_pane()
-                                    {
-                                        active_pane.pty.write_input(to_insert.as_bytes());
-                                    }
+                                    self.open_file_in_viewer(&item.path);
                                 }
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
                                 }
                                 return;
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
+        // Clics dentro del visor de archivos si la pestaña activa es un file viewer
+        let is_viewer_active = self.tabs[self.active_tab_index].file_viewer.is_some();
+        if is_viewer_active {
+            let offset = self.sidebar_offset();
+            let top_offset = self.top_offset();
+            let status_bar_h = self.status_bar_height();
+            let right_offset = self.file_explorer_offset();
+            let viewer_w = win_w.saturating_sub(offset + right_offset);
+            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
+            let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
+
+            if mx >= offset && mx < offset + viewer_w && my >= top_offset && my < top_offset + viewer_h {
+                self.file_explorer.is_focused = false;
+                if state == ElementState::Pressed && button == MouseButton::Left {
+                    if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                        // Comprobar clic en la barra de desplazamiento del visor
+                        if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
+                            offset,
+                            top_offset,
+                            viewer_w,
+                            viewer_h,
+                            viewer,
+                            row_h,
+                        ) {
+                            let hit_x = track.0.saturating_sub(4);
+                            if mx >= hit_x && mx < offset + viewer_w && my >= track.1 && my < track.1 + track.3 {
+                                if my >= thumb.1 && my < thumb.1 + thumb.3 {
+                                    self.viewer_scrollbar_dragging = true;
+                                    self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                } else {
+                                    let available_travel = track.3.saturating_sub(thumb.3);
+                                    let content_h = viewer_h.saturating_sub(38);
+                                    let visible_lines = (content_h / row_h.max(16)).max(1);
+                                    let max_offset = viewer.lines.len().saturating_sub(visible_lines);
+                                    if available_travel > 0 && max_offset > 0 {
+                                        let click_rel = (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
+                                        let ratio = (click_rel / available_travel as f32).clamp(0.0, 1.0);
+                                        viewer.scroll_offset = ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                                        if let Some(w) = &self.window {
+                                            w.request_redraw();
+                                        }
+                                    }
+                                }
+                                return;
+                            }
+                        }
+
+                        // Clic dentro del contenido de texto para posicionar el cursor
+                        let content_y = top_offset + 38;
+                        if my >= content_y && !viewer.is_binary {
+                            let clicked_row = (my - content_y) / row_h.max(16);
+                            let target_line = viewer.scroll_offset + clicked_row;
+                            if target_line < viewer.lines.len() {
+                                viewer.cursor_line = target_line;
+                                let total_lines = viewer.lines.len();
+                                let digits = format!("{}", total_lines).len().max(3);
+                                let gutter_w = digits * char_w.max(7) + 24;
+                                let text_start_x = offset + gutter_w + 14;
+
+                                if mx >= text_start_x {
+                                    let rel_x = (mx - text_start_x) + viewer.scroll_offset_x * char_w.max(7);
+                                    let line_str = &viewer.lines[target_line];
+                                    let mut cur_x_acc = 0;
+                                    let mut target_col = line_str.chars().count();
+                                    for (ci, ch) in line_str.chars().enumerate() {
+                                        let ch_adv = if ch == '\t' { char_w.max(7) * 4 } else { char_w.max(7) };
+                                        if cur_x_acc + ch_adv / 2 >= rel_x {
+                                            target_col = ci;
+                                            break;
+                                        }
+                                        cur_x_acc += ch_adv;
+                                    }
+                                    viewer.cursor_col = target_col;
+                                } else {
+                                    viewer.cursor_col = 0;
+                                }
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
                             }
                         }
                     }
@@ -746,6 +849,7 @@ impl AxonApp {
             .copied();
 
         if let Some(rect) = clicked_pane_rect {
+            self.file_explorer.is_focused = false;
             // Cambiar foco al panel clickeado si no está activo
             if active_tab.active_pane_id != rect.pane_id {
                 active_tab.active_pane_id = rect.pane_id;
