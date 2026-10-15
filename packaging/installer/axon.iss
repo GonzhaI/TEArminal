@@ -1,5 +1,5 @@
-﻿; Instalador de Axon (Inno Setup 6). Se compila con packaging/package.ps1:
-;   ISCC /DAppVersion=0.5.0 /DStageDir=..\dist\axon packaging\installer\axon.iss
+; Instalador de Axon (Inno Setup 6). Se compila con packaging/package.ps1:
+;   ISCC /DAppVersion=0.6.0 /DStageDir=..\dist\axon packaging\installer\axon.iss
 ; Instalación por usuario (sin permisos de administrador) en %LOCALAPPDATA%\Programs\Axon.
 #ifndef AppVersion
   #define AppVersion "0.0.0"

@@ -1,9 +1,9 @@
-﻿# Genera los entregables de Axon en dist\:
+# Genera los entregables de Axon en dist\:
 #   axon-<version>-windows-x64.zip   portable (axon.exe + bin\ con herramientas + licenses\)
 #   axon-setup-<version>.exe         instalador por usuario (Inno Setup), si ISCC está disponible
 #   SHA256SUMS.txt
 #
-# Uso:  pwsh packaging/package.ps1 [-Version 0.5.0] [-SkipBuild] [-SkipInstaller]
+# Uso:  pwsh packaging/package.ps1 [-Version 0.6.0] [-SkipBuild] [-SkipInstaller]
 [CmdletBinding()]
 param(
     [string]$Version,
