@@ -140,7 +140,9 @@ impl FileViewerState {
         if self.cursor_line < self.scroll_offset {
             self.scroll_offset = self.cursor_line;
         } else if self.cursor_line >= self.scroll_offset + visible_lines {
-            self.scroll_offset = self.cursor_line.saturating_sub(visible_lines.saturating_sub(1));
+            self.scroll_offset = self
+                .cursor_line
+                .saturating_sub(visible_lines.saturating_sub(1));
         }
 
         // Horizontal scroll ensure visible (columna)
@@ -224,7 +226,8 @@ impl FileViewerState {
 
             for (idx, &part) in parts.iter().enumerate().skip(1) {
                 if idx == parts.len() - 1 {
-                    self.lines.insert(self.cursor_line + idx, format!("{}{}", part, suffix));
+                    self.lines
+                        .insert(self.cursor_line + idx, format!("{}{}", part, suffix));
                     self.cursor_col = part.chars().count();
                 } else {
                     self.lines.insert(self.cursor_line + idx, part.to_string());

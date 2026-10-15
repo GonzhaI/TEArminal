@@ -429,12 +429,8 @@ impl AxonApp {
                 .unwrap_or(600);
             let top_offset = self.top_offset();
             let status_bar_h = self.status_bar_height();
-            let (_, _, _, panel_h) = crate::explorer::FileExplorer::panel_geometry(
-                800,
-                win_h,
-                top_offset,
-                status_bar_h,
-            );
+            let (_, _, _, panel_h) =
+                crate::explorer::FileExplorer::panel_geometry(800, win_h, top_offset, status_bar_h);
             let list_h = panel_h.saturating_sub(
                 crate::explorer::FileExplorer::HEADER_HEIGHT
                     + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
@@ -531,7 +527,10 @@ impl AxonApp {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     match viewer.save_to_disk() {
                         Ok(()) => {
-                            crate::logger::log(&format!("-> Archivo guardado con éxito: {}", viewer.file_name));
+                            crate::logger::log(&format!(
+                                "-> Archivo guardado con éxito: {}",
+                                viewer.file_name
+                            ));
                             // Refrescar git status en el explorador
                             self.file_explorer.refresh_git_status();
                             self.file_explorer.refresh();
@@ -653,7 +652,8 @@ impl AxonApp {
                                 viewer.cursor_col -= 1;
                             } else if viewer.cursor_line > 0 {
                                 viewer.cursor_line -= 1;
-                                viewer.cursor_col = viewer.lines[viewer.cursor_line].chars().count();
+                                viewer.cursor_col =
+                                    viewer.lines[viewer.cursor_line].chars().count();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -665,7 +665,11 @@ impl AxonApp {
                             if ctrl {
                                 viewer.cursor_col = viewer.find_word_boundary_right();
                             } else {
-                                let line_len = viewer.lines.get(viewer.cursor_line).map(|l| l.chars().count()).unwrap_or(0);
+                                let line_len = viewer
+                                    .lines
+                                    .get(viewer.cursor_line)
+                                    .map(|l| l.chars().count())
+                                    .unwrap_or(0);
                                 if viewer.cursor_col < line_len {
                                     viewer.cursor_col += 1;
                                 } else if viewer.cursor_line + 1 < viewer.lines.len() {
@@ -687,7 +691,11 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::End) => {
-                            let line_len = viewer.lines.get(viewer.cursor_line).map(|l| l.chars().count()).unwrap_or(0);
+                            let line_len = viewer
+                                .lines
+                                .get(viewer.cursor_line)
+                                .map(|l| l.chars().count())
+                                .unwrap_or(0);
                             viewer.cursor_col = line_len;
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -705,7 +713,8 @@ impl AxonApp {
                         }
                         Key::Named(NamedKey::PageDown) => {
                             let page = visible_lines.saturating_sub(2).max(1);
-                            viewer.cursor_line = (viewer.cursor_line + page).min(viewer.lines.len().saturating_sub(1));
+                            viewer.cursor_line = (viewer.cursor_line + page)
+                                .min(viewer.lines.len().saturating_sub(1));
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -781,8 +790,8 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            viewer.scroll_offset =
-                                (viewer.scroll_offset + 1).min(viewer.lines.len().saturating_sub(1));
+                            viewer.scroll_offset = (viewer.scroll_offset + 1)
+                                .min(viewer.lines.len().saturating_sub(1));
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }

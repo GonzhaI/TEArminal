@@ -24,12 +24,30 @@ impl TerminalRenderer {
         let clip: Clip = (x, y, (x + w).min(width), (y + h).min(height));
 
         // 1. Fondo completo del área de trabajo
-        fill_rect(buffer, width, clip, x, y, w, h, theme.background.to_u32_xrgb());
+        fill_rect(
+            buffer,
+            width,
+            clip,
+            x,
+            y,
+            w,
+            h,
+            theme.background.to_u32_xrgb(),
+        );
 
         // 2. Barra de encabezado superior (38px)
         let header_h = 38;
         let header_bg = theme.surface_bg();
-        fill_rect(buffer, width, clip, x, y, w, header_h, header_bg.to_u32_xrgb());
+        fill_rect(
+            buffer,
+            width,
+            clip,
+            x,
+            y,
+            w,
+            header_h,
+            header_bg.to_u32_xrgb(),
+        );
 
         // Línea divisoria inferior del encabezado
         fill_rect(
@@ -116,7 +134,11 @@ impl TerminalRenderer {
         let (status_text, status_fg, status_bg) = if viewer.is_binary {
             ("SOLO LECTURA", theme.ansi[8], theme.surface_hover())
         } else if viewer.is_dirty {
-            ("MODIFICADO", theme.ansi[3], Color::from_rgba(255, 180, 0, 24))
+            (
+                "MODIFICADO",
+                theme.ansi[3],
+                Color::from_rgba(255, 180, 0, 24),
+            )
         } else {
             ("EDITABLE", theme.ansi[2], Color::from_rgba(0, 255, 128, 16))
         };
@@ -149,7 +171,11 @@ impl TerminalRenderer {
 
         // Badge de cursor (Ln X, Col Y) si no es binario
         if !viewer.is_binary {
-            let cursor_text = format!("Ln {}, Col {}", viewer.cursor_line + 1, viewer.cursor_col + 1);
+            let cursor_text = format!(
+                "Ln {}, Col {}",
+                viewer.cursor_line + 1,
+                viewer.cursor_col + 1
+            );
             let cursor_w = self.measure_ui_text(&cursor_text, 10.5, false) + 14;
             let cursor_x = badge_right_x.saturating_sub(cursor_w);
             crate::ui::draw_rounded_rect(
@@ -378,7 +404,7 @@ impl TerminalRenderer {
             // Indicador de Git en el gutter si la línea fue modificada o añadida
             if let Some(git_status) = viewer.get_line_git_diff_status(line_idx) {
                 let git_color = match git_status {
-                    crate::app::GitLineStatus::Added => theme.ansi[2],    // Verde
+                    crate::app::GitLineStatus::Added => theme.ansi[2], // Verde
                     crate::app::GitLineStatus::Modified => theme.ansi[3], // Amarillo
                 };
                 fill_rect(
@@ -416,15 +442,7 @@ impl TerminalRenderer {
             let cur_x = (sep_x + 14) as i32 - start_x_offset;
 
             self.render_highlighted_line(
-                buffer,
-                width,
-                text_clip,
-                line_text,
-                cur_x,
-                baseline_y,
-                text_max_x,
-                char_w,
-                theme,
+                buffer, width, text_clip, line_text, cur_x, baseline_y, text_max_x, char_w, theme,
                 &ext,
             );
 
@@ -436,7 +454,11 @@ impl TerminalRenderer {
                     if ci >= col {
                         break;
                     }
-                    cursor_x_offset += if ch == '\t' { (char_w * 4) as i32 } else { char_w as i32 };
+                    cursor_x_offset += if ch == '\t' {
+                        (char_w * 4) as i32
+                    } else {
+                        char_w as i32
+                    };
                 }
                 let cursor_x = cur_x + cursor_x_offset;
                 if cursor_x >= (sep_x + 1) as i32 && cursor_x < text_max_x as i32 {
@@ -569,7 +591,9 @@ impl TerminalRenderer {
         // Comentarios completos de línea
         let is_full_comment = match ext {
             "py" | "sh" | "bash" | "ps1" | "toml" | "yaml" | "yml" => trimmed.starts_with('#'),
-            "bat" | "cmd" => trimmed.to_ascii_uppercase().starts_with("REM ") || trimmed.starts_with("::"),
+            "bat" | "cmd" => {
+                trimmed.to_ascii_uppercase().starts_with("REM ") || trimmed.starts_with("::")
+            }
             "sql" | "lua" => trimmed.starts_with("--"),
             _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
         };
@@ -675,7 +699,9 @@ impl TerminalRenderer {
                 cur_x += char_w_i32;
                 i += 1;
 
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == ':') {
+                while i < chars.len()
+                    && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == ':')
+                {
                     if cur_x >= max_x_i32 {
                         break;
                     }
@@ -707,37 +733,46 @@ impl TerminalRenderer {
 
                 let token_fg = match word.as_str() {
                     // Palabras clave de control, estructura y definición: Acento del tema
-                    "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const"
-                    | "use" | "mod" | "type" | "return" | "if" | "else" | "match" | "for"
-                    | "while" | "loop" | "async" | "await" | "trait" | "where" | "self"
-                    | "Self" | "function" | "def" | "class" | "import" | "from" | "export"
-                    | "var" | "val" | "interface" | "package" | "go" | "defer" | "select"
-                    | "switch" | "case" | "default" | "break" | "continue" | "try" | "catch"
-                    | "finally" | "throw" | "throws" | "new" | "delete" | "in" | "is" | "as"
-                    | "yield" | "lambda" | "with" | "pass" | "raise" | "assert" | "global"
-                    | "nonlocal" | "static" | "public" | "private" | "protected" | "virtual"
-                    | "override" | "abstract" | "extends" | "implements" | "namespace"
-                    | "using" | "template" | "typename" | "constexpr" | "sizeof"
-                    | "param" | "process" | "begin" | "end" => theme.accent_color(),
+                    "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const" | "use"
+                    | "mod" | "type" | "return" | "if" | "else" | "match" | "for" | "while"
+                    | "loop" | "async" | "await" | "trait" | "where" | "self" | "Self"
+                    | "function" | "def" | "class" | "import" | "from" | "export" | "var"
+                    | "val" | "interface" | "package" | "go" | "defer" | "select" | "switch"
+                    | "case" | "default" | "break" | "continue" | "try" | "catch" | "finally"
+                    | "throw" | "throws" | "new" | "delete" | "in" | "is" | "as" | "yield"
+                    | "lambda" | "with" | "pass" | "raise" | "assert" | "global" | "nonlocal"
+                    | "static" | "public" | "private" | "protected" | "virtual" | "override"
+                    | "abstract" | "extends" | "implements" | "namespace" | "using"
+                    | "template" | "typename" | "constexpr" | "sizeof" | "param" | "process"
+                    | "begin" | "end" => theme.accent_color(),
 
                     // Booleanos y valores nulos: Amarillo
                     "true" | "false" | "None" | "null" | "nil" | "undefined" => theme.ansi[3],
 
                     // Tipos primitivos y contenedores estándar: Cian brillante (ANSI 6)
-                    "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
-                    | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "f32" | "f64"
-                    | "bool" | "char" | "Option" | "Result" | "Vec" | "Some"
-                    | "Ok" | "Err" | "Box" | "Rc" | "Arc" | "Cell" | "RefCell" | "HashMap"
-                    | "HashSet" | "BTreeMap" | "BTreeSet" | "int" | "float" | "dict" | "list"
-                    | "set" | "tuple" | "void" | "int8" | "int16" | "int32" | "int64"
-                    | "uint8" | "uint16" | "uint32" | "uint64" | "byte" | "rune"
-                    | "any" | "unknown" | "never" | "number" | "boolean" | "object" => theme.ansi[6],
+                    "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8"
+                    | "i16" | "i32" | "i64" | "i128" | "isize" | "f32" | "f64" | "bool"
+                    | "char" | "Option" | "Result" | "Vec" | "Some" | "Ok" | "Err" | "Box"
+                    | "Rc" | "Arc" | "Cell" | "RefCell" | "HashMap" | "HashSet" | "BTreeMap"
+                    | "BTreeSet" | "int" | "float" | "dict" | "list" | "set" | "tuple" | "void"
+                    | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
+                    | "uint64" | "byte" | "rune" | "any" | "unknown" | "never" | "number"
+                    | "boolean" | "object" => theme.ansi[6],
 
                     _ if is_func_call => theme.ansi[4], // Azul moderno para llamadas a función
-                    _ if word.chars().all(|c| c.is_uppercase() || c == '_' || c.is_numeric()) && word.len() > 1 => {
+                    _ if word
+                        .chars()
+                        .all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
+                        && word.len() > 1 =>
+                    {
                         theme.ansi[5] // Constantes en mayúsculas: Magenta
                     }
-                    _ if word.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) => {
+                    _ if word
+                        .chars()
+                        .next()
+                        .map(|c| c.is_uppercase())
+                        .unwrap_or(false) =>
+                    {
                         theme.ansi[6] // Clases o Tipos PascalCase: Cian
                     }
                     _ => theme.foreground,
@@ -760,7 +795,9 @@ impl TerminalRenderer {
             // Números literales (enteros, hexadecimales 0x..., flotantes)
             if ch.is_ascii_digit() {
                 let num_fg = theme.ansi[3]; // Amarillo oro
-                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '.' || chars[i] == '_') {
+                while i < chars.len()
+                    && (chars[i].is_ascii_alphanumeric() || chars[i] == '.' || chars[i] == '_')
+                {
                     if cur_x >= max_x_i32 {
                         break;
                     }
@@ -778,7 +815,26 @@ impl TerminalRenderer {
             // Símbolos, delimitadores y operadores
             let symbol_fg = if matches!(ch, '{' | '}' | '(' | ')' | '[' | ']') {
                 theme.ansi[7]
-            } else if matches!(ch, ':' | ';' | ',' | '.' | '=' | '+' | '-' | '*' | '/' | '&' | '|' | '!' | '?' | '<' | '>' | '%' | '^' | '~') {
+            } else if matches!(
+                ch,
+                ':' | ';'
+                    | ','
+                    | '.'
+                    | '='
+                    | '+'
+                    | '-'
+                    | '*'
+                    | '/'
+                    | '&'
+                    | '|'
+                    | '!'
+                    | '?'
+                    | '<'
+                    | '>'
+                    | '%'
+                    | '^'
+                    | '~'
+            ) {
                 theme.ansi[6]
             } else {
                 theme.foreground

@@ -70,11 +70,9 @@ impl AxonApp {
         if self.file_explorer.visible {
             self.sync_file_explorer_root();
             self.file_explorer.is_focused = true;
-            if self.file_explorer.selected_index.is_none() && !self.file_explorer.items.is_empty()
-            {
+            if self.file_explorer.selected_index.is_none() && !self.file_explorer.items.is_empty() {
                 self.file_explorer.selected_index = Some(0);
-                self.file_explorer.selected_path =
-                    Some(self.file_explorer.items[0].path.clone());
+                self.file_explorer.selected_path = Some(self.file_explorer.items[0].path.clone());
             }
         } else {
             self.file_explorer.is_focused = false;

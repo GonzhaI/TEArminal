@@ -154,9 +154,23 @@ impl TerminalRenderer {
             Color::from_rgba(255, 255, 255, 6)
         };
         crate::ui::draw_rounded_rect(buffer, width, height, back_x, sub_y + 4, 22, 20, 5, back_bg);
-        crate::ui::stroke_rounded_rect(buffer, width, height, back_x, sub_y + 4, 22, 20, 5, border_color);
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            back_x,
+            sub_y + 4,
+            22,
+            20,
+            5,
+            border_color,
+        );
         let back_fg = if can_back {
-            if explorer.hovered_back_btn { theme.accent_color() } else { theme.ansi[7] }
+            if explorer.hovered_back_btn {
+                theme.accent_color()
+            } else {
+                theme.ansi[7]
+            }
         } else {
             theme.ansi[8]
         };
@@ -180,9 +194,23 @@ impl TerminalRenderer {
             Color::from_rgba(255, 255, 255, 6)
         };
         crate::ui::draw_rounded_rect(buffer, width, height, fwd_x, sub_y + 4, 22, 20, 5, fwd_bg);
-        crate::ui::stroke_rounded_rect(buffer, width, height, fwd_x, sub_y + 4, 22, 20, 5, border_color);
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            fwd_x,
+            sub_y + 4,
+            22,
+            20,
+            5,
+            border_color,
+        );
         let fwd_fg = if can_fwd {
-            if explorer.hovered_forward_btn { theme.accent_color() } else { theme.ansi[7] }
+            if explorer.hovered_forward_btn {
+                theme.accent_color()
+            } else {
+                theme.ansi[7]
+            }
         } else {
             theme.ansi[8]
         };
@@ -205,7 +233,17 @@ impl TerminalRenderer {
             Color::from_rgba(255, 255, 255, 6)
         };
         crate::ui::draw_rounded_rect(buffer, width, height, up_x, sub_y + 4, 22, 20, 5, up_bg);
-        crate::ui::stroke_rounded_rect(buffer, width, height, up_x, sub_y + 4, 22, 20, 5, border_color);
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            up_x,
+            sub_y + 4,
+            22,
+            20,
+            5,
+            border_color,
+        );
         let up_fg = if explorer.hovered_up_btn {
             theme.accent_color()
         } else {
@@ -383,9 +421,10 @@ impl TerminalRenderer {
                 let dir_color = if let Some(git) = item.git_status {
                     match git {
                         crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
-                        crate::explorer::GitFileStatus::Untracked | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
-                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1], // Rojo
-                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6], // Cian
+                        crate::explorer::GitFileStatus::Untracked
+                        | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
+                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1],  // Rojo
+                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6],  // Cian
                     }
                 } else if is_selected {
                     theme.accent_color()
@@ -435,9 +474,10 @@ impl TerminalRenderer {
                 let text_color = if let Some(git) = item.git_status {
                     match git {
                         crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
-                        crate::explorer::GitFileStatus::Untracked | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
-                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1], // Rojo
-                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6], // Cian
+                        crate::explorer::GitFileStatus::Untracked
+                        | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
+                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1],  // Rojo
+                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6],  // Cian
                     }
                 } else if is_selected {
                     theme.accent_color()

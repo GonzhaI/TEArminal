@@ -455,11 +455,7 @@ impl FileExplorer {
         } else {
             // En nivel raíz: subir de directorio (..)
             self.navigate_up();
-            self.selected_index = if self.items.is_empty() {
-                None
-            } else {
-                Some(0)
-            };
+            self.selected_index = if self.items.is_empty() { None } else { Some(0) };
             self.selected_path = self.selected_index.map(|i| self.items[i].path.clone());
         }
     }
@@ -481,7 +477,8 @@ impl FileExplorer {
         if self.items[idx].is_dir {
             if !self.items[idx].is_expanded {
                 self.toggle_expand(idx);
-            } else if idx + 1 < self.items.len() && self.items[idx + 1].depth > self.items[idx].depth
+            } else if idx + 1 < self.items.len()
+                && self.items[idx + 1].depth > self.items[idx].depth
             {
                 // Ya expandido: entrar al primer hijo
                 self.selected_index = Some(idx + 1);

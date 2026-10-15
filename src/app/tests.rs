@@ -315,7 +315,10 @@ fn test_file_viewer_editing_and_dirty_state() {
 
     let mut tab = TerminalTab::new_file_viewer(99, temp_file.clone());
 
-    assert_eq!(tab.display_title(), temp_file.file_name().unwrap().to_str().unwrap());
+    assert_eq!(
+        tab.display_title(),
+        temp_file.file_name().unwrap().to_str().unwrap()
+    );
 
     let viewer = tab.file_viewer.as_mut().unwrap();
     assert!(!viewer.is_dirty);
@@ -333,7 +336,10 @@ fn test_file_viewer_editing_and_dirty_state() {
     assert_eq!(viewer.cursor_col, 0);
     assert_eq!(viewer.lines.len(), 2);
 
-    assert_eq!(tab.display_title(), format!("● {}", temp_file.file_name().unwrap().to_str().unwrap()));
+    assert_eq!(
+        tab.display_title(),
+        format!("● {}", temp_file.file_name().unwrap().to_str().unwrap())
+    );
 
     let _ = std::fs::remove_file(temp_file);
 }
@@ -404,10 +410,16 @@ fn test_file_viewer_git_diff_status() {
     assert_eq!(viewer.get_line_git_diff_status(1), None);
 
     viewer.lines[1] = "line2 modified".to_string();
-    assert_eq!(viewer.get_line_git_diff_status(1), Some(crate::app::layout::GitLineStatus::Modified));
+    assert_eq!(
+        viewer.get_line_git_diff_status(1),
+        Some(crate::app::layout::GitLineStatus::Modified)
+    );
 
     viewer.lines.push("line4 added".to_string());
-    assert_eq!(viewer.get_line_git_diff_status(3), Some(crate::app::layout::GitLineStatus::Added));
+    assert_eq!(
+        viewer.get_line_git_diff_status(3),
+        Some(crate::app::layout::GitLineStatus::Added)
+    );
 
     let _ = std::fs::remove_file(temp_file);
 }

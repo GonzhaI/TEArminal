@@ -183,7 +183,9 @@ impl SettingsPageRects {
     pub fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
         let max_card_w = 980;
         let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
-        let card_w = (page_w.saturating_sub(side_padding * 2)).min(max_card_w).max(460);
+        let card_w = (page_w.saturating_sub(side_padding * 2))
+            .min(max_card_w)
+            .max(460);
         let margin_x = if page_w > card_w {
             (page_w - card_w) / 2
         } else {

@@ -459,4 +459,3 @@ fn test_ui_font_size_scaling() {
         "El ancho a 10pt ({w_10}px) debe ser menor que a 13pt ({w_13}px)"
     );
 }
-

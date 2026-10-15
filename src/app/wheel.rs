@@ -85,23 +85,28 @@ impl AxonApp {
                 MouseScrollDelta::LineDelta(x, y) => {
                     ((x * 3.0).round() as isize, (y * 3.0).round() as isize)
                 }
-                MouseScrollDelta::PixelDelta(pos) => {
-                    ((pos.x / 20.0).round() as isize, (pos.y / 20.0).round() as isize)
-                }
+                MouseScrollDelta::PixelDelta(pos) => (
+                    (pos.x / 20.0).round() as isize,
+                    (pos.y / 20.0).round() as isize,
+                ),
             };
             if self.modifiers.shift_key() {
                 // Shift + rueda vertical -> scroll horizontal
                 if dy > 0 {
-                    viewer.scroll_offset_x = viewer.scroll_offset_x.saturating_sub(dy.unsigned_abs() * 3);
+                    viewer.scroll_offset_x =
+                        viewer.scroll_offset_x.saturating_sub(dy.unsigned_abs() * 3);
                 } else if dy < 0 {
-                    viewer.scroll_offset_x = (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(1000);
+                    viewer.scroll_offset_x =
+                        (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(1000);
                 }
             } else if dx != 0 {
                 // Rueda horizontal nativa
                 if dx > 0 {
-                    viewer.scroll_offset_x = (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(1000);
+                    viewer.scroll_offset_x =
+                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(1000);
                 } else if dx < 0 {
-                    viewer.scroll_offset_x = viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
+                    viewer.scroll_offset_x =
+                        viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
                 }
             } else {
                 // Scroll vertical estándar

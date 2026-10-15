@@ -755,21 +755,26 @@ impl AxonApp {
             let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
             let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
 
-            if mx >= offset && mx < offset + viewer_w && my >= top_offset && my < top_offset + viewer_h {
+            if mx >= offset
+                && mx < offset + viewer_w
+                && my >= top_offset
+                && my < top_offset + viewer_h
+            {
                 self.file_explorer.is_focused = false;
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                         // Comprobar clic en la barra de desplazamiento del visor
-                        if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
-                            offset,
-                            top_offset,
-                            viewer_w,
-                            viewer_h,
-                            viewer,
-                            row_h,
-                        ) {
+                        if let Some((track, thumb)) =
+                            TerminalRenderer::file_viewer_scrollbar_geometry(
+                                offset, top_offset, viewer_w, viewer_h, viewer, row_h,
+                            )
+                        {
                             let hit_x = track.0.saturating_sub(4);
-                            if mx >= hit_x && mx < offset + viewer_w && my >= track.1 && my < track.1 + track.3 {
+                            if mx >= hit_x
+                                && mx < offset + viewer_w
+                                && my >= track.1
+                                && my < track.1 + track.3
+                            {
                                 if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                     self.viewer_scrollbar_dragging = true;
                                     self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -777,11 +782,16 @@ impl AxonApp {
                                     let available_travel = track.3.saturating_sub(thumb.3);
                                     let content_h = viewer_h.saturating_sub(38);
                                     let visible_lines = (content_h / row_h.max(16)).max(1);
-                                    let max_offset = viewer.lines.len().saturating_sub(visible_lines);
+                                    let max_offset =
+                                        viewer.lines.len().saturating_sub(visible_lines);
                                     if available_travel > 0 && max_offset > 0 {
-                                        let click_rel = (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
-                                        let ratio = (click_rel / available_travel as f32).clamp(0.0, 1.0);
-                                        viewer.scroll_offset = ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                                        let click_rel =
+                                            (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
+                                        let ratio =
+                                            (click_rel / available_travel as f32).clamp(0.0, 1.0);
+                                        viewer.scroll_offset = ((ratio * max_offset as f32).round()
+                                            as usize)
+                                            .min(max_offset);
                                         if let Some(w) = &self.window {
                                             w.request_redraw();
                                         }
@@ -804,12 +814,17 @@ impl AxonApp {
                                 let text_start_x = offset + gutter_w + 14;
 
                                 if mx >= text_start_x {
-                                    let rel_x = (mx - text_start_x) + viewer.scroll_offset_x * char_w.max(7);
+                                    let rel_x = (mx - text_start_x)
+                                        + viewer.scroll_offset_x * char_w.max(7);
                                     let line_str = &viewer.lines[target_line];
                                     let mut cur_x_acc = 0;
                                     let mut target_col = line_str.chars().count();
                                     for (ci, ch) in line_str.chars().enumerate() {
-                                        let ch_adv = if ch == '\t' { char_w.max(7) * 4 } else { char_w.max(7) };
+                                        let ch_adv = if ch == '\t' {
+                                            char_w.max(7) * 4
+                                        } else {
+                                            char_w.max(7)
+                                        };
                                         if cur_x_acc + ch_adv / 2 >= rel_x {
                                             target_col = ci;
                                             break;

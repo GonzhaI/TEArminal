@@ -180,12 +180,7 @@ impl AxonApp {
             if let Some(ref mut tab) = self.tabs.get_mut(self.active_tab_index) {
                 if let Some(ref mut viewer) = tab.file_viewer {
                     if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
-                        offset,
-                        top_offset,
-                        viewer_w,
-                        viewer_h,
-                        viewer,
-                        row_h,
+                        offset, top_offset, viewer_w, viewer_h, viewer, row_h,
                     ) {
                         let track_y = track.1;
                         let track_h = track.3;
@@ -196,10 +191,9 @@ impl AxonApp {
                         let max_offset = viewer.lines.len().saturating_sub(visible_lines);
 
                         if available_travel > 0 && max_offset > 0 {
-                            let target_thumb_top = (my as f32
-                                - self.viewer_scrollbar_drag_offset_y
-                                - track_y as f32)
-                                .clamp(0.0, available_travel as f32);
+                            let target_thumb_top =
+                                (my as f32 - self.viewer_scrollbar_drag_offset_y - track_y as f32)
+                                    .clamp(0.0, available_travel as f32);
                             let ratio = target_thumb_top / available_travel as f32;
                             viewer.scroll_offset =
                                 ((ratio * max_offset as f32).round() as usize).min(max_offset);
@@ -745,9 +739,11 @@ impl AxonApp {
                         top_offset,
                         status_bar_h,
                         &self.file_explorer,
-                    )
-                {
-                    mx >= track.0 && mx < track.0 + track.2 && my >= track.1 && my < track.1 + track.3
+                    ) {
+                    mx >= track.0
+                        && mx < track.0 + track.2
+                        && my >= track.1
+                        && my < track.1 + track.3
                 } else {
                     false
                 };
@@ -930,7 +926,12 @@ impl AxonApp {
             let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
 
             if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
-                if !viewer.is_binary && mx >= offset && mx < offset + viewer_w && my >= content_y && my < top_offset + viewer_h {
+                if !viewer.is_binary
+                    && mx >= offset
+                    && mx < offset + viewer_w
+                    && my >= content_y
+                    && my < top_offset + viewer_h
+                {
                     // Si no está sobre la barra de desplazamiento lateral derecha
                     let scrollbar_margin = 16;
                     let text_max_x = (offset + viewer_w).saturating_sub(scrollbar_margin);
