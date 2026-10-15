@@ -188,7 +188,7 @@ impl AxonApp {
                         let available_travel = track_h.saturating_sub(thumb_h);
                         let content_h = viewer_h.saturating_sub(38);
                         let visible_lines = (content_h / row_h.max(16)).max(1);
-                        let max_offset = viewer.lines.len().saturating_sub(visible_lines);
+                        let max_offset = viewer.rows().len().saturating_sub(visible_lines);
 
                         if available_travel > 0 && max_offset > 0 {
                             let target_thumb_top =
@@ -206,6 +206,79 @@ impl AxonApp {
             }
             if let Some(w) = &self.window {
                 w.set_cursor(winit::window::CursorIcon::Pointer);
+            }
+            return;
+        }
+
+        // Arrastre de la barra de desplazamiento de Ajustes
+        if self.settings_scrollbar_dragging {
+            let top = (my as f32 - self.settings_scrollbar_drag_offset_y).max(0.0) as usize;
+            self.settings_scroll_to_thumb(top);
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::Pointer);
+                w.request_redraw();
+            }
+            return;
+        }
+
+        // Arrastre de la barra de desplazamiento horizontal del visor de archivos
+        if self.viewer_hscrollbar_dragging {
+            let offset = self.sidebar_offset();
+            let top_offset = self.top_offset();
+            let viewer_w = win_w.saturating_sub(offset + self.file_explorer_offset());
+            let viewer_h = win_h.saturating_sub(top_offset + self.status_bar_height());
+            let (row_h, char_w) = self
+                .renderer
+                .as_ref()
+                .map(|r| (r.row_height, r.char_width))
+                .unwrap_or((20, 8));
+            let grab = self.viewer_hscrollbar_drag_offset_x;
+            if let Some(viewer) = self
+                .tabs
+                .get_mut(self.active_tab_index)
+                .and_then(|t| t.file_viewer.as_mut())
+            {
+                let lay = crate::renderer::FileViewerLayout::compute(
+                    offset,
+                    top_offset,
+                    viewer_w,
+                    viewer_h,
+                    row_h,
+                    char_w,
+                    viewer.lines.len(),
+                );
+                let max_x = viewer.max_scroll_x();
+                if let Some((track, thumb)) = lay.hscrollbar(max_x, viewer.scroll_offset_x) {
+                    let travel = track.2.saturating_sub(thumb.2);
+                    if travel > 0 {
+                        let thumb_left =
+                            (mx as f32 - grab - track.0 as f32).clamp(0.0, travel as f32);
+                        viewer.scroll_offset_x = ((thumb_left / travel as f32 * max_x as f32)
+                            .round() as usize)
+                            .min(max_x);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+            }
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::Pointer);
+            }
+            return;
+        }
+
+        // Con el menú contextual abierto solo se resalta su opción bajo el ratón
+        if let Some(menu) = &mut self.context_menu {
+            let hovered = menu.item_at(mx, my);
+            if menu.hovered != hovered {
+                menu.hovered = hovered;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::Default);
             }
             return;
         }
@@ -360,18 +433,27 @@ impl AxonApp {
                 needs_redraw = true;
             }
 
-            if !self.sidebar_visible {
-                let float_set_x = 44;
-                let float_set_w = 32;
-                let is_hover_float_set = mx >= float_set_x
-                    && mx < float_set_x + float_set_w
-                    && my >= toggle_btn_y
-                    && my < toggle_btn_y + toggle_btn_h;
-                if is_hover_float_set {
+            if self.sidebar_visible {
+                let usable_h = win_h.saturating_sub(status_bar_h);
+                let is_over_sidebar_sb = if let Some((track, _)) =
+                    TerminalRenderer::sidebar_scrollbar_geometry(
+                        SIDEBAR_WIDTH,
+                        usable_h,
+                        self.tabs.len(),
+                        self.sidebar_scroll_offset,
+                    ) {
+                    mx >= track.0
+                        && mx < track.0 + track.2
+                        && my >= track.1
+                        && my < track.1 + track.3
+                } else {
+                    false
+                };
+                if is_over_sidebar_sb {
                     is_pointer = true;
                 }
-                if self.hovered_floating_settings != is_hover_float_set {
-                    self.hovered_floating_settings = is_hover_float_set;
+                if self.sidebar_scrollbar_hovered != is_over_sidebar_sb {
+                    self.sidebar_scrollbar_hovered = is_over_sidebar_sb;
                     needs_redraw = true;
                 }
             }
@@ -479,6 +561,21 @@ impl AxonApp {
             let page_w = win_w.saturating_sub(offset);
             let page_h = win_h.saturating_sub(top_offset);
             let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
+            let over_sb = self
+                .settings_scrollbar()
+                .is_some_and(|(t, _)| mx + 6 >= t.0 && my >= t.1 && my < t.1 + t.3);
+            if over_sb {
+                is_pointer = true;
+            }
+            if self.settings_page_state.hovered_scrollbar != over_sb {
+                self.settings_page_state.hovered_scrollbar = over_sb;
+                needs_redraw = true;
+            }
+            let my = if my >= top_offset + SettingsPageRects::CONTENT_TOP {
+                my + self.settings_scroll()
+            } else {
+                my
+            };
 
             let h_sec = if SettingsPageRects::inside(mx, my, rects.nav_appearance) {
                 Some(SettingsSection::Appearance)
@@ -517,6 +614,9 @@ impl AxonApp {
             let mut h_sb = false;
             let mut h_fe = false;
             let mut h_rs = false;
+            let mut h_as = false;
+            let mut h_ww = false;
+            let mut h_si = false;
             let mut h_of = false;
             let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
 
@@ -562,6 +662,9 @@ impl AxonApp {
                     h_sb = SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn);
                     h_fe = SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn);
                     h_rs = SettingsPageRects::inside(mx, my, rects.restore_session_btn);
+                    h_as = SettingsPageRects::inside(mx, my, rects.auto_save_btn);
+                    h_ww = SettingsPageRects::inside(mx, my, rects.word_wrap_btn);
+                    h_si = SettingsPageRects::inside(mx, my, rects.ssh_integration_btn);
                     h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
                     h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
                 }
@@ -593,6 +696,9 @@ impl AxonApp {
                 || h_sb
                 || h_fe
                 || h_rs
+                || h_as
+                || h_ww
+                || h_si
                 || h_of
                 || h_reset
             {
@@ -622,6 +728,9 @@ impl AxonApp {
                 || st.hovered_status_bar != h_sb
                 || st.hovered_file_explorer != h_fe
                 || st.hovered_restore_session != h_rs
+                || st.hovered_auto_save != h_as
+                || st.hovered_word_wrap != h_ww
+                || st.hovered_ssh_integration != h_si
                 || st.hovered_open_file != h_of
                 || st.hovered_reset_defaults != h_reset
             {
@@ -647,6 +756,9 @@ impl AxonApp {
                 st.hovered_status_bar = h_sb;
                 st.hovered_file_explorer = h_fe;
                 st.hovered_restore_session = h_rs;
+                st.hovered_auto_save = h_as;
+                st.hovered_word_wrap = h_ww;
+                st.hovered_ssh_integration = h_si;
                 st.hovered_open_file = h_of;
                 st.hovered_reset_defaults = h_reset;
                 needs_redraw = true;
@@ -709,16 +821,6 @@ impl AxonApp {
                     status_bar_h,
                 );
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let close_x = panel_x + panel_w.saturating_sub(28);
-                let is_close_hover =
-                    mx >= close_x && mx < close_x + 22 && my >= panel_y + 7 && my < panel_y + 29;
-
-                let refresh_x = panel_x + panel_w.saturating_sub(56);
-                let is_refresh_hover = mx >= refresh_x
-                    && mx < refresh_x + 22
-                    && my >= panel_y + 7
-                    && my < panel_y + 29;
-
                 let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
                 let back_x = panel_x + 8;
                 let is_back_hover =
@@ -754,26 +856,16 @@ impl AxonApp {
                     self.file_explorer.item_at_y(my, panel_y)
                 };
 
-                if is_close_hover
-                    || is_refresh_hover
-                    || is_back_hover
-                    || is_fwd_hover
-                    || is_up_hover
-                    || item_hover.is_some()
-                {
+                if is_back_hover || is_fwd_hover || is_up_hover || item_hover.is_some() {
                     is_pointer = true;
                 }
 
-                if self.file_explorer.hovered_close_btn != is_close_hover
-                    || self.file_explorer.hovered_refresh_btn != is_refresh_hover
-                    || self.file_explorer.hovered_back_btn != is_back_hover
+                if self.file_explorer.hovered_back_btn != is_back_hover
                     || self.file_explorer.hovered_forward_btn != is_fwd_hover
                     || self.file_explorer.hovered_up_btn != is_up_hover
                     || self.file_explorer.hovered_index != item_hover
                     || self.file_explorer.hovered_scrollbar != is_over_scrollbar
                 {
-                    self.file_explorer.hovered_close_btn = is_close_hover;
-                    self.file_explorer.hovered_refresh_btn = is_refresh_hover;
                     self.file_explorer.hovered_back_btn = is_back_hover;
                     self.file_explorer.hovered_forward_btn = is_fwd_hover;
                     self.file_explorer.hovered_up_btn = is_up_hover;
@@ -781,16 +873,12 @@ impl AxonApp {
                     self.file_explorer.hovered_scrollbar = is_over_scrollbar;
                     needs_redraw = true;
                 }
-            } else if self.file_explorer.hovered_close_btn
-                || self.file_explorer.hovered_refresh_btn
-                || self.file_explorer.hovered_back_btn
+            } else if self.file_explorer.hovered_back_btn
                 || self.file_explorer.hovered_forward_btn
                 || self.file_explorer.hovered_up_btn
                 || self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
             {
-                self.file_explorer.hovered_close_btn = false;
-                self.file_explorer.hovered_refresh_btn = false;
                 self.file_explorer.hovered_back_btn = false;
                 self.file_explorer.hovered_forward_btn = false;
                 self.file_explorer.hovered_up_btn = false;
@@ -840,8 +928,18 @@ impl AxonApp {
 
                     if is_over_scrollbar {
                         is_pointer = true;
-                    } else if !pane.terminal.is_mouse_reporting_active() || bypass {
-                        is_text = true;
+                        if !pane.terminal.scrollbar_hovered {
+                            pane.terminal.scrollbar_hovered = true;
+                            needs_redraw = true;
+                        }
+                    } else {
+                        if pane.terminal.scrollbar_hovered {
+                            pane.terminal.scrollbar_hovered = false;
+                            needs_redraw = true;
+                        }
+                        if !pane.terminal.is_mouse_reporting_active() || bypass {
+                            is_text = true;
+                        }
                     }
 
                     if pane.terminal.is_mouse_reporting_active() && !bypass {
@@ -914,7 +1012,7 @@ impl AxonApp {
             }
         }
 
-        // Si la pestaña activa es un visor de archivos, mostrar cursor de texto (I-Beam) sobre el área editable
+        // Si la pestaña activa es un visor de archivos, gestionar arrastre de selección y cursor de texto (I-Beam)
         if !is_settings_active && self.tabs[self.active_tab_index].file_viewer.is_some() {
             let offset = self.sidebar_offset();
             let top_offset = self.top_offset();
@@ -923,9 +1021,140 @@ impl AxonApp {
             let viewer_w = win_w.saturating_sub(offset + right_offset);
             let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
             let content_y = top_offset + 38;
+            let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
             let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
 
-            if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
+            if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                let ext = viewer
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let is_markdown = ext == "md" || ext == "markdown";
+                let header_rects = crate::renderer::FileViewerHeaderRects::compute(
+                    offset,
+                    top_offset,
+                    viewer_w,
+                    viewer_h,
+                    is_markdown,
+                    viewer.git_base.is_some(),
+                );
+
+                let is_hover_diff = header_rects
+                    .diff_btn
+                    .map(|r| crate::renderer::FileViewerHeaderRects::inside(mx, my, r))
+                    .unwrap_or(false);
+                if viewer.hovered_diff_btn != is_hover_diff {
+                    viewer.hovered_diff_btn = is_hover_diff;
+                    needs_redraw = true;
+                }
+                let is_hover_mode =
+                    crate::renderer::FileViewerHeaderRects::inside(mx, my, header_rects.mode_btn);
+                let is_hover_md = header_rects
+                    .md_btn
+                    .map(|r| crate::renderer::FileViewerHeaderRects::inside(mx, my, r))
+                    .unwrap_or(false);
+
+                if is_hover_mode || is_hover_md || is_hover_diff {
+                    is_pointer = true;
+                }
+                if viewer.hovered_mode_btn != is_hover_mode {
+                    viewer.hovered_mode_btn = is_hover_mode;
+                    needs_redraw = true;
+                }
+                if viewer.hovered_md_btn != is_hover_md {
+                    viewer.hovered_md_btn = is_hover_md;
+                    needs_redraw = true;
+                }
+
+                let is_over_viewer_scrollbar = if let Some((track, _)) =
+                    TerminalRenderer::file_viewer_scrollbar_geometry(
+                        offset, top_offset, viewer_w, viewer_h, viewer, row_h,
+                    ) {
+                    mx >= track.0
+                        && mx < track.0 + track.2
+                        && my >= track.1
+                        && my < track.1 + track.3
+                } else {
+                    false
+                };
+                if is_over_viewer_scrollbar {
+                    is_pointer = true;
+                }
+                if viewer.hovered_scrollbar != is_over_viewer_scrollbar {
+                    viewer.hovered_scrollbar = is_over_viewer_scrollbar;
+                    needs_redraw = true;
+                }
+
+                let lay = crate::renderer::FileViewerLayout::compute(
+                    offset,
+                    top_offset,
+                    viewer_w,
+                    viewer_h,
+                    row_h,
+                    char_w,
+                    viewer.lines.len(),
+                );
+                let gutter_w = lay.gutter_w;
+                let over_gutter =
+                    mx >= offset && mx < lay.sep_x && my >= content_y && my < top_offset + viewer_h;
+                if viewer.hovered_gutter != over_gutter {
+                    viewer.hovered_gutter = over_gutter;
+                    needs_redraw = true;
+                }
+
+                let over_hscroll = lay
+                    .hscrollbar(viewer.max_scroll_x(), viewer.scroll_offset_x)
+                    .is_some_and(|(track, _)| {
+                        mx >= track.0
+                            && mx < track.0 + track.2
+                            && my + 4 >= track.1
+                            && my < track.1 + track.3 + 4
+                    });
+                if over_hscroll {
+                    is_pointer = true;
+                }
+                if viewer.hovered_hscrollbar != over_hscroll {
+                    viewer.hovered_hscrollbar = over_hscroll;
+                    needs_redraw = true;
+                }
+
+                if self.viewer_drag_selecting && !viewer.is_binary && !viewer.lines.is_empty() {
+                    let visible_lines = lay.content_h / lay.row_h;
+                    let total_rows = viewer.rows().len();
+
+                    if my < content_y && viewer.scroll_offset > 0 {
+                        viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                    } else if my >= top_offset + viewer_h {
+                        let max_scroll = total_rows.saturating_sub(visible_lines);
+                        if viewer.scroll_offset < max_scroll {
+                            viewer.scroll_offset += 1;
+                        }
+                    }
+
+                    let clicked_row = viewer.scroll_offset
+                        + if my < content_y {
+                            0
+                        } else {
+                            (my - content_y) / row_h.max(16)
+                        };
+                    let (target_line, target_col) = viewer
+                        .hit_test(clicked_row, mx, &lay)
+                        .unwrap_or((viewer.cursor_line, viewer.cursor_col));
+
+                    viewer.cursor_line = target_line;
+                    viewer.cursor_col = target_col;
+
+                    if let Some(start) = self.viewer_drag_start {
+                        viewer.selection = Some((start, (target_line, target_col)));
+                    }
+                    let content_h = viewer_h.saturating_sub(38);
+                    let visible_lines = (content_h / row_h.max(16)).max(1);
+                    viewer.ensure_cursor_visible(visible_lines);
+                    needs_redraw = true;
+                }
+
                 if !viewer.is_binary
                     && mx >= offset
                     && mx < offset + viewer_w
@@ -935,12 +1164,7 @@ impl AxonApp {
                     // Si no está sobre la barra de desplazamiento lateral derecha
                     let scrollbar_margin = 16;
                     let text_max_x = (offset + viewer_w).saturating_sub(scrollbar_margin);
-                    let total_lines = viewer.lines.len();
-                    let digits = format!("{}", total_lines).len().max(3);
-                    let gutter_w = digits * char_w.max(7) + 24;
-                    let text_start_x = offset + gutter_w;
-
-                    if mx >= text_start_x && mx < text_max_x {
+                    if mx >= (offset + gutter_w) && mx < text_max_x {
                         is_text = true;
                     }
                 }

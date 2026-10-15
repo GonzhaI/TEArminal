@@ -67,3 +67,18 @@ pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {
     }
     AiAgentStatus::None
 }
+
+/// Rama git que muestra la salida de un comando en una sesión SSH (sin ejecutar nada en remoto):
+/// `git status` ("On branch X" / "En la rama X"), `git branch` ("* X") o `git status -sb` ("## X...origin/X").
+pub(super) fn branch_from_output_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    let candidate = ["On branch ", "En la rama ", "En rama ", "* ", "## "]
+        .iter()
+        .find_map(|p| line.strip_prefix(p))?;
+    let candidate = candidate.split("...").next()?.trim();
+    let valid = !candidate.is_empty()
+        && candidate
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'));
+    valid.then(|| candidate.to_string())
+}

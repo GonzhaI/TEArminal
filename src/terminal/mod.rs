@@ -3,7 +3,8 @@
 //! `performer` traduce las secuencias VT/ANSI de `vte` en cambios de este estado.
 
 mod cell;
-mod performer;
+pub(crate) mod performer;
+pub(crate) use performer::clean_listing;
 
 pub use cell::*;
 use performer::Performer;
@@ -11,6 +12,21 @@ use performer::Performer;
 use crate::theme::{Color, Theme};
 use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
+
+/// Respuesta a una petición en banda al bash remoto (leer/escribir archivo, listar carpeta)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteFileResult {
+    pub id: u32,
+    pub ok: bool,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+struct RemoteFileAsm {
+    id: u32,
+    ok: bool,
+    parts: Vec<Option<String>>,
+}
 
 pub struct TerminalState {
     pub cols: usize,
@@ -45,7 +61,21 @@ pub struct TerminalState {
 
     // Sesión SSH remota activa y título de ventana notificado vía OSC 0 / OSC 2
     pub ssh_session: Option<SshSession>,
+    /// Token secreto del panel (`PtyManager::token`, variable `AXON_PANE_TOKEN` del shell): autentica los
+    /// marcadores `AxonSSH=start` que emite el wrapper `ssh` de `init.ps1`. Vacío = ningún marcador es válido.
+    pub pane_token: String,
+    /// El wrapper de agentes de `init.ps1` avisó (OSC 1337 AxonAgent) de que hay un agente en marcha
+    pub agent_running: bool,
     pub window_title: Option<String>,
+    /// El bash remoto lanzado por el wrapper `ssh` de Axon informa de rama git (OSC 1337 AxonGit) y listado
+    pub remote_integration: bool,
+    /// Entradas de la carpeta remota actual (`ls -1Ap`, las carpetas acaban en `/`), no confiables
+    pub remote_listing: Option<Vec<String>>,
+    /// El prompt remoto está esperando entrada (llega `AxonGit` en cada prompt; Enter lo apaga)
+    pub remote_at_prompt: bool,
+    /// Respuestas completas a peticiones en banda (`AxonFile`), pendientes de que la app las recoja
+    pub remote_file_results: Vec<RemoteFileResult>,
+    remote_file_parts: Vec<RemoteFileAsm>,
 
     // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
     pub bracketed_paste_mode: bool,
@@ -76,6 +106,9 @@ pub struct TerminalState {
 
     // Selección de texto
     pub selection: Option<SelectionRange>,
+
+    // Hover del scrollbar del panel
+    pub scrollbar_hovered: bool,
 
     parser: Option<Parser>,
 }
@@ -108,7 +141,14 @@ impl TerminalState {
             current_dir: None,
             clipboard_queue: Vec::new(),
             ssh_session: None,
+            pane_token: String::new(),
+            agent_running: false,
             window_title: None,
+            remote_integration: false,
+            remote_listing: None,
+            remote_at_prompt: false,
+            remote_file_results: Vec::new(),
+            remote_file_parts: Vec::new(),
             bracketed_paste_mode: false,
             mouse_reporting_normal: false,
             mouse_reporting_button_event: false,
@@ -129,8 +169,41 @@ impl TerminalState {
             current_strikethrough: false,
             current_inverse: false,
             selection: None,
+            scrollbar_hovered: false,
             parser: Some(Parser::new()),
         }
+    }
+
+    /// El marcador trae el token de este panel (comparación en tiempo constante). Un token vacío nunca vale.
+    pub fn pane_token_matches(&self, token: &str) -> bool {
+        let (a, b) = (self.pane_token.as_bytes(), token.as_bytes());
+        !a.is_empty()
+            && a.len() == b.len()
+            && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+    }
+
+    /// Bytes que Axon escribe en el bash remoto para pedir algo sin abrir otra conexión: escribe la
+    /// petición tras `#AXR#` en la línea de edición y pulsa una combinación que el gancho de Axon
+    /// tiene enlazada (`bind -x`); el gancho borra la petición y responde con `OSC 1337 AxonFile`.
+    /// Solo con integración activa y el prompt esperando entrada (si no, los bytes irían a otro programa).
+    pub fn remote_request_bytes(&self, op: &str, id: u32, payload: &str) -> Option<Vec<u8>> {
+        let safe = |s: &str, extra: &[char]| {
+            s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
+        };
+        if !self.remote_integration
+            || !self.remote_at_prompt
+            || !matches!(op, "get" | "put" | "ls")
+            || !safe(payload, &['%', '-', '_', '.', '~', '/', ' '])
+        {
+            return None;
+        }
+        Some(format!("\x05#AXR#{id} {op} {payload}\x1b[1337~").into_bytes())
+    }
+
+    /// El usuario pulsó Enter: lo que se escriba ya no llega a un prompt sino a un programa
+    pub fn note_enter_sent(&mut self) {
+        self.remote_at_prompt = false;
     }
 
     pub fn is_mouse_reporting_active(&self) -> bool {
@@ -253,6 +326,28 @@ impl TerminalState {
         self.command_blocks.push(block);
     }
 
+    /// Registra una imagen inline; con más de `MAX_IMAGE_BYTES` en total se descartan las más antiguas
+    fn push_image(&mut self, img: InlineImage) {
+        const MAX_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+        self.images.push(img);
+        let mut total: usize = self.images.iter().map(|i| i.rgba_data.len()).sum();
+        while total > MAX_IMAGE_BYTES && self.images.len() > 1 {
+            total -= self.images.remove(0).rgba_data.len();
+        }
+    }
+
+    /// El historial perdió su línea más antigua: las imágenes se reindexan y se liberan las que salen con ella
+    fn shift_images_after_eviction(&mut self) {
+        self.images
+            .retain_mut(|img| match img.line_index.checked_sub(1) {
+                Some(line) => {
+                    img.line_index = line;
+                    true
+                }
+                None => false,
+            });
+    }
+
     pub fn newline(&mut self) {
         self.total_lines_count += 1;
         let default_cell = Cell::default_with_theme(&self.theme);
@@ -302,6 +397,7 @@ impl TerminalState {
                 top_row.resize(self.cols, default_cell);
                 if self.scrollback.len() >= self.max_scrollback {
                     self.scrollback.pop_front();
+                    self.shift_images_after_eviction();
                 }
                 self.scrollback.push_back(stored);
                 self.grid.push_back(top_row);
@@ -476,6 +572,10 @@ impl TerminalState {
                 let shift = (self.cursor_y + 1).saturating_sub(new_rows);
                 for _ in 0..shift {
                     if let Some(r) = self.grid.pop_front() {
+                        if self.scrollback.len() >= self.max_scrollback {
+                            self.scrollback.pop_front();
+                            self.shift_images_after_eviction();
+                        }
                         self.scrollback.push_back(r);
                     }
                     if !self.alt_grid.is_empty() {

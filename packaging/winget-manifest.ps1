@@ -1,7 +1,7 @@
 # Genera los manifiestos de winget para una versión publicada, a partir de packaging\winget\ y de
 # dist\SHA256SUMS.txt. Resultado: dist\winget\ (listo para un PR a microsoft/winget-pkgs).
 #
-# Uso:  pwsh packaging/winget-manifest.ps1 -Version 0.6.0
+# Uso:  pwsh packaging/winget-manifest.ps1 -Version 0.7.0
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Version)
 $ErrorActionPreference = 'Stop'

@@ -27,10 +27,46 @@ impl AxonApp {
         }
     }
 
-    /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD de la terminal activa
+    /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
     pub fn sync_file_explorer_root(&mut self) {
-        if let Some(active) = self.tabs.get(self.active_tab_index) {
-            if let Some(pane) = active.active_pane() {
+        if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
+            if let Some(pane) = active.active_pane_mut() {
+                if let Some(ref ssh) = pane.terminal.ssh_session {
+                    if ssh.is_active && pane.terminal.remote_integration {
+                        // El shell remoto envía carpeta y listado: sin segunda conexión SSH (que exigiría clave)
+                        if let (Some(rdir), Some(names)) = (
+                            ssh.remote_dir.clone(),
+                            pane.terminal.remote_listing.as_ref(),
+                        ) {
+                            let sess = crate::explorer::RemoteSshSession {
+                                destination: ssh.destination.clone(),
+                                remote_dir: rdir,
+                            };
+                            self.file_explorer.set_remote_listing(sess, names);
+                        }
+                        return;
+                    }
+                    if ssh.is_active {
+                        let dest = ssh.destination.clone();
+                        let rdir = ssh.remote_dir.clone().unwrap_or_else(|| ".".to_string());
+                        let remote_sess = crate::explorer::RemoteSshSession {
+                            destination: dest,
+                            remote_dir: rdir,
+                        };
+                        self.file_explorer.set_remote_session(Some(remote_sess));
+                        if self.file_explorer.items.is_empty() {
+                            let grid_lines: Vec<String> = pane
+                                .terminal
+                                .grid
+                                .iter()
+                                .map(|row| row.iter().map(|c| c.c).collect::<String>())
+                                .collect();
+                            self.file_explorer.populate_from_grid(&grid_lines);
+                        }
+                        return;
+                    }
+                }
+                self.file_explorer.set_remote_session(None);
                 if let Some(cwd) = &pane.terminal.current_dir {
                     self.file_explorer.set_root(cwd.clone());
                 }
@@ -38,28 +74,106 @@ impl AxonApp {
         }
     }
 
-    pub fn open_file_in_viewer(&mut self, path: &std::path::Path) {
+    /// Abre un archivo en una pestaña de visor. Sin `pin` es una vista previa que la siguiente vista previa
+    /// reemplaza (un clic en el explorador); con `pin` (doble clic, Enter) queda fija.
+    pub fn open_file_in_viewer(&mut self, path: &std::path::Path, pin: bool) {
+        if let Some(rem) = self.file_explorer.remote_session.clone() {
+            // Modo remoto: verificar si ya existe una pestaña con este archivo remoto
+            if let Some(pos) = self.tabs.iter().position(|t| {
+                t.file_viewer
+                    .as_ref()
+                    .map(|v| {
+                        v.path == path && v.remote_destination.as_deref() == Some(&rem.destination)
+                    })
+                    .unwrap_or(false)
+            }) {
+                self.tabs[pos].is_preview &= !pin;
+                self.switch_to_tab(pos);
+                return;
+            }
+
+            // Ya pedido por la sesión (primer clic de un doble clic): solo se fija al llegar
+            if self.pin_pending_remote_open(&rem.destination, path, pin) {
+                return;
+            }
+            // Primero por la propia sesión (sirve con contraseña); la pestaña se abre al llegar el contenido
+            if self.remote_open(&rem.destination, path, pin) {
+                return;
+            }
+            // Sin integración (o si falla): segunda conexión SSH en un hilo; la pestaña se abre al llegar
+            self.ssh_open_file(&rem.destination, path, pin);
+            return;
+        }
+
         if !path.exists() {
             return;
         }
 
-        // Si ya existe una pestaña con este archivo, alternar a ella
+        // Si ya existe una pestaña con este archivo local, alternar a ella
         if let Some(pos) = self.tabs.iter().position(|t| {
             t.file_viewer
                 .as_ref()
-                .map(|v| v.path == path)
+                .map(|v| v.path == path && v.remote_destination.is_none())
                 .unwrap_or(false)
         }) {
+            self.tabs[pos].is_preview &= !pin;
             self.switch_to_tab(pos);
             return;
         }
 
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
-        self.tabs
-            .push(TerminalTab::new_file_viewer(tab_id, path.to_path_buf()));
-        self.switch_to_tab(self.tabs.len() - 1);
-        self.update_window_title();
+        let tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
+        self.install_viewer_tab(tab, pin);
+    }
+
+    /// Clic izquierdo en una pestaña: la activa; un segundo clic rápido sobre la misma fija una vista previa
+    pub(super) fn click_tab(&mut self, idx: usize) {
+        let now = Instant::now();
+        let double = self.last_tab_click_idx == Some(idx)
+            && now.duration_since(self.last_tab_click_time).as_millis() < 400;
+        self.last_tab_click_idx = Some(idx);
+        self.last_tab_click_time = now;
+        if double {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.is_preview = false;
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+        self.switch_to_tab(idx);
+    }
+
+    /// Coloca una pestaña de visor nueva: una vista previa reemplaza a la vista previa anterior (si no
+    /// tiene cambios) en su misma posición; una fija se añade al final.
+    pub(super) fn install_viewer_tab(&mut self, mut tab: TerminalTab, pin: bool) {
+        tab.is_preview = !pin;
+        let old_preview = if pin {
+            None
+        } else {
+            self.tabs.iter().position(|t| {
+                t.is_preview
+                    && t.file_viewer
+                        .as_ref()
+                        .is_some_and(|v| !v.is_dirty && v.is_read_only)
+            })
+        };
+        match old_preview {
+            Some(pos) => {
+                self.tabs[pos] = tab;
+                if pos == self.active_tab_index {
+                    self.update_window_title();
+                } else {
+                    self.switch_to_tab(pos);
+                }
+            }
+            None => {
+                self.tabs.push(tab);
+                self.switch_to_tab(self.tabs.len() - 1);
+                self.update_window_title();
+            }
+        }
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -293,6 +407,55 @@ impl AxonApp {
         }
     }
 
+    /// El shell de un panel terminó. Si había un agente en marcha (opencode se lleva la consola por delante
+    /// al salir) se abre un shell nuevo en el mismo panel y carpeta; si no (un `exit` normal) se cierra el panel.
+    pub(super) fn on_shell_exit(&mut self, pane_id: usize, event_loop: &ActiveEventLoop) {
+        if !self.respawn_shell_after_agent(pane_id) {
+            self.close_pane_by_id(pane_id, event_loop);
+        }
+    }
+
+    fn respawn_shell_after_agent(&mut self, pane_id: usize) -> bool {
+        let Some(pane) = self
+            .tabs
+            .iter_mut()
+            .find_map(|t| t.find_pane_mut(pane_id))
+            .filter(|p| p.terminal.agent_running)
+        else {
+            return false;
+        };
+        // Una sola reapertura: si el nuevo shell también muere, el panel se cierra
+        pane.terminal.agent_running = false;
+        let (cols, rows) = pane.last_grid_size;
+        let cwd = pane.terminal.current_dir.clone().filter(|d| d.is_dir());
+        match PtyManager::new(
+            pane_id,
+            &self.config.terminal.default_shell,
+            self.config.terminal.ghostty_prompt,
+            cols as u16,
+            rows as u16,
+            cwd.as_deref(),
+            self.proxy.clone(),
+        ) {
+            Ok(pty) => {
+                crate::logger::log(&format!(
+                    "Pane {pane_id}: el shell terminó con un agente en marcha, se reabre"
+                ));
+                pane.terminal.pane_token = pty.token.clone();
+                pane.pty = pty;
+                // Pantalla alternativa, modos de ratón/pegado y atributos como los dejaría un agente que sale bien
+                pane.terminal.process_bytes(
+                    b"[?1049l[?1000l[?1002l[?1003l[?1006l[?2004l[0m[?25h[r[2J[3J[H",
+                );
+                true
+            }
+            Err(e) => {
+                crate::logger::log(&format!("No se pudo reabrir el shell: {e}"));
+                false
+            }
+        }
+    }
+
     pub fn close_pane_by_id(&mut self, pane_id: usize, event_loop: &ActiveEventLoop) {
         let mut tab_to_close = None;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
@@ -451,5 +614,24 @@ impl AxonApp {
         };
         let max_offset = self.tabs.len().saturating_sub(visible_items);
         self.sidebar_scroll_offset = self.sidebar_scroll_offset.min(max_offset);
+    }
+
+    /// Navega el explorador remoto escribiendo `cd` en el shell remoto de la terminal activa
+    /// (la nueva carpeta llega de vuelta por OSC 7 y AxonLs). `false` si no hay integración SSH.
+    pub fn remote_cd(&mut self, dir: &str) -> bool {
+        let Some(pane) = self
+            .tabs
+            .get_mut(self.active_tab_index)
+            .and_then(|t| t.active_pane_mut())
+        else {
+            return false;
+        };
+        if !pane.terminal.remote_integration || dir.chars().any(char::is_control) {
+            return false;
+        }
+        // Ctrl+U limpia lo que hubiera escrito en la línea antes de lanzar el cd
+        let cmd = format!("\x15cd -- {}\r", crate::ssh::quote(dir));
+        pane.pty.write_input(cmd.as_bytes());
+        true
     }
 }

@@ -13,6 +13,48 @@ pub enum GitFileStatus {
     Renamed,
 }
 
+/// Raíz del repositorio git que contiene `dir` (busca `.git` hacia arriba)
+fn git_repo_root(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|p| p.join(".git").exists())
+        .map(Path::to_path_buf)
+}
+
+fn git_command(repo: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(repo);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    cmd
+}
+
+/// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
+/// `Some(vacío)` si el archivo es nuevo en un repo (todo es añadido); `None` fuera de un repo.
+pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
+    let repo = git_repo_root(path.parent()?)?;
+    let rel = path
+        .strip_prefix(&repo)
+        .ok()?
+        .to_string_lossy()
+        .replace('\\', "/");
+    let out = git_command(&repo)
+        .args(["show", &format!("HEAD:{rel}")])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return Some(Vec::new());
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(String::from)
+            .collect(),
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct ExplorerItem {
     pub path: PathBuf,
@@ -23,33 +65,72 @@ pub struct ExplorerItem {
     pub git_status: Option<GitFileStatus>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSshSession {
+    pub destination: String,
+    pub remote_dir: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct FileExplorer {
     pub root_dir: PathBuf,
     pub items: Vec<ExplorerItem>,
     pub scroll_offset: usize,
     pub hovered_index: Option<usize>,
-    pub hovered_close_btn: bool,
     pub hovered_back_btn: bool,
     pub hovered_forward_btn: bool,
     pub hovered_up_btn: bool,
-    pub hovered_refresh_btn: bool,
     pub selected_index: Option<usize>,
     pub selected_path: Option<PathBuf>,
     pub visible: bool,
     pub hovered_scrollbar: bool,
+    /// Sesión SSH con integración: el listado llega por el propio terminal (sin segunda conexión)
+    pub inband_remote: bool,
+    /// «Expandir todo» remoto en curso: cada listado recibido dispara la petición de la siguiente carpeta
+    pub remote_expand_all: bool,
     pub is_focused: bool,
     pub last_click_item: Option<usize>,
     pub last_click_time: std::time::Instant,
     pub history: Vec<PathBuf>,
     pub history_index: usize,
     pub git_statuses: HashMap<PathBuf, GitFileStatus>,
+    /// Raíz del repositorio del directorio actual (None si no hay repo)
+    pub git_root: Option<PathBuf>,
+    /// Vista «Cambios»: lista plana solo con los archivos modificados según git
+    pub changes_only: bool,
+    pub remote_session: Option<RemoteSshSession>,
+    pub error_message: Option<String>,
+    /// Última sesión remota pedida con `set_remote_session` (la raíz canónica de `remote_session` puede diferir)
+    remote_requested: Option<RemoteSshSession>,
+    /// Generación de la vista remota por SSH lento: las respuestas de una anterior se ignoran
+    remote_gen: u64,
+    /// Listados pedidos y aún sin lanzar (la app los ejecuta en hilos: `AxonApp::pump_explorer_ssh`)
+    ssh_requests: Vec<RemoteLsReq>,
+}
+
+/// Listado remoto por SSH lento: la raíz (`expand = None`) o el contenido de una carpeta del árbol
+#[derive(Debug, Clone)]
+pub struct RemoteLsReq {
+    pub gen: u64,
+    pub dest: String,
+    pub dir: String,
+    pub expand: Option<PathBuf>,
 }
 
 impl FileExplorer {
     pub const HEADER_HEIGHT: usize = 36;
     pub const SUBHEADER_HEIGHT: usize = 28;
     pub const ITEM_HEIGHT: usize = 24;
+
+    /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
+    #[inline]
+    pub fn changes_btn_rect(
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+    ) -> (usize, usize, usize, usize) {
+        (panel_x + panel_w.saturating_sub(34), panel_y + 8, 22, 20)
+    }
 
     /// Calcula la geometría exacta del panel flotante del explorador de archivos
     #[inline]
@@ -78,40 +159,195 @@ impl FileExplorer {
             items: Vec::new(),
             scroll_offset: 0,
             hovered_index: None,
-            hovered_close_btn: false,
             hovered_back_btn: false,
             hovered_forward_btn: false,
             hovered_up_btn: false,
-            hovered_refresh_btn: false,
             selected_index: None,
             selected_path: None,
             visible,
             hovered_scrollbar: false,
+            inband_remote: false,
+            remote_expand_all: false,
+            remote_requested: None,
+            remote_gen: 0,
+            ssh_requests: Vec::new(),
             is_focused: false,
             last_click_item: None,
             last_click_time: std::time::Instant::now(),
             history: vec![root_dir],
             history_index: 0,
             git_statuses: HashMap::new(),
+            git_root: None,
+            changes_only: false,
+            remote_session: None,
+            error_message: None,
         };
 
         explorer.refresh();
         explorer
     }
 
+    pub fn set_expanded(&mut self, path: &Path, expanded: bool) {
+        if let Some(item) = self.items.iter_mut().find(|i| i.path == path && i.is_dir) {
+            item.is_expanded = expanded;
+        }
+    }
+
+    /// Siguiente carpeta remota sin abrir para «Expandir todo» (3 niveles, 1 000 entradas como máximo)
+    pub fn next_remote_dir_to_expand(&self) -> Option<usize> {
+        const MAX_ITEMS: usize = 1000;
+        const MAX_DEPTH: usize = 3;
+        const SKIP: [&str; 4] = [".git", "node_modules", "target", "__pycache__"];
+        if self.items.len() >= MAX_ITEMS {
+            return None;
+        }
+        self.items.iter().position(|i| {
+            i.is_dir
+                && !i.is_expanded
+                && i.depth < MAX_DEPTH
+                && !SKIP.contains(&i.name.trim_end_matches('/'))
+        })
+    }
+
+    /// Elementos de un listado remoto ya depurado (`clean_listing`): carpetas primero, sin `.git`, por nombre
+    fn remote_items(base: &str, depth: usize, names: &[String]) -> Vec<ExplorerItem> {
+        let (mut dirs, mut files): (Vec<_>, Vec<_>) = names
+            .iter()
+            .map(|n| match n.strip_suffix('/') {
+                Some(d) => (d, true),
+                None => (n.as_str(), false),
+            })
+            .filter(|(name, _)| *name != ".git")
+            .map(|(name, is_dir)| ExplorerItem {
+                path: PathBuf::from(format!("{}/{}", base.trim_end_matches('/'), name)),
+                name: name.to_string(),
+                is_dir,
+                depth,
+                is_expanded: false,
+                git_status: None,
+            })
+            .partition(|i| i.is_dir);
+        dirs.sort_by_key(|i| i.name.to_lowercase());
+        files.sort_by_key(|i| i.name.to_lowercase());
+        dirs.extend(files);
+        dirs
+    }
+
+    /// Inserta bajo la carpeta remota `dir` los nombres de su listado (recibido por el terminal)
+    pub fn expand_remote_dir(&mut self, dir: &Path, names: &[String]) {
+        let Some(idx) = self.items.iter().position(|i| i.path == dir && i.is_dir) else {
+            return;
+        };
+        let depth = self.items[idx].depth;
+        let mut end = idx + 1;
+        while end < self.items.len() && self.items[end].depth > depth {
+            end += 1;
+        }
+        self.items.drain(idx + 1..end);
+        self.items[idx].is_expanded = true;
+        let base = dir.to_string_lossy().trim_end_matches('/').to_string();
+        let children = Self::remote_items(&base, depth + 1, names);
+        self.items.splice(idx + 1..idx + 1, children);
+    }
+
+    /// Cierra todas las carpetas abiertas y deja solo el primer nivel
+    pub fn collapse_all(&mut self) {
+        self.items.retain(|i| i.depth == 0);
+        for item in &mut self.items {
+            item.is_expanded = false;
+        }
+        self.scroll_offset = 0;
+        self.selected_index = None;
+    }
+
+    /// Abre todas las carpetas locales (hasta 4 niveles y 2 000 entradas; sin `.git`, `target`, etc.)
+    pub fn expand_all(&mut self) {
+        const MAX_ITEMS: usize = 2000;
+        const MAX_DEPTH: usize = 4;
+        const SKIP: [&str; 5] = [".git", "target", "node_modules", ".cargo", "dist"];
+        if self.remote_session.is_some() {
+            return;
+        }
+        while self.items.len() < MAX_ITEMS {
+            let next = self.items.iter().position(|i| {
+                i.is_dir
+                    && !i.is_expanded
+                    && i.depth < MAX_DEPTH
+                    && !SKIP.contains(&i.name.trim_end_matches('/'))
+            });
+            let Some(idx) = next else {
+                break;
+            };
+            self.toggle_expand(idx);
+        }
+    }
+
     pub fn can_go_back(&self) -> bool {
-        self.history_index > 0
+        !self.inband_remote && self.history_index > 0
     }
 
     pub fn can_go_forward(&self) -> bool {
-        self.history_index + 1 < self.history.len()
+        !self.inband_remote && self.history_index + 1 < self.history.len()
+    }
+
+    /// Carpeta padre de la carpeta remota actual
+    pub fn remote_parent(&self) -> Option<String> {
+        let cur = self
+            .remote_session
+            .as_ref()?
+            .remote_dir
+            .trim_end_matches('/');
+        let pos = cur.rfind('/')?;
+        Some(if pos == 0 {
+            "/".to_string()
+        } else {
+            cur[..pos].to_string()
+        })
+    }
+
+    /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 AxonLs).
+    /// No hace nada si ya está aplicado, así que puede llamarse tras cada ráfaga de salida.
+    pub fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
+        let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);
+        if same && self.listing_names_match(names) {
+            return;
+        }
+        if !same {
+            self.remote_expand_all = false;
+            self.scroll_offset = 0;
+            self.selected_index = None;
+            self.selected_path = None;
+        }
+        self.inband_remote = true;
+        self.error_message = None;
+        self.root_dir = PathBuf::from(&session.remote_dir);
+        let base = session.remote_dir.trim_end_matches('/').to_string();
+        self.remote_session = Some(session);
+        self.items = Self::remote_items(&base, 0, names);
+    }
+
+    fn listing_names_match(&self, names: &[String]) -> bool {
+        // Solo cuenta la raíz: las carpetas expandidas (profundidad > 0) no deben invalidar el listado
+        let roots: Vec<&ExplorerItem> = self.items.iter().filter(|i| i.depth == 0).collect();
+        let shown = names.iter().filter(|n| n.as_str() != ".git/").count();
+        shown == roots.len()
+            && names
+                .iter()
+                .filter(|n| n.as_str() != ".git/")
+                .all(|n| roots.iter().any(|i| i.name == n.trim_end_matches('/')))
     }
 
     pub fn go_back(&mut self) {
         if self.can_go_back() {
             self.history_index -= 1;
             let target = self.history[self.history_index].clone();
-            if target.is_dir() {
+            if let Some(ref mut sess) = self.remote_session {
+                sess.remote_dir = target.to_string_lossy().replace('\\', "/");
+                self.root_dir = target;
+                self.scroll_offset = 0;
+                self.selected_index = None;
+                self.refresh();
+            } else if target.is_dir() {
                 self.root_dir = target;
                 self.scroll_offset = 0;
                 self.selected_index = None;
@@ -124,7 +360,13 @@ impl FileExplorer {
         if self.can_go_forward() {
             self.history_index += 1;
             let target = self.history[self.history_index].clone();
-            if target.is_dir() {
+            if let Some(ref mut sess) = self.remote_session {
+                sess.remote_dir = target.to_string_lossy().replace('\\', "/");
+                self.root_dir = target;
+                self.scroll_offset = 0;
+                self.selected_index = None;
+                self.refresh();
+            } else if target.is_dir() {
                 self.root_dir = target;
                 self.scroll_offset = 0;
                 self.selected_index = None;
@@ -135,6 +377,24 @@ impl FileExplorer {
 
     /// Actualiza el directorio raíz y refresca la lista de elementos
     pub fn set_root(&mut self, new_root: PathBuf) {
+        if let Some(ref mut sess) = self.remote_session {
+            let r_str = new_root.to_string_lossy().replace('\\', "/");
+            if r_str != sess.remote_dir {
+                if self.history_index + 1 < self.history.len() {
+                    self.history.truncate(self.history_index + 1);
+                }
+                self.history.push(new_root.clone());
+                self.history_index = self.history.len() - 1;
+
+                sess.remote_dir = r_str;
+                self.root_dir = new_root;
+                self.scroll_offset = 0;
+                self.selected_index = None;
+                self.refresh();
+            }
+            return;
+        }
+
         if new_root != self.root_dir && new_root.is_dir() {
             if self.history_index + 1 < self.history.len() {
                 self.history.truncate(self.history_index + 1);
@@ -149,71 +409,319 @@ impl FileExplorer {
         }
     }
 
-    /// Consulta de manera no bloqueante el estado Git del repositorio activo
-    pub fn refresh_git_status(&mut self) {
-        self.git_statuses.clear();
-
-        let mut cur = self.root_dir.as_path();
-        let mut git_repo_root = None;
-        loop {
-            if cur.join(".git").exists() {
-                git_repo_root = Some(cur.to_path_buf());
-                break;
-            }
-            match cur.parent() {
-                Some(p) => cur = p,
-                None => break,
-            }
+    /// Configura o desactiva la sesión SSH remota para el explorador. El listado llega después, por la vía
+    /// lenta (`take_ssh_requests` + `apply_remote_listing`).
+    pub fn set_remote_session(&mut self, session: Option<RemoteSshSession>) {
+        if self.remote_session == session {
+            return;
         }
+        // La raíz canónica que devuelve el servidor cambia `remote_session`: sin esta comparación cada ráfaga
+        // de salida volvería a pedir el mismo listado
+        if session.is_some() && !self.inband_remote && self.remote_requested == session {
+            return;
+        }
+        self.remote_requested = session.clone();
+        self.remote_session = session;
+        self.inband_remote = false;
+        self.scroll_offset = 0;
+        self.selected_index = None;
+        self.selected_path = None;
+        if let Some(ref rem) = self.remote_session {
+            self.root_dir = PathBuf::from(&rem.remote_dir);
+            self.history = vec![self.root_dir.clone()];
+            self.history_index = 0;
+            self.items.clear();
+            self.refresh_remote();
+        } else {
+            self.history = vec![self.root_dir.clone()];
+            self.history_index = 0;
+            self.refresh();
+        }
+    }
 
-        let Some(repo_root) = git_repo_root else {
+    /// Pide el listado de la raíz remota por SSH (sin bloquear: lo lanza la app en un hilo)
+    pub fn refresh_remote(&mut self) {
+        if self.inband_remote {
+            return;
+        }
+        let Some(sess) = &self.remote_session else {
             return;
         };
+        let req = RemoteLsReq {
+            gen: self.remote_gen + 1,
+            dest: sess.destination.clone(),
+            dir: sess.remote_dir.clone(),
+            expand: None,
+        };
+        self.remote_gen = req.gen;
+        self.ssh_requests = vec![req]; // las peticiones de generaciones anteriores ya no valen
+        self.error_message = None;
+    }
 
-        let mut cmd = std::process::Command::new("git");
-        cmd.args(["status", "--porcelain", "-uall"])
-            .current_dir(&repo_root);
+    /// Listados pedidos hasta ahora (la app los ejecuta en hilos)
+    pub fn take_ssh_requests(&mut self) -> Vec<RemoteLsReq> {
+        std::mem::take(&mut self.ssh_requests)
+    }
 
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    /// Aplica el resultado de un listado remoto; devuelve la rama git si era el de la raíz.
+    /// Se ignora si la vista cambió mientras tanto (otra sesión, otra generación o listado en banda).
+    pub fn apply_remote_listing(
+        &mut self,
+        req: &RemoteLsReq,
+        result: Result<crate::ssh::Output, String>,
+    ) -> Option<String> {
+        let current = self.remote_session.as_ref().map(|s| s.destination.as_str());
+        if req.gen != self.remote_gen || self.inband_remote || current != Some(req.dest.as_str()) {
+            return None;
         }
-
-        if let Ok(output) = cmd.output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    if line.len() < 4 {
-                        continue;
+        match &req.expand {
+            None => self.apply_remote_root(result),
+            Some(dir) => {
+                match result {
+                    Ok(out) if out.ok => {
+                        let names =
+                            crate::terminal::clean_listing(&String::from_utf8_lossy(&out.stdout));
+                        self.expand_remote_dir(dir, &names);
                     }
-                    let status_code = &line[0..2];
-                    let rel_path = line[3..].trim().trim_matches('"');
-                    let file_path = repo_root.join(rel_path.replace('/', "\\"));
-
-                    let status = if status_code.contains('M') {
-                        GitFileStatus::Modified
-                    } else if status_code.contains('?') {
-                        GitFileStatus::Untracked
-                    } else if status_code.contains('A') {
-                        GitFileStatus::Added
-                    } else if status_code.contains('D') {
-                        GitFileStatus::Deleted
-                    } else if status_code.contains('R') {
-                        GitFileStatus::Renamed
-                    } else {
-                        GitFileStatus::Modified
-                    };
-
-                    self.git_statuses.insert(file_path, status);
+                    _ => self.set_expanded(dir, false),
                 }
+                None
             }
         }
     }
 
+    fn apply_remote_root(&mut self, result: Result<crate::ssh::Output, String>) -> Option<String> {
+        let output = match result {
+            Ok(out) => out,
+            Err(e) => {
+                self.items.clear();
+                self.error_message = Some(e);
+                return None;
+            }
+        };
+
+        if !output.ok {
+            self.items.clear();
+            if output.stderr.contains("Permission denied") {
+                self.error_message = Some(
+                    "Requiere clave SSH en servidor remoto (o ejecuta 'ls' en consola)".to_string(),
+                );
+            } else {
+                let trimmed = output.stderr.trim();
+                self.error_message = Some(if trimmed.is_empty() {
+                    "No se pudo listar directorio remoto".to_string()
+                } else {
+                    trimmed.to_string()
+                });
+            }
+            return None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines();
+
+        // La salida la controla el servidor: carpeta absoluta sin caracteres de control y rama de ≤ 200 bytes
+        // (al reconectar, `safe_remote_dir` vuelve a filtrar la carpeta antes de interpolarla)
+        let canonical_pwd =
+            match lines.next().map(str::trim).filter(|d| {
+                d.starts_with('/') && d.len() <= 1024 && !d.chars().any(char::is_control)
+            }) {
+                Some(dir) => dir.to_string(),
+                None => {
+                    self.items.clear();
+                    return None;
+                }
+            };
+        if let Some(ref mut s) = self.remote_session {
+            s.remote_dir = canonical_pwd.clone();
+        }
+        self.root_dir = PathBuf::from(&canonical_pwd);
+
+        // Entre la carpeta y `---` va la rama git (si hay repositorio)
+        let mut git_branch = None;
+        for l in lines.by_ref() {
+            let l = l.trim();
+            if l == "---" {
+                break;
+            }
+            if !l.is_empty() && l.len() <= 200 && !l.chars().any(char::is_control) {
+                git_branch = Some(l.to_string());
+            }
+        }
+
+        let rest: Vec<&str> = lines.collect();
+        let names = crate::terminal::clean_listing(&rest.join("\n"));
+        self.items = Self::remote_items(&canonical_pwd, 0, &names);
+
+        git_branch
+    }
+
+    /// Carga pasivamente archivos y carpetas remotos analizando la salida del comando `ls` en la grilla del terminal
+    pub fn populate_from_grid(&mut self, lines: &[String]) -> bool {
+        if let Some(ref sess) = self.remote_session {
+            let remote_dir = sess.remote_dir.clone();
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+
+            for line in lines {
+                let trimmed = line.trim();
+                if (trimmed.starts_with('d') || trimmed.starts_with('-')) && trimmed.len() > 20 {
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 9 {
+                        let is_dir = trimmed.starts_with('d');
+                        let name = parts[8..].join(" ");
+                        if name == "." || name == ".." || name == ".git" {
+                            continue;
+                        }
+                        let path =
+                            PathBuf::from(format!("{}/{}", remote_dir.trim_end_matches('/'), name));
+                        if is_dir {
+                            dirs.push((path, name));
+                        } else {
+                            files.push((path, name));
+                        }
+                    }
+                }
+            }
+
+            if !dirs.is_empty() || !files.is_empty() {
+                dirs.sort_by_key(|a| a.1.to_lowercase());
+                files.sort_by_key(|a| a.1.to_lowercase());
+
+                self.items.clear();
+                self.error_message = None;
+                for (path, name) in dirs {
+                    self.items.push(ExplorerItem {
+                        path,
+                        name,
+                        is_dir: true,
+                        depth: 0,
+                        is_expanded: false,
+                        git_status: None,
+                    });
+                }
+                for (path, name) in files {
+                    self.items.push(ExplorerItem {
+                        path,
+                        name,
+                        is_dir: false,
+                        depth: 0,
+                        is_expanded: false,
+                        git_status: None,
+                    });
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Consulta de manera no bloqueante el estado Git del repositorio activo
+    pub fn refresh_git_status(&mut self) {
+        self.git_statuses.clear();
+        self.git_root = git_repo_root(&self.root_dir);
+        let Some(repo_root) = self.git_root.clone() else {
+            return;
+        };
+
+        let output = git_command(&repo_root)
+            .args(["status", "--porcelain", "-uall"])
+            .output();
+        let Ok(output) = output else {
+            return;
+        };
+        if !output.status.success() {
+            return;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.len() < 4 {
+                continue;
+            }
+            let status_code = &line[0..2];
+            // Renombrados: «R  origen -> destino»
+            let rel_path = line[3..].rsplit(" -> ").next().unwrap_or("");
+            let rel_path = rel_path.trim().trim_matches('"');
+            let file_path = repo_root.join(rel_path.replace('/', "\\"));
+
+            let status = if status_code.contains('M') {
+                GitFileStatus::Modified
+            } else if status_code.contains('?') {
+                GitFileStatus::Untracked
+            } else if status_code.contains('A') {
+                GitFileStatus::Added
+            } else if status_code.contains('D') {
+                GitFileStatus::Deleted
+            } else if status_code.contains('R') {
+                GitFileStatus::Renamed
+            } else {
+                GitFileStatus::Modified
+            };
+
+            self.git_statuses.insert(file_path, status);
+        }
+    }
+
+    /// Alterna entre el árbol de archivos y la lista de archivos con cambios (solo sesiones locales)
+    pub fn toggle_changes_only(&mut self) {
+        if self.remote_session.is_some() {
+            return;
+        }
+        self.changes_only = !self.changes_only;
+        self.scroll_offset = 0;
+        self.selected_index = None;
+        self.refresh();
+    }
+
+    /// Archivos con cambios (sin los borrados, que ya no se pueden abrir), ordenados por ruta relativa
+    fn change_items(&self) -> Vec<ExplorerItem> {
+        let mut items: Vec<ExplorerItem> = self
+            .git_statuses
+            .iter()
+            .filter(|(path, status)| **status != GitFileStatus::Deleted && path.is_file())
+            .map(|(path, status)| {
+                let file = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let dir = self
+                    .git_root
+                    .as_deref()
+                    .and_then(|root| path.parent()?.strip_prefix(root).ok())
+                    .map(|d| d.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default();
+                ExplorerItem {
+                    path: path.clone(),
+                    name: if dir.is_empty() {
+                        file
+                    } else {
+                        format!("{file}  {dir}")
+                    },
+                    is_dir: false,
+                    depth: 0,
+                    is_expanded: false,
+                    git_status: Some(*status),
+                }
+            })
+            .collect();
+        items.sort_by(|a, b| a.path.cmp(&b.path));
+        items
+    }
+
     /// Refresca los contenidos del directorio raíz conservando las carpetas expandidas
     pub fn refresh(&mut self) {
+        if self.remote_session.is_some() {
+            self.refresh_remote();
+            return;
+        }
+
         self.refresh_git_status();
+
+        if self.changes_only {
+            self.items = self.change_items();
+            self.scroll_offset = self.scroll_offset.min(self.items.len().saturating_sub(1));
+            return;
+        }
 
         let expanded_paths: HashSet<PathBuf> = self
             .items
@@ -333,31 +841,62 @@ impl FileExplorer {
             let current_depth = self.items[index].depth;
             let dir_path = self.items[index].path.clone();
 
-            let expanded_set: HashSet<PathBuf> = self
-                .items
-                .iter()
-                .filter(|it| it.is_dir && it.is_expanded)
-                .map(|it| it.path.clone())
-                .collect();
-            let mut children = Vec::new();
+            if let Some(ref sess) = self.remote_session {
+                // El listado llega por SSH sin bloquear (`apply_remote_listing` inserta los hijos)
+                self.ssh_requests.push(RemoteLsReq {
+                    gen: self.remote_gen,
+                    dest: sess.destination.clone(),
+                    dir: dir_path.to_string_lossy().replace('\\', "/"),
+                    expand: Some(dir_path),
+                });
+            } else {
+                let expanded_set: HashSet<PathBuf> = self
+                    .items
+                    .iter()
+                    .filter(|it| it.is_dir && it.is_expanded)
+                    .map(|it| it.path.clone())
+                    .collect();
+                let mut children = Vec::new();
 
-            Self::read_directory(
-                &dir_path,
-                current_depth + 1,
-                &expanded_set,
-                &self.git_statuses,
-                &mut children,
-            );
+                Self::read_directory(
+                    &dir_path,
+                    current_depth + 1,
+                    &expanded_set,
+                    &self.git_statuses,
+                    &mut children,
+                );
 
-            let insert_pos = index + 1;
-            for (offset, item) in children.into_iter().enumerate() {
-                self.items.insert(insert_pos + offset, item);
+                let insert_pos = index + 1;
+                for (offset, item) in children.into_iter().enumerate() {
+                    self.items.insert(insert_pos + offset, item);
+                }
             }
         }
     }
 
     /// Sube al directorio padre
     pub fn navigate_up(&mut self) {
+        if let Some(ref mut sess) = self.remote_session {
+            let cur = sess.remote_dir.trim_end_matches('/');
+            if let Some(pos) = cur.rfind('/') {
+                let parent = if pos == 0 { "/" } else { &cur[..pos] };
+                if parent != sess.remote_dir {
+                    let parent_str = parent.to_string();
+                    sess.remote_dir = parent_str.clone();
+                    self.root_dir = PathBuf::from(parent_str);
+                    if self.history_index + 1 < self.history.len() {
+                        self.history.truncate(self.history_index + 1);
+                    }
+                    self.history.push(self.root_dir.clone());
+                    self.history_index = self.history.len() - 1;
+                    self.scroll_offset = 0;
+                    self.selected_index = None;
+                    self.refresh();
+                }
+            }
+            return;
+        }
+
         if let Some(parent) = self.root_dir.parent() {
             let p_buf = parent.to_path_buf();
             if p_buf.is_dir() {

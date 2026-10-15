@@ -18,6 +18,7 @@ impl TerminalRenderer {
         hovered_new_tab: bool,
         _hovered_settings_btn: bool,
         hovered_toggle_btn: bool,
+        is_scrollbar_hovered: bool,
         theme: &Theme,
     ) {
         if sidebar_width == 0 || width == 0 || height == 0 {
@@ -222,7 +223,7 @@ impl TerminalRenderer {
             let title_x = icon_cx + 12;
             let title_base = item_cy + 4;
             let title_max_x = tab_x + tab_w.saturating_sub(26);
-            self.draw_ui_text(
+            let title_end = self.draw_ui_text(
                 buffer,
                 width,
                 height,
@@ -234,6 +235,18 @@ impl TerminalRenderer {
                 11.5,
                 tab.is_active,
             );
+            if tab.is_preview {
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    title_x,
+                    title_base + 3,
+                    title_end.saturating_sub(title_x),
+                    1,
+                    text_color,
+                );
+            }
 
             // Indicador de actividad / no leído si la pestaña tiene salida pendiente en segundo plano
             if tab.has_unread && !tab.is_active {
@@ -280,16 +293,6 @@ impl TerminalRenderer {
             let track_y = list_start_y;
             let track_h = list_max_y.saturating_sub(list_start_y);
 
-            let track_bg = Color::from_rgba(
-                theme.surface_hover().r(),
-                theme.surface_hover().g(),
-                theme.surface_hover().b(),
-                100,
-            );
-            crate::ui::draw_rounded_rect(
-                buffer, width, height, track_x, track_y, track_w, track_h, 3, track_bg,
-            );
-
             let total_tabs = tabs.len();
             let thumb_h = (((visible_items as f32 / total_tabs as f32) * track_h as f32).max(18.0)
                 as usize)
@@ -301,16 +304,20 @@ impl TerminalRenderer {
             } else {
                 track_y
             };
-            crate::ui::draw_rounded_rect(
+
+            Self::draw_scrollbar(
                 buffer,
                 width,
                 height,
                 track_x,
-                thumb_y,
+                track_y,
                 track_w,
+                track_h,
+                thumb_y,
                 thumb_h,
-                3,
-                theme.ansi[8],
+                is_scrollbar_hovered,
+                self.scrollbars_awake,
+                theme,
             );
         }
 
@@ -403,7 +410,7 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza un botón flotante sutil en la esquina inferior izquierda para volver a desplegar la barra lateral o abrir ajustes
+    /// Renderiza un botón flotante sutil en la esquina inferior izquierda para volver a desplegar la barra lateral (los Ajustes están solo en la barra superior)
     pub fn render_floating_sidebar_toggle(
         &mut self,
         buffer: &mut [u32],
@@ -411,7 +418,6 @@ impl TerminalRenderer {
         height: usize,
         status_bar_h: usize,
         hovered_toggle: bool,
-        hovered_settings: bool,
         theme: &Theme,
     ) {
         if width == 0 || height == 0 {
@@ -460,42 +466,6 @@ impl TerminalRenderer {
             btn_y + (btn_h / 2),
             13.0,
             icon_fg,
-        );
-
-        // Botón 2: Abrir Ajustes flotante [ Settings ]
-        let set_x = 44;
-        let set_bg = if hovered_settings {
-            theme.surface_hover()
-        } else {
-            theme.surface_bg()
-        };
-        crate::ui::draw_rounded_rect(buffer, width, height, set_x, btn_y, btn_w, btn_h, 6, set_bg);
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            set_x,
-            btn_y,
-            btn_w,
-            btn_h,
-            6,
-            border_color,
-        );
-
-        let set_fg = if hovered_settings {
-            theme.accent_color()
-        } else {
-            theme.ansi[7]
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::Settings,
-            set_x + (btn_w / 2),
-            btn_y + (btn_h / 2),
-            13.0,
-            set_fg,
         );
     }
 

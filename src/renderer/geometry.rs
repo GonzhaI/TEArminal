@@ -27,8 +27,8 @@ impl TopTabBarRects {
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
 
-        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
-        let files_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
+        let files_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
+        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
 
         let right_reserved = ctrl_w * 3 + 76;
         let left_reserved = 76;
@@ -125,8 +125,8 @@ impl TopTitleBarRects {
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
-        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
-        let files_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
+        let files_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
+        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
         Self {
             bar_h,
             files_btn,
@@ -172,6 +172,9 @@ pub struct SettingsPageRects {
     pub status_bar_toggle_btn: (usize, usize, usize, usize),
     pub file_explorer_toggle_btn: (usize, usize, usize, usize),
     pub restore_session_btn: (usize, usize, usize, usize),
+    pub auto_save_btn: (usize, usize, usize, usize),
+    pub word_wrap_btn: (usize, usize, usize, usize),
+    pub ssh_integration_btn: (usize, usize, usize, usize),
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
     pub term_reset_btn: (usize, usize, usize, usize),
@@ -180,6 +183,52 @@ pub struct SettingsPageRects {
 }
 
 impl SettingsPageRects {
+    /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
+    pub const CONTENT_TOP: usize = 128;
+    /// Alto de la tarjeta «Comportamiento del terminal»
+    pub const TERMINAL_CARD_H: usize = 392;
+
+    /// Alto total del contenido desplazable de una sección (desde `CONTENT_TOP`).
+    pub fn content_height(section: super::state::SettingsSection) -> usize {
+        use super::state::SettingsSection::*;
+        let cards = match section {
+            Appearance => 478,
+            Terminal => Self::TERMINAL_CARD_H + 14 + 110,
+            Shortcuts => 434,
+            About => 280,
+        };
+        cards + 24
+    }
+
+    /// Máximo desplazamiento vertical para un viewport de `viewport_h` píxeles.
+    pub fn max_scroll(section: super::state::SettingsSection, viewport_h: usize) -> usize {
+        Self::content_height(section).saturating_sub(viewport_h)
+    }
+
+    /// Pista y pulgar de la barra de scroll de Ajustes (compartidos por dibujo, clic y arrastre)
+    pub fn scrollbar(
+        section: super::state::SettingsSection,
+        page_y: usize,
+        win_w: usize,
+        viewport_h: usize,
+        scroll: usize,
+    ) -> Option<(Rect, Rect)> {
+        let content_h = Self::content_height(section);
+        if content_h <= viewport_h || viewport_h == 0 {
+            return None;
+        }
+        let track = (
+            win_w.saturating_sub(9),
+            page_y + Self::CONTENT_TOP,
+            6,
+            viewport_h,
+        );
+        let thumb_h = (viewport_h * viewport_h / content_h).clamp(18.min(viewport_h), viewport_h);
+        let max_scroll = content_h - viewport_h;
+        let thumb_y = track.1 + scroll.min(max_scroll) * (viewport_h - thumb_h) / max_scroll;
+        Some((track, (track.0, thumb_y, track.2, thumb_h)))
+    }
+
     pub fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
         let max_card_w = 980;
         let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
@@ -295,8 +344,11 @@ impl SettingsPageRects {
         let status_bar_toggle_btn = (ctrl_x, card_y + 156, toggle_w, 28);
         let file_explorer_toggle_btn = (ctrl_x, card_y + 194, toggle_w, 28);
         let restore_session_btn = (ctrl_x, card_y + 232, toggle_w, 28);
+        let auto_save_btn = (ctrl_x, card_y + 270, toggle_w, 28);
+        let word_wrap_btn = (ctrl_x, card_y + 308, toggle_w, 28);
+        let ssh_integration_btn = (ctrl_x, card_y + 346, toggle_w, 28);
 
-        let cfg_y = card_y + 278 + 14;
+        let cfg_y = card_y + Self::TERMINAL_CARD_H + 14;
         let cfg_btn_w = (card_w.saturating_sub(50)) / 2;
         let open_file_btn = (content_x + 20, cfg_y + 44, cfg_btn_w, 32);
         let term_reset_btn = (content_x + 30 + cfg_btn_w, cfg_y + 44, cfg_btn_w, 32);
@@ -330,6 +382,9 @@ impl SettingsPageRects {
             status_bar_toggle_btn,
             file_explorer_toggle_btn,
             restore_session_btn,
+            auto_save_btn,
+            word_wrap_btn,
+            ssh_integration_btn,
             open_file_btn,
             reset_defaults_btn,
             term_reset_btn,
@@ -341,5 +396,147 @@ impl SettingsPageRects {
     #[inline]
     pub fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FileViewerHeaderRects {
+    pub mode_btn: (usize, usize, usize, usize),
+    pub md_btn: Option<(usize, usize, usize, usize)>,
+    /// «Cambios»: abre el diff contra HEAD (solo si el archivo está en un repo)
+    pub diff_btn: Option<(usize, usize, usize, usize)>,
+}
+
+impl FileViewerHeaderRects {
+    pub fn compute(
+        x: usize,
+        y: usize,
+        w: usize,
+        _h: usize,
+        is_markdown: bool,
+        has_diff: bool,
+    ) -> Self {
+        let mut right_x = (x + w).saturating_sub(16);
+
+        // 1. Botón Vista previa / Código si es .md (icono + texto)
+        let md_btn = if is_markdown {
+            let md_w = 118;
+            let md_x = right_x.saturating_sub(md_w);
+            right_x = md_x.saturating_sub(8);
+            Some((md_x, y + 8, md_w, 22))
+        } else {
+            None
+        };
+
+        // 2. Botón Lectura / Edición (icono + texto; el atajo Ctrl+E va en la ayuda del menú)
+        let mode_w = 98;
+        let mode_x = right_x.saturating_sub(mode_w);
+        let mode_btn = (mode_x, y + 8, mode_w, 22);
+
+        // 3. Botón Cambios (diff antes vs ahora), a la izquierda del de modo
+        let diff_btn = has_diff.then(|| {
+            let diff_w = 92;
+            (mode_x.saturating_sub(8 + diff_w), y + 8, diff_w, 22)
+        });
+
+        Self {
+            mode_btn,
+            md_btn,
+            diff_btn,
+        }
+    }
+
+    #[inline]
+    pub fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
+        mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+    }
+}
+
+/// Geometría del área de texto del visor de archivos (una sola fuente para dibujo, clics y scroll).
+#[derive(Debug, Clone, Copy)]
+pub struct FileViewerLayout {
+    pub content_y: usize,
+    pub content_h: usize,
+    pub row_h: usize,
+    pub char_w: usize,
+    pub gutter_w: usize,
+    pub sep_x: usize,
+    /// X del primer carácter de cada línea (con scroll horizontal 0)
+    pub text_x: usize,
+    pub text_max_x: usize,
+    pub visible_cols: usize,
+}
+
+impl FileViewerLayout {
+    pub const HEADER_H: usize = 38;
+
+    pub fn compute(
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        row_height: usize,
+        char_width: usize,
+        total_lines: usize,
+    ) -> Self {
+        let row_h = row_height.max(16);
+        let char_w = char_width.max(7);
+        let content_h = h.saturating_sub(Self::HEADER_H);
+        let digits = total_lines.to_string().len().max(3);
+        let gutter_w = digits * char_w + 24;
+        let sep_x = x + gutter_w;
+        let text_x = sep_x + 14;
+        let text_max_x = (x + w).saturating_sub(18);
+        Self {
+            content_y: y + Self::HEADER_H,
+            content_h,
+            row_h,
+            char_w,
+            gutter_w,
+            sep_x,
+            text_x,
+            text_max_x,
+            visible_cols: (text_max_x.saturating_sub(text_x) / char_w).max(1),
+        }
+    }
+
+    /// Columna (índice de carácter) de la línea bajo la coordenada X, con el scroll horizontal aplicado.
+    pub fn col_at(&self, line: &str, mx: usize, scroll_x: usize) -> usize {
+        if mx < self.text_x {
+            return 0;
+        }
+        let rel_x = (mx - self.text_x) + scroll_x * self.char_w;
+        let mut acc = 0;
+        for (ci, ch) in line.chars().enumerate() {
+            let adv = if ch == '\t' {
+                self.char_w * 4
+            } else {
+                self.char_w
+            };
+            if acc + adv / 2 >= rel_x {
+                return ci;
+            }
+            acc += adv;
+        }
+        line.chars().count()
+    }
+
+    /// Pista y pulgar de la barra horizontal; `None` si todo el ancho cabe. `max_scroll` = `FileViewerState::max_scroll_x`.
+    pub fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
+        if max_scroll == 0 || self.content_h < 24 {
+            return None;
+        }
+        let track_x = self.sep_x + 6;
+        let track_w = self.text_max_x.saturating_sub(track_x);
+        let track_h = 6;
+        let track_y = self.content_y + self.content_h - track_h - 3;
+        let total = max_scroll + self.visible_cols;
+        let thumb_w = (track_w * self.visible_cols / total).clamp(18.min(track_w), track_w);
+        let travel = track_w - thumb_w;
+        let thumb_x = track_x + travel * scroll_x.min(max_scroll) / max_scroll;
+        Some((
+            (track_x, track_y, track_w, track_h),
+            (thumb_x, track_y, thumb_w, track_h),
+        ))
     }
 }

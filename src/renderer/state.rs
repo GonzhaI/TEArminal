@@ -11,6 +11,8 @@ pub struct SidebarTabItem {
     pub pane_count: usize,
     pub is_settings: bool,
     pub is_file_viewer: bool,
+    /// Vista previa (no fijada): su título va subrayado
+    pub is_preview: bool,
 }
 
 pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
@@ -94,8 +96,14 @@ pub struct SettingsPageState {
     pub hovered_status_bar: bool,
     pub hovered_file_explorer: bool,
     pub hovered_restore_session: bool,
+    pub hovered_auto_save: bool,
+    pub hovered_word_wrap: bool,
+    pub hovered_ssh_integration: bool,
     pub hovered_open_file: bool,
     pub hovered_reset_defaults: bool,
+    pub hovered_scrollbar: bool,
+    /// Desplazamiento vertical (px) del contenido bajo la barra de navegación
+    pub scroll_y: usize,
     pub editing_setting: Option<EditingSettingField>,
     pub setting_input_buffer: String,
 }
@@ -126,8 +134,13 @@ impl Default for SettingsPageState {
             hovered_status_bar: false,
             hovered_file_explorer: false,
             hovered_restore_session: false,
+            hovered_auto_save: false,
+            hovered_word_wrap: false,
+            hovered_ssh_integration: false,
             hovered_open_file: false,
             hovered_reset_defaults: false,
+            hovered_scrollbar: false,
+            scroll_y: 0,
             editing_setting: None,
             setting_input_buffer: String::new(),
         }

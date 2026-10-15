@@ -5,7 +5,11 @@ use super::*;
 impl ApplicationHandler<AxonEvent> for AxonApp {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
         match event {
+            AxonEvent::SshDone => {
+                self.process_ssh_results();
+            }
             AxonEvent::PtyData(pane_id) => {
+                let osc52 = self.config.terminal.osc52;
                 let mut redraw = false;
                 for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
                     if let Some(pane) = tab.find_pane_mut(pane_id) {
@@ -15,7 +19,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                             pane.terminal.process_bytes(&bytes);
                         }
                         for text in pane.terminal.clipboard_queue.drain(..) {
-                            if let Some(cb) = &mut self.clipboard {
+                            // OSC 52 solo con `terminal.osc52`: si no, se descarta (nada de portapapeles silencioso)
+                            if let (true, Some(cb)) = (osc52, &mut self.clipboard) {
                                 cb.set_text(text).ok();
                             }
                         }
@@ -31,6 +36,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         break;
                     }
                 }
+                if redraw {
+                    self.process_remote_results();
+                }
                 if redraw && !self.occluded {
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -38,11 +46,24 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 }
             }
             AxonEvent::PtyClosed(pane_id) => {
-                crate::logger::log(&format!(
-                    "PtyClosed recibido para pane_id {}: cerrando pane",
-                    pane_id
-                ));
-                self.close_pane_by_id(pane_id, event_loop);
+                crate::logger::log(&format!("PtyClosed recibido para pane_id {}", pane_id));
+                // El EOF del lector de un PTY ya sustituido (shell reabierto tras un agente) no debe cerrar
+                // el panel nuevo: solo cuenta si el hijo del PTY actual ha terminado de verdad.
+                let mut exited = false;
+                for _ in 0..20 {
+                    exited = self
+                        .tabs
+                        .iter_mut()
+                        .find_map(|t| t.find_pane_mut(pane_id))
+                        .is_some_and(|p| p.pty.is_child_exited());
+                    if exited {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                if exited {
+                    self.on_shell_exit(pane_id, event_loop);
+                }
             }
         }
     }
@@ -130,6 +151,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         pane_count: t.panes.len(),
                         is_settings: t.is_settings,
                         is_file_viewer: t.file_viewer.is_some(),
+                        is_preview: t.is_preview,
                     })
                     .collect();
 
@@ -146,6 +168,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     self.hovered_new_tab,
                     self.hovered_settings_btn,
                     self.hovered_toggle_btn,
+                    self.sidebar_scrollbar_hovered,
                     &self.theme,
                 );
             }
@@ -213,23 +236,26 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 event_loop.exit();
             }
 
-            WindowEvent::Moved(_) => {
+            WindowEvent::Moved(pos) => {
+                crate::logger::log(&format!("MOVED: {},{}", pos.x, pos.y));
                 self.last_window_move = Instant::now();
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                crate::logger::log(&format!("SCALE_FACTOR: {}", scale_factor));
                 self.last_window_move = Instant::now();
                 if let (Some(renderer), Some(_window)) = (&mut self.renderer, &self.window) {
                     renderer.update_scale(&self.config, scale_factor);
                 }
                 self.clamp_sidebar_scroll();
-                self.recompute_grid_for_all_tabs();
+                self.schedule_pty_resize();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
             }
 
             WindowEvent::Resized(size) => {
+                crate::logger::log(&format!("RESIZED: {}x{}", size.width, size.height));
                 self.last_window_move = Instant::now();
                 if let Some(surface) = &mut self.surface {
                     if let (Some(w), Some(h)) =
@@ -239,7 +265,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     }
                 }
                 self.clamp_sidebar_scroll();
-                self.recompute_grid_for_all_tabs();
+                self.schedule_pty_resize();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
@@ -269,8 +295,17 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                         physical_key,
                         ..
                     },
+                is_synthetic,
                 ..
-            } => self.on_key_pressed(event_loop, logical_key, text, physical_key),
+            } => {
+                // winit re-emite como "pulsadas" las teclas que siguen abajo al recuperar el foco
+                // (p. ej. Enter o flechas al mover la ventana de monitor); no son pulsaciones reales.
+                if !is_synthetic {
+                    self.cursor_on = true;
+                    self.cursor_timer = Instant::now();
+                    self.on_key_pressed(event_loop, logical_key, text, physical_key);
+                }
+            }
 
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
 
@@ -284,12 +319,17 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 crate::logger::log(&format!("FOCUS: {}", focused));
                 self.is_focused = focused;
                 if !focused {
+                    self.context_menu = None;
+                }
+                if !focused {
                     self.modifiers = ModifiersState::empty();
                     self.mouse_down = false;
                     self.drag_start = None;
                 } else {
                     self.modifiers = ModifiersState::empty();
                     self.last_focus_gained = Instant::now();
+                    self.cursor_on = true;
+                    self.cursor_timer = Instant::now();
                 }
 
                 // En Windows ConPTY, las secuencias de foco VT (\x1b[I / \x1b[O) no son reconocidas
@@ -326,11 +366,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             }
         }
         for pane_id in closed_panes {
-            crate::logger::log(&format!(
-                "Proceso hijo de pane {} terminado: cerrando pane",
-                pane_id
-            ));
-            self.close_pane_by_id(pane_id, event_loop);
+            crate::logger::log(&format!("Proceso hijo de pane {} terminado", pane_id));
+            self.on_shell_exit(pane_id, event_loop);
         }
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando Axon");
@@ -341,6 +378,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         // 2. Drenar salida de ConPTY de todos los paneles por si quedó algún byte residual
         let mut got_bytes = false;
         let active_idx = self.active_tab_index;
+        let osc52 = self.config.terminal.osc52;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             let mut tab_got_bytes = false;
             for pane in &mut tab.panes {
@@ -350,7 +388,7 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     pane.terminal.process_bytes(&bytes);
                 }
                 for text in pane.terminal.clipboard_queue.drain(..) {
-                    if let Some(cb) = &mut self.clipboard {
+                    if let (true, Some(cb)) = (osc52, &mut self.clipboard) {
                         cb.set_text(text).ok();
                     }
                 }
@@ -365,6 +403,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 }
             }
         }
+
+        if got_bytes {
+            self.process_remote_results();
+        }
+        // Listados SSH que el explorador pidió desde cualquier clic: se ejecutan en hilos
+        self.pump_explorer_ssh();
 
         // 3. Solicitar repintado si llegaron nuevos bytes del PTY
         if got_bytes && !self.occluded {
@@ -381,11 +425,30 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         let mut wake: Option<Instant> = None;
         let now = Instant::now();
 
+        // Peticiones en banda al servidor SSH sin respuesta: vía lenta al vencer el plazo
+        if let Some(t) = self.expire_remote_requests() {
+            earliest(&mut wake, t);
+        }
+
+        // Tamaño final tras un redimensionado: una sola orden de resize al PTY cuando la ventana se estabiliza
+        if let Some(deadline) = self.resize_deadline {
+            if now >= deadline {
+                self.resize_deadline = None;
+                self.recompute_grid_for_all_tabs();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            } else {
+                earliest(&mut wake, deadline);
+            }
+        }
+
         // Parpadeo del cursor: solo con foco y ventana visible
         if self.config.terminal.cursor_blink && self.is_focused && !self.occluded {
             const BLINK: std::time::Duration = std::time::Duration::from_millis(500);
             if self.cursor_timer.elapsed() >= BLINK {
                 self.cursor_timer = Instant::now();
+                self.cursor_on = !self.cursor_on;
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }

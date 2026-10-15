@@ -7,11 +7,13 @@
 // hover): son primitivas planas, y agruparlas en structs solo trasladaría el ruido a cada llamada.
 #![allow(clippy::too_many_arguments)]
 
+mod context_menu;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
 mod geometry;
 mod glyphs;
+mod md_preview;
 mod pane;
 mod settings_page;
 mod sidebar;
@@ -60,6 +62,8 @@ pub struct TerminalRenderer {
     icon_glyph_cache: FastMap<(char, u32), CachedGlyph>,        // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
+    /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
+    pub scrollbars_awake: bool,
 }
 
 impl TerminalRenderer {
@@ -121,6 +125,7 @@ impl TerminalRenderer {
             icon_glyph_cache: FastMap::default(),
             margin_x,
             margin_y,
+            scrollbars_awake: false,
         }
     }
 

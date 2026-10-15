@@ -2,6 +2,31 @@
 
 use super::*;
 
+/// Abre un archivo con su programa asociado (`ShellExecuteW`): sin `cmd /C start`, donde `&`, `^` o `%` de la
+/// ruta se interpretarían como sintaxis del shell. `false` si Windows no pudo abrirlo.
+pub(super) fn shell_open(path: &std::path::Path) -> bool {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &std::ffi::OsStr| -> Vec<u16> {
+        std::os::windows::ffi::OsStrExt::encode_wide(s)
+            .chain(Some(0))
+            .collect()
+    };
+    let (verb, file) = (wide("open".as_ref()), wide(path.as_os_str()));
+    // SAFETY: cadenas UTF-16 terminadas en nulo que viven durante la llamada; el resto de punteros son nulos
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    result > 32 // por contrato de ShellExecute, un valor ≤ 32 es un código de error
+}
+
 pub(super) fn create_native_icon() -> Icon {
     const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon-256.png");
     if let Ok(img) = image::load_from_memory(ICON_BYTES) {

@@ -273,4 +273,70 @@ impl TerminalRenderer {
             color,
         );
     }
+
+    /// Dibuja una barra de desplazamiento vertical unificada con pista translúcida y pulgar redondeado
+    pub fn draw_scrollbar(
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        track_x: usize,
+        track_y: usize,
+        track_w: usize,
+        track_h: usize,
+        thumb_y: usize,
+        thumb_h: usize,
+        is_hovered: bool,
+        awake: bool,
+        theme: &Theme,
+    ) {
+        Self::draw_scrollbar_rects(
+            buffer,
+            width,
+            height,
+            (track_x, track_y, track_w, track_h),
+            (track_x, thumb_y, track_w, thumb_h),
+            is_hovered,
+            awake,
+            theme,
+        );
+    }
+
+    /// Barra de desplazamiento genérica (vertical u horizontal) a partir de pista y pulgar.
+    /// Solo se dibuja con el ratón encima (`is_hovered`) o mientras se hace scroll (`awake`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_scrollbar_rects(
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        track: Rect,
+        thumb: Rect,
+        is_hovered: bool,
+        awake: bool,
+        theme: &Theme,
+    ) {
+        if track.2 == 0 || track.3 == 0 || thumb.2 == 0 || thumb.3 == 0 || !(is_hovered || awake) {
+            return;
+        }
+        let hover = theme.surface_hover();
+        let track_bg = Color::from_rgba(hover.r(), hover.g(), hover.b(), 100);
+        crate::ui::draw_rounded_rect(
+            buffer, width, height, track.0, track.1, track.2, track.3, 3, track_bg,
+        );
+        let thumb_color = if is_hovered {
+            theme.accent_color()
+        } else {
+            theme.ansi[8]
+        };
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            thumb.0,
+            thumb.1,
+            thumb.2,
+            thumb.3,
+            3,
+            thumb_color,
+        );
+    }
 }

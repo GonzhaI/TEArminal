@@ -43,6 +43,16 @@ pub fn safe_remote_dir(dir: &str) -> Option<&str> {
     (!dir.is_empty() && dir.len() <= 1024 && dir.chars().all(ok)).then_some(dir)
 }
 
+/// Orden de PowerShell que reconecta por SSH. La orden remota va entre comillas simples: PowerShell no
+/// expande `$SHELL` ni trata `\` como escape (con comillas dobles el shell remoto recibía `exec \ -l`).
+/// `--` corta el análisis de opciones de ssh: el destino nunca puede ser una opción.
+fn ssh_command_line(destination: &str, remote_dir: Option<&str>) -> String {
+    match remote_dir.and_then(safe_remote_dir) {
+        Some(dir) => format!("ssh -t -- {destination} 'cd ''{dir}'' 2>/dev/null; exec $SHELL -l'"),
+        None => format!("ssh -- {destination}"),
+    }
+}
+
 /// Inicialización de PowerShell (prompt OSC 7/133, ls, agentes de IA, ssh): ver `assets/shell/init.ps1`
 const INIT_SCRIPT: &str = include_str!("../assets/shell/init.ps1");
 
@@ -77,6 +87,36 @@ pub fn fatal_spawn_error(shell: &str, err: &dyn std::fmt::Display) -> ! {
     std::process::exit(1)
 }
 
+/// 128 bits aleatorios del sistema; `None` si el RNG falla.
+fn random_bytes() -> Option<[u8; 16]> {
+    use windows_sys::Win32::Security::Cryptography::{
+        BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+    };
+    let mut buf = [0u8; 16];
+    // SAFETY: búfer propio de 16 bytes; con `BCRYPT_USE_SYSTEM_PREFERRED_RNG` el manejador debe ser nulo
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            buf.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    (status == 0).then_some(buf)
+}
+
+/// Token aleatorio en hex. Si el RNG falla devuelve vacío: sin token no se acepta ninguna sesión SSH.
+fn random_token() -> String {
+    random_bytes()
+        .map(|b| b.iter().map(|b| format!("{b:02x}")).collect())
+        .unwrap_or_default()
+}
+
+/// Identificador inicial aleatorio de las peticiones en banda (si el RNG falla, 1)
+pub fn random_id() -> u32 {
+    random_bytes().map_or(1, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+}
+
 /// Pila reducida: estos hilos solo copian bytes (el defecto de 2 MB se reserva por hilo)
 const THREAD_STACK: usize = 256 * 1024;
 
@@ -89,6 +129,9 @@ pub struct PtyManager {
     from_pty_rx: Receiver<Vec<u8>>,
     /// Hay un `PtyData` en vuelo: el lector no encola otro hasta que el consumidor vacíe el canal
     output_pending: Arc<AtomicBool>,
+    /// Secreto de este shell (`AXON_PANE_TOKEN`): solo el wrapper `ssh` de `init.ps1` lo conoce y lo adjunta a
+    /// `AxonSSH=start`. Vacío en los paneles que no ejecutan `init.ps1` (ningún marcador es válido).
+    pub token: String,
 }
 
 /// Hilos lector/escritor del PTY (compartidos por shell local y SSH). Devuelve (tx entrada, rx salida, flag de coalescencia).
@@ -169,6 +212,8 @@ impl PtyManager {
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        let token = random_token();
+        cmd.env("AXON_PANE_TOKEN", &token);
 
         // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
@@ -192,6 +237,7 @@ impl PtyManager {
                     let mut fallback_cmd = CommandBuilder::new("powershell.exe");
                     fallback_cmd.env("TERM", "xterm-256color");
                     fallback_cmd.env("COLORTERM", "truecolor");
+                    fallback_cmd.env("AXON_PANE_TOKEN", &token);
                     fallback_cmd.env("PATH", &path_env);
                     pair.slave.spawn_command(fallback_cmd)?
                 } else {
@@ -209,6 +255,7 @@ impl PtyManager {
             to_pty_tx,
             from_pty_rx,
             output_pending,
+            token,
         })
     }
 
@@ -244,18 +291,7 @@ impl PtyManager {
         cmd.arg("-NoExit");
         cmd.arg("-Command");
 
-        // `--` corta el análisis de opciones de ssh: el destino nunca puede ser una opción
-        let ssh_command = if let Some(dir) = remote_dir.and_then(safe_remote_dir) {
-            format!(
-                "ssh -t -- {} \"cd '{}' 2>/dev/null; exec \\$SHELL -l\"",
-                destination, dir
-            )
-        } else {
-            format!("ssh -- {}", destination)
-        };
-
-        cmd.arg(ssh_command);
-
+        cmd.arg(ssh_command_line(destination, remote_dir));
         let child = pair.slave.spawn_command(cmd)?;
 
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
@@ -267,6 +303,7 @@ impl PtyManager {
             to_pty_tx,
             from_pty_rx,
             output_pending,
+            token: String::new(),
         })
     }
 
@@ -302,6 +339,28 @@ impl PtyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El shell recibe el token del panel (lo adjunta el wrapper `ssh` a `AxonSSH=start`) y es único por panel
+    #[test]
+    fn test_pane_token_reaches_shell_and_is_unique() {
+        let pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None, None).unwrap();
+        let other = PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).unwrap();
+        assert_eq!(pty.token.len(), 32);
+        assert_ne!(pty.token, other.token);
+        std::thread::sleep(std::time::Duration::from_millis(1500)); // arranque de PowerShell
+        pty.write_input(b"Write-Output ('T=' + $env:AXON_PANE_TOKEN)\r\n");
+        let mut out = String::new();
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            while let Some(bytes) = pty.try_recv_output() {
+                out.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            if out.contains(&format!("T={}", pty.token)) {
+                return;
+            }
+        }
+        panic!("el shell no recibió AXON_PANE_TOKEN: {out:?}");
+    }
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
@@ -596,6 +655,34 @@ mod tests {
         // el sumidero también valida (defensa en profundidad): ni siquiera abre el PTY
         assert!(PtyManager::new_ssh(0, "x; calc", None, 80, 24, None).is_err());
         assert!(PtyManager::new_ssh(0, "-oProxyCommand=calc", None, 80, 24, None).is_err());
+    }
+
+    #[test]
+    fn test_ssh_command_reaches_ssh_with_remote_command_intact() {
+        assert!(ssh_command_line("user@host", Some("/x")).starts_with("ssh -t -- user@host '"));
+        // El `--` lo consume PowerShell al enlazar los argumentos de la función falsa; ssh.exe sí lo recibe
+        for shell in installed_shells() {
+            // Función `ssh` falsa: imprime cada argumento tal como lo recibiría el ejecutable
+            let script = format!(
+                "function ssh {{ $args | ForEach-Object {{ \"[$_]\" }} }}; {}",
+                ssh_command_line("user@host", Some("/home/a b"))
+            );
+            let out = std::process::Command::new(&shell)
+                .args(["-NoProfile", "-Command", &script])
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .collect::<Vec<_>>(),
+                [
+                    "[-t]",
+                    "[user@host]",
+                    "[cd '/home/a b' 2>/dev/null; exec $SHELL -l]"
+                ],
+                "{shell}"
+            );
+        }
     }
 
     #[test]

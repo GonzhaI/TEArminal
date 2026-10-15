@@ -174,7 +174,7 @@ impl TerminalRenderer {
                     } else {
                         6
                     });
-                self.draw_ui_text(
+                let title_end = self.draw_ui_text(
                     buffer,
                     width,
                     height,
@@ -186,6 +186,18 @@ impl TerminalRenderer {
                     11.5,
                     tab.is_active,
                 );
+                if tab.is_preview {
+                    Self::draw_rect(
+                        buffer,
+                        width,
+                        height,
+                        text_x,
+                        text_y + 3,
+                        title_end.saturating_sub(text_x),
+                        1,
+                        text_color,
+                    );
+                }
             }
 
             // Botón de cerrar pestaña con Lucide 'X' (solo si la pestaña no es ultra compacta)

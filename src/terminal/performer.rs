@@ -79,6 +79,13 @@ impl<'a> Perform for Performer<'a> {
             return;
         }
 
+        // Con marcador privado o intermedio (`CSI > 4 ; 2 m` modifyOtherKeys, `CSI > 1 u` kitty,
+        // `CSI SP q` DECSCUSR...) no es SGR, cursor ni borrado: ignorarlas evita, por ejemplo,
+        // que `>4;2m` active subrayado y tenue en el texto siguiente.
+        if !intermediates.is_empty() {
+            return;
+        }
+
         match action {
             // DECSTBM: Set Top and Bottom Margins (usado por tmux para split panes)
             'r' => {
@@ -283,6 +290,7 @@ impl<'a> Perform for Performer<'a> {
                             self.state.scroll_offset = 0;
                             self.state.total_lines_count = self.state.rows;
                             self.state.command_blocks.clear();
+                            self.state.images.clear();
                         }
                     }
                     _ => {}
@@ -445,46 +453,94 @@ impl<'a> Perform for Performer<'a> {
                 let title_str = String::from_utf8_lossy(params[1]).trim().to_string();
                 if !title_str.is_empty() {
                     self.state.window_title = Some(title_str.clone());
-                    // Inferencia automática de sesión SSH si el título lo indica (ej. "ssh: user@host")
-                    if let Some(dest) = title_str.strip_prefix("ssh: ") {
-                        let clean_dest = dest.trim().to_string();
-                        if crate::pty::is_safe_ssh_destination(&clean_dest) {
-                            self.state.ssh_session = Some(SshSession {
-                                destination: clean_dest.clone(),
-                                args: vec![clean_dest],
-                                remote_dir: None,
-                                is_active: true,
-                            });
+                    // El título NO crea sesiones SSH (cualquier texto en pantalla puede fijarlo); solo
+                    // actualiza el directorio remoto de una sesión ya autenticada por `AxonSSH=start`
+                    if let Some((user_host, rest)) = title_str.split_once(':') {
+                        if user_host.contains('@') {
+                            let clean_dir = rest.trim();
+                            if clean_dir.starts_with('/') || clean_dir.starts_with('~') {
+                                // Sin sesión SSH (p. ej. el título `user@host: /ruta` de WSL) la ruta no existe en
+                                // Windows: no es un directorio local
+                                if let Some(ref mut sess) = self.state.ssh_session {
+                                    sess.remote_dir = Some(clean_dir.to_string());
+                                    if let Some(dir) = accept_cwd(clean_dir) {
+                                        self.state.current_dir = Some(dir);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-            // Protocolo de imagen iTerm2 (OSC 1337) y señalización SSH de Axon
+            // Protocolo de imagen iTerm2 (OSC 1337) y señalización SSH/Git de Axon
             b"1337" if params.len() > 1 => {
                 let p1 = params[1];
                 if p1.starts_with(b"AxonSSH=start") {
                     let mut dest = String::new();
+                    let mut token = String::new();
                     for param in &params[1..] {
                         let text = String::from_utf8_lossy(param);
                         for part in text.split(';') {
                             if let Some(d) = part.strip_prefix("dest=") {
                                 dest = d.trim().to_string();
+                            } else if let Some(t) = part.strip_prefix("token=") {
+                                token = t.trim().to_string();
                             }
                         }
                     }
-                    if crate::pty::is_safe_ssh_destination(&dest) {
+                    // Solo el wrapper `ssh` de `init.ps1` conoce el token de este panel (`AXON_PANE_TOKEN`):
+                    // sin él, cualquier texto en pantalla (un `cat` de un archivo ajeno) fijaría el destino
+                    if self.state.pane_token_matches(&token)
+                        && crate::pty::is_safe_ssh_destination(&dest)
+                    {
                         self.state.ssh_session = Some(SshSession {
                             destination: dest.clone(),
                             args: vec![dest],
                             remote_dir: None,
+                            remote_git_branch: None,
                             is_active: true,
                         });
+                        self.state.remote_integration = false;
+                        self.state.remote_listing = None;
                     }
                 } else if p1.starts_with(b"AxonSSH=end") {
                     if let Some(sess) = &mut self.state.ssh_session {
                         sess.is_active = false;
                     }
                     self.state.ssh_session = None;
+                    self.state.remote_integration = false;
+                    self.state.remote_listing = None;
+                } else if p1.starts_with(b"AxonAgent=start") {
+                    self.state.agent_running = true;
+                } else if p1.starts_with(b"AxonAgent=end") {
+                    self.state.agent_running = false;
+                } else if p1.starts_with(b"AxonGit=") || p1.starts_with(b"git_branch=") {
+                    let text = String::from_utf8_lossy(p1);
+                    let branch = text
+                        .strip_prefix("AxonGit=")
+                        .or_else(|| text.strip_prefix("git_branch="))
+                        .unwrap_or("")
+                        .trim();
+                    if let Some(sess) = &mut self.state.ssh_session {
+                        // La rama llega en cada prompt: vacía = la carpeta actual no es un repositorio
+                        sess.remote_git_branch = (!branch.is_empty()
+                            && branch != "-"
+                            && branch.len() <= 200
+                            && !branch.chars().any(char::is_control))
+                        .then(|| branch.to_string());
+                        self.state.remote_integration = true;
+                        self.state.remote_at_prompt = true;
+                    }
+                } else if let Some(id) = p1.strip_prefix(b"AxonFile=") {
+                    if self.state.ssh_session.is_some() {
+                        self.state.remote_integration = true;
+                        self.handle_remote_file(id, &params[2..]);
+                    }
+                } else if let Some(b64) = p1.strip_prefix(b"AxonLs=") {
+                    if self.state.ssh_session.is_some() {
+                        self.state.remote_listing = parse_remote_listing(b64);
+                        self.state.remote_integration = true;
+                    }
                 } else {
                     self.handle_iterm2_image(&params[1..]);
                 }
@@ -506,7 +562,7 @@ impl<'a> Perform for Performer<'a> {
                     } else {
                         ("", path_part)
                     };
-                    let decoded_path = path.replace("%20", " ");
+                    let decoded_path = percent_decode(path);
                     if !host.is_empty()
                         && host != "localhost"
                         && host != "127.0.0.1"
@@ -515,20 +571,14 @@ impl<'a> Perform for Performer<'a> {
                         // Host remoto vía OSC 7 (el directorio solo se guarda si es seguro de reutilizar)
                         let remote_dir =
                             crate::pty::safe_remote_dir(&decoded_path).map(str::to_string);
+                        // Solo actualiza una sesión ya autenticada (`AxonSSH=start`): OSC 7 no puede crearla
                         if let Some(sess) = &mut self.state.ssh_session {
                             sess.remote_dir = remote_dir;
-                        } else {
-                            self.state.ssh_session = Some(SshSession {
-                                destination: host.to_string(),
-                                args: vec![host.to_string()],
-                                remote_dir,
-                                is_active: true,
-                            });
                         }
                     }
                     let trimmed = decoded_path.strip_prefix('/').unwrap_or(&decoded_path);
-                    if !trimmed.is_empty() {
-                        self.state.current_dir = Some(std::path::PathBuf::from(trimmed));
+                    if let Some(dir) = accept_cwd(trimmed) {
+                        self.state.current_dir = Some(dir);
                     }
                 }
             }
@@ -536,13 +586,73 @@ impl<'a> Perform for Performer<'a> {
             b"9" if params.len() > 1 && params[1] == b"9" && params.len() > 2 => {
                 let raw = String::from_utf8_lossy(params[2]);
                 let clean = raw.trim().trim_matches('"');
-                if !clean.is_empty() {
-                    self.state.current_dir = Some(std::path::PathBuf::from(clean));
+                if let Some(dir) = accept_cwd(clean) {
+                    self.state.current_dir = Some(dir);
                 }
             }
             _ => {}
         }
     }
+}
+
+/// Tamaño máximo (decodificado) que una secuencia OSC 52 puede dejar en el portapapeles
+const MAX_OSC52_BYTES: usize = 100 * 1024;
+
+/// Texto de una carga OSC 52 (base64), o `None` si no es base64/UTF-8 válido o supera `MAX_OSC52_BYTES`.
+/// El tope se comprueba antes de decodificar (base64 = 4 bytes por cada 3).
+pub(super) fn decode_osc52(b64: &[u8]) -> Option<String> {
+    use base64::prelude::*;
+    if b64.len() > MAX_OSC52_BYTES.div_ceil(3) * 4 + 64 {
+        return None;
+    }
+    let clean: Vec<u8> = b64
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    let decoded = BASE64_STANDARD.decode(&clean).ok()?;
+    if decoded.len() > MAX_OSC52_BYTES {
+        return None;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+/// Directorio de trabajo aceptable que reporta el shell (OSC 7, OSC 9;9, título): vacío o ruta de red
+/// (`\\host\x`, `//host/x`, `\\?\UNC\...`) se descartan. La salida de la terminal es entrada NO confiable y
+/// `dir.exists()`/`is_dir()`/`set_root` sobre una ruta UNC hacen que Windows abra SMB y filtre el hash NTLM.
+/// No exige ruta absoluta: en sesiones SSH el cwd remoto (`/home/x`) se guarda aquí para mostrarlo.
+pub(crate) fn accept_cwd(dir: &str) -> Option<std::path::PathBuf> {
+    let dir = dir.trim();
+    let is_sep = |c: char| matches!(c, '/' | '\\');
+    let mut chars = dir.chars();
+    let network = chars.next().is_some_and(is_sep) && chars.next().is_some_and(is_sep);
+    (!dir.is_empty() && !network && !dir.chars().any(char::is_control))
+        .then(|| std::path::PathBuf::from(dir))
+}
+
+/// Decodifica los `%XX` de una URI `file://` (OSC 7); lo que no es un escape válido se deja tal cual
+pub(super) fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = (b[i] == b'%')
+            .then(|| b.get(i + 1..i + 3))
+            .flatten()
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok());
+        match hex {
+            Some(v) => {
+                out.push(v);
+                i += 3;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 impl<'a> Performer<'a> {
@@ -700,8 +810,7 @@ impl<'a> Performer<'a> {
                 use base64::prelude::*;
                 if let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) {
                     if let Ok(dyn_img) = image::load_from_memory(&decoded) {
-                        let rgba = dyn_img.to_rgba8();
-                        let (w, h) = rgba.dimensions();
+                        let (w, h) = (dyn_img.width(), dyn_img.height());
 
                         // Dimensiones en celdas de terminal (aprox. 8px ancho, 18px alto por celda)
                         let max_cols =
@@ -711,12 +820,24 @@ impl<'a> Performer<'a> {
                         let rows =
                             ((cols as f32 * (8.0 / 18.0) * aspect).round() as usize).clamp(3, 30);
 
+                        // Se guarda al tamaño en que se dibuja (máx. 80x30 celdas = 640x540 px, ~1,4 MB):
+                        // un RGBA de 4000x3000 son 48 MB y el historial no lo libera
+                        let (tw, th) = ((cols * 8) as u32, (rows * 18) as u32);
+                        let rgba = if w > tw || h > th {
+                            dyn_img
+                                .resize_exact(tw, th, image::imageops::FilterType::Triangle)
+                                .to_rgba8()
+                        } else {
+                            dyn_img.to_rgba8()
+                        };
+                        let (w, h) = rgba.dimensions();
+
                         let img_id = self.state.next_image_id;
                         self.state.next_image_id += 1;
 
                         let img_entry = InlineImage {
                             id: img_id,
-                            line_index: self.state.total_lines_count + self.state.cursor_y,
+                            line_index: self.state.current_global_line(),
                             col: self.state.cursor_x,
                             width_cols: cols,
                             height_rows: rows,
@@ -725,7 +846,7 @@ impl<'a> Performer<'a> {
                             rgba_data: rgba.into_raw(),
                         };
 
-                        self.state.images.push(img_entry);
+                        self.state.push_image(img_entry);
 
                         // Dejar espacio vertical en el grid para que el texto siguiente continúe abajo
                         for _ in 0..rows {
@@ -753,18 +874,9 @@ impl<'a> Performer<'a> {
                 // Consulta de lectura remota OSC 52 (bloqueada por seguridad)
                 return;
             }
-
-            let clean_b64: Vec<u8> = b64_payload
-                .iter()
-                .copied()
-                .filter(|b| !b.is_ascii_whitespace())
-                .collect();
-
-            use base64::prelude::*;
-            if let Ok(decoded_bytes) = BASE64_STANDARD.decode(&clean_b64) {
-                if let Ok(text) = String::from_utf8(decoded_bytes) {
-                    self.state.clipboard_queue.push(text);
-                }
+            // La app solo lo vuelca al portapapeles con `terminal.osc52`
+            if let Some(text) = decode_osc52(b64_payload) {
+                self.state.clipboard_queue.push(text);
             }
         }
     }
@@ -822,6 +934,101 @@ impl<'a> Performer<'a> {
                 }
             }
             _ => {}
+        }
+    }
+}
+
+/// Decodifica texto hexadecimal (`od -An -tx1` sin espacios) que llega del servidor
+pub(crate) fn hex_decode(hex: &[u8]) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    hex.chunks(2)
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
+        .collect()
+}
+
+/// Decodifica el listado de la carpeta remota (hex de `ls -1Ap`). Es entrada no confiable: se limita
+/// el tamaño y se descartan nombres vacíos, con caracteres de control o con separadores de ruta.
+fn parse_remote_listing(hex: &[u8]) -> Option<Vec<String>> {
+    const MAX_HEX: usize = 96 * 1024;
+    if hex.len() > MAX_HEX {
+        return None;
+    }
+    Some(clean_listing(&String::from_utf8_lossy(&hex_decode(hex)?)))
+}
+
+/// Nombres válidos de un `ls -1Ap` remoto (las carpetas acaban en `/`)
+pub(crate) fn clean_listing(text: &str) -> Vec<String> {
+    const MAX_ENTRIES: usize = 300;
+    text.lines()
+        .filter(|n| {
+            let bare = n.strip_suffix('/').unwrap_or(n);
+            !bare.is_empty()
+                && bare.len() <= 255
+                && bare != "."
+                && bare != ".."
+                && !bare.contains('/')
+                && !bare.chars().any(char::is_control)
+        })
+        .take(MAX_ENTRIES)
+        .map(String::from)
+        .collect()
+}
+
+impl<'a> Performer<'a> {
+    /// Un trozo de respuesta `AxonFile=<id>;<ok|err>;<n>;<total>;<base64>`. Entrada no confiable: se
+    /// limita el número de trozos, su tamaño y las respuestas en curso.
+    fn handle_remote_file(&mut self, id: &[u8], rest: &[&[u8]]) {
+        const MAX_PARTS: usize = 64;
+        const MAX_CHUNK: usize = 40_000;
+        let num = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<usize>().ok();
+        let [status, n, total, chunk] = rest else {
+            return;
+        };
+        let (Some(id), Some(n), Some(total)) = (
+            num(id).and_then(|v| u32::try_from(v).ok()),
+            num(n),
+            num(total),
+        ) else {
+            return;
+        };
+        if !(1..=MAX_PARTS).contains(&total) || n >= total || chunk.len() > MAX_CHUNK {
+            return;
+        }
+        let state = &mut *self.state;
+        let idx = match state.remote_file_parts.iter().position(|a| a.id == id) {
+            Some(i) if state.remote_file_parts[i].parts.len() == total => i,
+            _ => {
+                state.remote_file_parts.retain(|a| a.id != id);
+                if state.remote_file_parts.len() >= 8 {
+                    state.remote_file_parts.remove(0);
+                }
+                state.remote_file_parts.push(RemoteFileAsm {
+                    id,
+                    ok: *status == b"ok",
+                    parts: vec![None; total],
+                });
+                state.remote_file_parts.len() - 1
+            }
+        };
+        state.remote_file_parts[idx].parts[n] = Some(String::from_utf8_lossy(chunk).into_owned());
+        if state.remote_file_parts[idx]
+            .parts
+            .iter()
+            .all(Option::is_some)
+        {
+            let asm = state.remote_file_parts.remove(idx);
+            let joined: String = asm.parts.into_iter().flatten().collect();
+            let (ok, data) = match hex_decode(joined.as_bytes()) {
+                Some(d) => (asm.ok, d),
+                None => (false, Vec::new()),
+            };
+            if state.remote_file_results.len() < 32 {
+                state
+                    .remote_file_results
+                    .push(RemoteFileResult { id, ok, data });
+            }
         }
     }
 }

@@ -129,6 +129,7 @@ pub struct SshSession {
     pub destination: String,
     pub args: Vec<String>,
     pub remote_dir: Option<String>,
+    pub remote_git_branch: Option<String>,
     pub is_active: bool,
 }
 

@@ -3,7 +3,7 @@
 #   axon-setup-<version>.exe         instalador por usuario (Inno Setup), si ISCC está disponible
 #   SHA256SUMS.txt
 #
-# Uso:  pwsh packaging/package.ps1 [-Version 0.6.0] [-SkipBuild] [-SkipInstaller]
+# Uso:  pwsh packaging/package.ps1 [-Version 0.7.0] [-SkipBuild] [-SkipInstaller]
 [CmdletBinding()]
 param(
     [string]$Version,

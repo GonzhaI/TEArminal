@@ -186,6 +186,7 @@ impl TerminalRenderer {
         height: usize,
         page_x: usize,
         page_y: usize,
+        status_bar_h: usize,
         config: &AxonConfig,
         state: &SettingsPageState,
         theme: &Theme,
@@ -403,21 +404,55 @@ impl TerminalRenderer {
             theme.border_color(),
         );
 
-        // 4. Renderizar contenido según la sección activa
-        let card_y = page_y + 128;
-
+        // 4. Contenido de la sección activa: se dibuja completo fuera de pantalla (coordenadas de
+        //    página, page_y = 0) y se copia solo la ventana visible según el scroll.
+        let top = SettingsPageRects::CONTENT_TOP;
+        let content_h = SettingsPageRects::content_height(state.section);
+        let viewport_h = page_h.saturating_sub(top + status_bar_h);
+        let scroll = state
+            .scroll_y
+            .min(SettingsPageRects::max_scroll(state.section, viewport_h));
+        let tmp_h = top + content_h;
+        let mut tmp = vec![theme.background.to_u32_xrgb(); width * tmp_h];
+        let v = SettingsPageRects::compute(page_x, 0, page_w, page_h);
         match state.section {
             SettingsSection::Appearance => self.draw_settings_appearance(
-                buffer, width, height, content_x, card_w, card_y, config, state, &rects, theme,
+                &mut tmp, width, tmp_h, content_x, card_w, top, config, state, &v, theme,
             ),
             SettingsSection::Terminal => self.draw_settings_terminal(
-                buffer, width, height, content_x, card_w, card_y, config, state, &rects, theme,
+                &mut tmp, width, tmp_h, content_x, card_w, top, config, state, &v, theme,
             ),
-            SettingsSection::Shortcuts => self
-                .draw_settings_shortcuts(buffer, width, height, content_x, card_w, card_y, theme),
+            SettingsSection::Shortcuts => {
+                self.draw_settings_shortcuts(&mut tmp, width, tmp_h, content_x, card_w, top, theme)
+            }
             SettingsSection::About => self.draw_settings_about(
-                buffer, width, height, content_x, card_w, card_y, state, &rects, theme,
+                &mut tmp, width, tmp_h, content_x, card_w, top, state, &v, theme,
             ),
+        }
+        let rows = viewport_h.min(content_h - scroll);
+        for row in 0..rows {
+            let dst_y = page_y + top + row;
+            if dst_y >= height {
+                break;
+            }
+            let src = (top + scroll + row) * width + page_x;
+            let dst = dst_y * width + page_x;
+            buffer[dst..dst + page_w].copy_from_slice(&tmp[src..src + page_w]);
+        }
+
+        if let Some((track, thumb)) =
+            SettingsPageRects::scrollbar(state.section, page_y, width, viewport_h, scroll)
+        {
+            Self::draw_scrollbar_rects(
+                buffer,
+                width,
+                height,
+                track,
+                thumb,
+                state.hovered_scrollbar,
+                self.scrollbars_awake,
+                theme,
+            );
         }
     }
 
@@ -850,7 +885,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         // Tarjeta 1: Comportamiento
-        let term_card_h = 278;
+        let term_card_h = SettingsPageRects::TERMINAL_CARD_H;
         self.draw_card(
             buffer,
             width,
@@ -1016,6 +1051,74 @@ impl TerminalRenderer {
             restore_str,
             state.hovered_restore_session,
             config.terminal.restore_session,
+            theme,
+        );
+
+        self.draw_label(
+            buffer,
+            width,
+            height,
+            content_x + 20,
+            rects.auto_save_btn.1,
+            content_x + 250,
+            "Auto-guardar archivos editados:",
+            theme,
+        );
+        let auto_save_str = if config.terminal.auto_save {
+            "Activado"
+        } else {
+            "Desactivado"
+        };
+        self.draw_button(
+            buffer,
+            width,
+            height,
+            rects.auto_save_btn,
+            auto_save_str,
+            state.hovered_auto_save,
+            config.terminal.auto_save,
+            theme,
+        );
+
+        let on_off = |on: bool| if on { "Activado" } else { "Desactivado" };
+        self.draw_label(
+            buffer,
+            width,
+            height,
+            content_x + 20,
+            rects.word_wrap_btn.1,
+            content_x + 250,
+            "Ajuste de línea en el visor:",
+            theme,
+        );
+        self.draw_button(
+            buffer,
+            width,
+            height,
+            rects.word_wrap_btn,
+            on_off(config.terminal.word_wrap),
+            state.hovered_word_wrap,
+            config.terminal.word_wrap,
+            theme,
+        );
+        self.draw_label(
+            buffer,
+            width,
+            height,
+            content_x + 20,
+            rects.ssh_integration_btn.1,
+            content_x + 250,
+            "Integración SSH (rama y carpeta):",
+            theme,
+        );
+        self.draw_button(
+            buffer,
+            width,
+            height,
+            rects.ssh_integration_btn,
+            on_off(config.terminal.ssh_integration),
+            state.hovered_ssh_integration,
+            config.terminal.ssh_integration,
             theme,
         );
 

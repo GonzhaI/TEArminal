@@ -344,27 +344,20 @@ impl TerminalRenderer {
             {
                 let track_y = rect_y + self.margin_y;
                 let track_h = rect_h.saturating_sub(self.margin_y * 2);
-                let track_bg = Color::from_rgba(
-                    theme.surface_hover().r(),
-                    theme.surface_hover().g(),
-                    theme.surface_hover().b(),
-                    100,
-                );
-                crate::ui::draw_rounded_rect(
-                    buffer, width, height, thumb_x, track_y, thumb_w, track_h, 3, track_bg,
-                );
 
-                let thumb_color = theme.ansi[8];
-                crate::ui::draw_rounded_rect(
+                Self::draw_scrollbar(
                     buffer,
                     width,
                     height,
                     thumb_x,
-                    thumb_y,
+                    track_y,
                     thumb_w,
+                    track_h,
+                    thumb_y,
                     thumb_h,
-                    3,
-                    thumb_color,
+                    terminal.scrollbar_hovered,
+                    self.scrollbars_awake,
+                    theme,
                 );
             }
         }

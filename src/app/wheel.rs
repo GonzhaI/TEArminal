@@ -19,6 +19,32 @@ impl AxonApp {
 
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
+        // Cualquier rueda despierta las barras de scroll (se auto-ocultan tras un instante)
+        // Rueda sobre el menú contextual: no actúa; fuera de él lo cierra y sigue su curso
+        if let Some(menu) = &self.context_menu {
+            let (x, y, w, h) = menu.bounds();
+            if mx >= x && mx < x + w && my >= y && my < y + h {
+                return;
+            }
+            self.context_menu = None;
+        }
+        self.last_scroll_time = Instant::now();
+
+        if self.tabs[self.active_tab_index].is_settings {
+            let dy = match delta {
+                MouseScrollDelta::LineDelta(_, y) => (y * 48.0) as isize,
+                MouseScrollDelta::PixelDelta(pos) => pos.y as isize,
+            };
+            let viewport_h =
+                win_h.saturating_sub(top_offset + SettingsPageRects::CONTENT_TOP + status_bar_h);
+            let max = SettingsPageRects::max_scroll(self.settings_page_state.section, viewport_h);
+            self.settings_page_state.scroll_y =
+                (self.settings_scroll() as isize - dy).clamp(0, max as isize) as usize;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
 
         // Scroll en la lista de pestañas verticales de la barra lateral
         if !self.is_horizontal_tabs() && self.sidebar_visible && mx < SIDEBAR_WIDTH {
@@ -90,6 +116,11 @@ impl AxonApp {
                     (pos.y / 20.0).round() as isize,
                 ),
             };
+            let max_x = if viewer.wrap_active() {
+                0
+            } else {
+                viewer.max_scroll_x()
+            };
             if self.modifiers.shift_key() {
                 // Shift + rueda vertical -> scroll horizontal
                 if dy > 0 {
@@ -97,13 +128,13 @@ impl AxonApp {
                         viewer.scroll_offset_x.saturating_sub(dy.unsigned_abs() * 3);
                 } else if dy < 0 {
                     viewer.scroll_offset_x =
-                        (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(1000);
+                        (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(max_x);
                 }
             } else if dx != 0 {
                 // Rueda horizontal nativa
                 if dx > 0 {
                     viewer.scroll_offset_x =
-                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(1000);
+                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(max_x);
                 } else if dx < 0 {
                     viewer.scroll_offset_x =
                         viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
@@ -114,7 +145,7 @@ impl AxonApp {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_sub(dy.unsigned_abs());
                 } else if dy < 0 {
                     viewer.scroll_offset = (viewer.scroll_offset + dy.unsigned_abs())
-                        .min(viewer.lines.len().saturating_sub(1));
+                        .min(viewer.rows().len().saturating_sub(1));
                 }
             }
             if let Some(w) = &self.window {

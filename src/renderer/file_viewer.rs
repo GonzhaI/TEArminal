@@ -14,6 +14,8 @@ impl TerminalRenderer {
         y: usize,
         w: usize,
         h: usize,
+        right_inset: usize,
+        cursor_visible: bool,
         viewer: &FileViewerState,
         theme: &Theme,
     ) {
@@ -21,7 +23,11 @@ impl TerminalRenderer {
             return;
         }
 
-        let clip: Clip = (x, y, (x + w).min(width), (y + h).min(height));
+        // Fondo y cabecera ocupan todo el ancho (también bajo el explorador flotante, sin corte abrupto);
+        // texto, controles y barras de scroll se quedan en el área libre de `w - right_inset`.
+        let full_w = w;
+        let w = w.saturating_sub(right_inset);
+        let clip: Clip = (x, y, (x + full_w).min(width), (y + h).min(height));
 
         // 1. Fondo completo del área de trabajo
         fill_rect(
@@ -30,7 +36,7 @@ impl TerminalRenderer {
             clip,
             x,
             y,
-            w,
+            full_w,
             h,
             theme.background.to_u32_xrgb(),
         );
@@ -44,7 +50,7 @@ impl TerminalRenderer {
             clip,
             x,
             y,
-            w,
+            full_w,
             header_h,
             header_bg.to_u32_xrgb(),
         );
@@ -56,7 +62,7 @@ impl TerminalRenderer {
             clip,
             x,
             y + header_h - 1,
-            w,
+            full_w,
             1,
             theme.border_color().to_u32_xrgb(),
         );
@@ -91,120 +97,107 @@ impl TerminalRenderer {
             theme.accent_color(),
         );
 
-        // Nombre del archivo (Inter Semibold)
-        let name_end_x = self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &viewer.file_name,
-            x + 38,
-            header_base,
-            (x + w).saturating_sub(240),
-            theme.foreground,
-            12.5,
-            true,
+        // Botones (modo y vista previa), chips informativos y, con el espacio sobrante, el nombre del archivo
+        let is_markdown = ext == "md" || ext == "markdown";
+        let header_rects = crate::renderer::geometry::FileViewerHeaderRects::compute(
+            x,
+            y,
+            w,
+            h,
+            is_markdown,
+            viewer.git_base.is_some(),
         );
+        let accent = theme.accent_color();
+        let chip_bg = Color::from_rgba(255, 255, 255, 8);
+        let tint = |c: Color, a: u8| Color::from_rgba(c.r(), c.g(), c.b(), a);
 
-        // Ruta relativa o del directorio padre
-        let parent_str = viewer
-            .path
-            .parent()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-        if !parent_str.is_empty() && name_end_x + 16 < (x + w).saturating_sub(260) {
-            let path_display = format!("—  {}", parent_str);
-            self.draw_ui_text(
+        if let Some(rect) = header_rects.md_btn {
+            let hov = viewer.hovered_md_btn;
+            let (icon, label, fg, bg) = if viewer.render_markdown {
+                (
+                    crate::ui::LucideIcon::Eye,
+                    "Vista previa",
+                    accent,
+                    tint(accent, if hov { 40 } else { 20 }),
+                )
+            } else {
+                (
+                    crate::ui::LucideIcon::Code,
+                    "Código",
+                    if hov { theme.foreground } else { theme.ansi[7] },
+                    if hov { theme.surface_hover() } else { chip_bg },
+                )
+            };
+            self.draw_header_button(
                 buffer,
                 width,
                 height,
-                &path_display,
-                name_end_x + 12,
+                rect,
+                icon,
+                label,
+                fg,
+                bg,
                 header_base,
-                (x + w).saturating_sub(260),
-                theme.ansi[8],
-                11.0,
-                false,
             );
         }
 
-        // Badges informativos a la derecha
-        let mut badge_right_x = (x + w).saturating_sub(16);
+        if let Some(rect) = header_rects.diff_btn {
+            let hov = viewer.hovered_diff_btn;
+            let changed = viewer.has_git_changes();
+            let showing = viewer.is_diff();
+            let color = if showing {
+                accent
+            } else if changed {
+                theme.ansi[3]
+            } else {
+                theme.ansi[8]
+            };
+            self.draw_header_button(
+                buffer,
+                width,
+                height,
+                rect,
+                crate::ui::LucideIcon::GitBranch,
+                "Cambios",
+                if hov { accent } else { color },
+                if hov {
+                    theme.surface_hover()
+                } else {
+                    tint(color, if showing || changed { 20 } else { 8 })
+                },
+                header_base,
+            );
+        }
 
-        // Badge de estado de edición ("MODIFICADO" o "SOLO LECTURA" si binario o "EDITABLE")
-        let (status_text, status_fg, status_bg) = if viewer.is_binary {
-            ("SOLO LECTURA", theme.ansi[8], theme.surface_hover())
-        } else if viewer.is_dirty {
+        let hov = viewer.hovered_mode_btn;
+        let (icon, label, fg, bg) = if viewer.is_read_only {
             (
-                "MODIFICADO",
-                theme.ansi[3],
-                Color::from_rgba(255, 180, 0, 24),
+                crate::ui::LucideIcon::Lock,
+                "Lectura",
+                if hov { accent } else { theme.ansi[8] },
+                if hov { theme.surface_hover() } else { chip_bg },
             )
         } else {
-            ("EDITABLE", theme.ansi[2], Color::from_rgba(0, 255, 128, 16))
+            (
+                crate::ui::LucideIcon::Pencil,
+                "Edición",
+                theme.ansi[2],
+                tint(theme.ansi[2], if hov { 40 } else { 20 }),
+            )
         };
-        let status_w = self.measure_ui_text(status_text, 10.0, true) + 14;
-        let status_x = badge_right_x.saturating_sub(status_w);
-        crate::ui::draw_rounded_rect(
+        self.draw_header_button(
             buffer,
             width,
             height,
-            status_x,
-            y + 8,
-            status_w,
-            22,
-            4,
-            status_bg,
+            header_rects.mode_btn,
+            icon,
+            label,
+            fg,
+            bg,
+            header_base,
         );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            status_text,
-            status_x + 7,
-            header_base - 1,
-            badge_right_x,
-            status_fg,
-            10.0,
-            true,
-        );
-        badge_right_x = status_x.saturating_sub(8);
 
-        // Badge de cursor (Ln X, Col Y) si no es binario
-        if !viewer.is_binary {
-            let cursor_text = format!(
-                "Ln {}, Col {}",
-                viewer.cursor_line + 1,
-                viewer.cursor_col + 1
-            );
-            let cursor_w = self.measure_ui_text(&cursor_text, 10.5, false) + 14;
-            let cursor_x = badge_right_x.saturating_sub(cursor_w);
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                cursor_x,
-                y + 8,
-                cursor_w,
-                22,
-                4,
-                Color::from_rgba(255, 255, 255, 8),
-            );
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                &cursor_text,
-                cursor_x + 7,
-                header_base - 1,
-                badge_right_x,
-                theme.ansi[7],
-                10.5,
-                false,
-            );
-            badge_right_x = cursor_x.saturating_sub(8);
-        }
-
-        // Badge de tamaño del archivo
+        // Chips en orden de prioridad (de derecha a izquierda); los que no caben junto al nombre se omiten
         let size_text = if viewer.file_size < 1024 {
             format!("{} B", viewer.file_size)
         } else if viewer.file_size < 1024 * 1024 {
@@ -212,59 +205,93 @@ impl TerminalRenderer {
         } else {
             format!("{:.2} MB", viewer.file_size as f64 / (1024.0 * 1024.0))
         };
-        let size_w = self.measure_ui_text(&size_text, 10.5, false) + 14;
-        let size_x = badge_right_x.saturating_sub(size_w);
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            size_x,
-            y + 8,
-            size_w,
-            22,
-            4,
-            Color::from_rgba(255, 255, 255, 8),
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &size_text,
-            size_x + 7,
-            header_base - 1,
-            badge_right_x,
+        let mut chips: Vec<(String, Color, Color)> = Vec::new();
+        if viewer.save_error.is_some() {
+            chips.push((
+                "ERROR AL GUARDAR".into(),
+                theme.ansi[1],
+                tint(theme.ansi[1], 24),
+            ));
+        }
+        if viewer.non_utf8 {
+            chips.push(("NO UTF-8".into(), theme.ansi[3], tint(theme.ansi[3], 24)));
+        }
+        if viewer.is_dirty {
+            chips.push(("MODIFICADO".into(), theme.ansi[3], tint(theme.ansi[3], 24)));
+        }
+        if !viewer.is_binary {
+            chips.push((
+                format!(
+                    "Ln {}, Col {}",
+                    viewer.cursor_line + 1,
+                    viewer.cursor_col + 1
+                ),
+                theme.ansi[7],
+                chip_bg,
+            ));
+            if let Some(s) = viewer.selection_stats() {
+                chips.push((
+                    if s.lines > 1 {
+                        format!("{} sel. · {} líneas", s.chars, s.lines)
+                    } else {
+                        format!("{} sel.", s.chars)
+                    },
+                    accent,
+                    tint(accent, 24),
+                ));
+            }
+        }
+        chips.push((size_text, theme.ansi[7], chip_bg));
+        chips.push((
+            format!("{} líneas", viewer.lines.len()),
             theme.ansi[7],
-            10.5,
-            false,
-        );
-        badge_right_x = size_x.saturating_sub(8);
+            chip_bg,
+        ));
 
-        // Badge de recuento de líneas
-        let lines_text = format!("{} líneas", viewer.lines.len());
-        let lines_w = self.measure_ui_text(&lines_text, 10.5, false) + 14;
-        let lines_x = badge_right_x.saturating_sub(lines_w);
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            lines_x,
-            y + 8,
-            lines_w,
-            22,
-            4,
-            Color::from_rgba(255, 255, 255, 8),
-        );
+        let name_start_x = x + 38;
+        let name_end_x = name_start_x + self.measure_ui_text(&viewer.file_name, 12.5, true);
+        let mut right_x = header_rects.mode_btn.0;
+        for r in [header_rects.md_btn, header_rects.diff_btn]
+            .into_iter()
+            .flatten()
+        {
+            right_x = right_x.min(r.0);
+        }
+        right_x = right_x.saturating_sub(8);
+        for (text, chip_fg, bg) in &chips {
+            let chip_w = self.measure_ui_text(text, 10.5, false) + 14;
+            let chip_x = right_x.saturating_sub(chip_w);
+            if chip_x < name_end_x + 16 {
+                break;
+            }
+            crate::ui::draw_rounded_rect(buffer, width, height, chip_x, y + 8, chip_w, 22, 4, *bg);
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                text,
+                chip_x + 7,
+                header_base - 1,
+                right_x,
+                *chip_fg,
+                10.5,
+                false,
+            );
+            right_x = chip_x.saturating_sub(8);
+        }
+
+        // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
         self.draw_ui_text(
             buffer,
             width,
             height,
-            &lines_text,
-            lines_x + 7,
-            header_base - 1,
-            badge_right_x,
-            theme.ansi[7],
-            10.5,
-            false,
+            &viewer.file_name,
+            name_start_x,
+            header_base,
+            right_x + 4,
+            theme.foreground,
+            12.5,
+            true,
         );
 
         // 3. Área de contenido del archivo
@@ -348,15 +375,20 @@ impl TerminalRenderer {
             return;
         }
 
-        let row_h = self.row_height.max(16);
-        let char_w = self.char_width.max(7);
-        let visible_lines = content_h / row_h;
         let total_lines = viewer.lines.len();
-
-        // Columna de números de línea (gutter)
-        let digits = format!("{}", total_lines).len().max(3);
-        let gutter_w = digits * char_w + 24;
-        let sep_x = x + gutter_w;
+        let lay = crate::renderer::geometry::FileViewerLayout::compute(
+            x,
+            y,
+            w,
+            h,
+            self.row_height,
+            self.char_width,
+            total_lines,
+        );
+        let (row_h, char_w, gutter_w, sep_x) = (lay.row_h, lay.char_w, lay.gutter_w, lay.sep_x);
+        let visible_lines = content_h / row_h;
+        let max_scroll_x = viewer.max_scroll_x();
+        let scroll_x = viewer.scroll_offset_x.min(max_scroll_x);
 
         // Fondo sutil del gutter
         fill_rect(
@@ -383,104 +415,301 @@ impl TerminalRenderer {
         );
 
         let baseline_offset = ((row_h as f32 * 0.76) as usize).max(char_w);
-        let start_line = viewer.scroll_offset;
-        let end_line = (start_line + visible_lines + 1).min(total_lines);
 
         let gutter_clip: Clip = (x, content_y, sep_x, content_y + content_h);
-        let text_max_x = (x + w).saturating_sub(18);
+        let text_max_x = lay.text_max_x;
         let text_clip: Clip = (sep_x + 1, content_y, text_max_x, content_y + content_h);
 
-        // 4. Renderizado línea por línea
-        for line_idx in start_line..end_line {
-            let row_idx = line_idx - start_line;
-            let row_y = content_y + row_idx * row_h;
+        let md_blocks = (viewer.render_markdown && is_markdown)
+            .then(|| crate::renderer::md_preview::classify_blocks(&viewer.lines));
+
+        // 4. Renderizado por filas visuales (ajuste de línea y plegado ya resueltos en `viewer.rows()`)
+        let rows = viewer.rows();
+        let total_rows = rows.len();
+        let wrap = viewer.wrap_active();
+        let scroll_x = if wrap { 0 } else { scroll_x };
+        let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
+        let selection = viewer.selection_ordered().filter(|(a, b)| a != b);
+        let accent = theme.accent_color();
+        let sel_bg = Color::from_rgba(accent.r(), accent.g(), accent.b(), 70);
+        let mark_color = theme.ansi[8].to_u32_xrgb();
+        let tab_adv = (char_w * 4) as i32;
+
+        for (row_idx, row) in rows
+            .iter()
+            .enumerate()
+            .skip(start_row)
+            .take(visible_lines + 1)
+        {
+            let row_y = content_y + (row_idx - start_row) * row_h;
             if row_y + row_h > content_y + content_h {
                 break;
             }
-
+            let line_idx = row.line;
+            let first_segment = row.start == 0;
+            let is_last_segment = row.end == usize::MAX;
             let is_cursor_line = !viewer.is_binary && line_idx == viewer.cursor_line;
             let baseline_y = row_y + baseline_offset;
+            let seg = viewer.row_text(row);
+            let cur_x = (sep_x + 14) as i32 - (scroll_x * char_w) as i32;
 
-            // Indicador de Git en el gutter si la línea fue modificada o añadida
+            // Indicador de Git en el gutter si la línea fue modificada, añadida o eliminada
             if let Some(git_status) = viewer.get_line_git_diff_status(line_idx) {
                 let git_color = match git_status {
                     crate::app::GitLineStatus::Added => theme.ansi[2], // Verde
                     crate::app::GitLineStatus::Modified => theme.ansi[3], // Amarillo
+                    crate::app::GitLineStatus::Deleted => theme.ansi[1], // Rojo
                 };
-                fill_rect(
+                if git_status == crate::app::GitLineStatus::Deleted {
+                    fill_rect(
+                        buffer,
+                        width,
+                        gutter_clip,
+                        sep_x.saturating_sub(4),
+                        row_y,
+                        4,
+                        3,
+                        git_color.to_u32_xrgb(),
+                    );
+                } else {
+                    fill_rect(
+                        buffer,
+                        width,
+                        gutter_clip,
+                        sep_x.saturating_sub(3),
+                        row_y,
+                        3,
+                        row_h,
+                        git_color.to_u32_xrgb(),
+                    );
+                }
+            }
+
+            // Número de línea (solo en la primera fila de cada línea) y flecha de plegado
+            if first_segment {
+                let line_num_str = format!("{}", line_idx + 1);
+                let num_w = line_num_str.len() * char_w;
+                let num_x = sep_x.saturating_sub(num_w + 10);
+                let num_fg = if is_cursor_line {
+                    theme.foreground
+                } else {
+                    theme.ansi[8]
+                };
+                for (ci, ch) in line_num_str.chars().enumerate() {
+                    let glyph = self.get_glyph(ch, false);
+                    let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
+                    let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+                    blit_glyph(buffer, width, gutter_clip, glyph, gx, gy, num_fg);
+                }
+
+                let folded = viewer.folded.contains(&line_idx);
+                if (folded || viewer.hovered_gutter)
+                    && (folded || viewer.fold_end(line_idx).is_some())
+                {
+                    let icon = if folded {
+                        crate::ui::LucideIcon::ChevronRight
+                    } else {
+                        crate::ui::LucideIcon::ChevronDown
+                    };
+                    let color = if folded { accent } else { theme.ansi[8] };
+                    self.draw_lucide_icon(
+                        buffer,
+                        width,
+                        height,
+                        icon,
+                        x + 10,
+                        row_y + row_h / 2,
+                        11.0,
+                        color,
+                    );
+                }
+            }
+
+            // Diff: fondo verde/rojo en líneas añadidas/quitadas y tenue en el encabezado de tramo
+            if viewer.is_diff() {
+                let tone = match viewer.lines[line_idx].as_bytes().first() {
+                    Some(b'+') => Some(theme.ansi[2]),
+                    Some(b'-') => Some(theme.ansi[1]),
+                    Some(b'@') => Some(accent),
+                    _ => None,
+                };
+                if let Some(c) = tone {
+                    crate::ui::draw_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        sep_x + 1,
+                        row_y,
+                        text_max_x.saturating_sub(sep_x + 1),
+                        row_h,
+                        0,
+                        Color::from_rgba(c.r(), c.g(), c.b(), 36),
+                    );
+                }
+            }
+
+            // Selección: rectángulo sin bordes redondeados (filas contiguas sin huecos) y marcas de
+            // espacios y tabuladores dentro de lo seleccionado para poder contar la sangría
+            let mut marks: Vec<(i32, bool)> = Vec::new();
+            if let Some(((l1, c1), (l2, c2))) = selection {
+                if line_idx >= l1 && line_idx <= l2 {
+                    let mut acc = cur_x;
+                    let mut sx: Option<i32> = None;
+                    let mut ex = cur_x;
+                    for (ci, ch) in seg.chars().enumerate() {
+                        let col = row.start + ci;
+                        let adv = if ch == '\t' { tab_adv } else { char_w as i32 };
+                        if (line_idx > l1 || col >= c1) && (line_idx < l2 || col < c2) {
+                            sx.get_or_insert(acc);
+                            ex = acc + adv;
+                            match ch {
+                                ' ' => marks.push((acc + adv / 2, false)),
+                                '\t' => marks.push((acc, true)),
+                                _ => {}
+                            }
+                        }
+                        acc += adv;
+                    }
+                    // El salto de línea también está seleccionado en todas las líneas menos la última
+                    if is_last_segment && line_idx < l2 {
+                        sx.get_or_insert(acc);
+                        ex = acc + char_w as i32;
+                    }
+                    if let Some(sx) = sx {
+                        let draw_sx = sx.max(text_clip.0 as i32) as usize;
+                        let draw_ex = ex.min(text_clip.2 as i32).max(draw_sx as i32) as usize;
+                        if draw_ex > draw_sx {
+                            crate::ui::draw_rounded_rect(
+                                buffer,
+                                width,
+                                height,
+                                draw_sx,
+                                row_y,
+                                draw_ex - draw_sx,
+                                row_h,
+                                0,
+                                sel_bg,
+                            );
+                        }
+                    }
+                }
+            }
+
+            match md_blocks.as_ref().and_then(|b| b.get(line_idx)) {
+                Some(block) => self.render_md_line(
+                    buffer, width, text_clip, seg, block, cur_x, row_y, row_h, baseline_y,
+                    text_max_x, char_w, theme,
+                ),
+                None => self.render_highlighted_line(
                     buffer,
                     width,
-                    gutter_clip,
-                    sep_x.saturating_sub(3),
-                    row_y,
-                    3,
-                    row_h,
-                    git_color.to_u32_xrgb(),
-                );
+                    text_clip,
+                    seg,
+                    cur_x,
+                    baseline_y,
+                    text_max_x,
+                    char_w,
+                    theme,
+                    if viewer.is_diff() { "" } else { &ext },
+                ),
             }
 
-            // Número de línea (alineado a la derecha en el gutter)
-            let line_num_str = format!("{}", line_idx + 1);
-            let num_w = line_num_str.len() * char_w;
-            let num_x = sep_x.saturating_sub(num_w + 10);
-            let num_fg = if is_cursor_line {
-                theme.foreground
-            } else {
-                theme.ansi[8]
-            };
-
-            for (ci, ch) in line_num_str.chars().enumerate() {
-                let glyph = self.get_glyph(ch, false);
-                let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
-                let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, gutter_clip, glyph, gx, gy, num_fg);
-            }
-
-            // Contenido de la línea de código con resaltado sintáctico completo y desplazamiento horizontal
-            let line_text = &viewer.lines[line_idx];
-            let start_x_offset = (viewer.scroll_offset_x * char_w) as i32;
-            let cur_x = (sep_x + 14) as i32 - start_x_offset;
-
-            self.render_highlighted_line(
-                buffer, width, text_clip, line_text, cur_x, baseline_y, text_max_x, char_w, theme,
-                &ext,
-            );
-
-            // Renderizado del cursor de texto en la línea activa
-            if is_cursor_line {
-                let col = viewer.cursor_col;
-                let mut cursor_x_offset: i32 = 0;
-                for (ci, ch) in line_text.chars().enumerate() {
-                    if ci >= col {
-                        break;
-                    }
-                    cursor_x_offset += if ch == '\t' {
-                        (char_w * 4) as i32
-                    } else {
-                        char_w as i32
-                    };
+            for (mx, is_tab) in marks {
+                let mid = row_y + row_h / 2;
+                if is_tab {
+                    fill_rect(
+                        buffer,
+                        width,
+                        text_clip,
+                        (mx + 4).max(0) as usize,
+                        mid,
+                        (tab_adv - 8).max(1) as usize,
+                        1,
+                        mark_color,
+                    );
+                } else if mx > 0 {
+                    fill_rect(
+                        buffer,
+                        width,
+                        text_clip,
+                        mx as usize - 1,
+                        mid - 1,
+                        2,
+                        2,
+                        mark_color,
+                    );
                 }
-                let cursor_x = cur_x + cursor_x_offset;
-                if cursor_x >= (sep_x + 1) as i32 && cursor_x < text_max_x as i32 {
-                    let cursor_w = 2;
-                    let cursor_h = (row_h as f32 * 0.85).round() as usize;
-                    let cursor_y = row_y + (row_h.saturating_sub(cursor_h)) / 2;
+            }
 
+            // Región plegada: indica cuántas líneas quedan ocultas tras el texto
+            if viewer.folded.contains(&line_idx) {
+                if let Some(end) = viewer.fold_end(line_idx) {
+                    let text_w: i32 = seg
+                        .chars()
+                        .map(|c| if c == '\t' { tab_adv } else { char_w as i32 })
+                        .sum();
+                    let label = format!("{} líneas", end - line_idx);
+                    let chip_w = self.measure_ui_text(&label, 10.5, false) + 14;
+                    let chip_x = (cur_x + text_w + char_w as i32).max(text_clip.0 as i32) as usize;
+                    if chip_x + chip_w < text_max_x {
+                        crate::ui::draw_rounded_rect(
+                            buffer,
+                            width,
+                            height,
+                            chip_x,
+                            row_y + 2,
+                            chip_w,
+                            row_h.saturating_sub(4),
+                            4,
+                            Color::from_rgba(accent.r(), accent.g(), accent.b(), 28),
+                        );
+                        self.draw_ui_text(
+                            buffer,
+                            width,
+                            height,
+                            &label,
+                            chip_x + 7,
+                            baseline_y,
+                            text_max_x,
+                            accent,
+                            10.5,
+                            false,
+                        );
+                    }
+                }
+            }
+
+            // Cursor de texto (parpadea con el resto de cursores)
+            let col = viewer.cursor_col;
+            if is_cursor_line
+                && cursor_visible
+                && col >= row.start
+                && (is_last_segment || col < row.end)
+            {
+                let offset: i32 = seg
+                    .chars()
+                    .take(col - row.start)
+                    .map(|c| if c == '\t' { tab_adv } else { char_w as i32 })
+                    .sum();
+                let cursor_x = cur_x + offset;
+                if cursor_x >= (sep_x + 1) as i32 && cursor_x < text_max_x as i32 {
+                    let cursor_h = (row_h as f32 * 0.85).round() as usize;
                     fill_rect(
                         buffer,
                         width,
                         text_clip,
                         cursor_x as usize,
-                        cursor_y,
-                        cursor_w,
+                        row_y + (row_h.saturating_sub(cursor_h)) / 2,
+                        2,
                         cursor_h,
-                        theme.accent_color().to_u32_xrgb(),
+                        accent.to_u32_xrgb(),
                     );
                 }
             }
         }
 
         // 5. Barra de desplazamiento vertical unificada
+        let total_lines = total_rows;
         if total_lines > visible_lines {
             let track_w = 6;
             let track_margin = 3;
@@ -500,29 +729,74 @@ impl TerminalRenderer {
             let thumb_y = track_y
                 + (scroll_ratio * (track_h.saturating_sub(thumb_h)) as f32).round() as usize;
 
-            // Pista sutil
-            let track_bg = Color::from_rgba(
-                theme.surface_hover().r(),
-                theme.surface_hover().g(),
-                theme.surface_hover().b(),
-                80,
-            );
-            crate::ui::draw_rounded_rect(
-                buffer, width, height, track_x, track_y, track_w, track_h, 3, track_bg,
-            );
-
-            crate::ui::draw_rounded_rect(
+            Self::draw_scrollbar(
                 buffer,
                 width,
                 height,
                 track_x,
-                thumb_y,
+                track_y,
                 track_w,
+                track_h,
+                thumb_y,
                 thumb_h,
-                3,
-                theme.surface_hover(),
+                viewer.hovered_scrollbar,
+                self.scrollbars_awake,
+                theme,
             );
         }
+
+        // 6. Barra de desplazamiento horizontal (solo si alguna línea excede el ancho visible)
+        if let Some((track, thumb)) = lay.hscrollbar(max_scroll_x, scroll_x) {
+            Self::draw_scrollbar_rects(
+                buffer,
+                width,
+                height,
+                track,
+                thumb,
+                viewer.hovered_hscrollbar,
+                self.scrollbars_awake,
+                theme,
+            );
+        }
+    }
+
+    /// Botón de la cabecera del visor: icono Lucide + texto sobre un fondo redondeado
+    #[allow(clippy::too_many_arguments)]
+    fn draw_header_button(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        rect: Rect,
+        icon: crate::ui::LucideIcon,
+        label: &str,
+        fg: Color,
+        bg: Color,
+        baseline: usize,
+    ) {
+        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 4, bg);
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            icon,
+            rect.0 + 14,
+            rect.1 + rect.3 / 2,
+            11.0,
+            fg,
+        );
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            label,
+            rect.0 + 26,
+            baseline - 1,
+            rect.0 + rect.2,
+            fg,
+            10.5,
+            true,
+        );
     }
 
     /// Calcula la geometría exacta de la barra de desplazamiento del visor de archivos
@@ -539,7 +813,7 @@ impl TerminalRenderer {
         let content_h = h.saturating_sub(header_h);
         let row_h = row_height.max(16);
         let visible_lines = content_h / row_h;
-        let total_lines = viewer.lines.len();
+        let total_lines = viewer.rows().len();
 
         if total_lines <= visible_lines || visible_lines == 0 {
             return None;
@@ -570,7 +844,7 @@ impl TerminalRenderer {
 
     /// Resaltado sintáctico multilenguaje de tokens ligero y de alto rendimiento
     #[allow(clippy::too_many_arguments)]
-    fn render_highlighted_line(
+    pub(super) fn render_highlighted_line(
         &mut self,
         buffer: &mut [u32],
         width: usize,
@@ -588,13 +862,19 @@ impl TerminalRenderer {
         let tab_adv_i32 = char_w_i32 * 4;
 
         let trimmed = line.trim_start();
+
         // Comentarios completos de línea
         let is_full_comment = match ext {
-            "py" | "sh" | "bash" | "ps1" | "toml" | "yaml" | "yml" => trimmed.starts_with('#'),
+            "py" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "toml" | "yaml" | "yml" | "rb"
+            | "r" | "jl" | "dockerfile" | "makefile" | "mk" => trimmed.starts_with('#'),
             "bat" | "cmd" => {
                 trimmed.to_ascii_uppercase().starts_with("REM ") || trimmed.starts_with("::")
             }
-            "sql" | "lua" => trimmed.starts_with("--"),
+            "sql" | "lua" | "hs" | "elm" | "vhd" | "vhdl" => trimmed.starts_with("--"),
+            "html" | "xml" | "svg" | "vue" | "svelte" => trimmed.starts_with("<!--"),
+            "ini" | "cfg" | "conf" | "properties" => {
+                trimmed.starts_with(';') || trimmed.starts_with('#')
+            }
             _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
         };
 
@@ -642,8 +922,19 @@ impl TerminalRenderer {
 
             // Comentario al final de la línea
             let is_inline_comment = match ext {
-                "py" | "sh" | "bash" | "ps1" | "toml" | "yaml" | "yml" => ch == '#',
-                "sql" | "lua" => ch == '-' && i + 1 < chars.len() && chars[i + 1] == '-',
+                "py" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "toml" | "yaml" | "yml" | "rb"
+                | "r" | "jl" | "dockerfile" | "makefile" | "mk" => ch == '#',
+                "sql" | "lua" | "hs" | "elm" => {
+                    ch == '-' && i + 1 < chars.len() && chars[i + 1] == '-'
+                }
+                "html" | "xml" | "svg" | "vue" | "svelte" => {
+                    ch == '<'
+                        && i + 3 < chars.len()
+                        && chars[i + 1] == '!'
+                        && chars[i + 2] == '-'
+                        && chars[i + 3] == '-'
+                }
+                "ini" | "cfg" | "conf" | "properties" => ch == ';' || ch == '#',
                 _ => ch == '/' && i + 1 < chars.len() && chars[i + 1] == '/',
             };
 
@@ -689,8 +980,15 @@ impl TerminalRenderer {
                 continue;
             }
 
-            // Atributos, decoradores o directivas (#![...] o @decorator o $variable)
-            if ch == '@' || (ch == '$' && matches!(ext, "ps1" | "php" | "sh" | "bash")) {
+            // Atributos, decoradores o directivas (#![...], #include, @decorator, $variable)
+            if ch == '@'
+                || (ch == '$'
+                    && matches!(
+                        ext,
+                        "ps1" | "php" | "sh" | "bash" | "zsh" | "fish" | "pl" | "rb"
+                    ))
+                || (ch == '#' && matches!(ext, "c" | "cpp" | "h" | "hpp" | "cs"))
+            {
                 let decorator_fg = theme.ansi[5]; // Magenta / Púrpura
                 let glyph = self.get_glyph(ch, false);
                 let gx = cur_x + glyph.x_offset;
@@ -734,30 +1032,44 @@ impl TerminalRenderer {
                 let token_fg = match word.as_str() {
                     // Palabras clave de control, estructura y definición: Acento del tema
                     "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const" | "use"
-                    | "mod" | "type" | "return" | "if" | "else" | "match" | "for" | "while"
-                    | "loop" | "async" | "await" | "trait" | "where" | "self" | "Self"
-                    | "function" | "def" | "class" | "import" | "from" | "export" | "var"
-                    | "val" | "interface" | "package" | "go" | "defer" | "select" | "switch"
-                    | "case" | "default" | "break" | "continue" | "try" | "catch" | "finally"
-                    | "throw" | "throws" | "new" | "delete" | "in" | "is" | "as" | "yield"
-                    | "lambda" | "with" | "pass" | "raise" | "assert" | "global" | "nonlocal"
-                    | "static" | "public" | "private" | "protected" | "virtual" | "override"
-                    | "abstract" | "extends" | "implements" | "namespace" | "using"
-                    | "template" | "typename" | "constexpr" | "sizeof" | "param" | "process"
-                    | "begin" | "end" => theme.accent_color(),
+                    | "mod" | "type" | "return" | "if" | "else" | "elif" | "elsif" | "match"
+                    | "for" | "while" | "loop" | "async" | "await" | "trait" | "where" | "self"
+                    | "Self" | "function" | "def" | "class" | "import" | "from" | "export"
+                    | "var" | "val" | "interface" | "package" | "go" | "defer" | "errdefer"
+                    | "select" | "switch" | "case" | "default" | "break" | "continue" | "try"
+                    | "catch" | "finally" | "throw" | "throws" | "new" | "delete" | "in" | "is"
+                    | "as" | "yield" | "lambda" | "with" | "pass" | "raise" | "assert"
+                    | "global" | "nonlocal" | "static" | "public" | "private" | "protected"
+                    | "virtual" | "override" | "abstract" | "extends" | "implements"
+                    | "namespace" | "using" | "template" | "typename" | "constexpr" | "sizeof"
+                    | "param" | "process" | "begin" | "end" | "unsafe" | "dyn" | "ref" | "move"
+                    | "fun" | "guard" | "when" | "protocol" | "extension" | "mutating"
+                    | "comptime" | "unreachable" | "echo" | "source" | "alias" | "local"
+                    | "then" | "fi" | "do" | "done" | "esac" | "SELECT" | "FROM" | "WHERE"
+                    | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE" | "CREATE"
+                    | "TABLE" | "DROP" | "ALTER" | "INDEX" | "JOIN" | "INNER" | "LEFT"
+                    | "RIGHT" | "OUTER" | "GROUP" | "BY" | "HAVING" | "ORDER" | "LIMIT"
+                    | "OFFSET" | "UNION" | "ALL" | "DISTINCT" | "PRIMARY" | "KEY" | "FOREIGN"
+                    | "REFERENCES" | "CONSTRAINT" | "DATABASE" | "SCHEMA" | "VIEW" | "TRIGGER"
+                    | "RUN" | "CMD" | "LABEL" | "EXPOSE" | "ENV" | "ADD" | "COPY"
+                    | "ENTRYPOINT" | "VOLUME" | "USER" | "WORKDIR" | "ARG" | "ONBUILD" => {
+                        theme.accent_color()
+                    }
 
                     // Booleanos y valores nulos: Amarillo
-                    "true" | "false" | "None" | "null" | "nil" | "undefined" => theme.ansi[3],
+                    "true" | "false" | "TRUE" | "FALSE" | "None" | "null" | "nil" | "undefined"
+                    | "NULL" | "nullptr" | "NaN" | "Infinity" => theme.ansi[3],
 
                     // Tipos primitivos y contenedores estándar: Cian brillante (ANSI 6)
                     "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8"
                     | "i16" | "i32" | "i64" | "i128" | "isize" | "f32" | "f64" | "bool"
                     | "char" | "Option" | "Result" | "Vec" | "Some" | "Ok" | "Err" | "Box"
-                    | "Rc" | "Arc" | "Cell" | "RefCell" | "HashMap" | "HashSet" | "BTreeMap"
-                    | "BTreeSet" | "int" | "float" | "dict" | "list" | "set" | "tuple" | "void"
+                    | "Rc" | "Arc" | "Cell" | "RefCell" | "Mutex" | "RwLock" | "HashMap"
+                    | "HashSet" | "BTreeMap" | "BTreeSet" | "Map" | "Set" | "Array" | "List"
+                    | "int" | "float" | "double" | "dict" | "list" | "set" | "tuple" | "void"
                     | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
                     | "uint64" | "byte" | "rune" | "any" | "unknown" | "never" | "number"
-                    | "boolean" | "object" => theme.ansi[6],
+                    | "boolean" | "object" | "bigint" | "symbol" | "this" => theme.ansi[6],
 
                     _ if is_func_call => theme.ansi[4], // Azul moderno para llamadas a función
                     _ if word

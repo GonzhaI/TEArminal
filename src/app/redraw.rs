@@ -22,8 +22,18 @@ impl AxonApp {
         let hovered_files_btn = self.hovered_files_btn;
         let hovered_settings_btn = self.hovered_settings_btn;
         let hovered_toggle_btn = self.hovered_toggle_btn;
-        let cursor_visible = !self.config.terminal.cursor_blink
-            || (self.cursor_timer.elapsed().as_millis() % 1000) < 600;
+        let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
+
+        // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
+        for t in &mut self.tabs {
+            if t.is_preview
+                && t.file_viewer
+                    .as_ref()
+                    .is_some_and(|v| v.is_dirty || !v.is_read_only)
+            {
+                t.is_preview = false;
+            }
+        }
 
         let tab_items: Vec<SidebarTabItem> = self
             .tabs
@@ -37,6 +47,7 @@ impl AxonApp {
                 pane_count: t.panes.len(),
                 is_settings: t.is_settings,
                 is_file_viewer: t.file_viewer.is_some(),
+                is_preview: t.is_preview,
             })
             .collect();
 
@@ -50,6 +61,8 @@ impl AxonApp {
                 return;
             }
 
+            renderer.scrollbars_awake =
+                self.last_scroll_time.elapsed() < std::time::Duration::from_millis(1250);
             let is_maximized = window.is_maximized();
             if let Ok(mut buffer) = surface.buffer_mut() {
                 buffer.fill(self.theme.background.to_u32_xrgb());
@@ -74,9 +87,7 @@ impl AxonApp {
                     );
                 } else {
                     let active_title = active_tab.display_title();
-                    let git_branch = active_tab
-                        .active_pane_mut()
-                        .and_then(|p| p.get_git_branch());
+                    let git_branch = active_tab.get_git_branch();
                     renderer.render_top_title_bar(
                         &mut buffer,
                         size.width as usize,
@@ -107,6 +118,7 @@ impl AxonApp {
                             hovered_new_tab,
                             hovered_settings_btn,
                             hovered_toggle_btn,
+                            self.sidebar_scrollbar_hovered,
                             &self.theme,
                         );
                     }
@@ -119,14 +131,26 @@ impl AxonApp {
                         size.height as usize,
                         offset,
                         top_offset,
+                        status_bar_h,
                         &self.config,
                         &self.settings_page_state,
                         &self.theme,
                     );
-                } else if let Some(ref viewer) = active_tab.file_viewer {
+                } else if let Some(ref mut viewer) = active_tab.file_viewer {
                     let term_area_w = (size.width as usize).saturating_sub(offset + right_offset);
                     let term_area_h =
                         (size.height as usize).saturating_sub(top_offset + status_bar_h);
+                    viewer.word_wrap = self.config.terminal.word_wrap;
+                    viewer.visible_cols = crate::renderer::FileViewerLayout::compute(
+                        offset,
+                        top_offset,
+                        term_area_w,
+                        term_area_h,
+                        renderer.row_height,
+                        renderer.char_width,
+                        viewer.lines.len(),
+                    )
+                    .visible_cols;
 
                     renderer.render_file_viewer(
                         &mut buffer,
@@ -134,8 +158,10 @@ impl AxonApp {
                         size.height as usize,
                         offset,
                         top_offset,
-                        term_area_w,
+                        term_area_w + right_offset,
                         term_area_h,
+                        right_offset,
+                        cursor_visible,
                         viewer,
                         &self.theme,
                     );
@@ -208,17 +234,13 @@ impl AxonApp {
                     }
                 }
 
-                if !is_horizontal
-                    && !sidebar_visible
-                    && (hovered_toggle_btn || self.hovered_floating_settings)
-                {
+                if !is_horizontal && !sidebar_visible && hovered_toggle_btn {
                     renderer.render_floating_sidebar_toggle(
                         &mut buffer,
                         size.width as usize,
                         size.height as usize,
                         status_bar_h,
                         hovered_toggle_btn,
-                        self.hovered_floating_settings,
                         &self.theme,
                     );
                 }
@@ -226,13 +248,38 @@ impl AxonApp {
                 if self.config.appearance.show_status_bar && !active_tab.is_settings {
                     let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
                         if let Some(ref viewer) = active_tab.file_viewer {
-                            let path_str = viewer.path.to_string_lossy().to_string();
+                            let path_str = {
+                                static HOME: std::sync::OnceLock<Option<String>> =
+                                    std::sync::OnceLock::new();
+                                let s = viewer.path.to_string_lossy().to_string();
+                                match HOME.get_or_init(|| std::env::var("USERPROFILE").ok()) {
+                                    Some(home) if s.starts_with(home.as_str()) => {
+                                        format!("~{}", &s[home.len()..])
+                                    }
+                                    _ => s,
+                                }
+                            };
+                            let branch = if viewer.remote_destination.is_some() {
+                                viewer.remote_branch.clone()
+                            } else {
+                                let dir = if viewer.path.is_relative() {
+                                    std::env::current_dir()
+                                        .ok()
+                                        .map(|cd| cd.join(&viewer.path))
+                                        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                                } else {
+                                    viewer.path.parent().map(|p| p.to_path_buf())
+                                };
+                                crate::app::shell_context::get_git_branch(dir.as_deref())
+                            };
+                            let ssh = viewer.remote_destination.clone();
+                            let lines_count = viewer.lines.len();
                             (
                                 Some(path_str),
-                                None,
-                                None,
+                                branch,
+                                ssh,
                                 0,
-                                viewer.lines.len(),
+                                lines_count,
                                 AiAgentStatus::None,
                             )
                         } else if let Some(pane) = active_tab.active_pane_mut() {
@@ -279,6 +326,16 @@ impl AxonApp {
                         rows,
                         ai_status,
                         explorer_visible,
+                        &self.theme,
+                    );
+                }
+
+                if let Some(menu) = &self.context_menu {
+                    renderer.render_context_menu(
+                        &mut buffer,
+                        size.width as usize,
+                        size.height as usize,
+                        menu,
                         &self.theme,
                     );
                 }

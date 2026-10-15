@@ -113,6 +113,61 @@ fn test_iterm2_image_protocol() {
 }
 
 #[test]
+fn test_inline_images_are_downscaled_evicted_and_capped() {
+    use base64::prelude::*;
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::GrayImage::new(700, 600)
+        .write_with_encoder(image::codecs::png::PngEncoder::new_with_quality(
+            &mut png,
+            image::codecs::png::CompressionType::Best,
+            image::codecs::png::FilterType::NoFilter,
+        ))
+        .unwrap();
+    let osc = format!(
+        "]1337;File=inline=1:{}",
+        BASE64_STANDARD.encode(png.into_inner())
+    );
+
+    // Se guarda al tamaño de dibujo (640x540), no el RGBA completo (700x600)
+    assert!(osc.len() < 1024, "{}", osc.len());
+    let mut term = TerminalState::new(80, 24, 100, Theme::ghostty_dark());
+    term.process_bytes(osc.as_bytes());
+    let img = &term.images[0];
+    assert!(
+        img.rgba_data.len() <= 640 * 540 * 4,
+        "{}",
+        img.rgba_data.len()
+    );
+    assert_eq!(
+        img.rgba_data.len(),
+        (img.width_px * img.height_px * 4) as usize
+    );
+
+    // La línea sale del historial (max_scrollback = 100): la imagen se libera
+    term.process_bytes(
+        "
+"
+        .repeat(300)
+        .as_bytes(),
+    );
+    assert!(term.images.is_empty());
+
+    // ED 3 vacía la lista
+    term.process_bytes(osc.as_bytes());
+    term.process_bytes(b"[3J");
+    assert!(term.images.is_empty());
+
+    // Tope total: nunca más de 64 MB, se descartan las más antiguas
+    let mut term = TerminalState::new(80, 24, 10_000, Theme::ghostty_dark());
+    for _ in 0..50 {
+        term.process_bytes(osc.as_bytes());
+    }
+    let total: usize = term.images.iter().map(|i| i.rgba_data.len()).sum();
+    assert!(total <= 64 * 1024 * 1024 && term.images.len() < 50);
+    assert_eq!(term.images.last().unwrap().id, 50);
+}
+
+#[test]
 fn test_alt_screen_buffer_tmux() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
@@ -204,6 +259,18 @@ fn test_osc_52_clipboard() {
         "Debe agregar el texto decodificado a la cola de portapapeles"
     );
     assert_eq!(term.clipboard_queue[0], "Hello from SSH!");
+}
+
+#[test]
+fn test_osc_52_payload_is_capped_at_100kb() {
+    use base64::prelude::*;
+    let enc = |n: usize| BASE64_STANDARD.encode(vec![b'a'; n]);
+    assert_eq!(
+        super::performer::decode_osc52(enc(100 * 1024).as_bytes()).map(|t| t.len()),
+        Some(100 * 1024)
+    );
+    assert!(super::performer::decode_osc52(enc(100 * 1024 + 1).as_bytes()).is_none());
+    assert!(super::performer::decode_osc52(enc(10 * 1024 * 1024).as_bytes()).is_none());
 }
 
 #[test]
@@ -481,7 +548,123 @@ fn test_osc_cwd_reporting() {
 }
 
 #[test]
-fn test_osc_window_title_and_ssh_inference() {
+fn test_osc_cwd_rejects_network_paths() {
+    let theme = Theme::ghostty_dark();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+
+    // Ninguna ruta de red (UNC) puede llegar a `current_dir`: Windows abriría SMB y filtraría el hash NTLM
+    for seq in [
+        &b"\x1b]9;9;\\\\evil.example\\x\x07"[..],
+        b"\x1b]9;9;//evil.example/x\x07",
+        b"\x1b]9;9;\\\\?\\UNC\\evil.example\\x\x07",
+        b"\x1b]7;file://localhost///evil.example/x\x07",
+        b"\x1b]7;file://localhost/\\\\evil.example\\x\x07",
+        b"\x1b]0;dev@host://evil.example/x\x07",
+    ] {
+        term.process_bytes(seq);
+        assert_eq!(term.current_dir, None, "{:?}", String::from_utf8_lossy(seq));
+    }
+}
+
+#[test]
+fn test_osc_7_decodes_every_percent_escape() {
+    use super::performer::percent_decode;
+    assert_eq!(percent_decode("/a%20b%2Fc%C3%B1%25"), "/a b/cñ%");
+    // Escapes incompletos o no hexadecimales se dejan tal cual
+    assert_eq!(percent_decode("100%"), "100%");
+    assert_eq!(percent_decode("%4"), "%4");
+    assert_eq!(percent_decode("%zz%+1"), "%zz%+1");
+
+    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    term.process_bytes(b"\x1b]7;file://localhost/C:/Users/Jos%C3%A9/mi%20carpeta%23\x07");
+    assert_eq!(
+        term.current_dir.as_deref(),
+        Some(std::path::Path::new("C:/Users/José/mi carpeta#"))
+    );
+    // Un `%0A` decodificado es un carácter de control: no es un directorio aceptable
+    term.process_bytes(b"\x1b]7;file://localhost/C:/x%0Ay\x07");
+    assert_eq!(
+        term.current_dir.as_deref(),
+        Some(std::path::Path::new("C:/Users/José/mi carpeta#"))
+    );
+}
+
+/// El gancho de bash escribe `%` como `%25` (y los espacios como `%20`): una carpeta llamada `a%41` no se
+/// puede confundir con `aA` al decodificar
+#[test]
+fn test_hook_osc_7_round_trips_special_directory_names() {
+    let Ok(out) = std::process::Command::new("bash")
+        .args(["-c", "command -v od tr"])
+        .output()
+    else {
+        return; // sin bash en esta máquina
+    };
+    if !out.status.success() {
+        return;
+    }
+    let init = include_str!("../../assets/shell/init.ps1").replace("\r\n", "\n");
+    let start = init.find("$hook = @'\n").expect("gancho") + "$hook = @'\n".len();
+    let hook = &init[start..start + init[start..].find("\n'@").expect("fin del gancho")];
+    let dir = format!("/tmp/axon_osc7_{}/a b%41", std::process::id());
+    let script = std::env::temp_dir().join(format!("axon_osc7_{}.sh", std::process::id()));
+    std::fs::write(
+        &script,
+        format!(
+            "mkdir -p '{dir}' && cd '{dir}'\nHOSTNAME=srv\n{hook}\nprintf '\\n@@@%s' \"$PWD\"\nrm -rf '/tmp/axon_osc7_{}'\n",
+            std::process::id()
+        ),
+    )
+    .unwrap();
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&script);
+    let text = String::from_utf8_lossy(&out.stdout).replace('\r', "");
+    let (osc, pwd) = text.split_once("\n@@@").expect("salida del gancho");
+    let uri = osc
+        .split("]7;file://srv")
+        .nth(1)
+        .and_then(|r| r.split('\x07').next())
+        .expect("OSC 7");
+    assert!(uri.ends_with("a%20b%2541"), "{uri:?}");
+    assert_eq!(super::performer::percent_decode(uri), pwd);
+}
+
+#[test]
+fn test_title_with_path_only_sets_cwd_inside_an_authenticated_ssh_session() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    term.pane_token = "t0k3n".into();
+    // Título de WSL (`user@host: /ruta`): la ruta no existe en Windows, no es un directorio local
+    term.process_bytes(b"\x1b]0;user@host: /home/user/proyecto\x07");
+    assert_eq!(term.current_dir, None);
+
+    // Dentro de una sesión SSH autenticada sí actualiza el directorio remoto que se muestra
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]0;user@host: /home/user/proyecto\x07");
+    assert_eq!(
+        term.ssh_session.as_ref().unwrap().remote_dir.as_deref(),
+        Some("/home/user/proyecto")
+    );
+    assert_eq!(
+        term.current_dir.as_deref(),
+        Some(std::path::Path::new("/home/user/proyecto"))
+    );
+}
+
+#[test]
+fn test_resize_respects_max_scrollback() {
+    let mut term = TerminalState::new(80, 24, 3, Theme::ghostty_dark());
+    for i in 0..24 {
+        term.process_bytes(format!("fila {i}\r\n").as_bytes());
+    }
+    // El cursor desborda la nueva altura: 20+ filas pasarían al historial, que admite 3
+    term.resize(80, 4);
+    assert!(term.scrollback.len() <= 3, "{}", term.scrollback.len());
+}
+
+#[test]
+fn test_osc_window_title_does_not_infer_ssh() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
@@ -490,27 +673,29 @@ fn test_osc_window_title_and_ssh_inference() {
     assert_eq!(term.window_title.as_deref(), Some("My Custom Window"));
     assert!(term.ssh_session.is_none());
 
-    // Inferencia de sesión SSH mediante título "ssh: user@host"
+    // El título no autentica nada: "ssh: user@host" no crea sesión SSH
     term.process_bytes(b"\x1b]0;ssh: dev@server.example.com\x07");
     assert_eq!(
         term.window_title.as_deref(),
         Some("ssh: dev@server.example.com")
     );
-    let sess = term
-        .ssh_session
-        .as_ref()
-        .expect("Debe inferir la sesión SSH desde el título");
-    assert_eq!(sess.destination, "dev@server.example.com");
-    assert!(sess.is_active);
+    assert!(term.ssh_session.is_none());
 }
 
 #[test]
 fn test_osc_axon_ssh_signaling() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
+    term.pane_token = "t0k3n".into();
 
-    // Inicio de sesión SSH mediante protocolo OSC 1337 AxonSSH=start
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=ubuntu@production-node-1\x07");
+    // Sin token o con uno ajeno (p. ej. un `cat` de un archivo con la secuencia) se ignora
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example\x07");
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example;token=otro\x07");
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example;token=\x07");
+    assert!(term.ssh_session.is_none());
+
+    // Inicio de sesión SSH mediante protocolo OSC 1337 AxonSSH=start con el token del panel
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=ubuntu@production-node-1;token=t0k3n\x07");
     let sess = term
         .ssh_session
         .as_ref()
@@ -527,16 +712,26 @@ fn test_osc_axon_ssh_signaling() {
 }
 
 #[test]
+fn test_axon_ssh_start_ignored_without_pane_token() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=host;token=\x07");
+    assert!(term.ssh_session.is_none());
+}
+
+#[test]
 fn test_osc_7_remote_host_ssh() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
+    term.pane_token = "t0k3n".into();
 
-    // OSC 7 emitido por una shell remota con hostname no local
+    // OSC 7 de un host remoto no puede crear la sesión (cualquier texto en pantalla lo emitiría)
     term.process_bytes(b"\x1b]7;file://bastion.corp.internal/home/admin/projects\x07");
-    let sess = term
-        .ssh_session
-        .as_ref()
-        .expect("Debe detectar host remoto vía OSC 7");
+    assert!(term.ssh_session.is_none());
+
+    // Con la sesión ya autenticada, solo actualiza el directorio remoto
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=bastion.corp.internal;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]7;file://bastion.corp.internal/home/admin/projects\x07");
+    let sess = term.ssh_session.as_ref().expect("sesión autenticada");
     assert_eq!(sess.destination, "bastion.corp.internal");
     assert_eq!(sess.remote_dir.as_deref(), Some("/home/admin/projects"));
     assert!(sess.is_active);
@@ -559,10 +754,7 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
 
     let mut t = new();
     t.process_bytes(b"\x1b]0;ssh: user@host\x07");
-    assert_eq!(
-        t.ssh_session.as_ref().map(|s| s.destination.as_str()),
-        Some("user@host")
-    );
+    assert!(t.ssh_session.is_none());
 
     // OSC usa `;` como separador de parámetros, así que los vectores reales son otros metacaracteres
     for evil in [
@@ -570,11 +762,12 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
         b"\x1b]0;ssh: $(calc)\x07",
         b"\x1b]2;ssh: x|calc\x07",
         b"\x1b]2;ssh: -oProxyCommand=calc\x07",
-        b"\x1b]1337;AxonSSH=start;dest=$(calc)\x07",
-        b"\x1b]1337;AxonSSH=start;dest=-oProxyCommand=calc\x07",
+        b"\x1b]1337;AxonSSH=start;dest=$(calc);token=t0k3n\x07",
+        b"\x1b]1337;AxonSSH=start;dest=-oProxyCommand=calc;token=t0k3n\x07",
         b"\x1b]7;file://evil$(calc)/home/x\x07",
     ] {
         let mut t = new();
+        t.pane_token = "t0k3n".into();
         t.process_bytes(evil);
         assert!(
             t.ssh_session.is_none(),
@@ -585,8 +778,169 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
 
     // host válido por OSC 7 pero directorio con comillas: la sesión se crea sin directorio remoto
     let mut t = new();
+    t.pane_token = "t0k3n".into();
+    t.process_bytes(b"\x1b]1337;AxonSSH=start;dest=server;token=t0k3n\x07");
     t.process_bytes(b"\x1b]7;file://server/tmp/'$(calc)'\x07");
     let s = t.ssh_session.as_ref().expect("host válido");
     assert_eq!(s.destination, "server");
     assert_eq!(s.remote_dir, None);
+}
+
+#[test]
+fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
+    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let mut term = TerminalState::new(80, 24, 100, theme);
+    term.pane_token = "t0k3n".into();
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
+    assert!(!term.remote_integration);
+
+    // La rama llega en cada prompt y se limpia al salir de un repositorio
+    term.process_bytes(b"\x1b]1337;AxonGit=qa\x07");
+    assert!(term.remote_integration);
+    assert_eq!(
+        term.ssh_session
+            .as_ref()
+            .unwrap()
+            .remote_git_branch
+            .as_deref(),
+        Some("qa")
+    );
+    term.process_bytes(b"\x1b]1337;AxonGit=\x07");
+    assert_eq!(term.ssh_session.as_ref().unwrap().remote_git_branch, None);
+
+    term.process_bytes(b"]1337;AxonGit=feature/x");
+    assert_eq!(
+        term.ssh_session
+            .as_ref()
+            .unwrap()
+            .remote_git_branch
+            .as_deref(),
+        Some("feature/x")
+    );
+    term.process_bytes(b"]1337;AxonGit=-");
+    assert_eq!(
+        term.ssh_session.as_ref().unwrap().remote_git_branch,
+        None,
+        "'-' = sin rama"
+    );
+
+    // Listado: se descartan nombres peligrosos (rutas, control, . y ..)
+    let raw = "src/\nREADME.md\n../\n./\na/b\nmalo\u{1b}[31m\n.env\n";
+    let osc = format!("\x1b]1337;AxonLs={}\x07", hex(raw));
+    term.process_bytes(osc.as_bytes());
+    assert_eq!(
+        term.remote_listing.as_deref(),
+        Some(
+            &[
+                "src/".to_string(),
+                "README.md".to_string(),
+                ".env".to_string()
+            ][..]
+        )
+    );
+
+    // Un listado desmesurado se ignora y al terminar la sesión todo se reinicia
+    let huge = format!("\x1b]1337;AxonLs={}\x07", "ab".repeat(100 * 1024));
+    term.remote_listing = None;
+    term.process_bytes(huge.as_bytes());
+    assert_eq!(term.remote_listing, None);
+    term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
+    assert!(!term.remote_integration && term.remote_listing.is_none());
+
+    // Sin sesión SSH nadie puede inyectar listado ni rama
+    term.process_bytes(osc.as_bytes());
+    assert_eq!(term.remote_listing, None);
+}
+
+#[test]
+fn test_remote_file_responses_are_reassembled_and_bounded() {
+    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let mut term = TerminalState::new(80, 24, 100, theme);
+
+    // Sin integración no se puede pedir nada (los bytes irían a otro programa)
+    assert!(term.remote_request_bytes("get", 1, "abc").is_none());
+    term.pane_token = "t0k3n".into();
+    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;AxonGit=\x07");
+    assert!(term.remote_at_prompt);
+    let req = term
+        .remote_request_bytes("get", 7, "%2Fetc%2Fhosts")
+        .expect("petición");
+    assert_eq!(req, b"\x05#AXR#7 get %2Fetc%2Fhosts\x1b[1337~".to_vec());
+    assert!(
+        term.remote_request_bytes("rm", 7, "x").is_none(),
+        "solo operaciones conocidas"
+    );
+    assert!(
+        term.remote_request_bytes("get", 7, "a;b").is_none(),
+        "carga no segura"
+    );
+    term.note_enter_sent();
+    assert!(
+        term.remote_request_bytes("get", 7, "abc").is_none(),
+        "tras Enter ya no hay prompt libre"
+    );
+
+    // Respuesta en dos trozos, llegando desordenados
+    let data = hex("hola mundo");
+    let (a, b) = data.split_at(8);
+    term.process_bytes(format!("\x1b]1337;AxonFile=7;ok;1;2;{b}\x07").as_bytes());
+    assert!(term.remote_file_results.is_empty());
+    term.process_bytes(format!("\x1b]1337;AxonFile=7;ok;0;2;{a}\x07").as_bytes());
+    assert_eq!(
+        term.remote_file_results,
+        vec![RemoteFileResult {
+            id: 7,
+            ok: true,
+            data: b"hola mundo".to_vec()
+        }]
+    );
+
+    // Error del servidor y datos corruptos
+    term.remote_file_results.clear();
+    term.process_bytes(b"\x1b]1337;AxonFile=8;err;0;1;\x07");
+    term.process_bytes(b"\x1b]1337;AxonFile=9;ok;0;1;zz\x07");
+    assert_eq!(term.remote_file_results.len(), 2);
+    assert!(term
+        .remote_file_results
+        .iter()
+        .all(|r| !r.ok && r.data.is_empty()));
+
+    // Límites: demasiados trozos, índice fuera de rango, sin sesión
+    term.remote_file_results.clear();
+    term.process_bytes(b"\x1b]1337;AxonFile=10;ok;0;9999;ab\x07");
+    term.process_bytes(b"\x1b]1337;AxonFile=10;ok;5;2;ab\x07");
+    assert!(term.remote_file_results.is_empty());
+    term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
+    term.process_bytes(b"\x1b]1337;AxonFile=11;ok;0;1;6162\x07");
+    assert!(term.remote_file_results.is_empty());
+}
+
+/// agy y Claude Code envían `CSI > 4 ; 2 m` (modifyOtherKeys) al arrancar: no es SGR y no debe
+/// dejar subrayado/tenue activos (subrayaba la primera fila del banner, también los espacios).
+#[test]
+fn test_private_marker_csi_m_is_not_sgr() {
+    let theme = Theme::ghostty_dark();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+    term.process_bytes(b"[>4;2m[>4m[>1u[0 qA");
+    let cell = &term.grid[0][0];
+    assert_eq!(cell.c, 'A');
+    assert!(!cell.underline() && !cell.dim() && !cell.strikethrough());
+    // el SGR de verdad sigue funcionando
+    term.process_bytes(b"[4mB");
+    assert!(term.grid[0][1].underline());
+}
+
+/// El wrapper de agentes avisa con OSC 1337 AxonAgent; Axon lo usa para reabrir el shell si muere con el agente.
+#[test]
+fn test_axon_agent_osc_tracks_running_agent() {
+    let theme = Theme::ghostty_dark();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+    assert!(!term.agent_running);
+    term.process_bytes(b"]1337;AxonAgent=start");
+    assert!(term.agent_running);
+    term.process_bytes(b"]1337;AxonAgent=end");
+    assert!(!term.agent_running);
 }

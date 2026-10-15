@@ -16,6 +16,20 @@ impl AxonApp {
             return;
         }
 
+        // Con el menú contextual abierto, Escape solo lo cierra; cualquier otra tecla lo cierra y sigue su curso
+        let is_modifier = matches!(
+            logical_key,
+            Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
+        );
+        if !is_modifier && self.context_menu.take().is_some() {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            if logical_key == Key::Named(NamedKey::Escape) {
+                return;
+            }
+        }
+
         // Debounce de foco: suprimir Enter/Tab residuales generados al alternar ventanas con Alt+Tab / Task View
         if self.last_focus_gained.elapsed().as_millis() < 150
             && (logical_key == Key::Named(NamedKey::Enter)
@@ -461,7 +475,7 @@ impl AxonApp {
                 }
                 Key::Named(NamedKey::ArrowRight) => {
                     if let Some(path) = self.file_explorer.handle_arrow_right(max_visible) {
-                        self.open_file_in_viewer(&path);
+                        self.open_file_in_viewer(&path, true);
                     }
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -470,7 +484,7 @@ impl AxonApp {
                 }
                 Key::Named(NamedKey::Enter) => {
                     if let Some(path) = self.file_explorer.handle_enter(max_visible) {
-                        self.open_file_in_viewer(&path);
+                        self.open_file_in_viewer(&path, true);
                     }
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -522,35 +536,49 @@ impl AxonApp {
             let visible_lines =
                 ((win_h.saturating_sub(top_offset + status_bar_h + 38)) / row_h.max(16)).max(1);
 
+            // Ajuste de línea global: Alt + Z
+            if alt && !ctrl && !shift && key_is_char(&logical_key, physical_key, 'z') {
+                self.toggle_word_wrap();
+                return;
+            }
+
             // 1. Guardar archivo: Ctrl + S
             if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 's') {
-                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
-                    match viewer.save_to_disk() {
-                        Ok(()) => {
-                            crate::logger::log(&format!(
-                                "-> Archivo guardado con éxito: {}",
-                                viewer.file_name
-                            ));
-                            // Refrescar git status en el explorador
-                            self.file_explorer.refresh_git_status();
-                            self.file_explorer.refresh();
-                        }
-                        Err(e) => {
-                            crate::logger::log(&format!("-> Error al guardar archivo: {}", e));
-                        }
-                    }
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                self.save_active_viewer();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
                 }
                 return;
             }
 
-            // 2. Cerrar visor: Ctrl + W o Escape
-            if (ctrl && !shift && key_is_char(&logical_key, physical_key, 'w'))
-                || matches!(logical_key, Key::Named(NamedKey::Escape))
-            {
+            // 2. Cerrar visor o cancelar selección: Escape o Ctrl + W
+            if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    if viewer.has_selection() {
+                        viewer.clear_selection();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                }
                 self.close_tab(self.active_tab_index, event_loop);
+                return;
+            }
+            if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
+                self.close_tab(self.active_tab_index, event_loop);
+                return;
+            }
+
+            // Seleccionar todo: Ctrl + A
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'a') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    viewer.select_all();
+                    viewer.ensure_cursor_visible(visible_lines);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
                 return;
             }
 
@@ -580,30 +608,20 @@ impl AxonApp {
                 return;
             }
 
-            // Copiar línea actual: Ctrl + C
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'c') {
-                if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
-                    if let Some(line) = viewer.lines.get(viewer.cursor_line) {
+            // Cortar selección: Ctrl + X
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'x') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    if !viewer.is_editable() {
+                        return;
+                    }
+                    if let Some(sel_text) = viewer.selected_text() {
                         if self.clipboard.is_none() {
                             self.clipboard = arboard::Clipboard::new().ok();
                         }
                         if let Some(cb) = &mut self.clipboard {
-                            let _ = cb.set_text(format!("{}\n", line));
+                            let _ = cb.set_text(sel_text);
                         }
-                    }
-                }
-                return;
-            }
-
-            // Pegar texto del portapapeles: Ctrl + V
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'v') {
-                if self.clipboard.is_none() {
-                    self.clipboard = arboard::Clipboard::new().ok();
-                }
-                let text_to_paste = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
-                if let Some(text) = text_to_paste {
-                    if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
-                        viewer.insert_text(&text);
+                        viewer.delete_selection();
                         viewer.ensure_cursor_visible(visible_lines);
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -613,17 +631,76 @@ impl AxonApp {
                 return;
             }
 
+            // Copiar selección o línea actual: Ctrl + C
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'c') {
+                if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    let text = if let Some(sel_text) = viewer.selected_text() {
+                        Some(sel_text)
+                    } else {
+                        viewer
+                            .lines
+                            .get(viewer.cursor_line)
+                            .map(|line| format!("{}\n", line))
+                    };
+                    if let Some(txt) = text {
+                        if self.clipboard.is_none() {
+                            self.clipboard = arboard::Clipboard::new().ok();
+                        }
+                        if let Some(cb) = &mut self.clipboard {
+                            let _ = cb.set_text(txt);
+                        }
+                    }
+                }
+                return;
+            }
+
+            // Alternar modo solo lectura / edición: Ctrl + E
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'e') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    viewer.toggle_read_only();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+            }
+
+            // Pegar texto del portapapeles: Ctrl + V (el modo lectura lo bloquea el propio visor)
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'v') {
+                self.paste_from_clipboard();
+                return;
+            }
+
             // 3. Edición de texto y navegación de cursor
+            let global_auto_save = self.config.terminal.auto_save;
             if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                 if !viewer.is_binary {
+                    let prev_pos = (viewer.cursor_line, viewer.cursor_col);
+                    let is_shift_nav = shift && !alt;
+
                     match logical_key {
                         Key::Named(NamedKey::ArrowUp) => {
-                            if viewer.cursor_line > 0 {
+                            if ctrl {
+                                // Ctrl + Arriba: al inicio del archivo
+                                viewer.cursor_line = 0;
+                                viewer.cursor_col = 0;
+                            } else if viewer.cursor_line > 0 {
                                 viewer.cursor_line -= 1;
-                                let line_len = viewer.lines[viewer.cursor_line].chars().count();
-                                if viewer.cursor_col > line_len {
-                                    viewer.cursor_col = line_len;
-                                }
+                            }
+                            let line_len = viewer
+                                .lines
+                                .get(viewer.cursor_line)
+                                .map(|l| l.chars().count())
+                                .unwrap_or(0);
+                            if viewer.cursor_col > line_len {
+                                viewer.cursor_col = line_len;
+                            }
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -632,12 +709,31 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::ArrowDown) => {
-                            if viewer.cursor_line + 1 < viewer.lines.len() {
+                            if ctrl {
+                                // Ctrl + Abajo: al final del archivo
+                                viewer.cursor_line = viewer.lines.len().saturating_sub(1);
+                                viewer.cursor_col = viewer
+                                    .lines
+                                    .get(viewer.cursor_line)
+                                    .map(|l| l.chars().count())
+                                    .unwrap_or(0);
+                            } else if viewer.cursor_line + 1 < viewer.lines.len() {
                                 viewer.cursor_line += 1;
-                                let line_len = viewer.lines[viewer.cursor_line].chars().count();
-                                if viewer.cursor_col > line_len {
-                                    viewer.cursor_col = line_len;
-                                }
+                            }
+                            let line_len = viewer
+                                .lines
+                                .get(viewer.cursor_line)
+                                .map(|l| l.chars().count())
+                                .unwrap_or(0);
+                            if viewer.cursor_col > line_len {
+                                viewer.cursor_col = line_len;
+                            }
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -647,13 +743,26 @@ impl AxonApp {
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
                             if ctrl {
-                                viewer.cursor_col = viewer.find_word_boundary_left();
+                                if viewer.cursor_col > 0 {
+                                    viewer.cursor_col = viewer.find_word_boundary_left();
+                                } else if viewer.cursor_line > 0 {
+                                    viewer.cursor_line -= 1;
+                                    viewer.cursor_col =
+                                        viewer.lines[viewer.cursor_line].chars().count();
+                                }
                             } else if viewer.cursor_col > 0 {
                                 viewer.cursor_col -= 1;
                             } else if viewer.cursor_line > 0 {
                                 viewer.cursor_line -= 1;
                                 viewer.cursor_col =
                                     viewer.lines[viewer.cursor_line].chars().count();
+                            }
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -663,7 +772,17 @@ impl AxonApp {
                         }
                         Key::Named(NamedKey::ArrowRight) => {
                             if ctrl {
-                                viewer.cursor_col = viewer.find_word_boundary_right();
+                                let line_len = viewer
+                                    .lines
+                                    .get(viewer.cursor_line)
+                                    .map(|l| l.chars().count())
+                                    .unwrap_or(0);
+                                if viewer.cursor_col < line_len {
+                                    viewer.cursor_col = viewer.find_word_boundary_right();
+                                } else if viewer.cursor_line + 1 < viewer.lines.len() {
+                                    viewer.cursor_line += 1;
+                                    viewer.cursor_col = 0;
+                                }
                             } else {
                                 let line_len = viewer
                                     .lines
@@ -677,6 +796,13 @@ impl AxonApp {
                                     viewer.cursor_col = 0;
                                 }
                             }
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
+                            }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -684,19 +810,39 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Home) => {
+                            if ctrl {
+                                viewer.cursor_line = 0;
+                            }
                             viewer.cursor_col = 0;
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
+                            }
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                             return;
                         }
                         Key::Named(NamedKey::End) => {
+                            if ctrl {
+                                viewer.cursor_line = viewer.lines.len().saturating_sub(1);
+                            }
                             let line_len = viewer
                                 .lines
                                 .get(viewer.cursor_line)
                                 .map(|l| l.chars().count())
                                 .unwrap_or(0);
                             viewer.cursor_col = line_len;
+                            if is_shift_nav {
+                                let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
+                                viewer.selection =
+                                    Some((start, (viewer.cursor_line, viewer.cursor_col)));
+                            } else {
+                                viewer.clear_selection();
+                            }
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
@@ -722,7 +868,13 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Enter) => {
+                            if viewer.is_read_only {
+                                return;
+                            }
                             viewer.insert_newline();
+                            if global_auto_save {
+                                viewer.autosave_local();
+                            }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -730,10 +882,16 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Backspace) => {
+                            if viewer.is_read_only {
+                                return;
+                            }
                             if ctrl {
                                 viewer.delete_word_left();
                             } else {
                                 viewer.backspace();
+                            }
+                            if global_auto_save {
+                                viewer.autosave_local();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -742,10 +900,16 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Delete) => {
+                            if viewer.is_read_only {
+                                return;
+                            }
                             if ctrl {
                                 viewer.delete_word_right();
                             } else {
                                 viewer.delete();
+                            }
+                            if global_auto_save {
+                                viewer.autosave_local();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -754,7 +918,13 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::Tab) => {
+                            if viewer.is_read_only {
+                                return;
+                            }
                             viewer.insert_tab();
+                            if global_auto_save {
+                                viewer.autosave_local();
+                            }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -764,11 +934,17 @@ impl AxonApp {
                         _ => {
                             // Insertar caracteres de texto imprimible
                             if !ctrl && !alt {
+                                if viewer.is_read_only {
+                                    return;
+                                }
                                 if let Some(ref t) = text {
                                     for ch in t.chars() {
                                         if !ch.is_control() {
                                             viewer.insert_char(ch);
                                         }
+                                    }
+                                    if global_auto_save {
+                                        viewer.autosave_local();
                                     }
                                     viewer.ensure_cursor_visible(visible_lines);
                                     if let Some(w) = &self.window {
@@ -791,7 +967,7 @@ impl AxonApp {
                         }
                         Key::Named(NamedKey::ArrowDown) => {
                             viewer.scroll_offset = (viewer.scroll_offset + 1)
-                                .min(viewer.lines.len().saturating_sub(1));
+                                .min(viewer.rows().len().saturating_sub(1));
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
@@ -1079,7 +1255,10 @@ impl AxonApp {
 
         // Teclas especiales y flechas VT estándar
         match logical_key {
-            Key::Named(NamedKey::Enter) => active.pty.write_input(b"\r"),
+            Key::Named(NamedKey::Enter) => {
+                active.terminal.note_enter_sent();
+                active.pty.write_input(b"\r")
+            }
             Key::Named(NamedKey::Backspace) => active.pty.write_input(&[0x7f]),
             Key::Named(NamedKey::Tab) => {
                 if alt {

@@ -61,7 +61,11 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            crate::ui::LucideIcon::FolderTree,
+            if explorer.changes_only {
+                crate::ui::LucideIcon::GitBranch
+            } else {
+                crate::ui::LucideIcon::FolderTree
+            },
             panel_x + 20,
             header_center_y,
             11.5,
@@ -72,72 +76,55 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            "ARCHIVOS",
+            if explorer.changes_only {
+                "CAMBIOS"
+            } else {
+                "ARCHIVOS"
+            },
             panel_x + 32,
             header_base,
-            panel_x + panel_w.saturating_sub(60),
+            panel_x + panel_w.saturating_sub(44),
             theme.foreground,
             11.5,
             true,
         );
 
-        // Botón '↻' refrescar
-        let ref_x = panel_x + panel_w.saturating_sub(56);
-        let ref_bg = if explorer.hovered_refresh_btn {
-            theme.surface_hover()
-        } else {
-            Color::TRANSPARENT
-        };
-        crate::ui::draw_rounded_rect(buffer, width, height, ref_x, panel_y + 7, 22, 22, 6, ref_bg);
-        let ref_fg = if explorer.hovered_refresh_btn {
-            theme.foreground
-        } else {
-            theme.ansi[8]
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::RefreshCw,
-            ref_x + 11,
-            panel_y + 18,
-            12.0,
-            ref_fg,
-        );
-
-        // Botón 'x' cerrar
-        let close_x = panel_x + panel_w.saturating_sub(28);
-        let close_bg = if explorer.hovered_close_btn {
-            theme.surface_hover()
-        } else {
-            Color::TRANSPARENT
-        };
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            close_x,
-            panel_y + 7,
-            22,
-            22,
-            6,
-            close_bg,
-        );
-        let close_fg = if explorer.hovered_close_btn {
-            theme.ansi[1]
-        } else {
-            theme.ansi[8]
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::X,
-            close_x + 11,
-            panel_y + 18,
-            12.0,
-            close_fg,
-        );
+        // Botón que alterna árbol de archivos / solo cambios (no hay git en sesiones remotas)
+        if explorer.remote_session.is_none() {
+            let (bx, by, bw, bh) =
+                crate::explorer::FileExplorer::changes_btn_rect(panel_x, panel_y, panel_w);
+            let (btn_bg, btn_fg) = if explorer.changes_only {
+                (Color::from_rgba(255, 255, 255, 18), theme.accent_color())
+            } else {
+                (Color::from_rgba(255, 255, 255, 6), theme.ansi[7])
+            };
+            crate::ui::draw_rounded_rect(buffer, width, height, bx, by, bw, bh, 5, btn_bg);
+            crate::ui::stroke_rounded_rect(
+                buffer,
+                width,
+                height,
+                bx,
+                by,
+                bw,
+                bh,
+                5,
+                if explorer.changes_only {
+                    theme.accent_color()
+                } else {
+                    border_color
+                },
+            );
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::GitBranch,
+                bx + bw / 2,
+                by + bh / 2,
+                11.0,
+                btn_fg,
+            );
+        }
 
         // 3. Sub-encabezado con botones de navegación [<] [>] [^] y ruta actual (28px)
         let sub_y = panel_y + header_h;
@@ -261,12 +248,27 @@ impl TerminalRenderer {
         );
 
         // Nombre de la carpeta actual con Inter
-        let dir_name = explorer
-            .root_dir
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| explorer.root_dir.to_string_lossy().to_string());
-        let dir_label = format!("{}/", dir_name);
+        let dir_label = if explorer.changes_only {
+            format!("{} con cambios", explorer.items.len())
+        } else if let Some(ref sess) = explorer.remote_session {
+            let name = sess
+                .remote_dir
+                .rsplit('/')
+                .find(|s| !s.is_empty())
+                .unwrap_or("/");
+            if name == "/" {
+                "/".to_string()
+            } else {
+                format!("{}/", name)
+            }
+        } else {
+            let dir_name = explorer
+                .root_dir
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| explorer.root_dir.to_string_lossy().to_string());
+            format!("{}/", dir_name.trim_end_matches('/'))
+        };
         self.draw_ui_text(
             buffer,
             width,
@@ -287,16 +289,25 @@ impl TerminalRenderer {
 
         if explorer.items.is_empty() {
             let empty_base = list_y + 14;
+            let (msg, color) = if let Some(ref err) = explorer.error_message {
+                (err.as_str(), theme.ansi[3])
+            } else if explorer.remote_session.is_some() {
+                ("Cargando archivos remotos...", theme.ansi[8])
+            } else if explorer.changes_only {
+                ("(Sin cambios en git)", theme.ansi[8])
+            } else {
+                ("(Directorio vacío)", theme.ansi[8])
+            };
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                "(Directorio vacío)",
+                msg,
                 panel_x + 16,
                 empty_base,
                 panel_x + panel_w - 16,
-                theme.ansi[8],
-                11.0,
+                color,
+                10.5,
                 false,
             );
             return;
@@ -533,18 +544,6 @@ impl TerminalRenderer {
             let track_y = list_y;
             let track_h = list_max_y.saturating_sub(list_y);
 
-            // Pista sutil unificada
-            let track_bg = Color::from_rgba(
-                theme.surface_hover().r(),
-                theme.surface_hover().g(),
-                theme.surface_hover().b(),
-                100,
-            );
-            crate::ui::draw_rounded_rect(
-                buffer, width, height, track_x, track_y, track_w, track_h, 3, track_bg,
-            );
-
-            // Pulgar claramente visible
             let total_items = explorer.items.len();
             let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(18.0)
                 as usize)
@@ -558,21 +557,19 @@ impl TerminalRenderer {
                 track_y
             };
 
-            let thumb_color = if explorer.hovered_scrollbar {
-                theme.accent_color()
-            } else {
-                theme.ansi[8]
-            };
-            crate::ui::draw_rounded_rect(
+            Self::draw_scrollbar(
                 buffer,
                 width,
                 height,
                 track_x,
-                thumb_y,
+                track_y,
                 track_w,
+                track_h,
+                thumb_y,
                 thumb_h,
-                3,
-                thumb_color,
+                explorer.hovered_scrollbar,
+                self.scrollbars_awake,
+                theme,
             );
         }
     }

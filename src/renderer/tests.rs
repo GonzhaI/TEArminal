@@ -160,6 +160,7 @@ fn test_sidebar_rendering_and_layout() {
             pane_count: 1,
             is_settings: false,
             is_file_viewer: false,
+            is_preview: false,
         },
         SidebarTabItem {
             id: 2,
@@ -169,6 +170,7 @@ fn test_sidebar_rendering_and_layout() {
             pane_count: 2,
             is_settings: false,
             is_file_viewer: false,
+            is_preview: false,
         },
     ];
 
@@ -183,6 +185,7 @@ fn test_sidebar_rendering_and_layout() {
         0,
         Some(1),
         None,
+        false,
         false,
         false,
         false,
@@ -230,7 +233,7 @@ fn test_sidebar_rendering_and_layout() {
     );
 
     // 4. Probar renderizado del botón flotante expand cuando el sidebar está oculto
-    renderer.render_floating_sidebar_toggle(&mut buffer, 1000, 600, 0, true, false, &ghostty_theme);
+    renderer.render_floating_sidebar_toggle(&mut buffer, 1000, 600, 0, true, &ghostty_theme);
     let float_btn_bg = ghostty_theme.surface_hover().to_u32_xrgb();
     let float_y = 600 - 30 - 8 + 5;
     assert_eq!(
@@ -247,6 +250,7 @@ fn test_sidebar_rendering_and_layout() {
         600,
         190,
         0,
+        26,
         &config,
         &settings_state,
         &ghostty_theme,
@@ -345,15 +349,16 @@ fn test_top_tab_bar_geometry_and_layout() {
 
     // Plus button debe situarse después de las 3 pestañas
     assert!(rects.plus_btn.0 > tab0.0 + (3 * 160));
-    // Settings button y controles de ventana al extremo derecho
-    assert_eq!(rects.settings_btn.0, 1200 - 160);
+    // Settings button, files button y controles de ventana al extremo derecho
+    assert_eq!(rects.settings_btn.0, 1200 - 194);
+    assert_eq!(rects.files_btn.0, 1200 - 160);
     assert_eq!(rects.win_min_btn.0, 1200 - 126);
     assert_eq!(rects.win_max_btn.0, 1200 - 84);
     assert_eq!(rects.win_close_btn.0, 1200 - 42);
 
     // Validar que con 30 pestañas NO se desborde sobre los controles de la derecha
     let compact_rects = TopTabBarRects::compute(1200, 30);
-    assert!(compact_rects.plus_btn.0 + compact_rects.plus_btn.2 <= compact_rects.files_btn.0);
+    assert!(compact_rects.plus_btn.0 + compact_rects.plus_btn.2 <= compact_rects.settings_btn.0);
     let tab29 = compact_rects.tab_rect(29);
     assert!(tab29.0 + tab29.2 <= compact_rects.plus_btn.0);
 }
@@ -458,4 +463,80 @@ fn test_ui_font_size_scaling() {
         w_10 < w_13,
         "El ancho a 10pt ({w_10}px) debe ser menor que a 13pt ({w_13}px)"
     );
+}
+
+#[test]
+fn test_settings_page_scrolls_only_the_content() {
+    use crate::renderer::{SettingsPageRects, SettingsPageState, SettingsSection};
+    let config = crate::config::AxonConfig::default();
+    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let mut renderer = TerminalRenderer::new(&config, 1.0);
+    let (w, h, status) = (1000usize, 300usize, 26usize);
+    let mut render = |scroll: usize| {
+        let mut buf = vec![0u32; w * h];
+        let state = SettingsPageState {
+            scroll_y: scroll,
+            ..SettingsPageState::default()
+        };
+        renderer.render_settings_page(&mut buf, w, h, 190, 0, status, &config, &state, &theme);
+        buf
+    };
+    let (top, scrolled) = (render(0), render(120));
+    assert_ne!(top, scrolled, "el contenido debe moverse con el scroll");
+    let nav = SettingsPageRects::CONTENT_TOP * w;
+    assert_eq!(
+        top[..nav],
+        scrolled[..nav],
+        "cabecera y navegación quedan fijas"
+    );
+
+    let max = SettingsPageRects::max_scroll(SettingsSection::Appearance, h - 128 - status);
+    assert!(max > 0);
+    assert_eq!(
+        render(max),
+        render(max + 500),
+        "el scroll se acota al final del contenido"
+    );
+}
+
+#[test]
+fn test_file_viewer_layout_columns_and_horizontal_scrollbar() {
+    use crate::renderer::FileViewerLayout;
+    let lay = FileViewerLayout::compute(0, 40, 800, 400, 20, 9, 120);
+    assert!(lay.text_x > lay.sep_x && lay.text_max_x > lay.text_x);
+
+    // Clic antes del texto = columna 0; tabulador ocupa 4 celdas; sin scroll y con scroll
+    assert_eq!(lay.col_at("abc", lay.text_x.saturating_sub(5), 0), 0);
+    assert_eq!(lay.col_at("abc", lay.text_x + 9 * 2 + 1, 0), 2);
+    assert_eq!(lay.col_at("\tx", lay.text_x + 9 * 4 + 2, 0), 1);
+    assert_eq!(lay.col_at("abcdef", lay.text_x + 1, 3), 3);
+    assert_eq!(
+        lay.col_at("ab", lay.text_x + 900, 0),
+        2,
+        "más allá del final = fin de línea"
+    );
+
+    // Barra horizontal: oculta sin scroll; con scroll el pulgar recorre la pista de punta a punta
+    assert!(lay.hscrollbar(0, 0).is_none());
+    let (track, start) = lay.hscrollbar(50, 0).expect("barra");
+    let (_, end) = lay.hscrollbar(50, 50).expect("barra");
+    assert_eq!(start.0, track.0);
+    assert_eq!(end.0 + end.2, track.0 + track.2);
+    let (_, over) = lay.hscrollbar(50, 500).expect("barra");
+    assert_eq!(over, end, "el scroll sobrante se acota");
+}
+
+#[test]
+fn test_settings_scrollbar_geometry_spans_the_track() {
+    use crate::renderer::{SettingsPageRects, SettingsSection};
+    let sec = SettingsSection::Appearance;
+    let max = SettingsPageRects::max_scroll(sec, 200);
+    assert!(max > 0);
+    let (track, top) = SettingsPageRects::scrollbar(sec, 40, 900, 200, 0).expect("barra");
+    let (_, bottom) = SettingsPageRects::scrollbar(sec, 40, 900, 200, max).expect("barra");
+    assert_eq!(top.1, track.1);
+    assert_eq!(bottom.1 + bottom.3, track.1 + track.3);
+    assert!(top.3 >= 18 && top.3 < track.3);
+    // sin desbordamiento no hay barra
+    assert!(SettingsPageRects::scrollbar(sec, 40, 900, 5000, 0).is_none());
 }

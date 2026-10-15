@@ -5,6 +5,7 @@
 
 mod click;
 mod clipboard;
+mod context_menu;
 mod cursor;
 mod handler;
 mod keyboard;
@@ -12,14 +13,19 @@ mod keys;
 mod layout;
 mod platform;
 mod redraw;
+mod remote_files;
 mod settings;
 mod shell_context;
+mod ssh_jobs;
 mod tabs;
+mod viewer;
 mod wheel;
 
+pub use context_menu::*;
 pub use keys::{key_code_to_char, key_is_char};
 pub use layout::*;
 pub(crate) use shell_context::detect_ai_agent;
+pub use viewer::*;
 
 use platform::{
     apply_window_opacity_native, create_native_icon, get_physical_modifiers, update_windows_theme,
@@ -48,6 +54,8 @@ use winit::window::{Icon, Window, WindowAttributes, WindowId};
 pub enum AxonEvent {
     PtyData(usize),
     PtyClosed(usize),
+    /// Terminó un trabajo SSH en segundo plano (`AxonApp::process_ssh_results`)
+    SshDone,
 }
 
 pub const SIDEBAR_WIDTH: usize = 190;
@@ -66,8 +74,8 @@ pub struct AxonApp {
     hovered_new_tab: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
-    hovered_floating_settings: bool,
     pub settings_page_state: SettingsPageState,
+    pub context_menu: Option<ContextMenu>,
     pub file_explorer: crate::explorer::FileExplorer,
     hovered_files_btn: bool,
     pub last_terminal_tab_index: usize,
@@ -81,6 +89,16 @@ pub struct AxonApp {
     mouse_pos: PhysicalPosition<f64>,
     mouse_down: bool,
     cursor_timer: Instant,
+    /// Fase actual del parpadeo del cursor (true = visible)
+    cursor_on: bool,
+    /// Peticiones en banda al bash remoto aún sin respuesta
+    pending_remote: Vec<remote_files::PendingRemote>,
+    /// Resultados de los hilos SSH (`ssh_jobs`); cada hilo envía el suyo y avisa con `AxonEvent::SshDone`
+    ssh_tx: std::sync::mpsc::Sender<ssh_jobs::SshDone>,
+    ssh_rx: std::sync::mpsc::Receiver<ssh_jobs::SshDone>,
+    next_remote_id: u32,
+    /// Instante a partir del cual se aplica el tamaño final de rejilla al PTY (antirrebote)
+    resize_deadline: Option<Instant>,
     is_focused: bool,
     // Barra de desplazamiento interactiva y auto-ocultable
     scrollbar_dragging: bool,
@@ -88,10 +106,24 @@ pub struct AxonApp {
     scrollbar_drag_offset_y: f32,
     sidebar_scrollbar_dragging: bool,
     sidebar_scrollbar_drag_offset_y: f32,
+    pub sidebar_scrollbar_hovered: bool,
     explorer_scrollbar_dragging: bool,
     explorer_scrollbar_drag_offset_y: f32,
     viewer_scrollbar_dragging: bool,
     viewer_scrollbar_drag_offset_y: f32,
+    viewer_hscrollbar_dragging: bool,
+    settings_scrollbar_dragging: bool,
+    settings_scrollbar_drag_offset_y: f32,
+    viewer_hscrollbar_drag_offset_x: f32,
+    viewer_drag_selecting: bool,
+    viewer_drag_start: Option<(usize, usize)>,
+    last_viewer_click_time: Instant,
+    last_explorer_click_time: Instant,
+    last_explorer_click_idx: Option<usize>,
+    last_tab_click_time: Instant,
+    last_tab_click_idx: Option<usize>,
+    last_viewer_click_pos: Option<(usize, usize)>,
+    viewer_click_count: usize,
     last_window_move: Instant,
     last_scroll_time: Instant,
     hovered_win_min: bool,
@@ -200,6 +232,7 @@ impl AxonApp {
 
         let clipboard = arboard::Clipboard::new().ok();
 
+        let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
         Self {
             config,
             theme,
@@ -214,8 +247,8 @@ impl AxonApp {
             hovered_new_tab: false,
             hovered_settings_btn: false,
             hovered_toggle_btn: false,
-            hovered_floating_settings: false,
             settings_page_state: SettingsPageState::default(),
+            context_menu: None,
             file_explorer,
             hovered_files_btn: false,
             last_terminal_tab_index: 0,
@@ -229,16 +262,37 @@ impl AxonApp {
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
             mouse_down: false,
             cursor_timer: Instant::now(),
+            cursor_on: true,
+            pending_remote: Vec::new(),
+            ssh_tx,
+            ssh_rx,
+            // Aleatorio: los ids no son adivinables por un servidor que quiera responder por otro panel
+            next_remote_id: crate::pty::random_id(),
+            resize_deadline: None,
             is_focused: true,
             scrollbar_dragging: false,
             scrollbar_drag_pane_id: None,
             scrollbar_drag_offset_y: 0.0,
             sidebar_scrollbar_dragging: false,
             sidebar_scrollbar_drag_offset_y: 0.0,
+            sidebar_scrollbar_hovered: false,
             explorer_scrollbar_dragging: false,
             explorer_scrollbar_drag_offset_y: 0.0,
             viewer_scrollbar_dragging: false,
             viewer_scrollbar_drag_offset_y: 0.0,
+            viewer_hscrollbar_dragging: false,
+            settings_scrollbar_dragging: false,
+            settings_scrollbar_drag_offset_y: 0.0,
+            viewer_hscrollbar_drag_offset_x: 0.0,
+            viewer_drag_selecting: false,
+            viewer_drag_start: None,
+            last_viewer_click_time: Instant::now(),
+            last_explorer_click_time: Instant::now(),
+            last_explorer_click_idx: None,
+            last_tab_click_time: Instant::now(),
+            last_tab_click_idx: None,
+            last_viewer_click_pos: None,
+            viewer_click_count: 0,
             last_window_move: Instant::now(),
             last_scroll_time: Instant::now(),
             hovered_win_min: false,
@@ -358,6 +412,11 @@ impl AxonApp {
                 *self.last_window_title.borrow_mut() = full_title;
             }
         }
+    }
+
+    /// Pospone el resize de los PTY hasta que dejen de llegar eventos de tamaño
+    fn schedule_pty_resize(&mut self) {
+        self.resize_deadline = Some(Instant::now() + std::time::Duration::from_millis(120));
     }
 
     fn recompute_grid_for_all_tabs(&mut self) {

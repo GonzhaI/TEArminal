@@ -50,65 +50,28 @@ pub(super) fn get_clipboard_files() -> Option<Vec<String>> {
     None
 }
 
-/// Comprueba si Claude Code (o un agente CLI compatible con imágenes) se encuentra activo en el sistema
-#[cfg(target_os = "windows")]
-pub(crate) fn is_claude_running() -> bool {
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
-        TH32CS_SNAPPROCESS,
-    };
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == 0 || snapshot == -1isize as _ {
-            return false;
-        }
-
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-
-        let mut found = false;
-        if Process32FirstW(snapshot, &mut entry) != 0 {
-            loop {
-                let len = entry
-                    .szExeFile
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(entry.szExeFile.len());
-                let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_lowercase();
-                if name.contains("claude") {
-                    found = true;
-                    break;
-                }
-                if Process32NextW(snapshot, &mut entry) == 0 {
-                    break;
-                }
-            }
-        }
-
-        windows_sys::Win32::Foundation::CloseHandle(snapshot);
-        found
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn is_claude_running() -> bool {
-    false
-}
-
 impl AxonApp {
-    pub(super) fn paste_text(&self, text: &str) {
+    pub(super) fn paste_text(&mut self, text: &str) {
+        let active_tab = &mut self.tabs[self.active_tab_index];
+        if let Some(active_pane) = active_tab.active_pane_mut() {
+            Self::paste_into_pane(active_pane, text);
+        }
+    }
+
+    /// Pega en un panel concreto (no necesariamente el activo: p. ej. al terminar una subida por `scp`)
+    pub(super) fn paste_into_pane(pane: &mut TerminalPane, text: &str) {
         let normalized = sanitize_paste(text);
-        let active_tab = &self.tabs[self.active_tab_index];
-        if let Some(active_pane) = active_tab.active_pane() {
-            if active_pane.terminal.bracketed_paste_mode {
-                let mut payload = Vec::with_capacity(normalized.len() + 16);
-                payload.extend_from_slice(b"\x1b[200~");
-                payload.extend_from_slice(normalized.as_bytes());
-                payload.extend_from_slice(b"\x1b[201~");
-                active_pane.pty.write_input(&payload);
-            } else {
-                active_pane.pty.write_input(normalized.as_bytes());
-            }
+        if normalized.contains(['\n', '\r']) {
+            pane.terminal.note_enter_sent();
+        }
+        if pane.terminal.bracketed_paste_mode {
+            let mut payload = Vec::with_capacity(normalized.len() + 16);
+            payload.extend_from_slice(b"\x1b[200~");
+            payload.extend_from_slice(normalized.as_bytes());
+            payload.extend_from_slice(b"\x1b[201~");
+            pane.pty.write_input(&payload);
+        } else {
+            pane.pty.write_input(normalized.as_bytes());
         }
     }
 
@@ -122,6 +85,24 @@ impl AxonApp {
         }
         if self.clipboard.is_none() {
             self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if self.tabs[self.active_tab_index].file_viewer.is_some() {
+            let text = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
+            let (auto_save, visible) =
+                (self.config.terminal.auto_save, self.viewer_visible_lines());
+            if let (Some(text), Some(viewer)) =
+                (text, self.tabs[self.active_tab_index].file_viewer.as_mut())
+            {
+                viewer.insert_text(&text);
+                if auto_save && viewer.is_dirty {
+                    viewer.autosave_local();
+                }
+                viewer.ensure_cursor_visible(visible);
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
         }
         let Some(cb) = &mut self.clipboard else {
             return;
@@ -142,14 +123,17 @@ impl AxonApp {
                 .get(self.active_tab_index)
                 .and_then(|t| t.active_pane());
             let ssh_session = active_pane.and_then(|p| p.terminal.ssh_session.clone());
+            let active_pane_id = active_pane.map(|p| p.id);
             let is_ssh = ssh_session.as_ref().map(|s| s.is_active).unwrap_or(false);
 
-            let is_claude = is_claude_running() || {
-                active_pane
-                    .and_then(|p| p.terminal.window_title.as_ref())
-                    .map(|title| title.to_lowercase().contains("claude"))
-                    .unwrap_or(false)
-            };
+            // Agente lanzado desde este panel (OSC AxonAgent de init.ps1) o `claude` en el título (p. ej. por SSH)
+            let is_claude = active_pane.is_some_and(|p| {
+                p.terminal.agent_running
+                    || p.terminal
+                        .window_title
+                        .as_ref()
+                        .is_some_and(|t| t.to_lowercase().contains("claude"))
+            });
 
             // Si Claude Code (local o remoto vía SSH) está activo, enviamos la secuencia
             // nativa de pegado de imágenes (Alt + V: \x1bv).
@@ -164,14 +148,12 @@ impl AxonApp {
             // y pegamos la ruta remota /tmp/axon_img_... en lugar de una ruta local de Windows
             if is_ssh {
                 if let Some(session) = ssh_session {
-                    if let Some(local_path) = self.save_clipboard_image(&img) {
-                        if let Some(remote_path) =
-                            self.upload_clipboard_image_ssh(&local_path, &session.destination)
-                        {
-                            let formatted = format!("\"{}\" ", remote_path);
-                            self.paste_text(&formatted);
-                            return;
-                        }
+                    if let (Some(local_path), Some(pane_id)) =
+                        (self.save_clipboard_image(&img), active_pane_id)
+                    {
+                        // `scp` en un hilo: al terminar se pega la ruta remota (o la local si falló)
+                        self.ssh_upload_image(pane_id, local_path, &session.destination);
+                        return;
                     }
                 }
             }
@@ -238,55 +220,6 @@ impl AxonApp {
         }
 
         None
-    }
-
-    /// Transfiere de forma segura y transparente una captura de pantalla a un host remoto SSH vía scp
-    pub(crate) fn upload_clipboard_image_ssh(
-        &self,
-        local_path: &str,
-        destination: &str,
-    ) -> Option<String> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        if !crate::pty::is_safe_ssh_destination(destination) {
-            crate::logger::log("SSH Upload: destino no válido, se omite la transferencia");
-            return None;
-        }
-        let remote_filename = format!("axon_img_{}.png", timestamp);
-        let remote_target = format!("{}:/tmp/{}", destination, remote_filename);
-
-        crate::logger::log(&format!(
-            "SSH Upload: transfiriendo captura a {} -> /tmp/{}",
-            destination, remote_filename
-        ));
-
-        let status = std::process::Command::new("scp.exe")
-            .arg("-q")
-            .arg("-o")
-            .arg("BatchMode=yes")
-            .arg("-o")
-            .arg("ConnectTimeout=3")
-            .arg("--")
-            .arg(local_path)
-            .arg(&remote_target)
-            .status();
-
-        match status {
-            Ok(s) if s.success() => {
-                crate::logger::log(&format!("SSH Upload exitoso: /tmp/{}", remote_filename));
-                Some(format!("/tmp/{}", remote_filename))
-            }
-            Ok(s) => {
-                crate::logger::log(&format!("SSH Upload falló con código: {:?}", s.code()));
-                None
-            }
-            Err(e) => {
-                crate::logger::log(&format!("Error al ejecutar scp.exe: {:?}", e));
-                None
-            }
-        }
     }
 }
 

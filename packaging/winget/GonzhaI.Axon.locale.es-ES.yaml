@@ -6,7 +6,7 @@ Publisher: Axon Team
 PublisherUrl: https://github.com/GonzhaI
 PackageName: Axon
 PackageUrl: https://github.com/GonzhaI/axon
-License: MIT
+License: Proprietary
 ShortDescription: Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI.
 Tags:
   - terminal

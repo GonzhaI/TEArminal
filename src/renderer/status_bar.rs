@@ -39,7 +39,7 @@ impl TerminalRenderer {
         let baseline = center_y + 4;
         let mut cur_x = 12;
 
-        // 2. Izquierda: CWD o SSH Host con icono Lucide
+        // 2. Izquierda: SSH Host y CWD con iconos Lucide
         if let Some(ssh) = ssh_host {
             self.draw_lucide_icon(
                 buffer,
@@ -60,13 +60,15 @@ impl TerminalRenderer {
                 &label,
                 cur_x,
                 baseline,
-                width.saturating_sub(200),
+                width.saturating_sub(260),
                 theme.ansi[2],
                 11.0,
                 true,
             );
             cur_x = adv + 16;
-        } else if let Some(dir) = cwd {
+        }
+
+        if let Some(dir) = cwd {
             self.draw_lucide_icon(
                 buffer,
                 width,
@@ -85,7 +87,7 @@ impl TerminalRenderer {
                 dir,
                 cur_x,
                 baseline,
-                (cur_x + 320).min(width.saturating_sub(200)),
+                (cur_x + 320).min(width.saturating_sub(180)),
                 theme.ansi[7],
                 11.0,
                 false,

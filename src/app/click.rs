@@ -23,23 +23,96 @@ impl AxonApp {
         let offset = self.sidebar_offset();
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
-        // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento
+        // Menú contextual abierto: un clic sobre una opción la ejecuta; cualquier otro clic lo cierra
+        if let Some(menu) = &self.context_menu {
+            if state != ElementState::Pressed {
+                return;
+            }
+            let action = menu
+                .item_at(mx, my)
+                .and_then(|i| menu.items.get(i))
+                .filter(|item| item.enabled)
+                .and_then(|item| item.action.clone());
+            self.context_menu = None;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            if button == MouseButton::Left {
+                if let Some(action) = action {
+                    self.run_menu_action(action, event_loop);
+                }
+                return;
+            }
+            if button != MouseButton::Right {
+                return;
+            }
+        }
+        if button == MouseButton::Right
+            && state == ElementState::Pressed
+            && self.open_context_menu(mx, my)
+        {
+            return;
+        }
+
+        // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
         if button == MouseButton::Left && state == ElementState::Released {
+            self.viewer_drag_selecting = false;
             let was_dragging = self.scrollbar_dragging
                 || self.sidebar_scrollbar_dragging
                 || self.explorer_scrollbar_dragging
-                || self.viewer_scrollbar_dragging;
+                || self.viewer_scrollbar_dragging
+                || self.viewer_hscrollbar_dragging
+                || self.settings_scrollbar_dragging;
             if was_dragging {
                 self.scrollbar_dragging = false;
                 self.scrollbar_drag_pane_id = None;
                 self.sidebar_scrollbar_dragging = false;
                 self.explorer_scrollbar_dragging = false;
                 self.viewer_scrollbar_dragging = false;
+                self.viewer_hscrollbar_dragging = false;
+                self.settings_scrollbar_dragging = false;
                 self.last_scroll_time = Instant::now();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
                 return;
+            }
+        }
+
+        // Botones laterales del ratón (Atrás / Adelante en explorador o navegación de pestañas)
+        if state == ElementState::Pressed {
+            match button {
+                MouseButton::Back => {
+                    if self.file_explorer.visible && self.file_explorer.can_go_back() {
+                        self.file_explorer.go_back();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if self.tabs.len() > 1 {
+                        if self.active_tab_index == 0 {
+                            self.switch_to_tab(self.tabs.len() - 1);
+                        } else {
+                            self.switch_to_tab(self.active_tab_index - 1);
+                        }
+                        return;
+                    }
+                }
+                MouseButton::Forward => {
+                    if self.file_explorer.visible && self.file_explorer.can_go_forward() {
+                        self.file_explorer.go_forward();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if self.tabs.len() > 1 {
+                        self.switch_to_tab((self.active_tab_index + 1) % self.tabs.len());
+                        return;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -81,7 +154,9 @@ impl AxonApp {
 
         // Si estamos en modo de pestañas horizontales superiores
         if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
-            if state == ElementState::Pressed && button == MouseButton::Left {
+            if state == ElementState::Pressed
+                && (button == MouseButton::Left || button == MouseButton::Middle)
+            {
                 let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
 
                 // Clic en [-] Minimizar
@@ -132,17 +207,28 @@ impl AxonApp {
                 for idx in 0..self.tabs.len() {
                     let tr = top_rects.tab_rect(idx);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
-                        if self.tabs.len() > 1 {
-                            let cr = top_rects.close_btn_rect(idx);
-                            if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
-                                crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
-                                self.close_tab(idx, event_loop);
-                                return;
-                            }
+                        if button == MouseButton::Middle {
+                            crate::logger::log(&format!(
+                                "-> Clic botón central (rueda) en pestaña {}",
+                                idx
+                            ));
+                            self.close_tab(idx, event_loop);
+                            return;
                         }
-                        crate::logger::log(&format!("-> Clic en pestaña {}", idx));
-                        self.switch_to_tab(idx);
-                        return;
+                        if button == MouseButton::Left {
+                            if self.tabs.len() > 1 {
+                                let cr = top_rects.close_btn_rect(idx);
+                                if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3
+                                {
+                                    crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
+                                    self.close_tab(idx, event_loop);
+                                    return;
+                                }
+                            }
+                            crate::logger::log(&format!("-> Clic en pestaña {}", idx));
+                            self.click_tab(idx);
+                            return;
+                        }
                     }
                 }
 
@@ -236,27 +322,11 @@ impl AxonApp {
                 return;
             }
 
-            // Si la barra lateral está colapsada, clic en el botón flotante de Ajustes
-            if !self.sidebar_visible {
-                let float_set_x = 44;
-                let float_set_w = 32;
-                let is_click_float_set = mx >= float_set_x
-                    && mx < float_set_x + float_set_w
-                    && my >= toggle_btn_y
-                    && my < toggle_btn_y + toggle_btn_h;
-                if is_click_float_set
-                    && state == ElementState::Pressed
-                    && button == MouseButton::Left
-                {
-                    crate::logger::log("-> Clic en botón flotante de Ajustes");
-                    self.open_or_switch_settings_tab();
-                    return;
-                }
-            }
-
             // Clics en la barra lateral abierta
             if self.sidebar_visible && mx < SIDEBAR_WIDTH {
-                if state == ElementState::Pressed && button == MouseButton::Left {
+                if state == ElementState::Pressed
+                    && (button == MouseButton::Left || button == MouseButton::Middle)
+                {
                     // Clic en botón "+"
                     let plus_btn_x = SIDEBAR_WIDTH.saturating_sub(34);
                     let plus_btn_y = 8;
@@ -342,19 +412,32 @@ impl AxonApp {
                             let close_y = tab_y + 6;
                             let close_size = 20;
 
-                            if self.tabs.len() > 1
-                                && mx >= close_x
-                                && mx < close_x + close_size
-                                && my >= close_y
-                                && my < close_y + close_size
-                            {
-                                crate::logger::log(&format!("-> Clic en [x] pestaña {}", tab_idx));
+                            if button == MouseButton::Middle {
+                                crate::logger::log(&format!(
+                                    "-> Clic botón central (rueda) en pestaña sidebar {}",
+                                    tab_idx
+                                ));
                                 self.close_tab(tab_idx, event_loop);
-                            } else {
-                                crate::logger::log(&format!("-> Clic en pestaña {}", tab_idx));
-                                self.switch_to_tab(tab_idx);
+                                return;
                             }
-                            return;
+                            if button == MouseButton::Left {
+                                if self.tabs.len() > 1
+                                    && mx >= close_x
+                                    && mx < close_x + close_size
+                                    && my >= close_y
+                                    && my < close_y + close_size
+                                {
+                                    crate::logger::log(&format!(
+                                        "-> Clic en [x] pestaña {}",
+                                        tab_idx
+                                    ));
+                                    self.close_tab(tab_idx, event_loop);
+                                } else {
+                                    crate::logger::log(&format!("-> Clic en pestaña {}", tab_idx));
+                                    self.click_tab(tab_idx);
+                                }
+                                return;
+                            }
                         }
                     }
                 }
@@ -373,6 +456,28 @@ impl AxonApp {
                 let page_w = win_w.saturating_sub(offset);
                 let page_h = win_h.saturating_sub(top_offset);
                 let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
+                // Barra de scroll de Ajustes: arrastrar el pulgar o saltar al punto pulsado
+                if let Some((track, thumb)) = self.settings_scrollbar() {
+                    if mx + 6 >= track.0 && my >= track.1 && my < track.1 + track.3 {
+                        if my >= thumb.1 && my < thumb.1 + thumb.3 {
+                            self.settings_scrollbar_dragging = true;
+                            self.settings_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                        } else {
+                            self.settings_scroll_to_thumb(my.saturating_sub(thumb.3 / 2));
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                }
+
+                // Bajo la navegación el contenido está desplazado: se traduce el ratón a coordenadas sin scroll
+                let my = if my >= top_offset + SettingsPageRects::CONTENT_TOP {
+                    my + self.settings_scroll()
+                } else {
+                    my
+                };
 
                 // Botón Restablecer valores por defecto (Header)
                 if SettingsPageRects::inside(mx, my, rects.reset_defaults_btn) {
@@ -384,24 +489,28 @@ impl AxonApp {
                 // Pestañas de navegación
                 if SettingsPageRects::inside(mx, my, rects.nav_appearance) {
                     self.settings_page_state.section = SettingsSection::Appearance;
+                    self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                     return;
                 } else if SettingsPageRects::inside(mx, my, rects.nav_terminal) {
                     self.settings_page_state.section = SettingsSection::Terminal;
+                    self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                     return;
                 } else if SettingsPageRects::inside(mx, my, rects.nav_shortcuts) {
                     self.settings_page_state.section = SettingsSection::Shortcuts;
+                    self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                     return;
                 } else if SettingsPageRects::inside(mx, my, rects.nav_about) {
                     self.settings_page_state.section = SettingsSection::About;
+                    self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -561,6 +670,16 @@ impl AxonApp {
                             crate::logger::log("-> Clic en alternar restaurar pestañas al iniciar");
                             self.toggle_restore_session();
                             return;
+                        } else if SettingsPageRects::inside(mx, my, rects.auto_save_btn) {
+                            crate::logger::log("-> Clic en alternar auto-guardar archivos");
+                            self.toggle_auto_save();
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.word_wrap_btn) {
+                            self.toggle_word_wrap();
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.ssh_integration_btn) {
+                            self.toggle_ssh_integration();
+                            return;
                         } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
                             crate::logger::log("-> Clic en abrir archivo axon.toml");
                             self.open_config_file();
@@ -649,22 +768,15 @@ impl AxonApp {
                         }
                     }
 
-                    let close_x = panel_x + panel_w.saturating_sub(28);
-                    if mx >= close_x && mx < close_x + 22 && my >= panel_y + 7 && my < panel_y + 29
+                    let (bx, by, bw, bh) =
+                        crate::explorer::FileExplorer::changes_btn_rect(panel_x, panel_y, panel_w);
+                    if self.file_explorer.remote_session.is_none()
+                        && mx >= bx
+                        && mx < bx + bw
+                        && my >= by
+                        && my < by + bh
                     {
-                        crate::logger::log("-> Clic en [x] cerrar explorador de archivos");
-                        self.toggle_file_explorer();
-                        return;
-                    }
-
-                    let refresh_x = panel_x + panel_w.saturating_sub(56);
-                    if mx >= refresh_x
-                        && mx < refresh_x + 22
-                        && my >= panel_y + 7
-                        && my < panel_y + 29
-                    {
-                        crate::logger::log("-> Clic en [↻] refrescar explorador de archivos");
-                        self.file_explorer.refresh();
+                        self.file_explorer.toggle_changes_only();
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -699,7 +811,12 @@ impl AxonApp {
                     let up_x = fwd_x + 24;
                     if mx >= up_x && mx < up_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
                         crate::logger::log("-> Clic en [^] subir nivel en explorador");
-                        self.file_explorer.navigate_up();
+                        match self.file_explorer.remote_parent() {
+                            Some(parent) if self.file_explorer.inband_remote => {
+                                self.remote_cd(&parent);
+                            }
+                            _ => self.file_explorer.navigate_up(),
+                        }
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -722,14 +839,28 @@ impl AxonApp {
                                         "-> Clic en carpeta: {}",
                                         item.name
                                     ));
-                                    self.file_explorer.toggle_expand(idx);
+                                    self.last_explorer_click_idx = None;
+                                    if self.file_explorer.inband_remote {
+                                        self.remote_toggle_dir(idx);
+                                    } else {
+                                        self.file_explorer.toggle_expand(idx);
+                                    }
                                 } else {
                                     // Con solo un clic se abre y visualiza el archivo inmediatamente
                                     crate::logger::log(&format!(
                                         "-> Abrir visor de archivos: {}",
                                         item.name
                                     ));
-                                    self.open_file_in_viewer(&item.path);
+                                    // Un clic = vista previa; doble clic sobre el mismo archivo = pestaña fija
+                                    let now = Instant::now();
+                                    let double = self.last_explorer_click_idx == Some(idx)
+                                        && now
+                                            .duration_since(self.last_explorer_click_time)
+                                            .as_millis()
+                                            < 400;
+                                    self.last_explorer_click_idx = Some(idx);
+                                    self.last_explorer_click_time = now;
+                                    self.open_file_in_viewer(&item.path, double);
                                 }
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
@@ -761,80 +892,200 @@ impl AxonApp {
                 && my < top_offset + viewer_h
             {
                 self.file_explorer.is_focused = false;
-                if state == ElementState::Pressed && button == MouseButton::Left {
-                    if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
-                        // Comprobar clic en la barra de desplazamiento del visor
-                        if let Some((track, thumb)) =
-                            TerminalRenderer::file_viewer_scrollbar_geometry(
-                                offset, top_offset, viewer_w, viewer_h, viewer, row_h,
-                            )
-                        {
-                            let hit_x = track.0.saturating_sub(4);
-                            if mx >= hit_x
-                                && mx < offset + viewer_w
-                                && my >= track.1
-                                && my < track.1 + track.3
-                            {
-                                if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                                    self.viewer_scrollbar_dragging = true;
-                                    self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
-                                } else {
-                                    let available_travel = track.3.saturating_sub(thumb.3);
-                                    let content_h = viewer_h.saturating_sub(38);
-                                    let visible_lines = (content_h / row_h.max(16)).max(1);
-                                    let max_offset =
-                                        viewer.lines.len().saturating_sub(visible_lines);
-                                    if available_travel > 0 && max_offset > 0 {
-                                        let click_rel =
-                                            (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
-                                        let ratio =
-                                            (click_rel / available_travel as f32).clamp(0.0, 1.0);
-                                        viewer.scroll_offset = ((ratio * max_offset as f32).round()
-                                            as usize)
-                                            .min(max_offset);
-                                        if let Some(w) = &self.window {
-                                            w.request_redraw();
-                                        }
+                if state == ElementState::Pressed {
+                    if button == MouseButton::Middle {
+                        // Clic central: pegar contenido del portapapeles
+                        self.paste_from_clipboard();
+                        return;
+                    }
+                    if button == MouseButton::Left {
+                        if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                            let ext = viewer
+                                .path
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            let is_markdown = ext == "md" || ext == "markdown";
+                            let header_rects = crate::renderer::FileViewerHeaderRects::compute(
+                                offset,
+                                top_offset,
+                                viewer_w,
+                                viewer_h,
+                                is_markdown,
+                                viewer.git_base.is_some(),
+                            );
+
+                            if let Some(rect) = header_rects.diff_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
+                                    viewer.toggle_diff();
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
                                     }
+                                    return;
+                                }
+                            }
+
+                            if crate::renderer::FileViewerHeaderRects::inside(
+                                mx,
+                                my,
+                                header_rects.mode_btn,
+                            ) {
+                                viewer.toggle_read_only();
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
                                 }
                                 return;
                             }
-                        }
 
-                        // Clic dentro del contenido de texto para posicionar el cursor
-                        let content_y = top_offset + 38;
-                        if my >= content_y && !viewer.is_binary {
-                            let clicked_row = (my - content_y) / row_h.max(16);
-                            let target_line = viewer.scroll_offset + clicked_row;
-                            if target_line < viewer.lines.len() {
-                                viewer.cursor_line = target_line;
-                                let total_lines = viewer.lines.len();
-                                let digits = format!("{}", total_lines).len().max(3);
-                                let gutter_w = digits * char_w.max(7) + 24;
-                                let text_start_x = offset + gutter_w + 14;
-
-                                if mx >= text_start_x {
-                                    let rel_x = (mx - text_start_x)
-                                        + viewer.scroll_offset_x * char_w.max(7);
-                                    let line_str = &viewer.lines[target_line];
-                                    let mut cur_x_acc = 0;
-                                    let mut target_col = line_str.chars().count();
-                                    for (ci, ch) in line_str.chars().enumerate() {
-                                        let ch_adv = if ch == '\t' {
-                                            char_w.max(7) * 4
-                                        } else {
-                                            char_w.max(7)
-                                        };
-                                        if cur_x_acc + ch_adv / 2 >= rel_x {
-                                            target_col = ci;
-                                            break;
-                                        }
-                                        cur_x_acc += ch_adv;
+                            if let Some(md_rect) = header_rects.md_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, md_rect) {
+                                    viewer.render_markdown = !viewer.render_markdown;
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
                                     }
-                                    viewer.cursor_col = target_col;
-                                } else {
-                                    viewer.cursor_col = 0;
+                                    return;
                                 }
+                            }
+
+                            let lay = crate::renderer::FileViewerLayout::compute(
+                                offset,
+                                top_offset,
+                                viewer_w,
+                                viewer_h,
+                                row_h,
+                                char_w,
+                                viewer.lines.len(),
+                            );
+
+                            // Barra de desplazamiento horizontal
+                            let max_x = viewer.max_scroll_x();
+                            if let Some((track, thumb)) =
+                                lay.hscrollbar(max_x, viewer.scroll_offset_x)
+                            {
+                                if mx >= track.0
+                                    && mx < track.0 + track.2
+                                    && my + 4 >= track.1
+                                    && my < track.1 + track.3 + 4
+                                {
+                                    if mx >= thumb.0 && mx < thumb.0 + thumb.2 {
+                                        self.viewer_hscrollbar_dragging = true;
+                                        self.viewer_hscrollbar_drag_offset_x =
+                                            (mx - thumb.0) as f32;
+                                    } else {
+                                        let rel = mx.saturating_sub(track.0 + thumb.2 / 2);
+                                        if let Some(x) = (rel * max_x)
+                                            .checked_div(track.2.saturating_sub(thumb.2))
+                                        {
+                                            viewer.scroll_offset_x = x.min(max_x);
+                                        }
+                                    }
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
+
+                            // Comprobar clic en la barra de desplazamiento del visor
+                            if let Some((track, thumb)) =
+                                TerminalRenderer::file_viewer_scrollbar_geometry(
+                                    offset, top_offset, viewer_w, viewer_h, viewer, row_h,
+                                )
+                            {
+                                let hit_x = track.0.saturating_sub(4);
+                                if mx >= hit_x
+                                    && mx < offset + viewer_w
+                                    && my >= track.1
+                                    && my < track.1 + track.3
+                                {
+                                    if my >= thumb.1 && my < thumb.1 + thumb.3 {
+                                        self.viewer_scrollbar_dragging = true;
+                                        self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                    } else {
+                                        let available_travel = track.3.saturating_sub(thumb.3);
+                                        let visible_lines = lay.content_h / lay.row_h;
+                                        let max_offset =
+                                            viewer.rows().len().saturating_sub(visible_lines);
+                                        if available_travel > 0 && max_offset > 0 {
+                                            let click_rel =
+                                                (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
+                                            let ratio = (click_rel / available_travel as f32)
+                                                .clamp(0.0, 1.0);
+                                            viewer.scroll_offset =
+                                                ((ratio * max_offset as f32).round() as usize)
+                                                    .min(max_offset);
+                                            if let Some(w) = &self.window {
+                                                w.request_redraw();
+                                            }
+                                        }
+                                    }
+                                    return;
+                                }
+                            }
+
+                            // Clic dentro del contenido de texto para posicionar el cursor y seleccionar
+                            let content_y = top_offset + 38;
+                            if my >= content_y && !viewer.is_binary && !viewer.lines.is_empty() {
+                                let clicked_row =
+                                    viewer.scroll_offset + (my - content_y) / row_h.max(16);
+
+                                // Clic en el margen: pliega o despliega la región de esa línea
+                                if mx < lay.sep_x {
+                                    if let Some(row) = viewer.rows().get(clicked_row).copied() {
+                                        if row.start == 0
+                                            && (viewer.folded.contains(&row.line)
+                                                || viewer.fold_end(row.line).is_some())
+                                        {
+                                            viewer.toggle_fold(row.line);
+                                            if let Some(w) = &self.window {
+                                                w.request_redraw();
+                                            }
+                                            return;
+                                        }
+                                    }
+                                }
+                                let Some((target_line, target_col)) =
+                                    viewer.hit_test(clicked_row, mx, &lay)
+                                else {
+                                    return;
+                                };
+
+                                if self.modifiers.shift_key() {
+                                    let start = viewer
+                                        .selection
+                                        .map(|s| s.0)
+                                        .unwrap_or((viewer.cursor_line, viewer.cursor_col));
+                                    viewer.cursor_line = target_line;
+                                    viewer.cursor_col = target_col;
+                                    viewer.selection = Some((start, (target_line, target_col)));
+                                } else {
+                                    let now = Instant::now();
+                                    let is_quick_click =
+                                        now.duration_since(self.last_viewer_click_time).as_millis()
+                                            < 400
+                                            && self.last_viewer_click_pos
+                                                == Some((target_line, target_col));
+
+                                    viewer.cursor_line = target_line;
+                                    viewer.cursor_col = target_col;
+
+                                    if is_quick_click && self.viewer_click_count == 1 {
+                                        viewer.select_word_at_cursor();
+                                        self.viewer_click_count = 2;
+                                    } else if is_quick_click && self.viewer_click_count == 2 {
+                                        viewer.select_line_at_cursor();
+                                        self.viewer_click_count = 3;
+                                    } else {
+                                        viewer.clear_selection();
+                                        self.viewer_click_count = 1;
+                                        self.viewer_drag_selecting = true;
+                                        self.viewer_drag_start = Some((target_line, target_col));
+                                    }
+                                    self.last_viewer_click_time = now;
+                                    self.last_viewer_click_pos = Some((target_line, target_col));
+                                }
+
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
                                 }
@@ -999,9 +1250,7 @@ impl AxonApp {
                                 self.drag_start = None;
                             }
                         },
-                        MouseButton::Right | MouseButton::Middle
-                            if state == ElementState::Pressed =>
-                        {
+                        MouseButton::Middle if state == ElementState::Pressed => {
                             self.paste_from_clipboard();
                         }
                         _ => {}

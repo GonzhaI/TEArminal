@@ -3,6 +3,62 @@
 use super::*;
 
 impl AxonApp {
+    /// Alto visible del contenido desplazable de Ajustes
+    fn settings_viewport_h(&self) -> usize {
+        let win_h = self
+            .window
+            .as_ref()
+            .map_or(600, |w| w.inner_size().height as usize);
+        win_h.saturating_sub(
+            self.top_offset() + SettingsPageRects::CONTENT_TOP + self.status_bar_height(),
+        )
+    }
+
+    /// Pista y pulgar de la barra de scroll de Ajustes con la geometría actual
+    pub(super) fn settings_scrollbar(
+        &self,
+    ) -> Option<(crate::renderer::Rect, crate::renderer::Rect)> {
+        let win_w = self
+            .window
+            .as_ref()
+            .map_or(800, |w| w.inner_size().width as usize);
+        SettingsPageRects::scrollbar(
+            self.settings_page_state.section,
+            self.top_offset(),
+            win_w,
+            self.settings_viewport_h(),
+            self.settings_scroll(),
+        )
+    }
+
+    /// Mueve el scroll de Ajustes para que el pulgar quede con su borde superior en `thumb_top`
+    pub(super) fn settings_scroll_to_thumb(&mut self, thumb_top: usize) {
+        let Some((track, thumb)) = self.settings_scrollbar() else {
+            return;
+        };
+        let travel = track.3.saturating_sub(thumb.3);
+        let max = SettingsPageRects::max_scroll(
+            self.settings_page_state.section,
+            self.settings_viewport_h(),
+        );
+        if let Some(scroll) =
+            (thumb_top.saturating_sub(track.1).min(travel) * max).checked_div(travel)
+        {
+            self.settings_page_state.scroll_y = scroll.min(max);
+            self.last_scroll_time = Instant::now();
+        }
+    }
+
+    /// Scroll vertical efectivo de Ajustes, acotado al viewport actual (mismo cálculo que el render).
+    pub(super) fn settings_scroll(&self) -> usize {
+        self.settings_page_state
+            .scroll_y
+            .min(SettingsPageRects::max_scroll(
+                self.settings_page_state.section,
+                self.settings_viewport_h(),
+            ))
+    }
+
     pub fn toggle_restore_session(&mut self) {
         self.config.terminal.restore_session = !self.config.terminal.restore_session;
         let _ = self.config.save();
@@ -195,18 +251,49 @@ impl AxonApp {
         }
     }
 
+    /// Ajuste de línea global del visor (se aplica a todas las pestañas del visor en el siguiente fotograma)
+    pub fn toggle_word_wrap(&mut self) {
+        self.config.terminal.word_wrap = !self.config.terminal.word_wrap;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Los shells nuevos heredan `AXON_SSH_INTEGRATION`, que lee el wrapper `ssh` de `init.ps1`
+    pub fn apply_ssh_integration_env(&self) {
+        let on = self.config.terminal.ssh_integration;
+        std::env::set_var("AXON_SSH_INTEGRATION", if on { "1" } else { "0" });
+    }
+
+    pub fn toggle_ssh_integration(&mut self) {
+        self.config.terminal.ssh_integration = !self.config.terminal.ssh_integration;
+        self.apply_ssh_integration_env();
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub fn toggle_auto_save(&mut self) {
+        self.config.terminal.auto_save = !self.config.terminal.auto_save;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub fn open_config_file(&self) {
         let path = AxonConfig::config_path();
-        let _ = self.config.save();
+        if !path.exists() {
+            let _ = self.config.save();
+        }
         let path_str = path.to_string_lossy().to_string();
         crate::logger::log(&format!(
             "-> Abriendo archivo de configuración: {}",
             path_str
         ));
-        let res = std::process::Command::new("cmd")
-            .args(["/C", "start", "", &path_str])
-            .spawn();
-        if res.is_err() {
+        if !platform::shell_open(&path) {
             let _ = std::process::Command::new("notepad.exe").arg(&path).spawn();
         }
     }

@@ -6,6 +6,7 @@ pub mod explorer;
 pub mod logger;
 mod pty;
 mod renderer;
+mod ssh;
 mod terminal;
 mod theme;
 pub mod tools;
@@ -24,6 +25,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proxy = event_loop.create_proxy();
 
     // 3. Instanciar aplicación nativa de Axon
+    // Antes de crear la app: su primera pestaña lanza el shell en `new` y debe heredar la variable
+    std::env::set_var(
+        "AXON_SSH_INTEGRATION",
+        if config.terminal.ssh_integration {
+            "1"
+        } else {
+            "0"
+        },
+    );
     let mut app = AxonApp::new(config, Some(proxy));
 
     // 4. Iniciar ciclo de eventos del sistema operativo

@@ -1,7 +1,7 @@
 # Prueba de extremo a extremo del instalador: instala en silencio en una carpeta temporal, verifica
 # archivos y herramientas, arranca Axon y desinstala.
 #
-# Uso:  pwsh packaging/test-installer.ps1 [-Setup dist\axon-setup-0.6.0.exe]
+# Uso:  pwsh packaging/test-installer.ps1 [-Setup dist\axon-setup-0.7.0.exe]
 [CmdletBinding()]
 param([string]$Setup)
 $ErrorActionPreference = 'Stop'

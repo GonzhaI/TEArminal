@@ -1,0 +1,807 @@
+//! Menú contextual (clic derecho): opciones según el elemento bajo el cursor (visor, terminal,
+//! pestaña, explorador o ventana).
+
+use super::*;
+use crate::renderer::Rect;
+use crate::ui::LucideIcon;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MenuAction {
+    // Visor de archivos
+    ViewerCopy,
+    ViewerCut,
+    ViewerPaste,
+    ViewerSelectAll,
+    ViewerUndo,
+    ViewerRedo,
+    ViewerSave,
+    ViewerFoldAll,
+    ViewerUnfoldAll,
+    ToggleWordWrap,
+    ViewerToggleReadOnly,
+    ViewerTogglePreview,
+    CopyFilePath,
+    CopyFileName,
+    // Terminal
+    TermCopy,
+    TermPaste,
+    SplitHorizontal,
+    SplitVertical,
+    ClosePane,
+    ClearTerminal,
+    // Pestañas y ventana
+    PinTab(usize),
+    CloseTab(usize),
+    CloseOtherTabs(usize),
+    NewTab,
+    OpenSettings,
+    ToggleExplorer,
+    // Explorador
+    ExplorerOpen(usize),
+    ExplorerCopyPath(PathBuf),
+    ExplorerRefresh,
+    ExplorerCollapseAll,
+    ExplorerExpandAll,
+}
+
+#[derive(Debug, Clone)]
+pub struct MenuItem {
+    pub label: &'static str,
+    pub icon: Option<LucideIcon>,
+    pub shortcut: &'static str,
+    /// `None` = separador
+    pub action: Option<MenuAction>,
+    pub enabled: bool,
+}
+
+impl MenuItem {
+    fn new(
+        label: &'static str,
+        icon: LucideIcon,
+        shortcut: &'static str,
+        action: MenuAction,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            label,
+            icon: Some(icon),
+            shortcut,
+            action: Some(action),
+            enabled,
+        }
+    }
+
+    fn separator() -> Self {
+        Self {
+            label: "",
+            icon: None,
+            shortcut: "",
+            action: None,
+            enabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextMenu {
+    pub x: usize,
+    pub y: usize,
+    /// Ancho calculado con el texto real de etiquetas y atajos
+    pub w: usize,
+    pub items: Vec<MenuItem>,
+    pub hovered: Option<usize>,
+}
+
+impl ContextMenu {
+    pub const ITEM_H: usize = 28;
+    pub const SEP_H: usize = 9;
+    pub const PAD: usize = 6;
+
+    /// Crea el menú y lo coloca dentro de la ventana (se abre hacia el lado con espacio).
+    fn new(
+        items: Vec<MenuItem>,
+        w: usize,
+        (mx, my): (usize, usize),
+        (win_w, win_h): (usize, usize),
+    ) -> Self {
+        let mut menu = Self {
+            x: 0,
+            y: 0,
+            w,
+            items,
+            hovered: None,
+        };
+        menu.x = if mx + w + 4 > win_w {
+            mx.saturating_sub(w)
+        } else {
+            mx
+        };
+        let h = menu.height();
+        menu.y = if my + h + 4 > win_h {
+            win_h.saturating_sub(h + 4)
+        } else {
+            my
+        };
+        menu
+    }
+
+    pub fn height(&self) -> usize {
+        Self::PAD * 2
+            + self
+                .items
+                .iter()
+                .map(|i| {
+                    if i.action.is_some() {
+                        Self::ITEM_H
+                    } else {
+                        Self::SEP_H
+                    }
+                })
+                .sum::<usize>()
+    }
+
+    pub fn bounds(&self) -> Rect {
+        (self.x, self.y, self.w, self.height())
+    }
+
+    /// Rectángulo del elemento `idx` (los separadores también tienen rectángulo)
+    pub fn item_rect(&self, idx: usize) -> Rect {
+        let mut y = self.y + Self::PAD;
+        for (i, item) in self.items.iter().enumerate() {
+            let h = if item.action.is_some() {
+                Self::ITEM_H
+            } else {
+                Self::SEP_H
+            };
+            if i == idx {
+                return (self.x + Self::PAD, y, self.w - Self::PAD * 2, h);
+            }
+            y += h;
+        }
+        (self.x, y, self.w, 0)
+    }
+
+    /// Índice del elemento accionable bajo el ratón
+    pub fn item_at(&self, mx: usize, my: usize) -> Option<usize> {
+        (0..self.items.len()).find(|&i| {
+            self.items[i].action.is_some() && {
+                let r = self.item_rect(i);
+                mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+            }
+        })
+    }
+}
+
+impl AxonApp {
+    /// Abre el menú contextual según lo que haya bajo el ratón. `false` = no hay menú para ese
+    /// elemento (o la aplicación del terminal captura el ratón) y el clic sigue su curso normal.
+    pub(super) fn open_context_menu(&mut self, mx: usize, my: usize) -> bool {
+        let (win_w, win_h) = self
+            .window
+            .as_ref()
+            .map(|w| {
+                let s = w.inner_size();
+                (s.width as usize, s.height as usize)
+            })
+            .unwrap_or((800, 600));
+        let offset = self.sidebar_offset();
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
+        let right_offset = self.file_explorer_offset();
+
+        let items = if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
+            let rects = TopTabBarRects::compute(win_w, self.tabs.len());
+            let hit = (0..self.tabs.len()).find(|&i| {
+                let r = rects.tab_rect(i);
+                mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+            });
+            self.tab_or_window_menu(hit)
+        } else if !self.is_horizontal_tabs() && self.sidebar_visible && mx < SIDEBAR_WIDTH {
+            // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
+            let (item_h, spacing, list_start_y) = (36, 4, 42);
+            let hit = (my >= list_start_y)
+                .then(|| {
+                    let rel = my - list_start_y;
+                    (rel % (item_h + spacing) < item_h)
+                        .then(|| rel / (item_h + spacing) + self.sidebar_scroll_offset)
+                })
+                .flatten()
+                .filter(|&i| i < self.tabs.len());
+            self.tab_or_window_menu(hit)
+        } else if self.tabs[self.active_tab_index].is_settings {
+            return false;
+        } else if self.file_explorer.visible && {
+            let (px, py, pw, ph) = crate::explorer::FileExplorer::panel_geometry(
+                win_w,
+                win_h,
+                top_offset,
+                status_bar_h,
+            );
+            mx >= px && mx < px + pw && my >= py && my < py + ph
+        } {
+            let (_, panel_y, _, _) = crate::explorer::FileExplorer::panel_geometry(
+                win_w,
+                win_h,
+                top_offset,
+                status_bar_h,
+            );
+            let idx = self.file_explorer.item_at_y(my, panel_y);
+            self.file_explorer.is_focused = true;
+            let mut items = Vec::new();
+            if let Some(idx) = idx {
+                let item = &self.file_explorer.items[idx];
+                self.file_explorer.selected_index = Some(idx);
+                self.file_explorer.selected_path = Some(item.path.clone());
+                let (label, icon) = if item.is_dir {
+                    ("Expandir / contraer", LucideIcon::FolderOpen)
+                } else {
+                    ("Abrir en el visor", LucideIcon::FileText)
+                };
+                items.push(MenuItem::new(
+                    label,
+                    icon,
+                    "",
+                    MenuAction::ExplorerOpen(idx),
+                    true,
+                ));
+                items.push(MenuItem::new(
+                    "Copiar ruta",
+                    LucideIcon::Copy,
+                    "",
+                    MenuAction::ExplorerCopyPath(item.path.clone()),
+                    true,
+                ));
+                items.push(MenuItem::separator());
+            }
+            let any_open = self.file_explorer.items.iter().any(|i| i.is_expanded);
+            items.push(MenuItem::new(
+                "Contraer todo",
+                LucideIcon::Minimize2,
+                "",
+                MenuAction::ExplorerCollapseAll,
+                any_open,
+            ));
+            items.push(MenuItem::new(
+                "Expandir todo",
+                LucideIcon::Maximize2,
+                "",
+                MenuAction::ExplorerExpandAll,
+                self.file_explorer.remote_session.is_none() || self.file_explorer.inband_remote,
+            ));
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new(
+                "Actualizar",
+                LucideIcon::RefreshCw,
+                "",
+                MenuAction::ExplorerRefresh,
+                true,
+            ));
+            items
+        } else if self.tabs[self.active_tab_index].file_viewer.is_some() {
+            let in_viewer = mx >= offset
+                && mx < win_w.saturating_sub(right_offset)
+                && my >= top_offset
+                && my < win_h.saturating_sub(status_bar_h);
+            if !in_viewer {
+                return false;
+            }
+            self.viewer_menu()
+        } else {
+            let area_w = win_w.saturating_sub(offset + right_offset);
+            let area_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let shift = self.modifiers.shift_key();
+            let tab = &mut self.tabs[self.active_tab_index];
+            let hit = tab
+                .compute_pane_rects(offset, top_offset, area_w, area_h)
+                .into_iter()
+                .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height);
+            let Some(rect) = hit else {
+                return false;
+            };
+            let Some(pane) = tab.find_pane(rect.pane_id) else {
+                return false;
+            };
+            // Las aplicaciones TUI que piden el ratón reciben el clic derecho (Shift lo evita)
+            if pane.terminal.is_mouse_reporting_active() && !shift {
+                return false;
+            }
+            let has_selection = pane.terminal.selection.is_some();
+            tab.active_pane_id = rect.pane_id;
+            self.terminal_menu(has_selection)
+        };
+
+        let w = self
+            .renderer
+            .as_ref()
+            .map_or(244, |r| r.context_menu_width(&items));
+        self.context_menu = Some(ContextMenu::new(items, w, (mx, my), (win_w, win_h)));
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+        true
+    }
+
+    fn tab_or_window_menu(&self, tab: Option<usize>) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        if let Some(idx) = tab {
+            if self.tabs.get(idx).is_some_and(|t| t.is_preview) {
+                items.push(MenuItem::new(
+                    "Fijar pestaña",
+                    LucideIcon::Check,
+                    "",
+                    MenuAction::PinTab(idx),
+                    true,
+                ));
+            }
+            items.push(MenuItem::new(
+                "Cerrar pestaña",
+                LucideIcon::X,
+                "Ctrl+W",
+                MenuAction::CloseTab(idx),
+                true,
+            ));
+            items.push(MenuItem::new(
+                "Cerrar las demás",
+                LucideIcon::Minus,
+                "",
+                MenuAction::CloseOtherTabs(idx),
+                self.tabs.len() > 1,
+            ));
+            items.push(MenuItem::separator());
+        }
+        items.push(MenuItem::new(
+            "Nueva pestaña",
+            LucideIcon::Plus,
+            "Ctrl+T",
+            MenuAction::NewTab,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Explorador de archivos",
+            LucideIcon::FolderTree,
+            "Ctrl+Shift+E",
+            MenuAction::ToggleExplorer,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Ajustes",
+            LucideIcon::Settings,
+            "Ctrl+,",
+            MenuAction::OpenSettings,
+            true,
+        ));
+        items
+    }
+
+    fn terminal_menu(&self, has_selection: bool) -> Vec<MenuItem> {
+        vec![
+            MenuItem::new(
+                "Copiar",
+                LucideIcon::Copy,
+                "Ctrl+Shift+C",
+                MenuAction::TermCopy,
+                has_selection,
+            ),
+            MenuItem::new(
+                "Pegar",
+                LucideIcon::ClipboardPaste,
+                "Ctrl+V",
+                MenuAction::TermPaste,
+                true,
+            ),
+            MenuItem::separator(),
+            MenuItem::new(
+                "Dividir horizontalmente",
+                LucideIcon::Rows2,
+                "Ctrl+Alt+D",
+                MenuAction::SplitHorizontal,
+                true,
+            ),
+            MenuItem::new(
+                "Dividir verticalmente",
+                LucideIcon::Columns2,
+                "Ctrl+Alt+V",
+                MenuAction::SplitVertical,
+                true,
+            ),
+            MenuItem::new(
+                "Cerrar panel",
+                LucideIcon::X,
+                "Ctrl+Alt+W",
+                MenuAction::ClosePane,
+                true,
+            ),
+            MenuItem::separator(),
+            MenuItem::new(
+                "Limpiar pantalla",
+                LucideIcon::RefreshCw,
+                "Ctrl+Shift+K",
+                MenuAction::ClearTerminal,
+                true,
+            ),
+            MenuItem::new(
+                "Nueva pestaña",
+                LucideIcon::Plus,
+                "Ctrl+T",
+                MenuAction::NewTab,
+                true,
+            ),
+        ]
+    }
+
+    fn viewer_menu(&self) -> Vec<MenuItem> {
+        let Some(v) = self.tabs[self.active_tab_index].file_viewer.as_ref() else {
+            return Vec::new();
+        };
+        let editable = v.is_editable();
+        let is_md = v
+            .path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
+        let mut items = vec![
+            MenuItem::new(
+                "Copiar",
+                LucideIcon::Copy,
+                "Ctrl+C",
+                MenuAction::ViewerCopy,
+                !v.is_binary,
+            ),
+            MenuItem::new(
+                "Cortar",
+                LucideIcon::Scissors,
+                "Ctrl+X",
+                MenuAction::ViewerCut,
+                editable && v.has_selection(),
+            ),
+            MenuItem::new(
+                "Pegar",
+                LucideIcon::ClipboardPaste,
+                "Ctrl+V",
+                MenuAction::ViewerPaste,
+                editable,
+            ),
+            MenuItem::new(
+                "Seleccionar todo",
+                LucideIcon::ScanText,
+                "Ctrl+A",
+                MenuAction::ViewerSelectAll,
+                !v.is_binary,
+            ),
+            MenuItem::separator(),
+            MenuItem::new(
+                "Deshacer",
+                LucideIcon::Undo2,
+                "Ctrl+Z",
+                MenuAction::ViewerUndo,
+                editable && !v.undo_stack.is_empty(),
+            ),
+            MenuItem::new(
+                "Rehacer",
+                LucideIcon::Redo2,
+                "Ctrl+Y",
+                MenuAction::ViewerRedo,
+                editable && !v.redo_stack.is_empty(),
+            ),
+            MenuItem::separator(),
+            MenuItem::new(
+                "Guardar",
+                LucideIcon::Save,
+                "Ctrl+S",
+                MenuAction::ViewerSave,
+                v.is_dirty,
+            ),
+        ];
+        let foldable = (0..v.lines.len()).any(|i| v.fold_end(i).is_some());
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Contraer todo",
+            LucideIcon::Minimize2,
+            "",
+            MenuAction::ViewerFoldAll,
+            foldable,
+        ));
+        items.push(MenuItem::new(
+            "Expandir todo",
+            LucideIcon::Maximize2,
+            "",
+            MenuAction::ViewerUnfoldAll,
+            !v.folded.is_empty(),
+        ));
+        items.push(MenuItem::new(
+            if self.config.terminal.word_wrap {
+                "Desactivar ajuste de línea"
+            } else {
+                "Activar ajuste de línea"
+            },
+            LucideIcon::WrapText,
+            "Alt+Z",
+            MenuAction::ToggleWordWrap,
+            true,
+        ));
+        items.push(MenuItem::separator());
+        items.push(if v.is_read_only {
+            MenuItem::new(
+                "Pasar a modo edición",
+                LucideIcon::Pencil,
+                "Ctrl+E",
+                MenuAction::ViewerToggleReadOnly,
+                !v.is_binary,
+            )
+        } else {
+            MenuItem::new(
+                "Pasar a modo lectura",
+                LucideIcon::Lock,
+                "Ctrl+E",
+                MenuAction::ViewerToggleReadOnly,
+                true,
+            )
+        });
+        if is_md {
+            items.push(if v.render_markdown {
+                MenuItem::new(
+                    "Ver código fuente",
+                    LucideIcon::Code,
+                    "",
+                    MenuAction::ViewerTogglePreview,
+                    true,
+                )
+            } else {
+                MenuItem::new(
+                    "Ver vista previa",
+                    LucideIcon::Eye,
+                    "",
+                    MenuAction::ViewerTogglePreview,
+                    true,
+                )
+            });
+        }
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Copiar ruta del archivo",
+            LucideIcon::Link,
+            "",
+            MenuAction::CopyFilePath,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Copiar nombre del archivo",
+            LucideIcon::FileText,
+            "",
+            MenuAction::CopyFileName,
+            true,
+        ));
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Cerrar pestaña",
+            LucideIcon::X,
+            "Ctrl+W",
+            MenuAction::CloseTab(self.active_tab_index),
+            true,
+        ));
+        items
+    }
+
+    pub(super) fn set_clipboard_text(&mut self, text: String) {
+        if self.clipboard.is_none() {
+            self.clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(cb) = &mut self.clipboard {
+            let _ = cb.set_text(text);
+        }
+    }
+
+    /// Filas de texto visibles en el visor de la pestaña activa
+    pub(super) fn viewer_visible_lines(&self) -> usize {
+        let win_h = self
+            .window
+            .as_ref()
+            .map_or(600, |w| w.inner_size().height as usize);
+        let row_h = self.renderer.as_ref().map_or(20, |r| r.row_height);
+        (win_h.saturating_sub(self.top_offset() + self.status_bar_height() + 38) / row_h.max(16))
+            .max(1)
+    }
+
+    /// Ctrl+S / «Guardar»: escribe el archivo del visor activo y refresca el estado git del explorador
+    pub(super) fn save_active_viewer(&mut self) {
+        // Archivo remoto: por la propia sesión SSH si es posible (la confirmación llega después)
+        let remote = self.tabs[self.active_tab_index]
+            .file_viewer
+            .as_ref()
+            .and_then(|v| Some((v.remote_destination.clone()?, v.path.clone(), v.is_dirty)));
+        if let Some((dest, path, dirty)) = remote {
+            if dirty && !self.remote_save_active_viewer() {
+                // Sin integración o archivo grande: segunda conexión SSH en un hilo
+                self.ssh_save_viewer(&dest, &path);
+            }
+            return;
+        }
+        let Some(viewer) = self.tabs[self.active_tab_index].file_viewer.as_mut() else {
+            return;
+        };
+        match viewer.save_to_disk() {
+            Ok(()) => {
+                crate::logger::log(&format!("-> Archivo guardado: {}", viewer.file_name));
+                self.file_explorer.refresh_git_status();
+                self.file_explorer.refresh();
+            }
+            Err(e) => crate::logger::log(&format!("-> Error al guardar archivo: {}", e)),
+        }
+    }
+
+    pub(super) fn run_menu_action(&mut self, action: MenuAction, event_loop: &ActiveEventLoop) {
+        let visible_lines = self.viewer_visible_lines();
+        let idx = self.active_tab_index;
+        match action {
+            MenuAction::ViewerCopy => {
+                let text = self.tabs[idx].file_viewer.as_ref().and_then(|v| {
+                    v.selected_text()
+                        .or_else(|| v.lines.get(v.cursor_line).map(|l| format!("{l}\n")))
+                });
+                if let Some(text) = text {
+                    self.set_clipboard_text(text);
+                }
+            }
+            MenuAction::ViewerCut => {
+                let text = self.tabs[idx]
+                    .file_viewer
+                    .as_ref()
+                    .filter(|v| v.is_editable())
+                    .and_then(|v| v.selected_text());
+                if let Some(text) = text {
+                    self.set_clipboard_text(text);
+                    if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                        v.delete_selection();
+                        v.ensure_cursor_visible(visible_lines);
+                    }
+                }
+            }
+            MenuAction::ViewerPaste | MenuAction::TermPaste => self.paste_from_clipboard(),
+            MenuAction::ViewerSelectAll => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    v.select_all();
+                    v.ensure_cursor_visible(visible_lines);
+                }
+            }
+            MenuAction::ViewerUndo | MenuAction::ViewerRedo => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    if action == MenuAction::ViewerUndo {
+                        v.undo();
+                    } else {
+                        v.redo();
+                    }
+                    v.ensure_cursor_visible(visible_lines);
+                }
+            }
+            MenuAction::ViewerSave => self.save_active_viewer(),
+            MenuAction::ViewerFoldAll | MenuAction::ViewerUnfoldAll => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    if action == MenuAction::ViewerFoldAll {
+                        v.fold_all();
+                    } else {
+                        v.unfold_all();
+                    }
+                    v.ensure_cursor_visible(visible_lines);
+                }
+            }
+            MenuAction::ToggleWordWrap => self.toggle_word_wrap(),
+            MenuAction::ViewerToggleReadOnly => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    v.toggle_read_only();
+                }
+            }
+            MenuAction::ViewerTogglePreview => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    v.render_markdown = !v.render_markdown;
+                }
+            }
+            MenuAction::CopyFilePath | MenuAction::CopyFileName => {
+                let text = self.tabs[idx].file_viewer.as_ref().map(|v| {
+                    if action == MenuAction::CopyFileName {
+                        v.file_name.clone()
+                    } else if let Some(dest) = &v.remote_destination {
+                        format!("{}:{}", dest, v.path.display())
+                    } else {
+                        v.path.display().to_string()
+                    }
+                });
+                if let Some(text) = text {
+                    self.set_clipboard_text(text);
+                }
+            }
+            MenuAction::TermCopy => {
+                let text = self.tabs[idx]
+                    .active_pane_mut()
+                    .and_then(|p| p.terminal.copy_selection_text());
+                if let Some(text) = text {
+                    self.set_clipboard_text(text);
+                    if let Some(p) = self.tabs[idx].active_pane_mut() {
+                        p.terminal.selection = None;
+                    }
+                }
+            }
+            MenuAction::SplitHorizontal => self.split_active_pane(SplitDirection::Horizontal),
+            MenuAction::SplitVertical => self.split_active_pane(SplitDirection::Vertical),
+            MenuAction::ClosePane => self.close_active_pane(event_loop),
+            MenuAction::ClearTerminal => {
+                if let Some(p) = self.tabs[idx].active_pane_mut() {
+                    p.terminal.scrollback.clear();
+                    p.terminal.reset_scroll();
+                    p.terminal.command_blocks.clear();
+                    p.pty.write_input(b"\x0c");
+                }
+            }
+            MenuAction::PinTab(i) => {
+                if let Some(t) = self.tabs.get_mut(i) {
+                    t.is_preview = false;
+                }
+            }
+            MenuAction::CloseTab(i) => self.close_tab(i, event_loop),
+            MenuAction::CloseOtherTabs(keep) => {
+                for i in (0..self.tabs.len()).rev().filter(|&i| i != keep) {
+                    self.close_tab(i, event_loop);
+                }
+            }
+            MenuAction::NewTab => self.create_new_tab(),
+            MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
+            MenuAction::ToggleExplorer => self.toggle_file_explorer(),
+            MenuAction::ExplorerOpen(i) => {
+                if let Some(item) = self.file_explorer.items.get(i).cloned() {
+                    if item.is_dir {
+                        self.file_explorer.toggle_expand(i);
+                    } else {
+                        self.open_file_in_viewer(&item.path, true);
+                    }
+                }
+            }
+            MenuAction::ExplorerCopyPath(path) => {
+                self.set_clipboard_text(path.display().to_string());
+            }
+            MenuAction::ExplorerCollapseAll => self.file_explorer.collapse_all(),
+            MenuAction::ExplorerExpandAll => {
+                if self.file_explorer.inband_remote {
+                    self.file_explorer.remote_expand_all = true;
+                    self.remote_expand_next();
+                } else {
+                    self.file_explorer.expand_all();
+                }
+            }
+            MenuAction::ExplorerRefresh => {
+                self.file_explorer.refresh_git_status();
+                self.file_explorer.refresh();
+            }
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(enabled: bool) -> MenuItem {
+        MenuItem::new("x", LucideIcon::Copy, "", MenuAction::NewTab, enabled)
+    }
+
+    #[test]
+    fn test_menu_is_clamped_inside_the_window_and_hit_testing_skips_separators() {
+        let items = vec![item(true), MenuItem::separator(), item(true)];
+        let menu = ContextMenu::new(items, 244, (790, 590), (800, 600));
+        let (x, y, w, h) = menu.bounds();
+        assert!(
+            x + w <= 800 && y + h <= 600,
+            "el menú no debe salirse de la ventana"
+        );
+
+        let first = menu.item_rect(0);
+        let sep = menu.item_rect(1);
+        let last = menu.item_rect(2);
+        assert_eq!(menu.item_at(first.0 + 4, first.1 + 4), Some(0));
+        assert_eq!(menu.item_at(sep.0 + 4, sep.1 + 2), None);
+        assert_eq!(menu.item_at(last.0 + 4, last.1 + 4), Some(2));
+        assert_eq!(menu.item_at(0, 0), None);
+    }
+}

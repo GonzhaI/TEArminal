@@ -36,7 +36,7 @@ function prompt {
     $esc = [char]27; $bel = [char]7
     $rawPath = (Get-Location).Path
     $p = $rawPath.Replace($HOME, '~')
-    $osc7 = $esc + ']7;file://localhost/' + $rawPath.Replace('\', '/') + $bel
+    $osc7 = $esc + ']7;file://localhost/' + $rawPath.Replace('%', '%25').Replace('\', '/') + $bel
     $git = ''
     for ($d = $rawPath; $d; $d = [IO.Path]::GetDirectoryName($d)) {
         $dotGit = [IO.Path]::Combine($d, '.git')
@@ -139,9 +139,11 @@ function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList)
         for ($i = 0; $i -lt $h; $i++) { [Console]::WriteLine('') }
         [Console]::Write($esc + '[' + $h + ';1H')
     }
+    # OSC 1337 AxonAgent: si la consola muere con el agente (opencode lo hace al salir), Axon reabre el shell
+    [Console]::Write($esc + ']1337;AxonAgent=start' + $bel)
     try { & $cmd @ArgumentList }
     finally {
-        [Console]::Write($esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[r')
+        [Console]::Write($esc + ']1337;AxonAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[r')
         Clear-Host
     }
 }
@@ -166,8 +168,25 @@ function ssh {
         break
     }
     if (-not $dest) { $dest = 'remote' }
+    # Integración (config terminal.ssh_integration): un bash remoto informa en cada prompt de la rama git,
+    # la carpeta (OSC 7) y su listado (OSC 1337), y atiende peticiones de Axon (leer/guardar archivo, listar
+    # carpeta) por la misma sesión, sin segunda conexión: funciona también con contraseña. Solo en sesiones
+    # interactivas sin comando remoto. Texto plano, sin ofuscar (los antivirus desconfían de lo contrario).
+    $integrate = ($env:AXON_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($rawArgs[-1] -eq $dest)
+    foreach ($a in $rawArgs) { if ($a -in @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
+    if ($integrate) {
+        $hook = @'
+__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;AxonGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;AxonLs=%s\007' $(ls -1Ap 2>/dev/null|head -300|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__axon_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 524288 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -300|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;AxonFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__axon_req';fi
+'@
+        $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
+        $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;exec ${SHELL:-/bin/sh} -l'
+        $remoteCmd = 'sh -c ' + (& $q $script)
+        # Windows PowerShell 5.1 (y 7.0-7.2) no escapa las comillas dobles al llamar a un .exe
+        if ($PSVersionTable.PSVersion -lt [version]'7.3') { $remoteCmd = $remoteCmd.Replace('"', '\"') }
+        $rawArgs = @('-t') + $rawArgs + @($remoteCmd)
+    }
     $esc = [char]27; $bel = [char]7
-    [Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + $bel)
+    [Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + ';token=' + $env:AXON_PANE_TOKEN + $bel)
     [Console]::Write($esc + ']0;ssh: ' + $dest + $bel)
     $prevTerm = $env:TERM; $prevColor = $env:COLORTERM
     $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'

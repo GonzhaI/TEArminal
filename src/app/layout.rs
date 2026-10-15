@@ -49,9 +49,10 @@ impl TerminalPane {
     pub fn new(
         id: usize,
         pty: PtyManager,
-        terminal: TerminalState,
+        mut terminal: TerminalState,
         last_grid_size: (usize, usize),
     ) -> Self {
+        terminal.pane_token = pty.token.clone();
         Self {
             id,
             pty,
@@ -63,421 +64,101 @@ impl TerminalPane {
     }
 
     pub fn get_git_branch(&mut self) -> Option<String> {
+        let is_ssh = self
+            .terminal
+            .ssh_session
+            .as_ref()
+            .map(|s| s.is_active)
+            .unwrap_or(false);
+
+        if is_ssh {
+            // Con la integración del shell remoto la rama llega en cada prompt (vacía = no es un repositorio)
+            if self.terminal.remote_integration {
+                return self
+                    .terminal
+                    .ssh_session
+                    .as_ref()
+                    .and_then(|s| s.remote_git_branch.clone());
+            }
+            let rows = self.terminal.grid.len();
+            let mut detected_branch = None;
+            let mut latest_prompt_dir = None;
+            let mut found_prompt = false;
+
+            for r in (0..rows).rev().take(35) {
+                if let Some(row) = self.terminal.grid.get(r) {
+                    let line: String = row.iter().map(|c| c.c).collect();
+                    let trimmed = line.trim();
+
+                    // Detectar CWD y rama del prompt: ej. "user@host:/path$" o "user@host:~/project (qa)$"
+                    if let Some((user_host, rest)) = trimmed.split_once(':') {
+                        if user_host.contains('@') {
+                            if let Some((path_part, _)) =
+                                rest.split_once('$').or_else(|| rest.split_once('#'))
+                            {
+                                let dir_raw = path_part.trim();
+                                if !found_prompt {
+                                    found_prompt = true;
+                                    // Si contiene rama en paréntesis, ej. "/home/django (qa)"
+                                    if let Some((dir_clean, branch_inside)) =
+                                        dir_raw.split_once('(')
+                                    {
+                                        let dir = dir_clean.trim();
+                                        latest_prompt_dir = Some(dir.to_string());
+                                        if detected_branch.is_none() {
+                                            let b = branch_inside.trim_end_matches(')').trim();
+                                            let words: Vec<&str> = b.split_whitespace().collect();
+                                            if words.len() == 1
+                                                && words[0].chars().all(|c| {
+                                                    c.is_alphanumeric()
+                                                        || matches!(c, '/' | '-' | '_' | '.')
+                                                })
+                                            {
+                                                detected_branch = Some(words[0].to_string());
+                                            }
+                                        }
+                                    } else {
+                                        let dir =
+                                            dir_raw.split_whitespace().next().unwrap_or(dir_raw);
+                                        latest_prompt_dir = Some(dir.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Rama mostrada por la salida de git (git status / git branch), en cualquier idioma
+                    if detected_branch.is_none() {
+                        detected_branch = shell_context::branch_from_output_line(trimmed);
+                    }
+                }
+            }
+
+            if let Some(ref mut s) = self.terminal.ssh_session {
+                if let Some(ref d) = latest_prompt_dir {
+                    if s.remote_dir.as_deref() != Some(d) {
+                        s.remote_dir = Some(d.clone());
+                        s.remote_git_branch = None; // Reset cached branch on directory change!
+                        if let Some(dir) = crate::terminal::performer::accept_cwd(d) {
+                            self.terminal.current_dir = Some(dir);
+                        }
+                    }
+                }
+                if detected_branch.is_some() {
+                    s.remote_git_branch = detected_branch.clone();
+                }
+                return s.remote_git_branch.clone();
+            }
+
+            return detected_branch;
+        }
+
         if self.terminal.current_dir != self.cached_git_dir {
             self.cached_git_branch = get_git_branch(self.terminal.current_dir.as_deref());
             self.cached_git_dir = self.terminal.current_dir.clone();
         }
         self.cached_git_branch.clone()
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewerSnapshot {
-    pub lines: Vec<String>,
-    pub cursor_line: usize,
-    pub cursor_col: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct FileViewerState {
-    pub path: std::path::PathBuf,
-    pub file_name: String,
-    pub lines: Vec<String>,
-    pub scroll_offset: usize,
-    pub scroll_offset_x: usize,
-    pub is_binary: bool,
-    pub file_size: u64,
-    pub cursor_line: usize,
-    pub cursor_col: usize,
-    pub is_dirty: bool,
-    pub undo_stack: Vec<ViewerSnapshot>,
-    pub redo_stack: Vec<ViewerSnapshot>,
-    pub original_lines: Vec<String>,
-}
-
-impl FileViewerState {
-    pub fn push_undo(&mut self) {
-        if self.undo_stack.len() >= 100 {
-            self.undo_stack.remove(0);
-        }
-        self.undo_stack.push(ViewerSnapshot {
-            lines: self.lines.clone(),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        });
-        self.redo_stack.clear();
-    }
-
-    pub fn undo(&mut self) {
-        if let Some(prev) = self.undo_stack.pop() {
-            self.redo_stack.push(ViewerSnapshot {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            });
-            self.lines = prev.lines;
-            self.cursor_line = prev.cursor_line.min(self.lines.len().saturating_sub(1));
-            self.cursor_col = prev.cursor_col;
-            self.is_dirty = self.lines != self.original_lines;
-        }
-    }
-
-    pub fn redo(&mut self) {
-        if let Some(next) = self.redo_stack.pop() {
-            self.undo_stack.push(ViewerSnapshot {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            });
-            self.lines = next.lines;
-            self.cursor_line = next.cursor_line.min(self.lines.len().saturating_sub(1));
-            self.cursor_col = next.cursor_col;
-            self.is_dirty = self.lines != self.original_lines;
-        }
-    }
-
-    pub fn ensure_cursor_visible(&mut self, visible_lines: usize) {
-        if self.cursor_line < self.scroll_offset {
-            self.scroll_offset = self.cursor_line;
-        } else if self.cursor_line >= self.scroll_offset + visible_lines {
-            self.scroll_offset = self
-                .cursor_line
-                .saturating_sub(visible_lines.saturating_sub(1));
-        }
-
-        // Horizontal scroll ensure visible (columna)
-        if self.cursor_col < self.scroll_offset_x {
-            self.scroll_offset_x = self.cursor_col;
-        } else if self.cursor_col >= self.scroll_offset_x + 80 {
-            self.scroll_offset_x = self.cursor_col.saturating_sub(79);
-        }
-    }
-
-    pub fn insert_char(&mut self, ch: char) {
-        if self.is_binary {
-            return;
-        }
-        self.push_undo();
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
-        }
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
-        }
-
-        let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let byte_pos = if self.cursor_col < char_indices.len() {
-            char_indices[self.cursor_col]
-        } else {
-            line.len()
-        };
-
-        line.insert(byte_pos, ch);
-        self.cursor_col += 1;
-        self.is_dirty = true;
-    }
-
-    pub fn insert_text(&mut self, text: &str) {
-        if self.is_binary || text.is_empty() {
-            return;
-        }
-        self.push_undo();
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
-        }
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
-        }
-
-        let text_clean = text.replace("\r\n", "\n").replace('\r', "\n");
-        let parts: Vec<&str> = text_clean.split('\n').collect();
-
-        if parts.len() == 1 {
-            let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            let byte_pos = if self.cursor_col < char_indices.len() {
-                char_indices[self.cursor_col]
-            } else {
-                line.len()
-            };
-
-            line.insert_str(byte_pos, parts[0]);
-            self.cursor_col += parts[0].chars().count();
-        } else {
-            let line = &self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            let byte_pos = if self.cursor_col < char_indices.len() {
-                char_indices[self.cursor_col]
-            } else {
-                line.len()
-            };
-
-            let prefix = self.lines[self.cursor_line][..byte_pos].to_string();
-            let suffix = self.lines[self.cursor_line][byte_pos..].to_string();
-
-            self.lines[self.cursor_line] = format!("{}{}", prefix, parts[0]);
-
-            for (idx, &part) in parts.iter().enumerate().skip(1) {
-                if idx == parts.len() - 1 {
-                    self.lines
-                        .insert(self.cursor_line + idx, format!("{}{}", part, suffix));
-                    self.cursor_col = part.chars().count();
-                } else {
-                    self.lines.insert(self.cursor_line + idx, part.to_string());
-                }
-            }
-            self.cursor_line += parts.len() - 1;
-        }
-        self.is_dirty = true;
-    }
-
-    pub fn insert_newline(&mut self) {
-        if self.is_binary {
-            return;
-        }
-        self.push_undo();
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
-        }
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
-        }
-
-        let line = &self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let byte_pos = if self.cursor_col < char_indices.len() {
-            char_indices[self.cursor_col]
-        } else {
-            line.len()
-        };
-
-        let remainder = self.lines[self.cursor_line][byte_pos..].to_string();
-        self.lines[self.cursor_line].truncate(byte_pos);
-
-        self.cursor_line += 1;
-        self.cursor_col = 0;
-        self.lines.insert(self.cursor_line, remainder);
-        self.is_dirty = true;
-    }
-
-    pub fn insert_tab(&mut self) {
-        self.insert_text("    ");
-    }
-
-    pub fn backspace(&mut self) {
-        if self.is_binary {
-            return;
-        }
-        if self.lines.is_empty() {
-            return;
-        }
-        self.push_undo();
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
-        }
-
-        if self.cursor_col > 0 {
-            let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            if self.cursor_col < char_indices.len() {
-                let start_byte = char_indices[self.cursor_col - 1];
-                let end_byte = char_indices[self.cursor_col];
-                line.drain(start_byte..end_byte);
-                self.cursor_col -= 1;
-                self.is_dirty = true;
-            }
-        } else if self.cursor_line > 0 {
-            // Unir la línea actual con la anterior
-            let cur_line = self.lines.remove(self.cursor_line);
-            self.cursor_line -= 1;
-            let prev_len = self.lines[self.cursor_line].chars().count();
-            self.lines[self.cursor_line].push_str(&cur_line);
-            self.cursor_col = prev_len;
-            self.is_dirty = true;
-        }
-    }
-
-    pub fn delete(&mut self) {
-        if self.is_binary {
-            return;
-        }
-        if self.lines.is_empty() {
-            return;
-        }
-        self.push_undo();
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
-        }
-
-        let line = &self.lines[self.cursor_line];
-        let char_count = line.chars().count();
-
-        if self.cursor_col < char_count {
-            let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            let start_byte = char_indices[self.cursor_col];
-            let end_byte = char_indices[self.cursor_col + 1];
-            line.drain(start_byte..end_byte);
-            self.is_dirty = true;
-        } else if self.cursor_line + 1 < self.lines.len() {
-            // Unir la línea siguiente a la actual
-            let next_line = self.lines.remove(self.cursor_line + 1);
-            self.lines[self.cursor_line].push_str(&next_line);
-            self.is_dirty = true;
-        }
-    }
-
-    /// Borrado de palabra hacia la izquierda (Ctrl + Backspace)
-    pub fn delete_word_left(&mut self) {
-        if self.is_binary || self.lines.is_empty() {
-            return;
-        }
-        if self.cursor_col == 0 {
-            self.backspace();
-            return;
-        }
-        self.push_undo();
-        let target_col = self.find_word_boundary_left();
-        let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let start_byte = char_indices[target_col];
-        let end_byte = char_indices[self.cursor_col];
-        line.drain(start_byte..end_byte);
-        self.cursor_col = target_col;
-        self.is_dirty = true;
-    }
-
-    /// Borrado de palabra hacia la derecha (Ctrl + Delete)
-    pub fn delete_word_right(&mut self) {
-        if self.is_binary || self.lines.is_empty() {
-            return;
-        }
-        let line_len = self.lines[self.cursor_line].chars().count();
-        if self.cursor_col >= line_len {
-            self.delete();
-            return;
-        }
-        self.push_undo();
-        let target_col = self.find_word_boundary_right();
-        let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let start_byte = char_indices[self.cursor_col];
-        let end_byte = char_indices[target_col];
-        line.drain(start_byte..end_byte);
-        self.is_dirty = true;
-    }
-
-    pub fn find_word_boundary_left(&self) -> usize {
-        if self.cursor_col == 0 || self.cursor_line >= self.lines.len() {
-            return 0;
-        }
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let mut idx = self.cursor_col;
-
-        // Saltar espacios a la izquierda
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
-        if idx == 0 {
-            return 0;
-        }
-
-        // Si es caracter alfanumérico o guion bajo, buscar el inicio de la palabra
-        let is_alphanumeric = chars[idx - 1].is_alphanumeric() || chars[idx - 1] == '_';
-        if is_alphanumeric {
-            while idx > 0 && (chars[idx - 1].is_alphanumeric() || chars[idx - 1] == '_') {
-                idx -= 1;
-            }
-        } else {
-            // Símbolos puntuación
-            while idx > 0 && !chars[idx - 1].is_alphanumeric() && !chars[idx - 1].is_whitespace() {
-                idx -= 1;
-            }
-        }
-        idx
-    }
-
-    pub fn find_word_boundary_right(&self) -> usize {
-        if self.cursor_line >= self.lines.len() {
-            return 0;
-        }
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let len = chars.len();
-        if self.cursor_col >= len {
-            return len;
-        }
-        let mut idx = self.cursor_col;
-
-        let is_alphanumeric = chars[idx].is_alphanumeric() || chars[idx] == '_';
-        if is_alphanumeric {
-            while idx < len && (chars[idx].is_alphanumeric() || chars[idx] == '_') {
-                idx += 1;
-            }
-        } else if !chars[idx].is_whitespace() {
-            while idx < len && !chars[idx].is_alphanumeric() && !chars[idx].is_whitespace() {
-                idx += 1;
-            }
-        }
-        // Saltar espacios posteriores
-        while idx < len && chars[idx].is_whitespace() {
-            idx += 1;
-        }
-        idx
-    }
-
-    pub fn get_line_git_diff_status(&self, line_idx: usize) -> Option<GitLineStatus> {
-        if line_idx >= self.lines.len() {
-            return None;
-        }
-        if self.original_lines.is_empty() {
-            // Todo el archivo es nuevo / no trackeado
-            return Some(GitLineStatus::Added);
-        }
-        if line_idx >= self.original_lines.len() {
-            return Some(GitLineStatus::Added);
-        }
-        if self.lines[line_idx] != self.original_lines[line_idx] {
-            return Some(GitLineStatus::Modified);
-        }
-        None
-    }
-
-    pub fn save_to_disk(&mut self) -> Result<(), std::io::Error> {
-        if self.is_binary {
-            return Ok(());
-        }
-        let content = self.lines.join("\r\n");
-        std::fs::write(&self.path, content)?;
-        self.is_dirty = false;
-        self.file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
-        self.original_lines = self.lines.clone();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GitLineStatus {
-    Added,
-    Modified,
 }
 
 pub struct TerminalTab {
@@ -489,6 +170,8 @@ pub struct TerminalTab {
     pub has_unread: bool,
     pub is_settings: bool,
     pub file_viewer: Option<FileViewerState>,
+    /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
+    pub is_preview: bool,
 }
 
 impl TerminalTab {
@@ -504,6 +187,7 @@ impl TerminalTab {
             has_unread: false,
             is_settings: false,
             file_viewer: None,
+            is_preview: false,
         }
     }
 
@@ -517,6 +201,7 @@ impl TerminalTab {
             has_unread: false,
             is_settings: true,
             file_viewer: None,
+            is_preview: false,
         }
     }
 
@@ -529,6 +214,7 @@ impl TerminalTab {
         let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let mut is_binary = false;
         let mut lines = Vec::new();
+        let mut text_meta = (false, true, false);
 
         if file_size > 5 * 1024 * 1024 {
             is_binary = true;
@@ -547,13 +233,9 @@ impl TerminalTab {
                                 .to_string(),
                         );
                     } else {
-                        let text = String::from_utf8_lossy(&bytes);
-                        for line in text.lines() {
-                            lines.push(line.to_string());
-                        }
-                        if lines.is_empty() {
-                            lines.push(String::new());
-                        }
+                        let d = crate::app::viewer::DecodedText::decode(&bytes);
+                        lines = d.lines;
+                        text_meta = (d.crlf, d.final_newline, d.non_utf8);
                     }
                 }
                 Err(e) => {
@@ -563,6 +245,16 @@ impl TerminalTab {
         }
 
         let original_lines = lines.clone();
+        let git_base = if is_binary {
+            None
+        } else {
+            crate::explorer::git_head_lines(&path)
+        };
+        let is_markdown = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
         let viewer = FileViewerState {
             path: path.clone(),
             file_name: file_name.clone(),
@@ -577,6 +269,30 @@ impl TerminalTab {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             original_lines,
+            git_base,
+            diff_stash: None,
+            hovered_diff_btn: false,
+            git_marks: Default::default(),
+            selection: None,
+            remote_destination: None,
+            remote_branch: None,
+            is_read_only: true,
+            crlf: text_meta.0,
+            final_newline: text_meta.1,
+            non_utf8: text_meta.2,
+            save_error: None,
+            render_markdown: is_markdown,
+            hovered_mode_btn: false,
+            hovered_md_btn: false,
+            hovered_scrollbar: false,
+            hovered_hscrollbar: false,
+            hovered_gutter: false,
+            visible_cols: 80,
+            word_wrap: false,
+            folded: Default::default(),
+            edit_gen: 0,
+            fold_gen: 0,
+            rows_cache: Default::default(),
         };
 
         Self {
@@ -588,6 +304,132 @@ impl TerminalTab {
             has_unread: false,
             is_settings: false,
             file_viewer: Some(viewer),
+            is_preview: false,
+        }
+    }
+
+    /// Pestaña de visor para un archivo remoto ya leído (por SSH o por el propio terminal)
+    pub fn new_remote_file_viewer_from(
+        id: usize,
+        dest: String,
+        path: std::path::PathBuf,
+        remote_branch: Option<String>,
+        data: Result<Vec<u8>, String>,
+    ) -> Self {
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "archivo".to_string());
+
+        let mut lines = Vec::new();
+        let mut is_binary = false;
+        let mut file_size = 0;
+        let mut non_utf8 = false;
+
+        match data {
+            Ok(bytes) => {
+                file_size = bytes.len() as u64;
+                if file_size > 5 * 1024 * 1024 {
+                    is_binary = true;
+                    lines.push(format!(
+                        "El archivo es demasiado grande ({:.1} MB) para previsualizar.",
+                        file_size as f64 / (1024.0 * 1024.0)
+                    ));
+                } else if bytes[..bytes.len().min(4096)].contains(&0) {
+                    is_binary = true;
+                    lines.push(
+                        "Archivo binario detectado. No se puede previsualizar en modo texto."
+                            .to_string(),
+                    );
+                } else {
+                    let d = crate::app::viewer::DecodedText::decode(&bytes);
+                    lines = d.lines;
+                    non_utf8 = d.non_utf8;
+                }
+            }
+            Err(err) if err.contains("Permission denied") => {
+                lines.push(
+                    "El servidor pide contraseña: para abrir archivos remotos configura"
+                        .to_string(),
+                );
+                lines.push(
+                    "una clave SSH (ssh-keygen y ssh-copy-id) y vuelve a abrirlo.".to_string(),
+                );
+            }
+            Err(err) => lines.push(format!("Error remoto: {}", err)),
+        }
+
+        let original_lines = lines.clone();
+        let is_markdown = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
+        let viewer = FileViewerState {
+            path: path.clone(),
+            file_name: file_name.clone(),
+            lines,
+            scroll_offset: 0,
+            scroll_offset_x: 0,
+            is_binary,
+            file_size,
+            cursor_line: 0,
+            cursor_col: 0,
+            is_dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            original_lines,
+            git_base: None,
+            diff_stash: None,
+            hovered_diff_btn: false,
+            git_marks: Default::default(),
+            selection: None,
+            remote_destination: Some(dest),
+            remote_branch,
+            is_read_only: true,
+            // El guardado remoto siempre usa LF y salto final (`remote_content`)
+            crlf: false,
+            final_newline: true,
+            non_utf8,
+            save_error: None,
+            render_markdown: is_markdown,
+            hovered_mode_btn: false,
+            hovered_md_btn: false,
+            hovered_scrollbar: false,
+            hovered_hscrollbar: false,
+            hovered_gutter: false,
+            visible_cols: 80,
+            word_wrap: false,
+            folded: Default::default(),
+            edit_gen: 0,
+            fold_gen: 0,
+            rows_cache: Default::default(),
+        };
+
+        Self {
+            id,
+            title: file_name,
+            panes: Vec::new(),
+            active_pane_id: 0,
+            layout: PaneNode::Leaf(0),
+            has_unread: false,
+            is_settings: false,
+            file_viewer: Some(viewer),
+            is_preview: false,
+        }
+    }
+
+    pub fn get_git_branch(&mut self) -> Option<String> {
+        if let Some(pane) = self.active_pane_mut() {
+            pane.get_git_branch()
+        } else if let Some(ref viewer) = self.file_viewer {
+            if viewer.remote_destination.is_some() {
+                viewer.remote_branch.clone()
+            } else {
+                crate::app::shell_context::get_git_branch(viewer.path.parent())
+            }
+        } else {
+            None
         }
     }
 

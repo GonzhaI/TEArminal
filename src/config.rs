@@ -41,6 +41,18 @@ pub struct TerminalConfig {
     pub copy_on_select: bool,
     #[serde(default = "default_false")]
     pub restore_session: bool,
+    #[serde(default = "default_false")]
+    pub auto_save: bool,
+    /// Ajuste de línea del visor de archivos (los textos largos se parten dentro del recuadro)
+    #[serde(default = "default_false")]
+    pub word_wrap: bool,
+    /// Al abrir `ssh` desde Axon, el shell remoto (bash) informa de la rama git y el directorio
+    #[serde(default = "default_true")]
+    pub ssh_integration: bool,
+    /// Deja que los programas de la terminal escriban en el portapapeles de Windows (OSC 52, máx. 100 KB).
+    /// Apagado por defecto: cualquier salida (un `cat` ajeno, un servidor SSH) podría dejar un comando listo para pegar.
+    #[serde(default = "default_false")]
+    pub osc52: bool,
 }
 
 fn default_font_size() -> f32 {
@@ -92,6 +104,10 @@ impl Default for AxonConfig {
                 cursor_blink: true,
                 copy_on_select: false,
                 restore_session: false,
+                auto_save: false,
+                word_wrap: false,
+                ssh_integration: true,
+                osc52: false,
             },
         }
     }
@@ -114,10 +130,13 @@ impl AxonConfig {
             return dirs_or_fallback().join("axon.toml");
         }
 
-        // 1. Prioridad: axon.toml en el directorio de trabajo actual
-        let local = PathBuf::from("axon.toml");
-        if local.exists() {
-            return local;
+        // 1. Solo en desarrollo: axon.toml del directorio actual. En release es un riesgo:
+        //    un repo clonado con `default_shell` malicioso ejecutaría su programa al abrir Axon ahí.
+        if cfg!(debug_assertions) {
+            let local = PathBuf::from("axon.toml");
+            if local.exists() {
+                return local;
+            }
         }
 
         // 2. Prioridad: axon.toml junto al ejecutable
@@ -136,18 +155,35 @@ impl AxonConfig {
     }
 
     pub fn load_or_default() -> Self {
-        // 1. Probar carga desde la ruta detectada
-        let path = Self::config_path();
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(cfg) = toml::from_str::<AxonConfig>(&content) {
-                return cfg;
-            }
-        }
+        Self::load_from(&Self::config_path())
+    }
 
-        // 2. Fallback a configuración por defecto y persistencia
-        let default_cfg = Self::default();
-        let _ = default_cfg.save();
-        default_cfg
+    /// Nunca sobrescribe un archivo existente: si no se puede interpretar, lo copia a
+    /// `axon.toml.bak` y usa los valores por defecto solo en memoria.
+    fn load_from(path: &std::path::Path) -> Self {
+        match fs::read_to_string(path) {
+            Ok(content) => match toml::from_str::<AxonConfig>(&content) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    crate::logger::log(&format!(
+                        "-> axon.toml inválido ({e}); copia en axon.toml.bak, usando valores por defecto"
+                    ));
+                    let _ = fs::write(path.with_extension("toml.bak"), content);
+                    Self::default()
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let default_cfg = Self::default();
+                if let Some(parent) = path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if let Ok(content) = toml::to_string_pretty(&default_cfg) {
+                    let _ = fs::write(path, content);
+                }
+                default_cfg
+            }
+            Err(_) => Self::default(),
+        }
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -212,5 +248,50 @@ impl SessionState {
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_invalid_toml_is_backed_up_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("axon-cfg-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("axon.toml");
+
+        // Inexistente: se crea con los valores por defecto
+        AxonConfig::load_from(&path);
+        assert!(path.exists());
+
+        // Inválido: el archivo queda intacto y se guarda copia
+        let broken = "# mi nota\n[appearance\nfont_size = \"";
+        fs::write(&path, broken).unwrap();
+        AxonConfig::load_from(&path);
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+        assert_eq!(
+            fs::read_to_string(dir.join("axon.toml.bak")).unwrap(),
+            broken
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_osc52_is_off_by_default_also_for_old_configs() {
+        assert!(!AxonConfig::default().terminal.osc52);
+        let mut old = toml::to_string(&AxonConfig::default()).unwrap();
+        old = old
+            .lines()
+            .filter(|l| !l.starts_with("osc52"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(!old.contains("osc52"));
+        assert!(!toml::from_str::<AxonConfig>(&old).unwrap().terminal.osc52);
     }
 }
