@@ -943,4 +943,21 @@ fn test_axon_agent_osc_tracks_running_agent() {
     assert!(term.agent_running);
     term.process_bytes(b"]1337;AxonAgent=end");
     assert!(!term.agent_running);
+
+    // Al terminar un agente, Axon restaura la región de scroll y modos TUI sin mover el cursor a (0,0)
+    term.process_bytes(
+        b"\x1b]1337;AxonAgent=start\x07\x1b[2;20r\x1b[?1000h\x1b[?2004h\x1b[10;5HUpdated to 1.2.3",
+    );
+    assert_eq!(term.scroll_region_top, 1);
+    assert_eq!(term.scroll_region_bottom, 19);
+    assert!(term.mouse_reporting_normal);
+    assert!(term.bracketed_paste_mode);
+    let cy_before = term.cursor_y;
+    term.process_bytes(b"\x1b]1337;AxonAgent=end\x07");
+    assert_eq!(term.scroll_region_top, 0);
+    assert_eq!(term.scroll_region_bottom, 23);
+    assert!(!term.mouse_reporting_normal);
+    assert!(!term.bracketed_paste_mode);
+    assert_eq!(term.cursor_y, cy_before);
+    assert_eq!(term.grid[9][4].c, 'U');
 }

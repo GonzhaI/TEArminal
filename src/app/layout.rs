@@ -27,6 +27,62 @@ pub enum PaneNode {
     },
 }
 
+/// Grosor del divisor entre dos paneles
+const DIVIDER: usize = 2;
+/// Tamaño mínimo (px) de un panel al arrastrar un divisor
+const MIN_PANE: f32 = 48.0;
+
+/// Divisor entre dos paneles
+#[derive(Debug, Clone, PartialEq)]
+pub struct Divider {
+    /// `(x, y, ancho, alto)`
+    pub rect: (usize, usize, usize, usize),
+    /// Camino desde la raíz del árbol hasta el `Split` que lo origina (`false` = primer hijo)
+    pub path: Vec<bool>,
+    pub direction: SplitDirection,
+    /// Inicio (y u x según `direction`) y largo disponible del `Split`, sin el divisor
+    pub origin: usize,
+    pub avail: usize,
+}
+
+impl Divider {
+    /// Margen extra (px) a cada lado para poder agarrar un divisor de 2 px
+    const GRAB: usize = 3;
+
+    pub fn contains(&self, mx: usize, my: usize) -> bool {
+        let (x, y, w, h) = self.rect;
+        mx + Self::GRAB >= x
+            && mx < x + w + Self::GRAB
+            && my + Self::GRAB >= y
+            && my < y + h + Self::GRAB
+    }
+
+    /// Proporción que deja el divisor con el borde del primer panel en `pos` (px de ventana)
+    pub fn ratio_at(&self, pos: usize) -> f32 {
+        if self.avail == 0 {
+            return 0.5;
+        }
+        let min = (MIN_PANE / self.avail as f32).min(0.5);
+        ((pos as f32 - self.origin as f32 - DIVIDER as f32 / 2.0) / self.avail as f32)
+            .clamp(min, 1.0 - min)
+    }
+
+    pub fn cursor_icon(&self) -> winit::window::CursorIcon {
+        match self.direction {
+            SplitDirection::Horizontal => winit::window::CursorIcon::RowResize,
+            SplitDirection::Vertical => winit::window::CursorIcon::ColResize,
+        }
+    }
+
+    /// Coordenada del ratón que mueve este divisor
+    pub fn axis(&self, mx: usize, my: usize) -> usize {
+        match self.direction {
+            SplitDirection::Horizontal => my,
+            SplitDirection::Vertical => mx,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct PaneRect {
     pub pane_id: usize,
@@ -182,6 +238,27 @@ impl TerminalTab {
             id,
             title,
             panes: vec![first_pane],
+            active_pane_id,
+            layout,
+            has_unread: false,
+            is_settings: false,
+            file_viewer: None,
+            is_preview: false,
+        }
+    }
+
+    /// Pestaña con varios paneles ya creados (restauración de sesión)
+    pub fn from_layout(
+        id: usize,
+        title: String,
+        layout: PaneNode,
+        panes: Vec<TerminalPane>,
+        active_pane_id: usize,
+    ) -> Self {
+        Self {
+            id,
+            title,
+            panes,
             active_pane_id,
             layout,
             has_unread: false,
@@ -534,27 +611,44 @@ impl TerminalTab {
         total_w: usize,
         total_h: usize,
     ) -> Vec<PaneRect> {
-        if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
-            return Vec::new();
-        }
-        let mut rects = Vec::new();
-        self.collect_rects(&self.layout, total_x, total_y, total_w, total_h, &mut rects);
-        rects
+        self.geometry(total_x, total_y, total_w, total_h).0
     }
 
-    fn collect_rects(
+    /// Divisores entre paneles: su rectángulo y lo necesario para arrastrarlos
+    pub fn compute_dividers(
         &self,
+        total_x: usize,
+        total_y: usize,
+        total_w: usize,
+        total_h: usize,
+    ) -> Vec<Divider> {
+        self.geometry(total_x, total_y, total_w, total_h).1
+    }
+
+    /// Única fuente de la geometría de paneles y divisores (dibujo, clics y arrastre)
+    fn geometry(&self, x: usize, y: usize, w: usize, h: usize) -> (Vec<PaneRect>, Vec<Divider>) {
+        let mut out = (Vec::new(), Vec::new());
+        if !(self.is_settings || self.file_viewer.is_some() || self.panes.is_empty()) {
+            Self::walk(&self.layout, (x, y, w, h), &mut Vec::new(), &mut out);
+        }
+        out
+    }
+
+    fn walk(
         node: &PaneNode,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        out: &mut Vec<PaneRect>,
+        (x, y, w, h): (usize, usize, usize, usize),
+        path: &mut Vec<bool>,
+        out: &mut (Vec<PaneRect>, Vec<Divider>),
     ) {
-        const DIVIDER: usize = 2;
-        match node {
-            PaneNode::Leaf(pane_id) => {
-                out.push(PaneRect {
+        let PaneNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = node
+        else {
+            if let PaneNode::Leaf(pane_id) = node {
+                out.0.push(PaneRect {
                     pane_id: *pane_id,
                     x,
                     y,
@@ -562,92 +656,104 @@ impl TerminalTab {
                     height: h,
                 });
             }
-            PaneNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => match direction {
-                SplitDirection::Horizontal => {
-                    let avail_h = h.saturating_sub(DIVIDER);
-                    let h1 = ((avail_h as f32) * ratio).round() as usize;
-                    let h1 = h1.min(avail_h);
-                    let h2 = avail_h.saturating_sub(h1);
-                    self.collect_rects(first, x, y, w, h1, out);
-                    self.collect_rects(second, x, y + h1 + DIVIDER, w, h2, out);
-                }
-                SplitDirection::Vertical => {
-                    let avail_w = w.saturating_sub(DIVIDER);
-                    let w1 = ((avail_w as f32) * ratio).round() as usize;
-                    let w1 = w1.min(avail_w);
-                    let w2 = avail_w.saturating_sub(w1);
-                    self.collect_rects(first, x, y, w1, h, out);
-                    self.collect_rects(second, x + w1 + DIVIDER, y, w2, h, out);
-                }
-            },
+            return;
+        };
+        let (origin, len) = match direction {
+            SplitDirection::Horizontal => (y, h),
+            SplitDirection::Vertical => (x, w),
+        };
+        let avail = len.saturating_sub(DIVIDER);
+        let len1 = (((avail as f32) * ratio).round() as usize).min(avail);
+        let len2 = avail - len1;
+        let (rect1, rect2, divider) = match direction {
+            SplitDirection::Horizontal => (
+                (x, y, w, len1),
+                (x, y + len1 + DIVIDER, w, len2),
+                (x, y + len1, w, DIVIDER),
+            ),
+            SplitDirection::Vertical => (
+                (x, y, len1, h),
+                (x + len1 + DIVIDER, y, len2, h),
+                (x + len1, y, DIVIDER, h),
+            ),
+        };
+        out.1.push(Divider {
+            rect: divider,
+            path: path.clone(),
+            direction: *direction,
+            origin,
+            avail,
+        });
+        path.push(false);
+        Self::walk(first, rect1, path, out);
+        path.pop();
+        path.push(true);
+        Self::walk(second, rect2, path, out);
+        path.pop();
+    }
+
+    /// Mueve el divisor `path` (camino desde la raíz: `false` = primer hijo) a `ratio`
+    pub fn set_split_ratio(&mut self, path: &[bool], new_ratio: f32) {
+        let mut node = &mut self.layout;
+        for &second in path {
+            let PaneNode::Split {
+                first, second: s, ..
+            } = node
+            else {
+                return;
+            };
+            node = if second { s } else { first };
+        }
+        if let PaneNode::Split { ratio, .. } = node {
+            *ratio = new_ratio;
         }
     }
 
-    pub fn compute_dividers(
-        &self,
-        total_x: usize,
-        total_y: usize,
-        total_w: usize,
-        total_h: usize,
-    ) -> Vec<(usize, usize, usize, usize)> {
-        if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
-            return Vec::new();
+    /// Árbol de paneles en forma persistible; `cwd_of` da la carpeta local de cada panel
+    pub fn session_layout(&self, cwd_of: &dyn Fn(&TerminalPane) -> Option<String>) -> PaneSession {
+        fn conv(
+            tab: &TerminalTab,
+            node: &PaneNode,
+            cwd_of: &dyn Fn(&TerminalPane) -> Option<String>,
+        ) -> PaneSession {
+            match node {
+                PaneNode::Leaf(id) => PaneSession::Leaf {
+                    cwd: tab.find_pane(*id).and_then(cwd_of),
+                },
+                PaneNode::Split {
+                    direction,
+                    ratio,
+                    first,
+                    second,
+                } => PaneSession::Split {
+                    direction: match direction {
+                        SplitDirection::Horizontal => "horizontal",
+                        SplitDirection::Vertical => "vertical",
+                    }
+                    .to_string(),
+                    ratio: *ratio,
+                    first: Box::new(conv(tab, first, cwd_of)),
+                    second: Box::new(conv(tab, second, cwd_of)),
+                },
+            }
         }
-        let mut dividers = Vec::new();
-        self.collect_dividers(
-            &self.layout,
-            total_x,
-            total_y,
-            total_w,
-            total_h,
-            &mut dividers,
-        );
-        dividers
+        conv(self, &self.layout, cwd_of)
     }
 
-    fn collect_dividers(
-        &self,
-        node: &PaneNode,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        out: &mut Vec<(usize, usize, usize, usize)>,
-    ) {
-        const DIVIDER: usize = 2;
-        match node {
-            PaneNode::Leaf(_) => {}
-            PaneNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => match direction {
-                SplitDirection::Horizontal => {
-                    let avail_h = h.saturating_sub(DIVIDER);
-                    let h1 = ((avail_h as f32) * ratio).round() as usize;
-                    let h1 = h1.min(avail_h);
-                    let h2 = avail_h.saturating_sub(h1);
-                    out.push((x, y + h1, w, DIVIDER));
-                    self.collect_dividers(first, x, y, w, h1, out);
-                    self.collect_dividers(second, x, y + h1 + DIVIDER, w, h2, out);
+    /// Ids de los paneles de `layout` de izquierda a derecha
+    pub fn leaf_ids(&self) -> Vec<usize> {
+        fn walk(node: &PaneNode, out: &mut Vec<usize>) {
+            match node {
+                PaneNode::Leaf(id) => out.push(*id),
+                PaneNode::Split { first, second, .. } => {
+                    walk(first, out);
+                    walk(second, out);
                 }
-                SplitDirection::Vertical => {
-                    let avail_w = w.saturating_sub(DIVIDER);
-                    let w1 = ((avail_w as f32) * ratio).round() as usize;
-                    let w1 = w1.min(avail_w);
-                    let w2 = avail_w.saturating_sub(w1);
-                    out.push((x + w1, y, DIVIDER, h));
-                    self.collect_dividers(first, x, y, w1, h, out);
-                    self.collect_dividers(second, x + w1 + DIVIDER, y, w2, h, out);
-                }
-            },
+            }
         }
+        let mut ids = Vec::new();
+        walk(&self.layout, &mut ids);
+        ids
     }
 
     pub fn split_active_pane(

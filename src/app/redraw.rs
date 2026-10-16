@@ -208,7 +208,11 @@ impl AxonApp {
                     }
 
                     let divider_color = self.theme.border_color();
-                    for (dx, dy, dw, dh) in dividers {
+                    for Divider {
+                        rect: (dx, dy, dw, dh),
+                        ..
+                    } in dividers
+                    {
                         TerminalRenderer::render_pane_divider(
                             &mut buffer,
                             size.width as usize,

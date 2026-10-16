@@ -4,12 +4,7 @@ use super::*;
 
 impl AxonApp {
     /// Botones del ratón: pestañas, paneles, explorador, ajustes, selección y TUIs.
-    pub(super) fn on_mouse_input(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        state: ElementState,
-        button: MouseButton,
-    ) {
+    pub(super) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
         let mx = self.mouse_pos.x as usize;
         let my = self.mouse_pos.y as usize;
 
@@ -39,7 +34,7 @@ impl AxonApp {
             }
             if button == MouseButton::Left {
                 if let Some(action) = action {
-                    self.run_menu_action(action, event_loop);
+                    self.run_menu_action(action);
                 }
                 return;
             }
@@ -52,6 +47,23 @@ impl AxonApp {
             && self.open_context_menu(mx, my)
         {
             return;
+        }
+
+        // Soltar un divisor: tamaño final de los PTY y disposición a la sesión
+        if button == MouseButton::Left
+            && state == ElementState::Released
+            && self.divider_drag.take().is_some()
+        {
+            self.resize_deadline = None;
+            self.recompute_grid_for_all_tabs();
+            self.save_session();
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+        if button == MouseButton::Left && state == ElementState::Released {
+            self.tab_drag = None;
         }
 
         // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
@@ -177,8 +189,7 @@ impl AxonApp {
 
                 // Clic en [✕] Cerrar ventana
                 if TopTabBarRects::inside(mx, my, top_rects.win_close_btn) {
-                    self.save_session();
-                    event_loop.exit();
+                    self.request_close();
                     return;
                 }
 
@@ -212,7 +223,7 @@ impl AxonApp {
                                 "-> Clic botón central (rueda) en pestaña {}",
                                 idx
                             ));
-                            self.close_tab(idx, event_loop);
+                            self.close_tab(idx);
                             return;
                         }
                         if button == MouseButton::Left {
@@ -221,12 +232,13 @@ impl AxonApp {
                                 if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3
                                 {
                                     crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
-                                    self.close_tab(idx, event_loop);
+                                    self.close_tab(idx);
                                     return;
                                 }
                             }
                             crate::logger::log(&format!("-> Clic en pestaña {}", idx));
                             self.click_tab(idx);
+                            self.tab_drag = Some(idx);
                             return;
                         }
                     }
@@ -268,8 +280,7 @@ impl AxonApp {
                 }
 
                 if TopTabBarRects::inside(mx, my, title_rects.win_close_btn) {
-                    self.save_session();
-                    event_loop.exit();
+                    self.request_close();
                     return;
                 }
 
@@ -417,7 +428,7 @@ impl AxonApp {
                                     "-> Clic botón central (rueda) en pestaña sidebar {}",
                                     tab_idx
                                 ));
-                                self.close_tab(tab_idx, event_loop);
+                                self.close_tab(tab_idx);
                                 return;
                             }
                             if button == MouseButton::Left {
@@ -431,10 +442,11 @@ impl AxonApp {
                                         "-> Clic en [x] pestaña {}",
                                         tab_idx
                                     ));
-                                    self.close_tab(tab_idx, event_loop);
+                                    self.close_tab(tab_idx);
                                 } else {
                                     crate::logger::log(&format!("-> Clic en pestaña {}", tab_idx));
                                     self.click_tab(tab_idx);
+                                    self.tab_drag = Some(tab_idx);
                                 }
                                 return;
                             }
@@ -1097,7 +1109,15 @@ impl AxonApp {
             }
         }
 
-        // 2. Clics en paneles de terminal activa
+        // 2. Divisor entre paneles: agarrarlo para redimensionar
+        if button == MouseButton::Left && state == ElementState::Pressed {
+            if let Some(divider) = self.divider_at(mx, my) {
+                self.divider_drag = Some(divider);
+                return;
+            }
+        }
+
+        // 3. Clics en paneles de terminal activa
         let bypass = self.modifiers.shift_key();
         let offset = self.sidebar_offset();
         let top_offset = self.top_offset();

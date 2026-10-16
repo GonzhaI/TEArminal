@@ -209,8 +209,15 @@ fn dirs_or_fallback() -> PathBuf {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Sesión persistida: una entrada por ventana abierta (`session.toml`)
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub struct SessionState {
+    pub windows: Vec<WindowSession>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct WindowSession {
+    /// Posición entre las pestañas de terminal (ajustes y visores no se guardan)
     pub active_tab_index: usize,
     #[serde(default = "default_true")]
     pub sidebar_visible: bool,
@@ -219,11 +226,34 @@ pub struct SessionState {
     pub tabs: Vec<TabSession>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct TabSession {
     pub title: String,
-    pub cwd: Option<String>,
+    pub layout: PaneSession,
+    /// Panel activo: posición entre las hojas de `layout`, de izquierda a derecha
+    #[serde(default)]
+    pub active_pane: usize,
 }
+
+/// Árbol de paneles de una pestaña (espejo serializable de `app::PaneNode`)
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum PaneSession {
+    Leaf {
+        cwd: Option<String>,
+    },
+    Split {
+        /// `horizontal` (uno encima del otro) o `vertical` (lado a lado)
+        direction: String,
+        ratio: f32,
+        first: Box<PaneSession>,
+        second: Box<PaneSession>,
+    },
+}
+
+/// Ventanas vivas de este proceso y su última instantánea: `session.toml` guarda todas a la vez
+static OPEN_WINDOWS: std::sync::Mutex<std::collections::BTreeMap<u32, WindowSession>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 impl SessionState {
     pub fn session_path() -> PathBuf {
@@ -248,6 +278,29 @@ impl SessionState {
         let content = toml::to_string_pretty(self)?;
         fs::write(path, content)?;
         Ok(())
+    }
+
+    /// Guarda la instantánea de la ventana `id` junto a las de las demás ventanas abiertas
+    pub fn save_window(id: u32, window: WindowSession) {
+        Self::update_open_windows(|open| {
+            open.insert(id, window);
+        });
+    }
+
+    /// La ventana `id` se cerró con otras aún abiertas: deja de formar parte de la sesión
+    pub fn forget_window(id: u32) {
+        Self::update_open_windows(|open| {
+            open.remove(&id);
+        });
+    }
+
+    fn update_open_windows(f: impl FnOnce(&mut std::collections::BTreeMap<u32, WindowSession>)) {
+        let mut open = OPEN_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+        f(&mut open);
+        let state = Self {
+            windows: open.values().cloned().collect(),
+        };
+        let _ = state.save();
     }
 }
 
@@ -277,6 +330,44 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_session_with_nested_splits_round_trips_through_toml() {
+        let leaf = |cwd: &str| PaneSession::Leaf {
+            cwd: Some(cwd.to_string()),
+        };
+        let state = SessionState {
+            windows: vec![WindowSession {
+                active_tab_index: 1,
+                sidebar_visible: false,
+                file_explorer_visible: true,
+                tabs: vec![
+                    TabSession {
+                        title: "Terminal 1".into(),
+                        layout: leaf("C:/Users"),
+                        active_pane: 0,
+                    },
+                    TabSession {
+                        title: "Terminal 2".into(),
+                        layout: PaneSession::Split {
+                            direction: "vertical".into(),
+                            ratio: 0.25,
+                            first: Box::new(leaf("C:/a")),
+                            second: Box::new(PaneSession::Split {
+                                direction: "horizontal".into(),
+                                ratio: 0.75,
+                                first: Box::new(PaneSession::Leaf { cwd: None }),
+                                second: Box::new(leaf("C:/b")),
+                            }),
+                        },
+                        active_pane: 2,
+                    },
+                ],
+            }],
+        };
+        let text = toml::to_string_pretty(&state).unwrap();
+        assert_eq!(toml::from_str::<SessionState>(&text).unwrap(), state);
     }
 
     #[test]

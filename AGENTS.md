@@ -8,7 +8,7 @@ Terminal nativa para Windows en Rust (ConPTY, `winit`, render por software). Est
 src/
 ├── main.rs        # carga config, fija AXON_SSH_INTEGRATION y arranca el EventLoop
 ├── app/           # AxonApp y bucle de winit, un archivo por responsabilidad:
-│   mod.rs (estado, sesión) · handler.rs (despacho de eventos, about_to_wait) · redraw.rs (un fotograma)
+│   host.rs (AxonHost: ventanas, único que toca el ActiveEventLoop) · mod.rs (estado, sesión) · handler.rs (despacho de eventos, about_to_wait) · redraw.rs (un fotograma)
 │   keyboard.rs · cursor.rs · click.rs · wheel.rs (entrada) · tabs.rs · settings.rs · clipboard.rs
 │   layout.rs (paneles, TerminalPane/TerminalTab) · viewer.rs (FileViewerState) · context_menu.rs
 │   remote_files.rs (peticiones en banda por SSH) · shell_context.rs · platform.rs (Win32) · keys.rs · tests.rs
@@ -34,7 +34,7 @@ tools/             # subset-fonts (recorta fuentes) y make-icon.ps1
 
 ## Trampas de la plataforma (leer antes de tocar teclado o VT)
 
-* **Borrado:** Backspace = `0x7f`; `Ctrl+Backspace` = `0x17` (no `0x08`: los harnesses raw lo leen como 1 carácter); `Alt+Backspace` = `ESC DEL`.
+* **Borrado y salto de línea:** Backspace = `0x7f`; `Ctrl+Backspace` = `0x17` (no `0x08`: los harnesses raw lo leen como 1 carácter); `Alt+Backspace` = `ESC DEL`; `Shift+Enter` / `Alt+Enter` = `ESC CR` (`\x1b\r`, salto de línea en agentes CLI y `AddLine` en PSReadLine).
 * **AltGr:** Windows inyecta un `VK_LCONTROL` sintético y a veces no emite su key-up. Consulta modificadores con `get_physical_modifiers()` (`GetAsyncKeyState`), no con `winit`. `Ctrl` activo solo si `VK_RCONTROL`, o `VK_LCONTROL` sin `VK_RMENU`. AltGr sin texto imprimible = `Ctrl+Alt`.
 * **Atajos con Alt:** `winit` da `Key::Unidentified`; comprueba la tecla física con `key_is_char`.
 * **Foco:** al cambiar de foco `modifiers` se resetea; `Alt+Tab` nunca emite `\t`. El reporte de foco (modo 1004) está desactivado: ConPTY lo convierte en Enter/Escape. `handler.rs` descarta `KeyboardInput { is_synthetic: true }` (winit reenvía teclas aún pulsadas al recuperar el foco).

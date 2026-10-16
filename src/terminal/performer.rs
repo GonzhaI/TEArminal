@@ -514,6 +514,18 @@ impl<'a> Perform for Performer<'a> {
                     self.state.agent_running = true;
                 } else if p1.starts_with(b"AxonAgent=end") {
                     self.state.agent_running = false;
+                    // Restaura región de scroll y modos TUI sin mover el cursor a (0,0) como haría CSI r
+                    if self.state.is_alt_screen {
+                        self.state.exit_alt_screen();
+                    }
+                    self.state.scroll_region_top = 0;
+                    self.state.scroll_region_bottom = self.state.rows.saturating_sub(1);
+                    self.state.mouse_reporting_normal = false;
+                    self.state.mouse_reporting_button_event = false;
+                    self.state.mouse_reporting_any_event = false;
+                    self.state.mouse_reporting_sgr = false;
+                    self.state.bracketed_paste_mode = false;
+                    self.state.sync_update_mode = false;
                 } else if p1.starts_with(b"AxonGit=") || p1.starts_with(b"git_branch=") {
                     let text = String::from_utf8_lossy(p1);
                     let branch = text

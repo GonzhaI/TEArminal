@@ -268,6 +268,22 @@ impl AxonApp {
             return;
         }
 
+        // Arrastre de un divisor entre paneles
+        if let Some(icon) = self.divider_drag.as_ref().map(Divider::cursor_icon) {
+            self.drag_divider(mx, my);
+            if let Some(w) = &self.window {
+                w.set_cursor(icon);
+            }
+            return;
+        }
+
+        // Reordenar pestañas: la arrastrada salta a la posición bajo el ratón
+        if let Some(from) = self.tab_drag {
+            if let Some(to) = self.tab_slot_at(mx, my).filter(|&to| to != from) {
+                self.move_tab(from, to);
+            }
+        }
+
         // Con el menú contextual abierto solo se resalta su opción bajo el ratón
         if let Some(menu) = &mut self.context_menu {
             let hovered = menu.item_at(mx, my);
@@ -1207,7 +1223,8 @@ impl AxonApp {
             }
         };
 
-        let cursor_icon = if let Some(resize_cur) = border_resize_cursor {
+        let divider_cursor = self.divider_at(mx, my).map(|d| d.cursor_icon());
+        let cursor_icon = if let Some(resize_cur) = border_resize_cursor.or(divider_cursor) {
             resize_cur
         } else if is_pointer {
             winit::window::CursorIcon::Pointer

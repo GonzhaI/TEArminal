@@ -201,8 +201,7 @@ impl AxonApp {
     pub fn create_new_tab(&mut self) {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
-        let pane_id = self.next_pane_id;
-        self.next_pane_id += 1;
+        let pane_id = alloc_pane_id();
 
         let (cols, rows) = if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
             let size = window.inner_size();
@@ -251,16 +250,15 @@ impl AxonApp {
         }
     }
 
-    pub fn close_tab(&mut self, index: usize, event_loop: &ActiveEventLoop) {
+    pub fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
         }
 
         self.tabs.remove(index);
         if self.tabs.is_empty() {
-            crate::logger::log("No quedan pestañas activas: cerrando Axon");
-            self.save_session();
-            event_loop.exit();
+            crate::logger::log("No quedan pestañas activas: cerrando la ventana");
+            self.request_close();
             return;
         }
 
@@ -282,8 +280,7 @@ impl AxonApp {
         {
             return;
         }
-        let new_pane_id = self.next_pane_id;
-        self.next_pane_id += 1;
+        let new_pane_id = alloc_pane_id();
 
         let active_pane = self
             .tabs
@@ -391,27 +388,28 @@ impl AxonApp {
 
         self.recompute_grid_for_all_tabs();
         self.update_window_title();
+        self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
     }
 
-    pub fn close_active_pane(&mut self, event_loop: &ActiveEventLoop) {
+    pub fn close_active_pane(&mut self) {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
             if active_tab.is_settings || active_tab.file_viewer.is_some() {
-                self.close_tab(self.active_tab_index, event_loop);
+                self.close_tab(self.active_tab_index);
                 return;
             }
             let active_pane_id = active_tab.active_pane_id;
-            self.close_pane_by_id(active_pane_id, event_loop);
+            self.close_pane_by_id(active_pane_id);
         }
     }
 
     /// El shell de un panel terminó. Si había un agente en marcha (opencode se lleva la consola por delante
     /// al salir) se abre un shell nuevo en el mismo panel y carpeta; si no (un `exit` normal) se cierra el panel.
-    pub(super) fn on_shell_exit(&mut self, pane_id: usize, event_loop: &ActiveEventLoop) {
+    pub(super) fn on_shell_exit(&mut self, pane_id: usize) {
         if !self.respawn_shell_after_agent(pane_id) {
-            self.close_pane_by_id(pane_id, event_loop);
+            self.close_pane_by_id(pane_id);
         }
     }
 
@@ -456,7 +454,7 @@ impl AxonApp {
         }
     }
 
-    pub fn close_pane_by_id(&mut self, pane_id: usize, event_loop: &ActiveEventLoop) {
+    pub fn close_pane_by_id(&mut self, pane_id: usize) {
         let mut tab_to_close = None;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             if tab.panes.iter().any(|p| p.id == pane_id) {
@@ -466,6 +464,7 @@ impl AxonApp {
                     tab.close_pane(pane_id);
                     self.recompute_grid_for_all_tabs();
                     self.update_window_title();
+                    self.save_session();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -475,7 +474,7 @@ impl AxonApp {
         }
 
         if let Some(idx) = tab_to_close {
-            self.close_tab(idx, event_loop);
+            self.close_tab(idx);
         }
     }
 
@@ -566,6 +565,75 @@ impl AxonApp {
         }
     }
 
+    /// Área de paneles de terminal `(x, y, ancho, alto)` entre barras, barra lateral y explorador
+    fn pane_area(&self) -> Option<(usize, usize, usize, usize)> {
+        let size = self.window.as_ref()?.inner_size();
+        let (x, y) = (self.sidebar_offset(), self.top_offset());
+        let w = (size.width as usize).saturating_sub(x + self.file_explorer_offset());
+        let h = (size.height as usize).saturating_sub(y + self.status_bar_height());
+        Some((x, y, w, h))
+    }
+
+    /// Divisor entre paneles bajo `(mx, my)` en la pestaña activa
+    pub(super) fn divider_at(&self, mx: usize, my: usize) -> Option<Divider> {
+        let (x, y, w, h) = self.pane_area()?;
+        let tab = self.tabs.get(self.active_tab_index)?;
+        let dividers = tab.compute_dividers(x, y, w, h);
+        dividers.into_iter().find(|d| d.contains(mx, my))
+    }
+
+    /// Mueve el divisor agarrado hasta el ratón; el PTY se redimensiona al soltarlo o al detenerse
+    pub(super) fn drag_divider(&mut self, mx: usize, my: usize) {
+        let Some(divider) = &self.divider_drag else {
+            return;
+        };
+        let ratio = divider.ratio_at(divider.axis(mx, my));
+        let path = divider.path.clone();
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+            tab.set_split_ratio(&path, ratio);
+        }
+        self.schedule_pty_resize();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Posición de pestaña bajo el ratón mientras se arrastra una (solo cuenta la coordenada a lo largo de la lista)
+    pub(super) fn tab_slot_at(&self, mx: usize, my: usize) -> Option<usize> {
+        let slot = if self.is_horizontal_tabs() {
+            let width = self.window.as_ref()?.inner_size().width as usize;
+            let rects = TopTabBarRects::compute(width, self.tabs.len());
+            (0..self.tabs.len()).find(|&i| {
+                let r = rects.tab_rect(i);
+                mx >= r.0 && mx < r.0 + r.2
+            })?
+        } else {
+            const LIST_START_Y: usize = 42;
+            const ITEM_STRIDE: usize = 36 + 4;
+            (my.checked_sub(LIST_START_Y)? / ITEM_STRIDE) + self.sidebar_scroll_offset
+        };
+        (slot < self.tabs.len()).then_some(slot)
+    }
+
+    /// Mueve la pestaña `from` a la posición `to`; la activa sigue siendo la misma pestaña
+    pub fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        let moved = |i: usize| moved_index(i, from, to);
+        self.active_tab_index = moved(self.active_tab_index);
+        self.last_terminal_tab_index = moved(self.last_terminal_tab_index);
+        self.last_tab_click_idx = self.last_tab_click_idx.map(moved);
+        self.hovered_tab = self.hovered_tab.map(moved);
+        self.tab_drag = self.tab_drag.map(moved);
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
             let next = (self.active_tab_index + 1) % self.tabs.len();
@@ -633,5 +701,18 @@ impl AxonApp {
         let cmd = format!("\x15cd -- {}\r", crate::ssh::quote(dir));
         pane.pty.write_input(cmd.as_bytes());
         true
+    }
+}
+
+/// Dónde queda la pestaña `i` tras mover la de `from` a `to`
+pub(super) fn moved_index(i: usize, from: usize, to: usize) -> usize {
+    if i == from {
+        to
+    } else if from < to && i > from && i <= to {
+        i - 1
+    } else if to < from && i >= to && i < from {
+        i + 1
+    } else {
+        i
     }
 }

@@ -8,6 +8,7 @@ mod clipboard;
 mod context_menu;
 mod cursor;
 mod handler;
+mod host;
 mod keyboard;
 mod keys;
 mod layout;
@@ -22,6 +23,7 @@ mod viewer;
 mod wheel;
 
 pub use context_menu::*;
+pub use host::AxonHost;
 pub use keys::{key_code_to_char, key_is_char};
 pub use layout::*;
 pub(crate) use shell_context::detect_ai_agent;
@@ -32,7 +34,7 @@ use platform::{
 };
 use shell_context::get_git_branch;
 
-use crate::config::AxonConfig;
+use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, SettingsPageRects, SettingsPageState, SettingsSection,
@@ -67,7 +69,6 @@ pub struct AxonApp {
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
     next_tab_id: usize,
-    next_pane_id: usize,
     pub sidebar_visible: bool,
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
@@ -137,15 +138,41 @@ pub struct AxonApp {
     last_window_title: std::cell::RefCell<String>,
     pub last_focus_gained: Instant,
     pub sidebar_scroll_offset: usize,
+    /// Identificador de esta ventana en `session.toml`
+    session_id: u32,
+    /// La ventana debe cerrarse: el anfitrión (`AxonHost`) la retira tras el evento
+    closing: bool,
+    /// Se pidió abrir otra ventana (la crea el anfitrión, que posee el bucle de eventos)
+    new_window_request: bool,
+    /// Divisor entre paneles que se está arrastrando
+    divider_drag: Option<Divider>,
+    /// Pestaña (índice) que se arrastra para reordenarla
+    tab_drag: Option<usize>,
+}
+
+/// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña
+static NEXT_PANE_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static NEXT_WINDOW_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn alloc_pane_id() -> usize {
+    NEXT_PANE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl AxonApp {
+    /// Ventana con una sola pestaña nueva
     pub fn new(
         config: AxonConfig,
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
     ) -> Self {
-        let cols = 100;
-        let rows = 30;
+        Self::from_session(config, proxy, None)
+    }
+
+    /// Ventana restaurada desde `session` (sin sesión, o sin pestañas, una pestaña nueva)
+    pub fn from_session(
+        config: AxonConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        session: Option<WindowSession>,
+    ) -> Self {
         let theme = if config.appearance.theme_mode.eq_ignore_ascii_case("system") {
             if crate::theme::is_windows_system_light_mode() {
                 Theme::catppuccin_latte()
@@ -158,74 +185,32 @@ impl AxonApp {
             Theme::from_name(&config.appearance.theme)
         };
 
-        // Restaurar estado de sesiones previas solo si está habilitado en configuración
-        let saved_session = if config.terminal.restore_session {
-            crate::config::SessionState::load()
-        } else {
-            None
-        };
-        let explorer_visible = saved_session
+        let session = session.filter(|s| !s.tabs.is_empty());
+        let explorer_visible = session
             .as_ref()
             .map(|s| s.file_explorer_visible)
             .unwrap_or(config.appearance.show_file_explorer);
-        let mut next_pane_id = 0;
-        let (tabs, active_tab_index, next_tab_id, sidebar_visible) = if let Some(session) =
-            saved_session
-        {
-            let cwd_path = session
-                .tabs
-                .into_iter()
-                .next()
-                .and_then(|t| t.cwd.map(std::path::PathBuf::from));
-            let cwd_ref = cwd_path.as_deref();
-
-            let pane_id = next_pane_id;
-            next_pane_id += 1;
-            let pty = PtyManager::new(
-                pane_id,
-                &config.terminal.default_shell,
-                config.terminal.ghostty_prompt,
-                cols as u16,
-                rows as u16,
-                cwd_ref,
-                proxy.clone(),
-            )
-            .unwrap_or_else(|e| crate::pty::fatal_spawn_error(&config.terminal.default_shell, &e));
-
-            let mut terminal =
-                TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
-            terminal.current_dir = cwd_path;
-
-            let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
-            (
-                vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
-                0,
-                1,
-                session.sidebar_visible,
-            )
-        } else {
-            let pane_id = next_pane_id;
-            next_pane_id += 1;
-            let pty = PtyManager::new(
-                pane_id,
-                &config.terminal.default_shell,
-                config.terminal.ghostty_prompt,
-                cols as u16,
-                rows as u16,
-                None,
-                proxy.clone(),
-            )
-            .unwrap_or_else(|e| crate::pty::fatal_spawn_error(&config.terminal.default_shell, &e));
-            let terminal =
-                TerminalState::new(cols, rows, config.terminal.scrollback_lines, theme.clone());
-            let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
-            (
-                vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)],
-                0,
-                1,
-                true,
-            )
+        let sidebar_visible = session.as_ref().is_none_or(|s| s.sidebar_visible);
+        let active_tab_index = session.as_ref().map_or(0, |s| s.active_tab_index);
+        let spawn = SpawnCtx {
+            config: &config,
+            proxy: &proxy,
+            theme: &theme,
         };
+        let tabs: Vec<TerminalTab> = match &session {
+            Some(s) => s
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(id, t)| spawn.restore_tab(id, t))
+                .collect(),
+            None => {
+                let pane = spawn.pane(None);
+                vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)]
+            }
+        };
+        let next_tab_id = tabs.len();
+        let active_tab_index = active_tab_index.min(tabs.len() - 1);
 
         let current_dir = std::env::current_dir().ok();
         let file_explorer = crate::explorer::FileExplorer::new(current_dir, explorer_visible);
@@ -240,7 +225,6 @@ impl AxonApp {
             tabs,
             active_tab_index,
             next_tab_id,
-            next_pane_id,
             sidebar_visible,
             hovered_tab: None,
             hovered_close: None,
@@ -305,43 +289,96 @@ impl AxonApp {
             last_window_title: Default::default(),
             last_focus_gained: Instant::now(),
             sidebar_scroll_offset: 0,
+            session_id: NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            closing: false,
+            new_window_request: false,
+            divider_drag: None,
+            tab_drag: None,
+        }
+    }
+
+    /// Estado de esta ventana tal como se restaurará: solo pestañas de terminal, con sus paneles
+    fn session_snapshot(&self) -> WindowSession {
+        let is_terminal = |t: &TerminalTab| !t.is_settings && t.file_viewer.is_none();
+        let cwd_of = |p: &TerminalPane| {
+            // Un panel SSH guarda la carpeta remota en `current_dir`: no es una ruta local
+            let dir = p.terminal.current_dir.as_ref();
+            dir.filter(|_| p.terminal.ssh_session.is_none())
+                .map(|d| d.to_string_lossy().to_string())
+        };
+        let tabs: Vec<TabSession> = self
+            .tabs
+            .iter()
+            .filter(|t| is_terminal(t))
+            .map(|t| TabSession {
+                title: t.title.clone(),
+                layout: t.session_layout(&cwd_of),
+                active_pane: t
+                    .leaf_ids()
+                    .iter()
+                    .position(|&id| id == t.active_pane_id)
+                    .unwrap_or(0),
+            })
+            .collect();
+        // Con Ajustes o un visor al frente, la pestaña activa al restaurar es la última de terminal
+        let active = if self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(is_terminal)
+        {
+            self.active_tab_index
+        } else {
+            self.last_terminal_tab_index
+        };
+        let active_pos = self
+            .tabs
+            .iter()
+            .take(active)
+            .filter(|t| is_terminal(t))
+            .count();
+        WindowSession {
+            active_tab_index: active_pos.min(tabs.len().saturating_sub(1)),
+            sidebar_visible: self.sidebar_visible,
+            file_explorer_visible: self.file_explorer.visible,
+            tabs,
         }
     }
 
     pub fn save_session(&self) {
-        let tab_sessions = self
-            .tabs
-            .iter()
-            .filter(|tab| !tab.is_settings && tab.file_viewer.is_none())
-            .map(|tab| {
-                let cwd = tab
-                    .active_pane()
-                    .and_then(|p| p.terminal.current_dir.as_ref())
-                    .map(|p| p.to_string_lossy().to_string())
-                    .or_else(|| {
-                        std::env::current_dir()
-                            .ok()
-                            .map(|p| p.to_string_lossy().to_string())
-                    });
-                crate::config::TabSession {
-                    title: tab.title.clone(),
-                    cwd,
-                }
-            })
-            .collect();
-        let state = crate::config::SessionState {
-            active_tab_index: self.last_terminal_tab_index.min(
-                self.tabs
-                    .iter()
-                    .filter(|t| !t.is_settings && t.file_viewer.is_none())
-                    .count()
-                    .saturating_sub(1),
-            ),
+        crate::config::SessionState::save_window(self.session_id, self.session_snapshot());
+    }
+
+    /// Sesión de la ventana que abre `Ctrl+Shift+N`: una pestaña en la carpeta del panel activo
+    pub(super) fn new_window_session(&self) -> WindowSession {
+        WindowSession {
+            active_tab_index: 0,
             sidebar_visible: self.sidebar_visible,
             file_explorer_visible: self.file_explorer.visible,
-            tabs: tab_sessions,
-        };
-        let _ = state.save();
+            tabs: vec![TabSession {
+                title: "Terminal 1".to_string(),
+                layout: PaneSession::Leaf {
+                    cwd: self.active_cwd().map(|d| d.to_string_lossy().to_string()),
+                },
+                active_pane: 0,
+            }],
+        }
+    }
+
+    /// Cierra esta ventana (el anfitrión la retira) conservando su sesión
+    pub(super) fn request_close(&mut self) {
+        self.save_session();
+        self.closing = true;
+    }
+
+    pub fn owns_pane(&self, pane_id: usize) -> bool {
+        self.tabs.iter().any(|t| t.find_pane(pane_id).is_some())
+    }
+
+    /// Carpeta local del panel activo (la ventana nueva arranca ahí)
+    pub fn active_cwd(&self) -> Option<std::path::PathBuf> {
+        let pane = self.tabs.get(self.active_tab_index)?.active_pane()?;
+        let dir = pane.terminal.current_dir.clone();
+        dir.filter(|d| pane.terminal.ssh_session.is_none() && d.is_dir())
     }
 
     pub fn is_horizontal_tabs(&self) -> bool {
@@ -448,6 +485,85 @@ impl AxonApp {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Lo necesario para lanzar shells al abrir o restaurar una ventana
+struct SpawnCtx<'a> {
+    config: &'a AxonConfig,
+    proxy: &'a Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+    theme: &'a Theme,
+}
+
+impl SpawnCtx<'_> {
+    /// Panel con un shell nuevo en `cwd`; el tamaño real lo fija `AxonApp::init_window`
+    fn pane(&self, cwd: Option<&std::path::Path>) -> TerminalPane {
+        let (cols, rows) = (100, 30);
+        let id = alloc_pane_id();
+        let shell = &self.config.terminal.default_shell;
+        let pty = PtyManager::new(
+            id,
+            shell,
+            self.config.terminal.ghostty_prompt,
+            cols as u16,
+            rows as u16,
+            cwd,
+            self.proxy.clone(),
+        )
+        .unwrap_or_else(|e| crate::pty::fatal_spawn_error(shell, &e));
+        let mut terminal = TerminalState::new(
+            cols,
+            rows,
+            self.config.terminal.scrollback_lines,
+            self.theme.clone(),
+        );
+        terminal.current_dir = cwd.map(std::path::Path::to_path_buf);
+        TerminalPane::new(id, pty, terminal, (cols, rows))
+    }
+
+    fn restore_tab(&self, id: usize, tab: &TabSession) -> TerminalTab {
+        let mut panes = Vec::new();
+        let layout = self.restore_layout(&tab.layout, &mut panes);
+        let active = panes
+            .get(tab.active_pane)
+            .or(panes.first())
+            .map_or(0, |p| p.id);
+        TerminalTab::from_layout(id, tab.title.clone(), layout, panes, active)
+    }
+
+    fn restore_layout(&self, node: &PaneSession, panes: &mut Vec<TerminalPane>) -> PaneNode {
+        match node {
+            PaneSession::Leaf { cwd } => {
+                // La carpeta pudo desaparecer desde la última sesión
+                let dir = cwd
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .filter(|d| d.is_dir());
+                let pane = self.pane(dir);
+                let id = pane.id;
+                panes.push(pane);
+                PaneNode::Leaf(id)
+            }
+            PaneSession::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => PaneNode::Split {
+                direction: if direction == "vertical" {
+                    SplitDirection::Vertical
+                } else {
+                    SplitDirection::Horizontal
+                },
+                ratio: if ratio.is_finite() {
+                    ratio.clamp(0.1, 0.9)
+                } else {
+                    0.5
+                },
+                first: Box::new(self.restore_layout(first, panes)),
+                second: Box::new(self.restore_layout(second, panes)),
+            },
         }
     }
 }

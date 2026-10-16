@@ -12,7 +12,7 @@ mod theme;
 pub mod tools;
 pub mod ui;
 
-use app::{AxonApp, AxonEvent};
+use app::{AxonEvent, AxonHost};
 use config::AxonConfig;
 use winit::event_loop::EventLoop;
 
@@ -24,8 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::<AxonEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
-    // 3. Instanciar aplicación nativa de Axon
-    // Antes de crear la app: su primera pestaña lanza el shell en `new` y debe heredar la variable
+    // 3. Instanciar el anfitrión de ventanas de Axon
+    // Antes de crearlo: la primera pestaña lanza el shell en `new` y debe heredar la variable
     std::env::set_var(
         "AXON_SSH_INTEGRATION",
         if config.terminal.ssh_integration {
@@ -34,10 +34,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "0"
         },
     );
-    let mut app = AxonApp::new(config, Some(proxy));
+    let mut host = AxonHost::new(config, Some(proxy));
 
     // 4. Iniciar ciclo de eventos del sistema operativo
-    event_loop.run_app(&mut app)?;
+    event_loop.run_app(&mut host)?;
 
     Ok(())
 }

@@ -15,6 +15,7 @@ Set-PSReadLineOption -Colors @{
     Error     = ([char]27 + '[38;2;244;56;65m')
 } -ErrorAction SilentlyContinue
 Set-PSReadLineKeyHandler -Chord 'Alt+Backspace' -Function BackwardKillWord -ErrorAction SilentlyContinue
+Set-PSReadLineKeyHandler -Chord 'Alt+Enter' -Function AddLine -ErrorAction SilentlyContinue
 
 # Busca un ejecutable en PATH respetando PATHEXT (claude.cmd de npm incluido). Get-Command tarda 250-500 ms
 # cuando el programa NO está instalado (recorre cada entrada de PATH); File.Exists, ~5 ms. Solo memoiza aciertos.
@@ -127,10 +128,34 @@ if (Find-AxonApp 'fd') { Set-Alias -Name find -Value fd -Option AllScope -ErrorA
 if (Find-AxonApp 'zoxide') { Invoke-Expression (& zoxide init powershell --cmd cd | Out-String) -ErrorAction SilentlyContinue }
 
 # Agentes de IA en CLI. Mode: Anchor = limpia y ancla el prompt a la última línea (entrada inferior);
-# Clear = solo limpia; None = solo título. Al salir se restaura título, cursor y región de scroll.
+# Clear = solo limpia; None = solo título. Subcomandos y flags no interactivos (update, --help, -v, -p…)
+# pasan a None para conservar la pantalla; al salir no se llama a Clear-Host ni a ESC[r (lleva el cursor a 1;1).
 function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList) {
     $cmd = Find-AxonApp $Name
     if (-not $cmd) { Write-Error "El comando '$Name' no se encuentra en PATH."; return }
+    if ($Mode -ne 'None' -and $ArgumentList -and $ArgumentList.Count -gt 0) {
+        $first = [string]$ArgumentList[0]
+        $subcommands = @(
+            'update', 'upgrade', 'uninstall', 'install', 'help', 'version', 'doctor', 'mcp',
+            'plugin', 'plugins', 'auth', 'login', 'logout', 'config', 'models', 'agent', 'agents',
+            'changelog', 'logs', 'stop', 'kill', 'rm', 'purge', 'respawn', 'setup-token',
+            'auto-mode', 'gateway', 'import', 'ultrareview', 'remote-control', 'mic-serve',
+            'extensions', 'extension', 'skills', 'skill', 'hooks', 'hook', 'gemma', 'acp', 'api',
+            'debug', 'stats', 'run', 'session', 'service', 'reload', 'pair', 'serve'
+        )
+        if ($first -in $subcommands -or ($Name -eq 'agy' -and -not $first.StartsWith('-'))) {
+            $Mode = 'None'
+        } else {
+            foreach ($a in $ArgumentList) {
+                $s = [string]$a
+                if ($s -in @('-h', '--help', '-?', '/?', '-v', '--version', '-V', '-p', '--print', '--prompt', '-l', '--list-extensions', '--list-sessions', '--delete-session', '--bg', '--background', '--desktop', '--completions') -or
+                    $s.StartsWith('--print=') -or $s.StartsWith('--prompt=') -or $s.StartsWith('--delete-session=') -or $s.StartsWith('--completions=')) {
+                    $Mode = 'None'
+                    break
+                }
+            }
+        }
+    }
     $esc = [char]27; $bel = [char]7
     [Console]::Write($esc + ']0;' + $Name + $bel)
     if ($Mode -ne 'None') { Clear-Host; [Console]::Write($esc + '[2J' + $esc + '[3J' + $esc + '[H') }
@@ -143,8 +168,7 @@ function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList)
     [Console]::Write($esc + ']1337;AxonAgent=start' + $bel)
     try { & $cmd @ArgumentList }
     finally {
-        [Console]::Write($esc + ']1337;AxonAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[r')
-        Clear-Host
+        [Console]::Write($esc + ']1337;AxonAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[J')
     }
 }
 function agy      { Invoke-AxonAgent 'agy' 'Anchor' $args }

@@ -203,7 +203,7 @@ fn test_split_panes_layout_and_tree() {
 
     let dividers = tab.compute_dividers(0, 0, 1000, 600);
     assert_eq!(dividers.len(), 1);
-    assert_eq!(dividers[0], (0, h_rects[0].height, 1000, 2));
+    assert_eq!(dividers[0].rect, (0, h_rects[0].height, 1000, 2));
 
     // 3. Cerrar un panel (Ctrl + Alt + W) y validar que el árbol colapsa limpiamente
     tab.close_pane(1);
@@ -1273,4 +1273,171 @@ fn test_file_viewer_save_preserves_format_and_never_corrupts() {
     assert!(v.save_error.is_none());
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Pestaña de terminal con `n` paneles en cadena vertical (lado a lado)
+fn tab_with_panes(app: &mut AxonApp, n: usize) {
+    for _ in 1..n {
+        app.split_active_pane(SplitDirection::Vertical);
+    }
+}
+
+#[test]
+fn test_divider_drag_moves_split_and_respects_minimum_size() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    tab_with_panes(&mut app, 2);
+    let tab = &mut app.tabs[0];
+
+    let div = tab.compute_dividers(0, 0, 1000, 600).remove(0);
+    assert_eq!(div.direction, SplitDirection::Vertical);
+    // Agarrable con 3 px de margen, no más lejos
+    let (x, y, _, _) = div.rect;
+    assert!(div.contains(x - 3, y + 10) && div.contains(x + 4, y + 10));
+    assert!(!div.contains(x + 6, y + 10) && !div.contains(x.saturating_sub(5), y + 10));
+
+    // Arrastrar a 300 px: el primer panel mide ~300 y los paneles siguen sumando el total
+    tab.set_split_ratio(&div.path, div.ratio_at(div.axis(300, 100)));
+    let rects = tab.compute_pane_rects(0, 0, 1000, 600);
+    assert!(
+        (rects[0].width as i32 - 299).abs() <= 2,
+        "{}",
+        rects[0].width
+    );
+    assert_eq!(rects[0].width + rects[1].width + 2, 1000);
+
+    // Ni el borde ni más allá aplastan un panel por debajo del mínimo
+    for pos in [0, 5, 999, 5000] {
+        let r = div.ratio_at(pos);
+        tab.set_split_ratio(&div.path, r);
+        let rects = tab.compute_pane_rects(0, 0, 1000, 600);
+        assert!(rects.iter().all(|r| r.width >= 47), "pos {pos}: {rects:?}");
+    }
+}
+
+#[test]
+fn test_nested_divider_path_targets_the_right_split() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    tab_with_panes(&mut app, 2);
+    app.split_active_pane(SplitDirection::Horizontal); // divide el panel derecho
+    let tab = &mut app.tabs[0];
+    let dividers = tab.compute_dividers(0, 0, 1000, 600);
+    assert_eq!(dividers.len(), 2);
+    let inner = dividers
+        .iter()
+        .find(|d| d.direction == SplitDirection::Horizontal)
+        .unwrap();
+    assert_eq!(inner.path, vec![true]);
+
+    let before = tab.compute_pane_rects(0, 0, 1000, 600);
+    tab.set_split_ratio(&inner.path, 0.2);
+    let after = tab.compute_pane_rects(0, 0, 1000, 600);
+    // El panel izquierdo no se mueve; solo cambia el reparto vertical del derecho
+    assert_eq!(before[0].width, after[0].width);
+    assert!(after[1].height < before[1].height);
+}
+
+#[test]
+fn test_moved_index_follows_the_dragged_tab() {
+    // Mover 1 -> 3 en [a b c d e]: b pasa al final de ese tramo
+    let order: Vec<usize> = (0..5).map(|i| super::tabs::moved_index(i, 1, 3)).collect();
+    assert_eq!(order, vec![0, 3, 1, 2, 4]);
+    let order: Vec<usize> = (0..5).map(|i| super::tabs::moved_index(i, 3, 1)).collect();
+    assert_eq!(order, vec![0, 2, 3, 1, 4]);
+}
+
+#[test]
+fn test_move_tab_reorders_and_keeps_active_tab() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    app.create_new_tab();
+    app.create_new_tab();
+    let ids: Vec<usize> = app.tabs.iter().map(|t| t.id).collect();
+    assert_eq!(app.active_tab_index, 2);
+
+    app.move_tab(2, 0);
+    let moved: Vec<usize> = app.tabs.iter().map(|t| t.id).collect();
+    assert_eq!(moved, vec![ids[2], ids[0], ids[1]]);
+    assert_eq!(app.active_tab_index, 0, "la activa viaja con su pestaña");
+
+    app.move_tab(1, 2); // otra pestaña: la activa no cambia de pestaña
+    assert_eq!(app.tabs[app.active_tab_index].id, ids[2]);
+    app.move_tab(0, 9); // fuera de rango: no hace nada
+    assert_eq!(app.tabs[0].id, ids[2]);
+}
+
+#[test]
+fn test_session_restores_tabs_and_split_layout() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    tab_with_panes(&mut app, 2);
+    app.split_active_pane(SplitDirection::Horizontal);
+    app.tabs[0].set_split_ratio(&[], 0.3);
+    app.create_new_tab();
+    app.open_or_switch_settings_tab(); // Ajustes no se guarda
+    app.last_terminal_tab_index = 0;
+
+    let snap = app.session_snapshot();
+    assert_eq!(snap.tabs.len(), 2, "solo pestañas de terminal");
+    assert_eq!(snap.active_tab_index, 0);
+
+    let restored = AxonApp::from_session(AxonConfig::default(), None, Some(snap.clone()));
+    assert_eq!(restored.tabs.len(), 2);
+    assert_eq!(restored.tabs[0].panes.len(), 3);
+    assert_eq!(restored.tabs[1].panes.len(), 1);
+    // Misma forma, proporciones y panel activo (los ids de panel son nuevos)
+    assert_eq!(restored.session_snapshot(), snap);
+    assert!(restored.tabs[0].panes.iter().all(|p| !app.owns_pane(p.id)));
+}
+
+#[test]
+fn test_restore_ignores_missing_folders_and_empty_sessions() {
+    use crate::config::{PaneSession, TabSession, WindowSession};
+    let gone = PaneSession::Leaf {
+        cwd: Some("Z:/no/existe/axon".to_string()),
+    };
+    let session = WindowSession {
+        active_tab_index: 7, // fuera de rango
+        sidebar_visible: true,
+        file_explorer_visible: false,
+        tabs: vec![TabSession {
+            title: "T".into(),
+            layout: gone,
+            active_pane: 9,
+        }],
+    };
+    let app = AxonApp::from_session(AxonConfig::default(), None, Some(session));
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.active_tab_index, 0);
+    assert!(app.tabs[0].active_pane().is_some());
+
+    let empty = WindowSession {
+        active_tab_index: 0,
+        sidebar_visible: true,
+        file_explorer_visible: false,
+        tabs: Vec::new(),
+    };
+    let app = AxonApp::from_session(AxonConfig::default(), None, Some(empty));
+    assert_eq!(
+        app.tabs.len(),
+        1,
+        "sin pestañas guardadas arranca una nueva"
+    );
+}
+
+#[test]
+fn test_pane_ids_are_unique_across_windows() {
+    let a = AxonApp::new(AxonConfig::default(), None);
+    let b = AxonApp::new(AxonConfig::default(), None);
+    let (pa, pb) = (a.tabs[0].panes[0].id, b.tabs[0].panes[0].id);
+    assert_ne!(pa, pb);
+    assert!(a.owns_pane(pa) && !a.owns_pane(pb));
+    assert!(b.owns_pane(pb) && !b.owns_pane(pa));
+}
+
+#[test]
+fn test_closing_last_tab_closes_the_window_not_the_process() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    app.create_new_tab();
+    app.close_tab(0);
+    assert!(!app.closing, "queda una pestaña");
+    app.close_tab(0);
+    assert!(app.closing && app.tabs.is_empty());
 }

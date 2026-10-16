@@ -1,9 +1,11 @@
-//! Bucle de eventos de winit: despacha cada evento al método que lo trata.
+//! Eventos de winit de UNA ventana: `AxonHost` (host.rs) los enruta hasta aquí y cada uno se despacha
+//! al método que lo trata.
 
 use super::*;
 
-impl ApplicationHandler<AxonEvent> for AxonApp {
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
+impl AxonApp {
+    /// Evento de usuario de esta ventana (`PtyData`/`PtyClosed` de uno de sus paneles, o `SshDone`)
+    pub(super) fn on_user_event(&mut self, event: AxonEvent) {
         match event {
             AxonEvent::SshDone => {
                 self.process_ssh_results();
@@ -62,13 +64,14 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 if exited {
-                    self.on_shell_exit(pane_id, event_loop);
+                    self.on_shell_exit(pane_id);
                 }
             }
         }
     }
 
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    /// Crea la ventana nativa y su superficie (una vez que el bucle de eventos está activo)
+    pub(super) fn init_window(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
@@ -199,7 +202,11 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             }
 
             let divider_color = crate::theme::Color::from_rgb(38, 38, 43);
-            for (dx, dy, dw, dh) in dividers {
+            for Divider {
+                rect: (dx, dy, dw, dh),
+                ..
+            } in dividers
+            {
                 TerminalRenderer::render_pane_divider(
                     &mut buffer,
                     initial_size.width as usize,
@@ -224,17 +231,13 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         self.renderer = Some(renderer);
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
+    pub(super) fn window_id(&self) -> Option<WindowId> {
+        self.window.as_ref().map(|w| w.id())
+    }
+
+    pub(super) fn on_window_event(&mut self, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => {
-                self.save_session();
-                event_loop.exit();
-            }
+            WindowEvent::CloseRequested => self.request_close(),
 
             WindowEvent::Moved(pos) => {
                 crate::logger::log(&format!("MOVED: {},{}", pos.x, pos.y));
@@ -303,15 +306,13 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                 if !is_synthetic {
                     self.cursor_on = true;
                     self.cursor_timer = Instant::now();
-                    self.on_key_pressed(event_loop, logical_key, text, physical_key);
+                    self.on_key_pressed(logical_key, text, physical_key);
                 }
             }
 
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
 
-            WindowEvent::MouseInput { state, button, .. } => {
-                self.on_mouse_input(event_loop, state, button)
-            }
+            WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
 
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
 
@@ -325,6 +326,8 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
                     self.modifiers = ModifiersState::empty();
                     self.mouse_down = false;
                     self.drag_start = None;
+                    self.divider_drag = None;
+                    self.tab_drag = None;
                 } else {
                     self.modifiers = ModifiersState::empty();
                     self.last_focus_gained = Instant::now();
@@ -355,7 +358,9 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    /// Trabajo periódico de la ventana tras cada tanda de eventos. Devuelve el instante en que debe volver a
+    /// despertar (`None` = dormir hasta el próximo evento).
+    pub(super) fn tick(&mut self) -> Option<Instant> {
         // 1. Revisar si algún panel tiene su proceso terminado
         let mut closed_panes = Vec::new();
         for tab in &mut self.tabs {
@@ -367,12 +372,12 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
         }
         for pane_id in closed_panes {
             crate::logger::log(&format!("Proceso hijo de pane {} terminado", pane_id));
-            self.on_shell_exit(pane_id, event_loop);
+            self.on_shell_exit(pane_id);
         }
         if self.tabs.is_empty() {
-            crate::logger::log("No quedan pestañas activas: cerrando Axon");
-            event_loop.exit();
-            return;
+            crate::logger::log("No quedan pestañas activas: cerrando la ventana");
+            self.request_close();
+            return None;
         }
 
         // 2. Drenar salida de ConPTY de todos los paneles por si quedó algún byte residual
@@ -504,9 +509,6 @@ impl ApplicationHandler<AxonEvent> for AxonApp {
             );
         }
 
-        event_loop.set_control_flow(match wake {
-            Some(t) => winit::event_loop::ControlFlow::WaitUntil(t),
-            None => winit::event_loop::ControlFlow::Wait,
-        });
+        wake
     }
 }

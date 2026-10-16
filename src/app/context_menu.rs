@@ -35,6 +35,7 @@ pub enum MenuAction {
     CloseTab(usize),
     CloseOtherTabs(usize),
     NewTab,
+    NewWindow,
     OpenSettings,
     ToggleExplorer,
     // Explorador
@@ -358,6 +359,13 @@ impl AxonApp {
             true,
         ));
         items.push(MenuItem::new(
+            "Nueva ventana",
+            LucideIcon::ExternalLink,
+            "Ctrl+Shift+N",
+            MenuAction::NewWindow,
+            true,
+        ));
+        items.push(MenuItem::new(
             "Explorador de archivos",
             LucideIcon::FolderTree,
             "Ctrl+Shift+E",
@@ -630,7 +638,7 @@ impl AxonApp {
         }
     }
 
-    pub(super) fn run_menu_action(&mut self, action: MenuAction, event_loop: &ActiveEventLoop) {
+    pub(super) fn run_menu_action(&mut self, action: MenuAction) {
         let visible_lines = self.viewer_visible_lines();
         let idx = self.active_tab_index;
         match action {
@@ -723,7 +731,7 @@ impl AxonApp {
             }
             MenuAction::SplitHorizontal => self.split_active_pane(SplitDirection::Horizontal),
             MenuAction::SplitVertical => self.split_active_pane(SplitDirection::Vertical),
-            MenuAction::ClosePane => self.close_active_pane(event_loop),
+            MenuAction::ClosePane => self.close_active_pane(),
             MenuAction::ClearTerminal => {
                 if let Some(p) = self.tabs[idx].active_pane_mut() {
                     p.terminal.scrollback.clear();
@@ -737,13 +745,14 @@ impl AxonApp {
                     t.is_preview = false;
                 }
             }
-            MenuAction::CloseTab(i) => self.close_tab(i, event_loop),
+            MenuAction::CloseTab(i) => self.close_tab(i),
             MenuAction::CloseOtherTabs(keep) => {
                 for i in (0..self.tabs.len()).rev().filter(|&i| i != keep) {
-                    self.close_tab(i, event_loop);
+                    self.close_tab(i);
                 }
             }
             MenuAction::NewTab => self.create_new_tab(),
+            MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),
             MenuAction::ExplorerOpen(i) => {

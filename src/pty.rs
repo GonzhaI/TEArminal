@@ -472,6 +472,28 @@ mod tests {
             del_alt_bs.push_str(&String::from_utf8_lossy(&bytes));
         }
         println!("ALT+BACKSPACE (\\x1b\\x7f) PTY OUTPUT: {:?}", del_alt_bs);
+
+        // 3. Probar \x1b\r (Shift+Enter / Alt+Enter): salto de línea sin enviar hasta pulsar \r
+        pty.write_input(&[0x03]); // limpiar línea previa
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        while pty.try_recv_output().is_some() {}
+
+        pty.write_input(b"Write-Output 'LINE_A'\x1b\rWrite-Output 'LINE_B'");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let mut before_enter = String::new();
+        while let Some(bytes) = pty.try_recv_output() {
+            before_enter.push_str(&String::from_utf8_lossy(&bytes));
+        }
+        assert!(
+            !before_enter.contains("\nLINE_A"),
+            "\\x1b\\r no debe ejecutar la primera línea antes de Enter: {before_enter:?}"
+        );
+        pty.write_input(b"\r");
+        let (ok, after_enter) = read_until(&pty, "LINE_B", 5_000);
+        assert!(
+            ok && (before_enter.contains("LINE_A") || after_enter.contains("LINE_A")),
+            "tras Enter deben ejecutarse ambas líneas: {before_enter:?} / {after_enter:?}"
+        );
     }
 
     /// Lee del PTY hasta ver `needle` o agotar el tiempo. Devuelve (encontrado, salida acumulada).
@@ -520,6 +542,9 @@ mod tests {
             "ref: refs/heads/axon-test-branch\n",
         )
         .unwrap();
+
+        let fake_agy = cwd.join("fake-agy.cmd");
+        std::fs::write(&fake_agy, "@echo off\r\necho AGY_STATUS_%1_OK\r\n").unwrap();
 
         // En CI deben estar las dos versiones: si no, el test pasaría sin probar PowerShell 7
         if std::env::var_os("CI").is_some() {
@@ -591,6 +616,27 @@ mod tests {
                 assert!(
                     !out.contains(e),
                     "{shell}: error al ejecutar funciones: {out:?}"
+                );
+            }
+
+            // 3. Subcomandos de agentes (`agy update`, `--version`…) no deben limpiar la pantalla ni borrar su estado
+            pty.write_input(
+                b"$script:AxonApps['agy'] = (Join-Path $PWD 'fake-agy.cmd'); agy update; Write-Output ('AGY_DONE_' + (6*7))\r\n",
+            );
+            let (ok, agy_out) = read_until(&pty, "AGY_DONE_42", 20_000);
+            assert!(ok, "{shell}: `agy update` no terminó. Salida: {agy_out:?}");
+            assert!(
+                agy_out.contains("AGY_STATUS_update_OK"),
+                "{shell}: falta la salida de `agy update`: {agy_out:?}"
+            );
+            assert!(
+                !agy_out.contains("\x1b[2J") && !agy_out.contains("\x1b[3J"),
+                "{shell}: `agy update` limpió la pantalla: {agy_out:?}"
+            );
+            for e in ERRORS {
+                assert!(
+                    !agy_out.contains(e),
+                    "{shell}: error al ejecutar `agy update`: {agy_out:?}"
                 );
             }
             println!("[OK] {shell}: script de inicio verificado");

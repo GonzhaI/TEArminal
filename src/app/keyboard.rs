@@ -6,7 +6,6 @@ impl AxonApp {
     /// Teclado: atajos de la aplicación y traducción de teclas a bytes para el PTY.
     pub(super) fn on_key_pressed(
         &mut self,
-        event_loop: &ActiveEventLoop,
         logical_key: Key,
         text: Option<SmolStr>,
         physical_key: PhysicalKey,
@@ -217,7 +216,7 @@ impl AxonApp {
             }
             if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
                 crate::logger::log("-> Cerrando pestaña de Ajustes con Ctrl+W");
-                self.close_tab(self.active_tab_index, event_loop);
+                self.close_tab(self.active_tab_index);
                 return;
             }
         }
@@ -252,7 +251,7 @@ impl AxonApp {
         // 3. Cerrar panel activo en split: Alt + Shift + W (o Ctrl + Alt + W)
         if is_split_mod && is_w {
             crate::logger::log("-> Hotkey: Cerrar panel activo (Alt+Shift+W)");
-            self.close_active_pane(event_loop);
+            self.close_active_pane();
             return;
         }
 
@@ -293,10 +292,17 @@ impl AxonApp {
             return;
         }
 
+        // Nueva ventana: Ctrl + Shift + N
+        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'n') {
+            crate::logger::log("-> Hotkey: Nueva ventana (Ctrl+Shift+N)");
+            self.new_window_request = true;
+            return;
+        }
+
         // 2. Cerrar pestaña activa: Ctrl + W
         if ctrl && !alt && !shift && key_is_char(&logical_key, physical_key, 'w') {
             crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+W)");
-            self.close_tab(self.active_tab_index, event_loop);
+            self.close_tab(self.active_tab_index);
             return;
         }
 
@@ -562,11 +568,11 @@ impl AxonApp {
                         return;
                     }
                 }
-                self.close_tab(self.active_tab_index, event_loop);
+                self.close_tab(self.active_tab_index);
                 return;
             }
             if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
-                self.close_tab(self.active_tab_index, event_loop);
+                self.close_tab(self.active_tab_index);
                 return;
             }
 
@@ -1249,6 +1255,23 @@ impl AxonApp {
             active.terminal.scroll_down(half);
             if let Some(w) = &self.window {
                 w.request_redraw();
+            }
+            return;
+        }
+
+        // Enter con Shift o Alt (incluso bajo WM_SYSKEYDOWN donde logical_key es Unidentified):
+        // envía ESC + CR (\x1b\r), secuencia que Claude Code, Gemini CLI, agy, OpenCode, Aider y PSReadLine
+        // interpretan como salto de línea sin enviar el mensaje.
+        let is_enter = matches!(
+            physical_key,
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
+        ) || matches!(&logical_key, Key::Named(NamedKey::Enter));
+        if is_enter && !ctrl {
+            active.terminal.note_enter_sent();
+            if shift || alt {
+                active.pty.write_input(b"\x1b\r");
+            } else {
+                active.pty.write_input(b"\r");
             }
             return;
         }
