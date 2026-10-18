@@ -252,30 +252,8 @@ impl AxonApp {
                 if self.config.appearance.show_status_bar && !active_tab.is_settings {
                     let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
                         if let Some(ref viewer) = active_tab.file_viewer {
-                            let path_str = {
-                                static HOME: std::sync::OnceLock<Option<String>> =
-                                    std::sync::OnceLock::new();
-                                let s = viewer.path.to_string_lossy().to_string();
-                                match HOME.get_or_init(|| std::env::var("USERPROFILE").ok()) {
-                                    Some(home) if s.starts_with(home.as_str()) => {
-                                        format!("~{}", &s[home.len()..])
-                                    }
-                                    _ => s,
-                                }
-                            };
-                            let branch = if viewer.remote_destination.is_some() {
-                                viewer.remote_branch.clone()
-                            } else {
-                                let dir = if viewer.path.is_relative() {
-                                    std::env::current_dir()
-                                        .ok()
-                                        .map(|cd| cd.join(&viewer.path))
-                                        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                                } else {
-                                    viewer.path.parent().map(|p| p.to_path_buf())
-                                };
-                                crate::app::shell_context::get_git_branch(dir.as_deref())
-                            };
+                            let path_str = shell_context::shorten_home(&viewer.path);
+                            let branch = viewer.remote_branch.clone();
                             let ssh = viewer.remote_destination.clone();
                             let lines_count = viewer.lines.len();
                             (
@@ -287,17 +265,11 @@ impl AxonApp {
                                 AiAgentStatus::None,
                             )
                         } else if let Some(pane) = active_tab.active_pane_mut() {
-                            let c_dir = pane.terminal.current_dir.as_ref().map(|p| {
-                                static HOME: std::sync::OnceLock<Option<String>> =
-                                    std::sync::OnceLock::new();
-                                let s = p.to_string_lossy().to_string();
-                                match HOME.get_or_init(|| std::env::var("USERPROFILE").ok()) {
-                                    Some(home) if s.starts_with(home.as_str()) => {
-                                        format!("~{}", &s[home.len()..])
-                                    }
-                                    _ => s,
-                                }
-                            });
+                            let c_dir = pane
+                                .terminal
+                                .current_dir
+                                .as_deref()
+                                .map(shell_context::shorten_home);
                             let g_branch = pane.get_git_branch();
                             let s_host = pane
                                 .terminal
@@ -318,7 +290,8 @@ impl AxonApp {
                             (None, None, None, 100, 30, AiAgentStatus::None)
                         };
 
-                    renderer.render_status_bar(
+                    let active_model = self.ai_usage.snapshot.active_model.as_deref();
+                    renderer.render_status_bar_with_ai(
                         &mut buffer,
                         size.width as usize,
                         size.height as usize,
@@ -329,9 +302,21 @@ impl AxonApp {
                         cols,
                         rows,
                         ai_status,
+                        active_model,
+                        self.hovered_ai_badge,
                         explorer_visible,
                         &self.theme,
                     );
+
+                    if self.hovered_ai_badge && self.context_menu.is_none() {
+                        renderer.render_ai_usage_popup(
+                            &mut buffer,
+                            size.width as usize,
+                            size.height as usize,
+                            &self.ai_usage.snapshot,
+                            &self.theme,
+                        );
+                    }
                 }
 
                 if let Some(menu) = &self.context_menu {

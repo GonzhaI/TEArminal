@@ -71,10 +71,9 @@ fn test_settings_tab_actions_and_theme_switching() {
     app.switch_to_tab(0);
     assert!(!app.tabs[app.active_tab_index].is_settings);
 
-    // 2. Cambio cíclico de temas
-    let initial_theme = app.config.appearance.theme.clone();
-    app.cycle_theme(true);
-    assert_ne!(app.config.appearance.theme, initial_theme);
+    // 2. Cambio de temas
+    app.apply_theme("Nord");
+    assert_eq!(app.config.appearance.theme, "Nord");
     assert!(!app.theme.ansi.is_empty());
     assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Frappé"));
 
@@ -493,7 +492,6 @@ fn test_terminal_pane_git_branch_ssh_isolation() {
     // Con SSH activo: NUNCA debe devolver la rama local, siempre debe aislar
     pane.terminal.ssh_session = Some(crate::terminal::SshSession {
         destination: "user@remotehost".to_string(),
-        args: vec![],
         remote_dir: Some("/home/user/app".to_string()),
         remote_git_branch: None,
         is_active: true,
@@ -1440,4 +1438,174 @@ fn test_closing_last_tab_closes_the_window_not_the_process() {
     assert!(!app.closing, "queda una pestaña");
     app.close_tab(0);
     assert!(app.closing && app.tabs.is_empty());
+}
+
+#[test]
+fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let term = &mut app.tabs[0].panes[0].terminal;
+    term.remote_integration = true;
+    term.remote_at_prompt = false;
+    assert!(
+        !app.remote_cd("/srv"),
+        "no debe escribir si hay un programa corriendo"
+    );
+    app.tabs[0].panes[0].terminal.remote_at_prompt = true;
+    assert!(app.remote_cd("/srv"));
+    assert!(!app.tabs[0].panes[0].terminal.remote_at_prompt);
+
+    app.tabs.push(TerminalTab::new_settings(10));
+    app.tabs.push(TerminalTab::new_settings(11));
+    app.switch_to_tab(1);
+    app.close_tab(0);
+    assert_eq!(app.tabs[app.active_tab_index].id, 10);
+
+    app.tabs.push(TerminalTab::new_settings(12));
+    app.close_other_tabs(2);
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.tabs[0].id, 12);
+    assert_eq!(app.active_tab_index, 0);
+}
+
+#[test]
+fn test_viewer_replace_selection_takes_single_undo() {
+    let (mut tab, path) = viewer_with("undo_sel.txt", "hola mundo");
+    let v = tab.file_viewer.as_mut().unwrap();
+    v.is_read_only = false;
+    v.select_all();
+    v.insert_char('X');
+    assert_eq!(v.lines[0], "X");
+    v.undo();
+    assert_eq!(v.lines[0], "hola mundo");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_get_git_branch_worktree_detached_head() {
+    let dir = std::env::temp_dir().join(format!("axon_test_wt_{}", std::process::id()));
+    let real_git = dir.join("real_git");
+    std::fs::create_dir_all(&real_git).unwrap();
+    std::fs::write(dir.join(".git"), "gitdir: real_git\n").unwrap();
+    std::fs::write(real_git.join("HEAD"), "abcdef1234567890\n").unwrap();
+    assert_eq!(
+        super::shell_context::get_git_branch(Some(&dir)).as_deref(),
+        Some("abcdef1")
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bench_viewer_wrap_edit_and_selection() {
+    let mut text = String::new();
+    for i in 0..1000 {
+        text.push_str(&format!(
+            "    let resultado_{i} = calcular_transformacion_linea({i}, \"cadena de prueba con longitud suficiente para envolver en 80 columnas\");\n"
+        ));
+    }
+    let (mut tab, path) = viewer_with("bench_viewer.rs", &text);
+    let v = tab.file_viewer.as_mut().unwrap();
+    v.is_read_only = false;
+    v.word_wrap = true;
+    v.visible_cols = 80;
+    v.cursor_line = 500;
+    v.cursor_col = 20;
+
+    let n = if cfg!(debug_assertions) { 10 } else { 200 };
+    let start = std::time::Instant::now();
+    for _ in 0..n {
+        v.insert_char('x');
+        let _ = v.rows().len();
+        let _ = v.max_cols();
+        let _ = v.has_git_changes();
+        v.selection = Some(((100, 4), (v.cursor_line, v.cursor_col)));
+        let _ = v.selection_stats();
+        v.selection = None;
+        v.backspace();
+    }
+    let elapsed = start.elapsed();
+    let _ = std::fs::remove_file(path);
+    println!(
+        "bench_viewer_wrap_edit_and_selection: {n} ciclos (insert+wrap+git+sel+backspace en 1000 líneas) en {elapsed:.2?} ({:.2} µs/ciclo)",
+        elapsed.as_secs_f64() * 1_000_000.0 / n as f64
+    );
+}
+
+#[test]
+fn test_viewer_save_preserves_undo_redo_and_autosave_blank_lines() {
+    let (mut tab, path) = viewer_with("save_undo_test.txt", "linea 1\nlinea 2\n");
+    let v = tab.file_viewer.as_mut().unwrap();
+    v.is_read_only = false;
+    v.cursor_line = 1;
+    v.cursor_col = 7;
+    v.insert_char('!');
+    assert!(v.is_dirty);
+    assert!(!v.undo_stack.is_empty());
+
+    // Guardar en disco no debe vaciar undo_stack ni redo_stack
+    assert!(v.save_to_disk().is_ok());
+    assert!(!v.is_dirty);
+    assert!(!v.undo_stack.is_empty());
+
+    // Se puede deshacer después de guardar
+    v.undo();
+    assert_eq!(v.lines[1], "linea 2");
+    assert!(!v.redo_stack.is_empty());
+
+    // Se puede rehacer
+    v.redo();
+    assert_eq!(v.lines[1], "linea 2!");
+
+    // Autosave no debe recortar líneas en blanco finales
+    v.lines.push(String::new());
+    v.lines.push(String::new());
+    v.cursor_line = 3;
+    v.cursor_col = 0;
+    v.autosave_local();
+    assert_eq!(v.lines.len(), 4);
+
+    // save_to_disk explícito sí recorta líneas en blanco (dejando como máximo una) y ajusta el cursor
+    v.cursor_line = 3;
+    assert!(v.save_to_disk().is_ok());
+    assert_eq!(v.lines.len(), 3);
+    assert!(v.cursor_line < v.lines.len());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_reset_font_size_default() {
+    let config = AxonConfig::load_or_default();
+    let mut app = AxonApp::new(config, None);
+    app.config.appearance.font_size = 22.0;
+    app.config.appearance.ui_font_size = 18.0;
+
+    app.reset_font_size();
+    assert_eq!(
+        app.config.appearance.font_size,
+        AxonConfig::default().appearance.font_size
+    );
+    assert_eq!(app.config.appearance.ui_font_size, 18.0);
+}
+
+#[test]
+fn test_scroll_offset_for_thumb_y_helper() {
+    let track = (100, 50, 10, 200);
+    let thumb = (100, 50, 10, 40);
+    let max_offset = 100;
+
+    // Arriba del todo
+    assert_eq!(
+        crate::renderer::scroll_offset_for_thumb_y(track, thumb, 50.0, max_offset),
+        Some(0)
+    );
+    // Abajo del todo (disponible = 200 - 40 = 160)
+    assert_eq!(
+        crate::renderer::scroll_offset_for_thumb_y(track, thumb, 210.0, max_offset),
+        Some(100)
+    );
+    // Mitad (50 + 80 = 130)
+    assert_eq!(
+        crate::renderer::scroll_offset_for_thumb_y(track, thumb, 130.0, max_offset),
+        Some(50)
+    );
 }

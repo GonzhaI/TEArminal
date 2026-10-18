@@ -139,11 +139,14 @@ pub(super) fn update_windows_theme(window: &Window, theme: &Theme) {
                 let brush =
                     windows_sys::Win32::Graphics::Gdi::CreateSolidBrush(to_bgr(theme.background));
                 if brush != 0 {
-                    windows_sys::Win32::UI::WindowsAndMessaging::SetClassLongPtrW(
+                    let prev = windows_sys::Win32::UI::WindowsAndMessaging::SetClassLongPtrW(
                         hwnd,
                         windows_sys::Win32::UI::WindowsAndMessaging::GCLP_HBRBACKGROUND,
                         brush as isize,
                     );
+                    if prev != 0 {
+                        windows_sys::Win32::Graphics::Gdi::DeleteObject(prev as isize);
+                    }
                 }
             }
         }

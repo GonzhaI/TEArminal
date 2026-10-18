@@ -200,15 +200,13 @@ impl AxonApp {
             self.tab_or_window_menu(hit)
         } else if !self.is_horizontal_tabs() && self.sidebar_visible && mx < SIDEBAR_WIDTH {
             // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
-            let (item_h, spacing, list_start_y) = (36, 4, 42);
-            let hit = (my >= list_start_y)
-                .then(|| {
-                    let rel = my - list_start_y;
-                    (rel % (item_h + spacing) < item_h)
-                        .then(|| rel / (item_h + spacing) + self.sidebar_scroll_offset)
-                })
-                .flatten()
-                .filter(|&i| i < self.tabs.len());
+            let usable_h = win_h.saturating_sub(status_bar_h);
+            let hit = crate::renderer::SidebarRects::tab_at_y(
+                my,
+                usable_h,
+                self.sidebar_scroll_offset,
+                self.tabs.len(),
+            );
             self.tab_or_window_menu(hit)
         } else if self.tabs[self.active_tab_index].is_settings {
             return false;
@@ -631,8 +629,9 @@ impl AxonApp {
         match viewer.save_to_disk() {
             Ok(()) => {
                 crate::logger::log(&format!("-> Archivo guardado: {}", viewer.file_name));
-                self.file_explorer.refresh_git_status();
-                self.file_explorer.refresh();
+                if self.file_explorer.visible {
+                    self.file_explorer.refresh();
+                }
             }
             Err(e) => crate::logger::log(&format!("-> Error al guardar archivo: {}", e)),
         }
@@ -652,6 +651,7 @@ impl AxonApp {
                 }
             }
             MenuAction::ViewerCut => {
+                let auto_save = self.config.terminal.auto_save;
                 let text = self.tabs[idx]
                     .file_viewer
                     .as_ref()
@@ -661,6 +661,9 @@ impl AxonApp {
                     self.set_clipboard_text(text);
                     if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
                         v.delete_selection();
+                        if auto_save {
+                            v.autosave_local();
+                        }
                         v.ensure_cursor_visible(visible_lines);
                     }
                 }
@@ -673,11 +676,15 @@ impl AxonApp {
                 }
             }
             MenuAction::ViewerUndo | MenuAction::ViewerRedo => {
+                let auto_save = self.config.terminal.auto_save;
                 if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
                     if action == MenuAction::ViewerUndo {
                         v.undo();
                     } else {
                         v.redo();
+                    }
+                    if auto_save {
+                        v.autosave_local();
                     }
                     v.ensure_cursor_visible(visible_lines);
                 }
@@ -734,9 +741,7 @@ impl AxonApp {
             MenuAction::ClosePane => self.close_active_pane(),
             MenuAction::ClearTerminal => {
                 if let Some(p) = self.tabs[idx].active_pane_mut() {
-                    p.terminal.scrollback.clear();
-                    p.terminal.reset_scroll();
-                    p.terminal.command_blocks.clear();
+                    p.terminal.clear_scrollback();
                     p.pty.write_input(b"\x0c");
                 }
             }
@@ -746,11 +751,7 @@ impl AxonApp {
                 }
             }
             MenuAction::CloseTab(i) => self.close_tab(i),
-            MenuAction::CloseOtherTabs(keep) => {
-                for i in (0..self.tabs.len()).rev().filter(|&i| i != keep) {
-                    self.close_tab(i);
-                }
-            }
+            MenuAction::CloseOtherTabs(keep) => self.close_other_tabs(keep),
             MenuAction::NewTab => self.create_new_tab(),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
@@ -777,7 +778,6 @@ impl AxonApp {
                 }
             }
             MenuAction::ExplorerRefresh => {
-                self.file_explorer.refresh_git_status();
                 self.file_explorer.refresh();
             }
         }

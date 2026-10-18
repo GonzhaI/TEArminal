@@ -147,11 +147,12 @@ impl TerminalRenderer {
         }
     }
 
-    /// Obtiene o rasteriza un glifo; tabla plana O(1) para ASCII y caché rápida para el resto
+    /// Obtiene o rasteriza un glifo; tabla plana O(1) para ASCII + Latin-1 y caché rápida para el resto
+    #[inline]
     pub fn get_glyph(&mut self, c: char, bold: bool) -> &CachedGlyph {
         let code = c as u32;
-        if code < 128 {
-            let idx = code as usize + if bold { 128 } else { 0 };
+        if code < 256 {
+            let idx = code as usize + if bold { 256 } else { 0 };
             if self.ascii_cache[idx].is_none() {
                 self.ascii_cache[idx] = Some(self.rasterize_glyph(c, bold));
             }

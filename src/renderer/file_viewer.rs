@@ -420,8 +420,17 @@ impl TerminalRenderer {
         let text_max_x = lay.text_max_x;
         let text_clip: Clip = (sep_x + 1, content_y, text_max_x, content_y + content_h);
 
-        let md_blocks = (viewer.render_markdown && is_markdown)
-            .then(|| crate::renderer::md_preview::classify_blocks(&viewer.lines));
+        let md_blocks = (viewer.render_markdown && is_markdown).then(|| {
+            if let Some((ref path, gen, ref blocks)) = self.md_blocks_cache {
+                if gen == viewer.edit_gen && path == &viewer.path {
+                    return blocks.clone();
+                }
+            }
+            let blocks =
+                std::rc::Rc::new(crate::renderer::md_preview::classify_blocks(&viewer.lines));
+            self.md_blocks_cache = Some((viewer.path.clone(), viewer.edit_gen, blocks.clone()));
+            blocks
+        });
 
         // 4. Renderizado por filas visuales (ajuste de línea y plegado ya resueltos en `viewer.rows()`)
         let rows = viewer.rows();
@@ -487,16 +496,24 @@ impl TerminalRenderer {
 
             // Número de línea (solo en la primera fila de cada línea) y flecha de plegado
             if first_segment {
-                let line_num_str = format!("{}", line_idx + 1);
-                let num_w = line_num_str.len() * char_w;
+                let mut num_buf = [0u8; 20];
+                let mut n = line_idx + 1;
+                let mut pos = num_buf.len();
+                while n > 0 {
+                    pos -= 1;
+                    num_buf[pos] = b'0' + (n % 10) as u8;
+                    n /= 10;
+                }
+                let digits = &num_buf[pos..];
+                let num_w = digits.len() * char_w;
                 let num_x = sep_x.saturating_sub(num_w + 10);
                 let num_fg = if is_cursor_line {
                     theme.foreground
                 } else {
                     theme.ansi[8]
                 };
-                for (ci, ch) in line_num_str.chars().enumerate() {
-                    let glyph = self.get_glyph(ch, false);
+                for (ci, &b) in digits.iter().enumerate() {
+                    let glyph = self.get_glyph(b as char, false);
                     let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
                     blit_glyph(buffer, width, gutter_clip, glyph, gx, gy, num_fg);
@@ -709,36 +726,15 @@ impl TerminalRenderer {
         }
 
         // 5. Barra de desplazamiento vertical unificada
-        let total_lines = total_rows;
-        if total_lines > visible_lines {
-            let track_w = 6;
-            let track_margin = 3;
-            let track_x = (x + w).saturating_sub(track_w + track_margin);
-            let track_y = content_y + 4;
-            let track_h = content_h.saturating_sub(8);
-            let min_thumb_h = 18;
-
-            let thumb_h = (((visible_lines as f32) / (total_lines as f32)) * track_h as f32)
-                .max(min_thumb_h as f32) as usize;
-            let max_scroll = total_lines.saturating_sub(visible_lines);
-            let scroll_ratio = if max_scroll > 0 {
-                (viewer.scroll_offset as f32) / (max_scroll as f32)
-            } else {
-                0.0
-            };
-            let thumb_y = track_y
-                + (scroll_ratio * (track_h.saturating_sub(thumb_h)) as f32).round() as usize;
-
-            Self::draw_scrollbar(
+        if let Some((track, thumb)) =
+            Self::file_viewer_scrollbar_geometry(x, y, w, h, viewer, self.row_height)
+        {
+            Self::draw_scrollbar_rects(
                 buffer,
                 width,
                 height,
-                track_x,
-                track_y,
-                track_w,
-                track_h,
-                thumb_y,
-                thumb_h,
+                track,
+                thumb,
                 viewer.hovered_scrollbar,
                 self.scrollbars_awake,
                 theme,
@@ -895,28 +891,40 @@ impl TerminalRenderer {
             return;
         }
 
-        // Tokenizador por caracteres
-        let chars: Vec<char> = line.chars().collect();
+        // Tokenizador sin alojamientos sobre la cadena UTF-8
+        let bytes = line.as_bytes();
+        let len = bytes.len();
         let mut i = 0;
 
-        while i < chars.len() {
+        #[inline(always)]
+        fn decode_at(line: &str, bytes: &[u8], i: usize) -> (char, usize) {
+            let b = bytes[i];
+            if b < 128 {
+                (b as char, i + 1)
+            } else {
+                let c = line[i..].chars().next().unwrap();
+                (c, i + c.len_utf8())
+            }
+        }
+
+        while i < len {
             if cur_x >= max_x_i32 {
                 break;
             }
 
-            let ch = chars[i];
+            let (ch, next_i) = decode_at(line, bytes, i);
 
             // Tabulaciones: 4 espacios
             if ch == '\t' {
                 cur_x += tab_adv_i32;
-                i += 1;
+                i = next_i;
                 continue;
             }
 
             // Espacios en blanco
             if ch == ' ' {
                 cur_x += char_w_i32;
-                i += 1;
+                i = next_i;
                 continue;
             }
 
@@ -924,24 +932,18 @@ impl TerminalRenderer {
             let is_inline_comment = match ext {
                 "py" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "toml" | "yaml" | "yml" | "rb"
                 | "r" | "jl" | "dockerfile" | "makefile" | "mk" => ch == '#',
-                "sql" | "lua" | "hs" | "elm" => {
-                    ch == '-' && i + 1 < chars.len() && chars[i + 1] == '-'
-                }
-                "html" | "xml" | "svg" | "vue" | "svelte" => {
-                    ch == '<'
-                        && i + 3 < chars.len()
-                        && chars[i + 1] == '!'
-                        && chars[i + 2] == '-'
-                        && chars[i + 3] == '-'
-                }
+                "sql" | "lua" | "hs" | "elm" => line[i..].starts_with("--"),
+                "html" | "xml" | "svg" | "vue" | "svelte" => line[i..].starts_with("<!--"),
                 "ini" | "cfg" | "conf" | "properties" => ch == ';' || ch == '#',
-                _ => ch == '/' && i + 1 < chars.len() && chars[i + 1] == '/',
+                _ => line[i..].starts_with("//"),
             };
 
             if is_inline_comment {
                 let comment_fg = theme.ansi[8];
-                while i < chars.len() && cur_x < max_x_i32 {
-                    let c = chars[i];
+                for c in line[i..].chars() {
+                    if cur_x >= max_x_i32 {
+                        break;
+                    }
                     if c != ' ' && c != '\t' {
                         let glyph = self.get_glyph(c, false);
                         let gx = cur_x + glyph.x_offset;
@@ -949,7 +951,6 @@ impl TerminalRenderer {
                         blit_glyph(buffer, width, clip, glyph, gx, gy, comment_fg);
                     }
                     cur_x += if c == '\t' { tab_adv_i32 } else { char_w_i32 };
-                    i += 1;
                 }
                 break;
             }
@@ -963,19 +964,21 @@ impl TerminalRenderer {
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
                 blit_glyph(buffer, width, clip, glyph, gx, gy, str_fg);
                 cur_x += char_w_i32;
-                i += 1;
+                i = next_i;
 
-                while i < chars.len() && cur_x < max_x_i32 {
-                    let c = chars[i];
+                let mut prev_char = ch;
+                while i < len && cur_x < max_x_i32 {
+                    let (c, ni) = decode_at(line, bytes, i);
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
                     blit_glyph(buffer, width, clip, glyph, gx, gy, str_fg);
                     cur_x += char_w_i32;
-                    i += 1;
-                    if c == quote && (i == 1 || chars[i - 2] != '\\') {
+                    i = ni;
+                    if c == quote && prev_char != '\\' {
                         break;
                     }
+                    prev_char = c;
                 }
                 continue;
             }
@@ -995,21 +998,22 @@ impl TerminalRenderer {
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
                 blit_glyph(buffer, width, clip, glyph, gx, gy, decorator_fg);
                 cur_x += char_w_i32;
-                i += 1;
+                i = next_i;
 
-                while i < chars.len()
-                    && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == ':')
-                {
+                while i < len {
+                    let (c, ni) = decode_at(line, bytes, i);
+                    if !(c.is_alphanumeric() || c == '_' || c == ':') {
+                        break;
+                    }
                     if cur_x >= max_x_i32 {
                         break;
                     }
-                    let c = chars[i];
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
                     blit_glyph(buffer, width, clip, glyph, gx, gy, decorator_fg);
                     cur_x += char_w_i32;
-                    i += 1;
+                    i = ni;
                 }
                 continue;
             }
@@ -1017,19 +1021,21 @@ impl TerminalRenderer {
             // Identificadores, palabras clave o llamadas a función
             if ch.is_alphabetic() || ch == '_' {
                 let start_idx = i;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                    i += 1;
+                i = next_i;
+                while i < len {
+                    let (c, ni) = decode_at(line, bytes, i);
+                    if c.is_alphanumeric() || c == '_' {
+                        i = ni;
+                    } else {
+                        break;
+                    }
                 }
-                let word: String = chars[start_idx..i].iter().collect();
+                let word = &line[start_idx..i];
 
                 // Verificar si va seguido de paréntesis '(' para colorear como invocación de función
-                let mut peek_idx = i;
-                while peek_idx < chars.len() && chars[peek_idx] == ' ' {
-                    peek_idx += 1;
-                }
-                let is_func_call = peek_idx < chars.len() && chars[peek_idx] == '(';
+                let is_func_call = line[i..].trim_start_matches(' ').starts_with('(');
 
-                let token_fg = match word.as_str() {
+                let token_fg = match word {
                     // Palabras clave de control, estructura y definición: Acento del tema
                     "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const" | "use"
                     | "mod" | "type" | "return" | "if" | "else" | "elif" | "elsif" | "match"
@@ -1075,23 +1081,18 @@ impl TerminalRenderer {
                     _ if word
                         .chars()
                         .all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
-                        && word.len() > 1 =>
+                        && word.chars().nth(1).is_some() =>
                     {
                         theme.ansi[5] // Constantes en mayúsculas: Magenta
                     }
-                    _ if word
-                        .chars()
-                        .next()
-                        .map(|c| c.is_uppercase())
-                        .unwrap_or(false) =>
-                    {
+                    _ if ch.is_uppercase() => {
                         theme.ansi[6] // Clases o Tipos PascalCase: Cian
                     }
                     _ => theme.foreground,
                 };
 
                 let is_bold = token_fg == theme.accent_color();
-                for &wc in &chars[start_idx..i] {
+                for wc in word.chars() {
                     if cur_x >= max_x_i32 {
                         break;
                     }
@@ -1107,13 +1108,15 @@ impl TerminalRenderer {
             // Números literales (enteros, hexadecimales 0x..., flotantes)
             if ch.is_ascii_digit() {
                 let num_fg = theme.ansi[3]; // Amarillo oro
-                while i < chars.len()
-                    && (chars[i].is_ascii_alphanumeric() || chars[i] == '.' || chars[i] == '_')
-                {
+                while i < len {
+                    let b = bytes[i];
+                    if !(b.is_ascii_alphanumeric() || b == b'.' || b == b'_') {
+                        break;
+                    }
                     if cur_x >= max_x_i32 {
                         break;
                     }
-                    let c = chars[i];
+                    let c = b as char;
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
@@ -1157,7 +1160,7 @@ impl TerminalRenderer {
             let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
             blit_glyph(buffer, width, clip, glyph, gx, gy, symbol_fg);
             cur_x += char_w_i32;
-            i += 1;
+            i = next_i;
         }
     }
 }

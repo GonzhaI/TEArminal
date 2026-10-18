@@ -28,6 +28,16 @@ impl AxonApp {
             }
             self.context_menu = None;
         }
+        if self.hovered_ai_badge
+            && self.config.appearance.show_status_bar
+            && !self.tabs[self.active_tab_index].is_settings
+        {
+            let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
+            let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
+            if StatusBarRects::inside(mx, my, popup_rect) {
+                return;
+            }
+        }
         self.last_scroll_time = Instant::now();
 
         if self.tabs[self.active_tab_index].is_settings {
@@ -52,17 +62,8 @@ impl AxonApp {
                 MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
                 MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as isize,
             };
-            let tab_item_h = 36;
-            let tab_spacing = 4;
-            let list_start_y = 42;
-            let toggle_h = 30;
-            let toggle_y = win_h.saturating_sub(status_bar_h + toggle_h + 8);
-            let list_max_y = toggle_y.saturating_sub(8);
-            let visible_items = if list_max_y > list_start_y {
-                (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-            } else {
-                1
-            };
+            let usable_h = win_h.saturating_sub(status_bar_h);
+            let visible_items = crate::renderer::SidebarRects::visible_items(usable_h);
             let max_offset = self.tabs.len().saturating_sub(visible_items);
 
             if scroll_steps > 0 {

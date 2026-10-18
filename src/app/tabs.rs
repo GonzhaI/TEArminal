@@ -29,6 +29,9 @@ impl AxonApp {
 
     /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
     pub fn sync_file_explorer_root(&mut self) {
+        if !self.file_explorer.visible {
+            return;
+        }
         if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
             if let Some(pane) = active.active_pane_mut() {
                 if let Some(ref ssh) = pane.terminal.ssh_session {
@@ -54,15 +57,6 @@ impl AxonApp {
                             remote_dir: rdir,
                         };
                         self.file_explorer.set_remote_session(Some(remote_sess));
-                        if self.file_explorer.items.is_empty() {
-                            let grid_lines: Vec<String> = pane
-                                .terminal
-                                .grid
-                                .iter()
-                                .map(|row| row.iter().map(|c| c.c).collect::<String>())
-                                .collect();
-                            self.file_explorer.populate_from_grid(&grid_lines);
-                        }
                         return;
                     }
                 }
@@ -124,7 +118,15 @@ impl AxonApp {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
         let tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
+        let fetch_git_base = !cfg!(test)
+            && tab
+                .file_viewer
+                .as_ref()
+                .is_some_and(|v| !v.is_binary && v.git_base.is_none());
         self.install_viewer_tab(tab, pin);
+        if fetch_git_base {
+            self.spawn_git_head_lines(path.to_path_buf());
+        }
     }
 
     /// Clic izquierdo en una pestaña: la activa; un segundo clic rápido sobre la misma fija una vista previa
@@ -255,17 +257,50 @@ impl AxonApp {
             return;
         }
 
+        if let Some(viewer) = self.tabs[index].file_viewer.as_mut() {
+            if viewer.needs_autosave {
+                viewer.autosave_local();
+            }
+        }
+
         self.tabs.remove(index);
+        self.prune_pending_remote();
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando la ventana");
             self.request_close();
             return;
         }
 
-        if self.active_tab_index >= self.tabs.len() {
+        if index < self.active_tab_index {
+            self.active_tab_index -= 1;
+        } else if self.active_tab_index >= self.tabs.len() {
             self.active_tab_index = self.tabs.len() - 1;
         }
+        if index < self.last_terminal_tab_index {
+            self.last_terminal_tab_index -= 1;
+        } else if self.last_terminal_tab_index >= self.tabs.len() {
+            self.last_terminal_tab_index = self.tabs.len() - 1;
+        }
         self.tabs[self.active_tab_index].has_unread = false;
+        self.sync_file_explorer_root();
+        self.clamp_sidebar_scroll();
+        self.update_window_title();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub fn close_other_tabs(&mut self, keep: usize) {
+        let Some(id) = self.tabs.get(keep).map(|t| t.id) else {
+            return;
+        };
+        self.tabs.retain(|t| t.id == id);
+        self.prune_pending_remote();
+        self.active_tab_index = 0;
+        self.last_terminal_tab_index = 0;
+        self.tabs[0].has_unread = false;
+        self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
         self.update_window_title();
         self.save_session();
@@ -443,7 +478,7 @@ impl AxonApp {
                 pane.pty = pty;
                 // Pantalla alternativa, modos de ratón/pegado y atributos como los dejaría un agente que sale bien
                 pane.terminal.process_bytes(
-                    b"[?1049l[?1000l[?1002l[?1003l[?1006l[?2004l[0m[?25h[r[2J[3J[H",
+                    b"\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m\x1b[?25h\x1b[r\x1b[2J\x1b[3J\x1b[H",
                 );
                 true
             }
@@ -462,6 +497,7 @@ impl AxonApp {
                     tab_to_close = Some(idx);
                 } else {
                     tab.close_pane(pane_id);
+                    self.prune_pending_remote();
                     self.recompute_grid_for_all_tabs();
                     self.update_window_title();
                     self.save_session();
@@ -667,19 +703,8 @@ impl AxonApp {
         } else {
             800
         };
-        let status_bar_h = self.status_bar_height();
-        let usable_h = win_h.saturating_sub(status_bar_h);
-        let tab_item_h = 36;
-        let tab_spacing = 4;
-        let list_start_y = 42;
-        let toggle_h = 30;
-        let toggle_y = usable_h.saturating_sub(toggle_h + 8);
-        let list_max_y = toggle_y.saturating_sub(8);
-        let visible_items = if list_max_y > list_start_y {
-            (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-        } else {
-            1
-        };
+        let usable_h = win_h.saturating_sub(self.status_bar_height());
+        let visible_items = crate::renderer::SidebarRects::visible_items(usable_h);
         let max_offset = self.tabs.len().saturating_sub(visible_items);
         self.sidebar_scroll_offset = self.sidebar_scroll_offset.min(max_offset);
     }
@@ -694,9 +719,13 @@ impl AxonApp {
         else {
             return false;
         };
-        if !pane.terminal.remote_integration || dir.chars().any(char::is_control) {
+        if !pane.terminal.remote_integration
+            || !pane.terminal.remote_at_prompt
+            || dir.chars().any(char::is_control)
+        {
             return false;
         }
+        pane.terminal.note_enter_sent();
         // Ctrl+U limpia lo que hubiera escrito en la línea antes de lanzar el cd
         let cmd = format!("\x15cd -- {}\r", crate::ssh::quote(dir));
         pane.pty.write_input(cmd.as_bytes());

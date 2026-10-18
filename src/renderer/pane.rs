@@ -2,14 +2,6 @@
 
 use super::*;
 
-pub(super) fn is_cell_selected(col: usize, row: usize, sel: SelectionRange) -> bool {
-    let (mut p1, mut p2) = (sel.start, sel.end);
-    if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
-        std::mem::swap(&mut p1, &mut p2);
-    }
-    row >= p1.1 && row <= p2.1 && (row != p1.1 || col >= p1.0) && (row != p2.1 || col <= p2.0)
-}
-
 pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
     let base = if cell.inverse() {
         if cell.bg != Color::TRANSPARENT {
@@ -108,6 +100,15 @@ impl TerminalRenderer {
         let base_y = rect_y + self.margin_y;
         let visible_rows = terminal.visible_rows();
         let view_start = terminal.visible_line_start();
+        let max_cols = max_x.saturating_sub(base_x) / self.char_width;
+
+        let norm_sel = terminal.selection.map(|sel| {
+            let (mut p1, mut p2) = (sel.start, sel.end);
+            if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
+                std::mem::swap(&mut p1, &mut p2);
+            }
+            (p1, p2)
+        });
 
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
@@ -115,19 +116,24 @@ impl TerminalRenderer {
             if cell_y + self.row_height > max_y {
                 break;
             }
+            let cols_in_row = row.len().min(max_cols);
+            let row_slice = &row[..cols_in_row];
 
-            // PASADA 1: Dibujar todos los fondos de celda y selecciones
-            for (col_idx, cell) in row.iter().enumerate() {
-                let cell_x = base_x + (col_idx * self.char_width);
-                if cell_x + self.char_width > max_x {
-                    break;
-                }
-
-                let is_selected = if let Some(sel) = terminal.selection {
-                    is_cell_selected(col_idx, row_idx, sel)
+            let row_sel = norm_sel.and_then(|(p1, p2)| {
+                if row_idx < p1.1 || row_idx > p2.1 {
+                    None
                 } else {
-                    false
-                };
+                    let start_col = if row_idx == p1.1 { p1.0 } else { 0 };
+                    let end_col = if row_idx == p2.1 { p2.0 } else { usize::MAX };
+                    Some((start_col, end_col))
+                }
+            });
+
+            // PASADA 1: Dibujar fondos de celda y selecciones fusionando tramos horizontales idénticos
+            let mut run_start = 0usize;
+            let mut run_color: Option<u32> = None;
+            for (col_idx, cell) in row_slice.iter().enumerate() {
+                let is_selected = row_sel.is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec);
 
                 let effective_bg = if is_selected {
                     theme.selection
@@ -143,34 +149,48 @@ impl TerminalRenderer {
                     theme.background
                 };
 
-                // Dibujar fondo de celda si difiere del fondo global
-                if effective_bg != theme.background {
-                    fill_rect(
-                        buffer,
-                        width,
-                        clip,
-                        cell_x,
-                        cell_y,
-                        self.char_width,
-                        self.row_height,
-                        effective_bg.to_u32_xrgb(),
-                    );
+                let cell_bg_u32 =
+                    (effective_bg != theme.background).then(|| effective_bg.to_u32_xrgb());
+
+                if cell_bg_u32 != run_color {
+                    if let Some(c_u32) = run_color {
+                        fill_rect(
+                            buffer,
+                            width,
+                            clip,
+                            base_x + run_start * self.char_width,
+                            cell_y,
+                            (col_idx - run_start) * self.char_width,
+                            self.row_height,
+                            c_u32,
+                        );
+                    }
+                    run_start = col_idx;
+                    run_color = cell_bg_u32;
                 }
+            }
+            if let Some(c_u32) = run_color {
+                fill_rect(
+                    buffer,
+                    width,
+                    clip,
+                    base_x + run_start * self.char_width,
+                    cell_y,
+                    (cols_in_row - run_start) * self.char_width,
+                    self.row_height,
+                    c_u32,
+                );
             }
 
             // PASADA 2: Dibujar decoraciones y rasterizar/mezclar glifos
-            for (col_idx, cell) in row.iter().enumerate() {
-                let cell_x = base_x + (col_idx * self.char_width);
-                if cell_x + self.char_width > max_x {
-                    break;
-                }
-
+            for (col_idx, cell) in row_slice.iter().enumerate() {
                 // Espaciador de carácter ancho o espacio sin decoración: nada más que pintar
                 let decorated = cell.underline() || cell.strikethrough();
                 if cell.width == 0 || (cell.c == ' ' && !decorated) {
                     continue;
                 }
 
+                let cell_x = base_x + (col_idx * self.char_width);
                 let fg_color = compute_cell_fg(cell, theme);
 
                 // Subrayado (SGR 4) y tachado (SGR 9)

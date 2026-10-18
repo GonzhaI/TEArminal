@@ -64,13 +64,25 @@ pub fn run(
         return Err(format!("destino SSH no válido: {dest:?}"));
     }
     let mut cmd = Command::new("ssh.exe");
-    cmd.args(["-o", "BatchMode=yes", "-o"])
-        .arg(format!("ConnectTimeout={connect_timeout}"))
-        .args(["--", dest, remote_cmd]);
+    cmd.args([
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=2",
+        "-o",
+    ])
+    .arg(format!("ConnectTimeout={connect_timeout}"))
+    .args(["--", dest, remote_cmd]);
     run_command(cmd, stdin, max_out)
 }
 
-fn run_command(mut cmd: Command, stdin: Option<&[u8]>, max_out: usize) -> Result<Output, String> {
+pub(crate) fn run_command(
+    mut cmd: Command,
+    stdin: Option<&[u8]>,
+    max_out: usize,
+) -> Result<Output, String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -83,9 +95,10 @@ fn run_command(mut cmd: Command, stdin: Option<&[u8]>, max_out: usize) -> Result
     })
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
+    let prog = cmd.get_program().to_string_lossy().to_string();
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("Error al ejecutar SSH: {e}"))?;
+        .map_err(|e| format!("Error al ejecutar {prog}: {e}"))?;
 
     // stdin y stderr en hilos propios: si no, una tubería llena bloquearía al hijo mientras se lee stdout
     let writer = match (stdin, child.stdin.take()) {
@@ -148,9 +161,20 @@ pub fn upload_image(local_path: &str, destination: &str) -> Option<String> {
     ));
 
     let mut cmd = Command::new("scp.exe");
-    cmd.args(["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "--"])
-        .arg(local_path)
-        .arg(&remote_target);
+    cmd.args([
+        "-q",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=3",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=2",
+        "--",
+    ])
+    .arg(local_path)
+    .arg(&remote_target);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;

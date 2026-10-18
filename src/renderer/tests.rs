@@ -26,7 +26,7 @@ mod bench {
         }
         let mut buf = vec![0u32; w * h];
         r.render_pane(&mut buf, w, h, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
-        let n = 200;
+        let n = if cfg!(debug_assertions) { 4 } else { 200 };
         let t = Instant::now();
         for _ in 0..n {
             r.render_pane(&mut buf, w, h, 0, 0, w, h, &term, &theme, true, true, false);
@@ -38,6 +38,218 @@ mod bench {
         }
         let fill = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("render_pane {w}x{h} ({cols}x{rows} celdas): {per:.2} ms/frame; buffer.fill: {fill:.2} ms");
+    }
+
+    #[test]
+    fn bench_sdf_rounded_rect_and_stroke() {
+        let (w, h) = (1920usize, 1080usize);
+        let mut buf = vec![0xFF16_1618u32; w * h];
+        let fill_color = Color::from_rgb(38, 42, 52);
+        let stroke_color = Color::from_rgb(90, 100, 120);
+        let n = if cfg!(debug_assertions) { 6 } else { 300 };
+        let t = Instant::now();
+        for _ in 0..n {
+            for i in 0..12 {
+                let y = 40 + i * 76;
+                crate::ui::paint::draw_rounded_rect(&mut buf, w, h, 80, y, 820, 64, 10, fill_color);
+                crate::ui::paint::stroke_rounded_rect(
+                    &mut buf,
+                    w,
+                    h,
+                    80,
+                    y,
+                    820,
+                    64,
+                    10,
+                    stroke_color,
+                );
+            }
+        }
+        let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("bench_sdf_rounded_rect_and_stroke (12 cards 820x64): {per:.3} ms/iter");
+    }
+
+    #[test]
+    fn bench_render_file_viewer_code_and_markdown() {
+        let cfg = AxonConfig::default();
+        let theme = Theme::from_name(&cfg.appearance.theme);
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let (w, h) = (1920usize, 1080usize);
+        let mut buf = vec![0u32; w * h];
+
+        let dir = std::env::temp_dir().join(format!("axon_bench_fv_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let rs_path = dir.join("sample.rs");
+        let md_path = dir.join("README.md");
+
+        let mut rs_code = String::new();
+        for i in 0..120 {
+            rs_code.push_str(&format!(
+                "pub fn compute_block_{i}(input: &[u32], factor: usize) -> u64 {{ // comentario {i}\n    let mut acc: u64 = 0x1234_5678;\n    for &v in input {{ acc = acc.wrapping_add((v as u64) * (factor as u64)); }}\n    acc\n}}\n"
+            ));
+        }
+        let _ = std::fs::write(&rs_path, &rs_code);
+
+        let mut md_text = String::from("# Guía de Rendimiento de Axon\n\nTexto con **negrita**, *cursiva* y `código inline`.\n\n");
+        for i in 0..40 {
+            md_text.push_str(&format!(
+                "## Sección {i}\n- Punto de verificación {i} con ruta `src/renderer/pane.rs`\n- [x] Tarea completada {i}\n\n```rust\nfn demo_{i}() {{ println!(\"hola {i}\"); }}\n```\n\n"
+            ));
+        }
+        let _ = std::fs::write(&md_path, &md_text);
+
+        let fv_rs = crate::app::TerminalTab::new_file_viewer(1, rs_path.clone())
+            .file_viewer
+            .unwrap();
+        let fv_md = crate::app::TerminalTab::new_file_viewer(2, md_path.clone())
+            .file_viewer
+            .unwrap();
+
+        r.render_file_viewer(
+            &mut buf,
+            w,
+            h,
+            190,
+            0,
+            w - 190,
+            h - 26,
+            0,
+            true,
+            &fv_rs,
+            &theme,
+        );
+        let n = if cfg!(debug_assertions) { 3 } else { 100 };
+        let t_rs = Instant::now();
+        for _ in 0..n {
+            r.render_file_viewer(
+                &mut buf,
+                w,
+                h,
+                190,
+                0,
+                w - 190,
+                h - 26,
+                0,
+                true,
+                &fv_rs,
+                &theme,
+            );
+        }
+        let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+        r.render_file_viewer(
+            &mut buf,
+            w,
+            h,
+            190,
+            0,
+            w - 190,
+            h - 26,
+            0,
+            true,
+            &fv_md,
+            &theme,
+        );
+        let t_md = Instant::now();
+        for _ in 0..n {
+            r.render_file_viewer(
+                &mut buf,
+                w,
+                h,
+                190,
+                0,
+                w - 190,
+                h - 26,
+                0,
+                true,
+                &fv_md,
+                &theme,
+            );
+        }
+        let md_ms = t_md.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("bench_render_file_viewer (1920x1080): Rust code = {rs_ms:.2} ms/frame | Markdown preview = {md_ms:.2} ms/frame");
+    }
+
+    #[test]
+    fn bench_render_ui_chrome() {
+        let cfg = AxonConfig::default();
+        let theme = Theme::from_name(&cfg.appearance.theme);
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let (w, h) = (1920usize, 1080usize);
+        let mut buf = vec![0u32; w * h];
+        let tabs: Vec<SidebarTabItem> = (0..8)
+            .map(|i| SidebarTabItem {
+                id: i + 1,
+                title: format!("pwsh — axon/src #{i}"),
+                is_active: i == 2,
+                has_unread: i % 3 == 0,
+                pane_count: 1 + (i % 2),
+                is_settings: false,
+                is_file_viewer: i == 5,
+                is_preview: i == 5,
+            })
+            .collect();
+        let settings_state = SettingsPageState::default();
+
+        // Warm up
+        r.render_sidebar(
+            &mut buf, w, h, 190, 26, &tabs, 0, None, None, false, false, false, false, &theme,
+        );
+        r.render_top_tab_bar(
+            &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
+            true, &theme,
+        );
+        r.render_status_bar(
+            &mut buf,
+            w,
+            h,
+            190,
+            Some("~/dev/axon"),
+            Some("main"),
+            None,
+            180,
+            48,
+            AiAgentStatus::Claude,
+            true,
+            &theme,
+        );
+        r.render_settings_page(&mut buf, w, h, 190, 0, 26, &cfg, &settings_state, &theme);
+
+        let n = if cfg!(debug_assertions) { 3 } else { 120 };
+        let t_chrome = Instant::now();
+        for _ in 0..n {
+            r.render_sidebar(
+                &mut buf, w, h, 190, 26, &tabs, 0, None, None, false, false, false, false, &theme,
+            );
+            r.render_top_tab_bar(
+                &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
+                true, &theme,
+            );
+            r.render_status_bar(
+                &mut buf,
+                w,
+                h,
+                190,
+                Some("~/dev/axon"),
+                Some("main"),
+                None,
+                180,
+                48,
+                AiAgentStatus::Claude,
+                true,
+                &theme,
+            );
+        }
+        let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0 / n as f64;
+
+        let t_settings = Instant::now();
+        for _ in 0..n {
+            r.render_settings_page(&mut buf, w, h, 190, 0, 26, &cfg, &settings_state, &theme);
+        }
+        let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        println!("bench_render_ui_chrome: sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
     }
 }
 

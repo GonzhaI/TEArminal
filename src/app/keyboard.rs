@@ -590,8 +590,12 @@ impl AxonApp {
 
             // Deshacer: Ctrl + Z
             if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'z') {
+                let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.undo();
+                    if auto_save {
+                        viewer.schedule_autosave();
+                    }
                     viewer.ensure_cursor_visible(visible_lines);
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -604,8 +608,12 @@ impl AxonApp {
             if (ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'y'))
                 || (ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'z'))
             {
+                let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.redo();
+                    if auto_save {
+                        viewer.schedule_autosave();
+                    }
                     viewer.ensure_cursor_visible(visible_lines);
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -616,6 +624,7 @@ impl AxonApp {
 
             // Cortar selección: Ctrl + X
             if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'x') {
+                let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     if !viewer.is_editable() {
                         return;
@@ -628,6 +637,9 @@ impl AxonApp {
                             let _ = cb.set_text(sel_text);
                         }
                         viewer.delete_selection();
+                        if auto_save {
+                            viewer.schedule_autosave();
+                        }
                         viewer.ensure_cursor_visible(visible_lines);
                         if let Some(w) = &self.window {
                             w.request_redraw();
@@ -820,6 +832,7 @@ impl AxonApp {
                                 viewer.cursor_line = 0;
                             }
                             viewer.cursor_col = 0;
+                            viewer.ensure_cursor_visible(visible_lines);
                             if is_shift_nav {
                                 let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
                                 viewer.selection =
@@ -842,6 +855,7 @@ impl AxonApp {
                                 .map(|l| l.chars().count())
                                 .unwrap_or(0);
                             viewer.cursor_col = line_len;
+                            viewer.ensure_cursor_visible(visible_lines);
                             if is_shift_nav {
                                 let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
                                 viewer.selection =
@@ -879,7 +893,7 @@ impl AxonApp {
                             }
                             viewer.insert_newline();
                             if global_auto_save {
-                                viewer.autosave_local();
+                                viewer.schedule_autosave();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -897,7 +911,7 @@ impl AxonApp {
                                 viewer.backspace();
                             }
                             if global_auto_save {
-                                viewer.autosave_local();
+                                viewer.schedule_autosave();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -915,7 +929,7 @@ impl AxonApp {
                                 viewer.delete();
                             }
                             if global_auto_save {
-                                viewer.autosave_local();
+                                viewer.schedule_autosave();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -929,7 +943,7 @@ impl AxonApp {
                             }
                             viewer.insert_tab();
                             if global_auto_save {
-                                viewer.autosave_local();
+                                viewer.schedule_autosave();
                             }
                             viewer.ensure_cursor_visible(visible_lines);
                             if let Some(w) = &self.window {
@@ -950,7 +964,7 @@ impl AxonApp {
                                         }
                                     }
                                     if global_auto_save {
-                                        viewer.autosave_local();
+                                        viewer.schedule_autosave();
                                     }
                                     viewer.ensure_cursor_visible(visible_lines);
                                     if let Some(w) = &self.window {
@@ -1119,9 +1133,7 @@ impl AxonApp {
 
         // Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
         if ctrl && shift && key_is_char(&logical_key, physical_key, 'k') {
-            active.terminal.scrollback.clear();
-            active.terminal.reset_scroll();
-            active.terminal.command_blocks.clear();
+            active.terminal.clear_scrollback();
             active.pty.write_input(b"\x0c");
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -1133,11 +1145,11 @@ impl AxonApp {
         if ctrl && shift {
             if let Key::Named(NamedKey::ArrowUp) = logical_key {
                 if let Some(block) = active.terminal.command_blocks.last() {
-                    let target = active
+                    active.terminal.scroll_offset = active
                         .terminal
-                        .total_lines_count
+                        .scrollback
+                        .len()
                         .saturating_sub(block.prompt_line);
-                    active.terminal.scroll_offset = target.min(active.terminal.scrollback.len());
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }

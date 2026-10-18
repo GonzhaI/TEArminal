@@ -182,21 +182,29 @@ Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction Silently
 function ssh {
     $rawArgs = $args
     $dest = ''
+    $posCount = 0
+    $optWithArg = @('-p', '-i', '-l', '-o', '-c', '-b', '-B', '-J', '-F', '-D', '-E', '-I', '-R', '-L', '-m', '-O', '-Q', '-S', '-w', '-W')
     for ($i = 0; $i -lt $rawArgs.Count; $i++) {
-        $arg = $rawArgs[$i]
+        $arg = [string]$rawArgs[$i]
+        if ($arg -eq '--') {
+            $rem = $rawArgs.Count - ($i + 1)
+            if ($rem -ge 1 -and -not $dest) { $dest = [string]$rawArgs[$i + 1] }
+            $posCount += [Math]::Max(0, $rem)
+            break
+        }
         if ($arg.StartsWith('-')) {
-            if ($arg -in @('-p', '-i', '-l', '-o', '-c', '-b', '-J', '-F', '-D', '-R', '-L', '-W') -and ($i + 1 -lt $rawArgs.Count)) { $i++ }
+            if ($arg -in $optWithArg -and ($i + 1 -lt $rawArgs.Count)) { $i++ }
             continue
         }
-        $dest = $arg
-        break
+        if (-not $dest) { $dest = $arg }
+        $posCount++
     }
     if (-not $dest) { $dest = 'remote' }
     # Integración (config terminal.ssh_integration): un bash remoto informa en cada prompt de la rama git,
     # la carpeta (OSC 7) y su listado (OSC 1337), y atiende peticiones de Axon (leer/guardar archivo, listar
     # carpeta) por la misma sesión, sin segunda conexión: funciona también con contraseña. Solo en sesiones
     # interactivas sin comando remoto. Texto plano, sin ofuscar (los antivirus desconfían de lo contrario).
-    $integrate = ($env:AXON_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($rawArgs[-1] -eq $dest)
+    $integrate = ($env:AXON_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($posCount -eq 1)
     foreach ($a in $rawArgs) { if ($a -in @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'

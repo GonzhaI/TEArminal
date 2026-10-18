@@ -6,33 +6,25 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
     let mut cur = start_dir?.to_path_buf();
     for _ in 0..8 {
         let git_dir = cur.join(".git");
-        if git_dir.is_dir() {
-            let head_path = git_dir.join("HEAD");
-            if let Ok(content) = std::fs::read_to_string(head_path) {
-                let line = content.lines().next()?.trim();
-                if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
-                    return Some(branch.to_string());
-                } else if line.len() >= 7 {
-                    return Some(line[..7].to_string());
-                }
-            }
-            return None;
+        let head_path = if git_dir.is_dir() {
+            Some(git_dir.join("HEAD"))
         } else if git_dir.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&git_dir) {
-                if let Some(path_str) = content
-                    .lines()
-                    .next()
-                    .and_then(|l| l.strip_prefix("gitdir: "))
-                {
-                    let actual_git_dir = cur.join(path_str.trim());
-                    let head_path = actual_git_dir.join("HEAD");
-                    if let Ok(head_content) = std::fs::read_to_string(head_path) {
-                        let line = head_content.lines().next()?.trim();
-                        if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
-                            return Some(branch.to_string());
-                        }
-                    }
-                }
+            std::fs::read_to_string(&git_dir).ok().and_then(|c| {
+                c.lines()
+                    .next()?
+                    .strip_prefix("gitdir: ")
+                    .map(|p| cur.join(p.trim()).join("HEAD"))
+            })
+        } else {
+            None
+        };
+        if let Some(head_path) = head_path {
+            let content = std::fs::read_to_string(head_path).ok()?;
+            let line = content.lines().next()?.trim();
+            if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
+                return Some(branch.to_string());
+            } else if line.len() >= 7 {
+                return Some(line[..7].to_string());
             }
             return None;
         }
@@ -43,25 +35,34 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
     None
 }
 
+pub(super) fn shorten_home(path: &std::path::Path) -> String {
+    static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let s = path.to_string_lossy();
+    match HOME.get_or_init(|| std::env::var("USERPROFILE").ok()) {
+        Some(home) if s.starts_with(home.as_str()) => format!("~{}", &s[home.len()..]),
+        _ => s.into_owned(),
+    }
+}
+
 pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {
+    use crate::renderer::contains_ignore_ascii_case;
     if let Some(t) = title {
-        let lower = t.to_lowercase();
-        if lower.contains("claude") {
+        if contains_ignore_ascii_case(t, "claude") {
             return AiAgentStatus::Claude;
         }
-        if lower.contains("agy") || lower.contains("antigravity") {
+        if contains_ignore_ascii_case(t, "agy") || contains_ignore_ascii_case(t, "antigravity") {
             return AiAgentStatus::Agy;
         }
-        if lower.contains("gemini") {
+        if contains_ignore_ascii_case(t, "gemini") {
             return AiAgentStatus::Gemini;
         }
-        if lower.contains("aider") {
+        if contains_ignore_ascii_case(t, "aider") {
             return AiAgentStatus::Aider;
         }
-        if lower.contains("copilot") {
+        if contains_ignore_ascii_case(t, "copilot") {
             return AiAgentStatus::Copilot;
         }
-        if lower.contains("ollama") {
+        if contains_ignore_ascii_case(t, "ollama") {
             return AiAgentStatus::Ollama;
         }
     }

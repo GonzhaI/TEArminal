@@ -95,14 +95,9 @@ pub struct TerminalState {
 
     // Estado SGR actual
     pub theme: Theme,
-    current_fg: Color,
-    current_bg: Color,
-    current_bold: bool,
-    current_dim: bool,
-    current_italic: bool,
-    current_underline: bool,
-    current_strikethrough: bool,
-    current_inverse: bool,
+    pub(super) current_fg: Color,
+    pub(super) current_bg: Color,
+    pub(super) current_flags: u8,
 
     // Selección de texto
     pub selection: Option<SelectionRange>,
@@ -111,6 +106,7 @@ pub struct TerminalState {
     pub scrollbar_hovered: bool,
 
     parser: Option<Parser>,
+    pub(super) parser_in_ground: bool,
 }
 
 impl TerminalState {
@@ -126,7 +122,7 @@ impl TerminalState {
             cursor_x: 0,
             cursor_y: 0,
             grid,
-            scrollback: VecDeque::with_capacity(max_scrollback.min(1000)),
+            scrollback: VecDeque::with_capacity(max_scrollback.min(4096)),
             max_scrollback,
             scroll_offset: 0,
             is_alt_screen: false,
@@ -162,15 +158,11 @@ impl TerminalState {
             theme,
             current_fg: fg,
             current_bg: Color::TRANSPARENT,
-            current_bold: false,
-            current_dim: false,
-            current_italic: false,
-            current_underline: false,
-            current_strikethrough: false,
-            current_inverse: false,
+            current_flags: 0,
             selection: None,
             scrollbar_hovered: false,
             parser: Some(Parser::new()),
+            parser_in_ground: true,
         }
     }
 
@@ -300,21 +292,83 @@ impl TerminalState {
             self.scroll_region_bottom = self.rows.saturating_sub(1);
             self.current_fg = Color::TRANSPARENT;
             self.current_bg = Color::TRANSPARENT;
-            self.current_bold = false;
-            self.current_dim = false;
-            self.current_italic = false;
-            self.current_underline = false;
-            self.current_strikethrough = false;
-            self.current_inverse = false;
+            self.current_flags = 0;
         }
     }
 
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        if let Some(mut parser) = self.parser.take() {
+        let Some(mut parser) = self.parser.take() else {
+            return;
+        };
+        let mut i = 0;
+        let len = bytes.len();
+        while i < len {
+            if self.parser_in_ground {
+                let b = bytes[i];
+                if (0x20..=0x7e).contains(&b) {
+                    if self.cursor_x >= self.cols {
+                        self.cursor_x = 0;
+                        self.newline();
+                    }
+                    let max_run = (len - i).min(self.cols.saturating_sub(self.cursor_x));
+                    let run = bytes[i..i + max_run]
+                        .iter()
+                        .take_while(|&&ch| (0x20..=0x7e).contains(&ch))
+                        .count();
+                    if run > 0 && self.cursor_y < self.rows {
+                        let (cx, cy, flags, fg, bg) = (
+                            self.cursor_x,
+                            self.cursor_y,
+                            self.current_flags,
+                            self.current_fg,
+                            self.current_bg,
+                        );
+                        let grid = if self.is_alt_screen {
+                            &mut self.alt_grid
+                        } else {
+                            &mut self.grid
+                        };
+                        let row = &mut grid[cy][cx..cx + run];
+                        for (&ch, cell) in bytes[i..i + run].iter().zip(row) {
+                            *cell = Cell {
+                                c: ch as char,
+                                width: 1,
+                                flags,
+                                fg,
+                                bg,
+                            };
+                        }
+                        self.cursor_x += run;
+                        i += run;
+                        continue;
+                    }
+                } else if b != 0x1b && b < 0x80 {
+                    match b {
+                        b'\r' => self.cursor_x = 0,
+                        b'\n' => self.newline(),
+                        b'\x08' => {
+                            if self.cursor_x > 0 {
+                                self.cursor_x -= 1;
+                            }
+                        }
+                        b'\t' => {
+                            let next_tab = (self.cursor_x + 8) & !7;
+                            self.cursor_x = next_tab.min(self.cols.saturating_sub(1));
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                    continue;
+                }
+            }
+            self.parser_in_ground = false;
             let mut performer = Performer { state: self };
-            parser.advance(&mut performer, bytes);
-            performer.state.parser = Some(parser);
+            while i < len && !performer.state.parser_in_ground {
+                parser.advance(&mut performer, &bytes[i..=i]);
+                i += 1;
+            }
         }
+        self.parser = Some(parser);
     }
 
     /// Registra un bloque OSC 133 descartando los más antiguos (el render los recorre en cada fotograma)
@@ -336,16 +390,66 @@ impl TerminalState {
         }
     }
 
-    /// El historial perdió su línea más antigua: las imágenes se reindexan y se liberan las que salen con ella
+    /// El historial perdió su línea más antigua: imágenes y bloques OSC 133 se reindexan y se liberan los que salen con ella
     fn shift_images_after_eviction(&mut self) {
-        self.images
-            .retain_mut(|img| match img.line_index.checked_sub(1) {
-                Some(line) => {
-                    img.line_index = line;
-                    true
+        if !self.images.is_empty() {
+            self.images
+                .retain_mut(|img| match img.line_index.checked_sub(1) {
+                    Some(line) => {
+                        img.line_index = line;
+                        true
+                    }
+                    None => false,
+                });
+        }
+        if !self.command_blocks.is_empty() {
+            let oldest_survives = self.command_blocks[0]
+                .output_end
+                .or(self.command_blocks[0].output_start)
+                .or(self.command_blocks[0].command_line)
+                .unwrap_or(self.command_blocks[0].prompt_line)
+                > 1;
+            if oldest_survives {
+                for b in &mut self.command_blocks {
+                    b.prompt_line = b.prompt_line.saturating_sub(1);
+                    if let Some(l) = &mut b.command_line {
+                        *l = l.saturating_sub(1);
+                    }
+                    if let Some(l) = &mut b.output_start {
+                        *l = l.saturating_sub(1);
+                    }
+                    if let Some(l) = &mut b.output_end {
+                        *l = l.saturating_sub(1);
+                    }
                 }
-                None => false,
-            });
+            } else {
+                self.command_blocks
+                    .retain_mut(Self::shift_block_after_eviction);
+            }
+        }
+        if let Some(b) = &mut self.active_block {
+            Self::shift_block_after_eviction(b);
+        }
+    }
+
+    #[inline]
+    fn shift_block_after_eviction(b: &mut CommandBlock) -> bool {
+        let max_line = b
+            .output_end
+            .or(b.output_start)
+            .or(b.command_line)
+            .unwrap_or(b.prompt_line);
+        b.prompt_line = b.prompt_line.saturating_sub(1);
+        if let Some(l) = &mut b.command_line {
+            *l = l.saturating_sub(1);
+        }
+        if let Some(l) = &mut b.output_start {
+            *l = l.saturating_sub(1);
+        }
+        if let Some(l) = &mut b.output_end {
+            *l = l.saturating_sub(1);
+        }
+        max_line > 0
     }
 
     pub fn newline(&mut self) {
@@ -355,10 +459,11 @@ impl TerminalState {
         if self.is_alt_screen {
             if self.cursor_y >= self.scroll_region_bottom {
                 if self.scroll_region_top < self.alt_grid.len() {
-                    self.alt_grid.remove(self.scroll_region_top);
-                    let insert_pos = self.scroll_region_bottom.min(self.alt_grid.len());
-                    self.alt_grid
-                        .insert(insert_pos, vec![default_cell; self.cols]);
+                    if let Some(mut recycled) = self.alt_grid.remove(self.scroll_region_top) {
+                        recycled.fill(default_cell);
+                        let insert_pos = self.scroll_region_bottom.min(self.alt_grid.len());
+                        self.alt_grid.insert(insert_pos, recycled);
+                    }
                 }
             } else {
                 self.cursor_y += 1;
@@ -390,23 +495,34 @@ impl TerminalState {
                     })
                     .map_or(0, |i| i + 1);
 
-                // Una sola asignación de tamaño exacto por línea; el buffer completo de la fila que sale
-                // se reutiliza como nueva fila inferior y, al llenar el historial, la más antigua se libera.
-                let stored = top_row[..used].to_vec();
-                top_row.clear();
-                top_row.resize(self.cols, default_cell);
-                if self.scrollback.len() >= self.max_scrollback {
-                    self.scrollback.pop_front();
+                // Si el historial está lleno, reciclar el buffer expulsado cuando su capacidad se ajuste
+                let stored = if self.scrollback.len() >= self.max_scrollback {
+                    let evicted = self.scrollback.pop_front();
                     self.shift_images_after_eviction();
+                    match evicted {
+                        Some(mut buf) if buf.capacity() >= used && buf.capacity() <= used + 32 => {
+                            buf.clear();
+                            buf.extend_from_slice(&top_row[..used]);
+                            buf
+                        }
+                        _ => top_row[..used].to_vec(),
+                    }
+                } else {
+                    top_row[..used].to_vec()
+                };
+                top_row.fill(default_cell);
+                if self.max_scrollback > 0 {
+                    self.scrollback.push_back(stored);
                 }
-                self.scrollback.push_back(stored);
                 self.grid.push_back(top_row);
             } else {
                 // Sub-región de desplazamiento (split panes de tmux)
                 if self.scroll_region_top < self.grid.len() {
-                    self.grid.remove(self.scroll_region_top);
-                    let insert_pos = self.scroll_region_bottom.min(self.grid.len());
-                    self.grid.insert(insert_pos, vec![default_cell; self.cols]);
+                    if let Some(mut recycled) = self.grid.remove(self.scroll_region_top) {
+                        recycled.fill(default_cell);
+                        let insert_pos = self.scroll_region_bottom.min(self.grid.len());
+                        self.grid.insert(insert_pos, recycled);
+                    }
                 }
             }
         } else {
@@ -415,29 +531,6 @@ impl TerminalState {
     }
 
     #[inline(always)]
-    pub fn current_flags(&self) -> u8 {
-        let mut flags = 0u8;
-        if self.current_bold {
-            flags |= Cell::FLAG_BOLD;
-        }
-        if self.current_dim {
-            flags |= Cell::FLAG_DIM;
-        }
-        if self.current_italic {
-            flags |= Cell::FLAG_ITALIC;
-        }
-        if self.current_underline {
-            flags |= Cell::FLAG_UNDERLINE;
-        }
-        if self.current_strikethrough {
-            flags |= Cell::FLAG_STRIKETHROUGH;
-        }
-        if self.current_inverse {
-            flags |= Cell::FLAG_INVERSE;
-        }
-        flags
-    }
-
     pub fn put_char(&mut self, c: char) {
         // Fast-path para caracteres imprimibles ASCII estándar (ancho 1 fijo sin queries Unicode)
         let w = if c.is_ascii() {
@@ -459,39 +552,46 @@ impl TerminalState {
         };
 
         // Si es de doble ancho (emoji, CJK) y no cabe al final de la línea, envolver automáticamente
-        if (w == 2 && self.cursor_x + 1 >= self.cols) || self.cursor_x >= self.cols {
+        if self.cursor_x >= self.cols || (w == 2 && self.cursor_x + 1 >= self.cols) {
             self.cursor_x = 0;
             self.newline();
         }
 
-        let flags = self.current_flags();
+        let (cx, cy, flags, fg, bg) = (
+            self.cursor_x,
+            self.cursor_y,
+            self.current_flags,
+            self.current_fg,
+            self.current_bg,
+        );
         let grid = if self.is_alt_screen {
             &mut self.alt_grid
         } else {
             &mut self.grid
         };
 
-        if self.cursor_y < self.rows && self.cursor_x < self.cols {
-            grid[self.cursor_y][self.cursor_x] = Cell {
+        if cy < self.rows && cx < self.cols {
+            let row = &mut grid[cy];
+            row[cx] = Cell {
                 c,
                 width: w,
                 flags,
-                fg: self.current_fg,
-                bg: self.current_bg,
+                fg,
+                bg,
             };
 
             // Para caracteres de 2 columnas, la celda contigua es un espaciador de continuación (width: 0)
-            if w == 2 && self.cursor_x + 1 < self.cols {
-                grid[self.cursor_y][self.cursor_x + 1] = Cell {
+            if w == 2 && cx + 1 < self.cols {
+                row[cx + 1] = Cell {
                     c: ' ',
                     width: 0,
                     flags,
-                    fg: self.current_fg,
-                    bg: self.current_bg,
+                    fg,
+                    bg,
                 };
-                self.cursor_x += 2;
+                self.cursor_x = cx + 2;
             } else {
-                self.cursor_x += 1;
+                self.cursor_x = cx + 1;
             }
         }
     }
@@ -513,6 +613,16 @@ impl TerminalState {
 
     pub fn reset_scroll(&mut self) {
         self.scroll_offset = 0;
+    }
+
+    /// Vacía el historial de desplazamiento, los bloques OSC 133, las imágenes inline y la selección
+    pub fn clear_scrollback(&mut self) {
+        self.scrollback.clear();
+        self.scroll_offset = 0;
+        self.total_lines_count = self.rows;
+        self.command_blocks.clear();
+        self.images.clear();
+        self.selection = None;
     }
 
     /// Obtiene las filas que deben renderizarse en pantalla según `scroll_offset`

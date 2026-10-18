@@ -99,53 +99,24 @@ impl AxonApp {
     }
 
     pub(super) fn reset_font_size(&mut self) {
-        let default_cfg = AxonConfig::load_or_default();
-        let target_size = default_cfg.appearance.font_size;
-        self.config.appearance.font_size = target_size;
-        self.config.appearance.ui_font_size = default_cfg.appearance.ui_font_size;
-        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
-            let scale_factor = window.scale_factor();
-            renderer.update_scale(&self.config, scale_factor);
-        }
-        self.recompute_grid_for_all_tabs();
-        if let Some(w) = &self.window {
-            w.request_redraw();
+        let target_size = AxonConfig::default().appearance.font_size;
+        if (self.config.appearance.font_size - target_size).abs() > 0.01 {
+            self.config.appearance.font_size = target_size;
+            let _ = self.config.save();
+            if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+                let scale_factor = window.scale_factor();
+                renderer.update_scale(&self.config, scale_factor);
+            }
+            self.recompute_grid_for_all_tabs();
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
         }
     }
 
     pub(super) fn reload_config(&mut self) {
         self.config = AxonConfig::load_or_default();
-        self.theme = Theme::from_name(&self.config.appearance.theme);
-        for tab in &mut self.tabs {
-            for pane in &mut tab.panes {
-                pane.terminal.theme = self.theme.clone();
-            }
-        }
-        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
-            let scale_factor = window.scale_factor();
-            renderer.update_scale(&self.config, scale_factor);
-        }
-        self.recompute_grid_for_all_tabs();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn cycle_theme(&mut self, next: bool) {
-        let themes = crate::theme::Theme::AVAILABLE_THEMES;
-        let current = &self.config.appearance.theme;
-        let current_idx = themes
-            .iter()
-            .position(|&t| t.eq_ignore_ascii_case(current))
-            .unwrap_or(0);
-        let new_idx = if next {
-            (current_idx + 1) % themes.len()
-        } else {
-            (current_idx + themes.len() - 1) % themes.len()
-        };
-        let new_theme = themes[new_idx];
-        self.apply_theme(new_theme);
+        self.apply_loaded_config();
     }
 
     pub fn apply_theme(&mut self, theme_name: &str) {
@@ -167,17 +138,21 @@ impl AxonApp {
         self.config.appearance.theme_mode = mode.to_string();
         if mode.eq_ignore_ascii_case("system") {
             let is_light = crate::theme::is_windows_system_light_mode();
-            self.apply_theme(if is_light {
-                "Catppuccin Latte"
+            let target = if is_light {
+                "Catppuccin Latte".to_string()
             } else {
-                "Catppuccin Frappé"
-            });
+                let cur = Theme::from_name(&self.config.appearance.theme);
+                if cur.is_light() {
+                    "Catppuccin Frappé".to_string()
+                } else {
+                    self.config.appearance.theme.clone()
+                }
+            };
+            self.apply_theme(&target);
         } else if mode.eq_ignore_ascii_case("light") {
             self.apply_theme("Catppuccin Latte");
-        } else {
-            if self.theme.is_light() {
-                self.apply_theme("Catppuccin Frappé");
-            }
+        } else if self.theme.is_light() {
+            self.apply_theme("Catppuccin Frappé");
         }
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -302,32 +277,20 @@ impl AxonApp {
         crate::logger::log("-> Restableciendo configuración a valores por defecto");
         self.config = AxonConfig::default();
         let _ = self.config.save();
-        self.theme = if self
-            .config
-            .appearance
-            .theme_mode
-            .eq_ignore_ascii_case("system")
-        {
-            if crate::theme::is_windows_system_light_mode() {
-                Theme::catppuccin_latte()
-            } else {
-                Theme::from_name(&self.config.appearance.theme)
-            }
-        } else if self
-            .config
-            .appearance
-            .theme_mode
-            .eq_ignore_ascii_case("light")
-        {
-            Theme::catppuccin_latte()
-        } else {
-            Theme::from_name(&self.config.appearance.theme)
-        };
+        self.apply_loaded_config();
+    }
+
+    fn apply_loaded_config(&mut self) {
+        self.theme = Theme::from_mode_and_name(
+            &self.config.appearance.theme_mode,
+            &self.config.appearance.theme,
+        );
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
                 pane.terminal.theme = self.theme.clone();
             }
         }
+        self.apply_ssh_integration_env();
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
             renderer.update_scale(&self.config, scale_factor);

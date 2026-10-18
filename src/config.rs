@@ -198,7 +198,7 @@ impl AxonConfig {
 }
 
 /// Carpeta de configuración y sesión del usuario (`%APPDATA%\axon\axon\config`)
-fn dirs_or_fallback() -> PathBuf {
+pub(crate) fn dirs_or_fallback() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join(format!("axon-test-{}", std::process::id()));
     }

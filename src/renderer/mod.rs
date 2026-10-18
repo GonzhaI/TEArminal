@@ -31,7 +31,7 @@ pub use glyphs::CachedGlyph;
 pub use state::*;
 
 use crate::config::AxonConfig;
-use crate::terminal::{Cell, SelectionRange, TerminalState};
+use crate::terminal::{Cell, TerminalState};
 use crate::theme::{Color, Theme};
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
@@ -56,7 +56,7 @@ pub struct TerminalRenderer {
     pub row_height: usize,
     pub baseline_y: usize,
     glyph_cache: FastMap<(char, bool), CachedGlyph>,
-    ascii_cache: Box<[Option<CachedGlyph>; 256]>,
+    ascii_cache: Box<[Option<CachedGlyph>; 512]>,
     ui_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
     icon_glyph_cache: FastMap<(char, u32), CachedGlyph>,        // (c, size_bits) -> glyph
@@ -64,36 +64,18 @@ pub struct TerminalRenderer {
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
+    pub(super) settings_scratch: Vec<u32>,
+    md_blocks_cache: Option<(
+        std::path::PathBuf,
+        u64,
+        std::rc::Rc<Vec<md_preview::MdBlock>>,
+    )>,
 }
 
 impl TerminalRenderer {
     pub fn new(config: &AxonConfig, scale_factor: f64) -> Self {
-        // En Ghostty (macOS y Linux), font-size predeterminado es 13pt con espaciado natural compacto
-        let font_size = (config.appearance.font_size * scale_factor as f32)
-            .round()
-            .max(10.0);
-        let ui_font_size = (config.appearance.ui_font_size * scale_factor as f32)
-            .round()
-            .max(9.0);
         // JetBrains Mono Nerd Font Regular (o la fuente del usuario); negrita y fallback son perezosas
         let (regular_font, custom_font) = Self::load_regular_font(config);
-
-        // Medir dimensiones estándar de celda monoespaciada al estilo Ghostty
-        let metrics = regular_font.metrics('M', font_size);
-        let char_width = (metrics.advance_width.round() as usize).max(7);
-        let line_height_raw = regular_font
-            .horizontal_line_metrics(font_size)
-            .map(|m| m.new_line_size)
-            .unwrap_or(font_size * 1.25);
-        let row_height =
-            ((line_height_raw * config.appearance.line_spacing).round() as usize).max(15);
-        let baseline_y = regular_font
-            .horizontal_line_metrics(font_size)
-            .map(|m| m.ascent.ceil() as usize)
-            .unwrap_or(font_size.ceil() as usize);
-
-        let margin_x = (10.0 * scale_factor as f32).round() as usize;
-        let margin_y = (8.0 * scale_factor as f32).round() as usize;
 
         let inter_font = fontdue::Font::from_bytes(EMBEDDED_INTER_MEDIUM, font_settings())
             .expect("Error al inicializar fuente Inter Medium");
@@ -103,7 +85,7 @@ impl TerminalRenderer {
         let lucide_font = fontdue::Font::from_bytes(EMBEDDED_LUCIDE, font_settings())
             .expect("Error al inicializar fuente Lucide");
 
-        Self {
+        let mut renderer = Self {
             regular_font,
             bold_font: OnceCell::new(),
             custom_font,
@@ -112,21 +94,25 @@ impl TerminalRenderer {
             inter_font,
             inter_semibold_font,
             lucide_font,
-            font_size,
-            ui_font_size,
+            font_size: 0.0,
+            ui_font_size: 0.0,
             scale_factor,
-            char_width,
-            row_height,
-            baseline_y,
+            char_width: 0,
+            row_height: 0,
+            baseline_y: 0,
             glyph_cache: FastMap::default(),
-            ascii_cache: Box::new([(); 256].map(|_| None)),
+            ascii_cache: Box::new(std::array::from_fn(|_| None)),
             ui_glyph_cache: FastMap::default(),
             ui_advance_cache: RefCell::default(),
             icon_glyph_cache: FastMap::default(),
-            margin_x,
-            margin_y,
+            margin_x: 0,
+            margin_y: 0,
             scrollbars_awake: false,
-        }
+            settings_scratch: Vec::new(),
+            md_blocks_cache: None,
+        };
+        renderer.update_scale(config, scale_factor);
+        renderer
     }
 
     pub fn update_scale(&mut self, config: &AxonConfig, scale_factor: f64) {

@@ -3,6 +3,7 @@
 //! `AxonApp` reparte sus métodos por responsabilidad en submódulos (`tabs`, `settings`, `clipboard`, ...);
 //! los eventos de winit entran por `handler` y se despachan a `redraw`, `keyboard`, `cursor`, `click` y `wheel`.
 
+mod ai_usage;
 mod click;
 mod clipboard;
 mod context_menu;
@@ -22,6 +23,7 @@ mod tabs;
 mod viewer;
 mod wheel;
 
+pub use ai_usage::*;
 pub use context_menu::*;
 pub use host::AxonHost;
 pub use keys::{key_code_to_char, key_is_char};
@@ -38,7 +40,7 @@ use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, SettingsPageRects, SettingsPageState, SettingsSection,
-    SidebarTabItem, TerminalRenderer, TopTabBarRects, TopTitleBarRects,
+    SidebarTabItem, StatusBarRects, TerminalRenderer, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -148,6 +150,10 @@ pub struct AxonApp {
     divider_drag: Option<Divider>,
     /// Pestaña (índice) que se arrastra para reordenarla
     tab_drag: Option<usize>,
+    /// Hover sobre el indicador de agente/modelo IA en la barra de estado inferior
+    hovered_ai_badge: bool,
+    /// Estado de consumo y cuotas de modelos de IA para el menú flotante
+    pub ai_usage: AiUsageState,
 }
 
 /// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña
@@ -173,17 +179,8 @@ impl AxonApp {
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
         session: Option<WindowSession>,
     ) -> Self {
-        let theme = if config.appearance.theme_mode.eq_ignore_ascii_case("system") {
-            if crate::theme::is_windows_system_light_mode() {
-                Theme::catppuccin_latte()
-            } else {
-                Theme::from_name(&config.appearance.theme)
-            }
-        } else if config.appearance.theme_mode.eq_ignore_ascii_case("light") {
-            Theme::catppuccin_latte()
-        } else {
-            Theme::from_name(&config.appearance.theme)
-        };
+        let theme =
+            Theme::from_mode_and_name(&config.appearance.theme_mode, &config.appearance.theme);
 
         let session = session.filter(|s| !s.tabs.is_empty());
         let explorer_visible = session
@@ -294,6 +291,8 @@ impl AxonApp {
             new_window_request: false,
             divider_drag: None,
             tab_drag: None,
+            hovered_ai_badge: false,
+            ai_usage: AiUsageState::default(),
         }
     }
 
@@ -366,6 +365,13 @@ impl AxonApp {
 
     /// Cierra esta ventana (el anfitrión la retira) conservando su sesión
     pub(super) fn request_close(&mut self) {
+        for tab in &mut self.tabs {
+            if let Some(viewer) = tab.file_viewer.as_mut() {
+                if viewer.needs_autosave {
+                    viewer.autosave_local();
+                }
+            }
+        }
         self.save_session();
         self.closing = true;
     }

@@ -4,6 +4,13 @@ use std::path::{Path, PathBuf};
 
 pub const FILE_EXPLORER_WIDTH: usize = 240;
 
+#[inline]
+fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .cmp(b.chars().flat_map(char::to_lowercase))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitFileStatus {
     Modified,
@@ -53,6 +60,52 @@ pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
             .map(String::from)
             .collect(),
     )
+}
+
+/// Ejecuta `git status --porcelain` sobre `repo_root` y devuelve el estado por ruta absoluta
+pub fn collect_git_statuses(
+    repo_root: &Path,
+    changes_only: bool,
+) -> HashMap<PathBuf, GitFileStatus> {
+    let mut map = HashMap::new();
+    let untracked_mode = if changes_only { "-uall" } else { "-unormal" };
+    let Ok(output) = git_command(repo_root)
+        .args(["status", "--porcelain", untracked_mode])
+        .output()
+    else {
+        return map;
+    };
+    if !output.status.success() {
+        return map;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let status_code = &line[0..2];
+        // Renombrados: «R  origen -> destino»
+        let rel_path = line[3..].rsplit(" -> ").next().unwrap_or("");
+        let rel_path = rel_path.trim().trim_matches('"');
+        let file_path = repo_root.join(rel_path.replace('/', "\\"));
+
+        let status = if status_code.contains('M') {
+            GitFileStatus::Modified
+        } else if status_code.contains('?') {
+            GitFileStatus::Untracked
+        } else if status_code.contains('A') {
+            GitFileStatus::Added
+        } else if status_code.contains('D') {
+            GitFileStatus::Deleted
+        } else if status_code.contains('R') {
+            GitFileStatus::Renamed
+        } else {
+            GitFileStatus::Modified
+        };
+
+        map.insert(file_path, status);
+    }
+    map
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +159,8 @@ pub struct FileExplorer {
     remote_gen: u64,
     /// Listados pedidos y aún sin lanzar (la app los ejecuta en hilos: `AxonApp::pump_explorer_ssh`)
     ssh_requests: Vec<RemoteLsReq>,
+    /// Consulta de `git status` pendiente de lanzar en segundo plano (`(repo_root, changes_only)`)
+    git_status_req: Option<(PathBuf, bool)>,
 }
 
 /// Listado remoto por SSH lento: la raíz (`expand = None`) o el contenido de una carpeta del árbol
@@ -171,6 +226,7 @@ impl FileExplorer {
             remote_requested: None,
             remote_gen: 0,
             ssh_requests: Vec::new(),
+            git_status_req: None,
             is_focused: false,
             last_click_item: None,
             last_click_time: std::time::Instant::now(),
@@ -183,7 +239,9 @@ impl FileExplorer {
             error_message: None,
         };
 
-        explorer.refresh();
+        if visible {
+            explorer.refresh();
+        }
         explorer
     }
 
@@ -227,8 +285,8 @@ impl FileExplorer {
                 git_status: None,
             })
             .partition(|i| i.is_dir);
-        dirs.sort_by_key(|i| i.name.to_lowercase());
-        files.sort_by_key(|i| i.name.to_lowercase());
+        dirs.sort_by(|a, b| cmp_ignore_case(&a.name, &b.name));
+        files.sort_by(|a, b| cmp_ignore_case(&a.name, &b.name));
         dirs.extend(files);
         dirs
     }
@@ -339,39 +397,30 @@ impl FileExplorer {
 
     pub fn go_back(&mut self) {
         if self.can_go_back() {
-            self.history_index -= 1;
-            let target = self.history[self.history_index].clone();
-            if let Some(ref mut sess) = self.remote_session {
-                sess.remote_dir = target.to_string_lossy().replace('\\', "/");
-                self.root_dir = target;
-                self.scroll_offset = 0;
-                self.selected_index = None;
-                self.refresh();
-            } else if target.is_dir() {
-                self.root_dir = target;
-                self.scroll_offset = 0;
-                self.selected_index = None;
-                self.refresh();
-            }
+            self.step_history(self.history_index - 1);
         }
     }
 
     pub fn go_forward(&mut self) {
         if self.can_go_forward() {
-            self.history_index += 1;
-            let target = self.history[self.history_index].clone();
-            if let Some(ref mut sess) = self.remote_session {
-                sess.remote_dir = target.to_string_lossy().replace('\\', "/");
-                self.root_dir = target;
-                self.scroll_offset = 0;
-                self.selected_index = None;
-                self.refresh();
-            } else if target.is_dir() {
-                self.root_dir = target;
-                self.scroll_offset = 0;
-                self.selected_index = None;
-                self.refresh();
-            }
+            self.step_history(self.history_index + 1);
+        }
+    }
+
+    fn step_history(&mut self, next_index: usize) {
+        self.history_index = next_index;
+        let target = self.history[self.history_index].clone();
+        if let Some(ref mut sess) = self.remote_session {
+            sess.remote_dir = target.to_string_lossy().replace('\\', "/");
+            self.root_dir = target;
+            self.scroll_offset = 0;
+            self.selected_index = None;
+            self.refresh();
+        } else if target.is_dir() {
+            self.root_dir = target;
+            self.scroll_offset = 0;
+            self.selected_index = None;
+            self.refresh();
         }
     }
 
@@ -556,109 +605,56 @@ impl FileExplorer {
         git_branch
     }
 
-    /// Carga pasivamente archivos y carpetas remotos analizando la salida del comando `ls` en la grilla del terminal
-    pub fn populate_from_grid(&mut self, lines: &[String]) -> bool {
-        if let Some(ref sess) = self.remote_session {
-            let remote_dir = sess.remote_dir.clone();
-            let mut dirs = Vec::new();
-            let mut files = Vec::new();
-
-            for line in lines {
-                let trimmed = line.trim();
-                if (trimmed.starts_with('d') || trimmed.starts_with('-')) && trimmed.len() > 20 {
-                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                    if parts.len() >= 9 {
-                        let is_dir = trimmed.starts_with('d');
-                        let name = parts[8..].join(" ");
-                        if name == "." || name == ".." || name == ".git" {
-                            continue;
-                        }
-                        let path =
-                            PathBuf::from(format!("{}/{}", remote_dir.trim_end_matches('/'), name));
-                        if is_dir {
-                            dirs.push((path, name));
-                        } else {
-                            files.push((path, name));
-                        }
-                    }
-                }
-            }
-
-            if !dirs.is_empty() || !files.is_empty() {
-                dirs.sort_by_key(|a| a.1.to_lowercase());
-                files.sort_by_key(|a| a.1.to_lowercase());
-
-                self.items.clear();
-                self.error_message = None;
-                for (path, name) in dirs {
-                    self.items.push(ExplorerItem {
-                        path,
-                        name,
-                        is_dir: true,
-                        depth: 0,
-                        is_expanded: false,
-                        git_status: None,
-                    });
-                }
-                for (path, name) in files {
-                    self.items.push(ExplorerItem {
-                        path,
-                        name,
-                        is_dir: false,
-                        depth: 0,
-                        is_expanded: false,
-                        git_status: None,
-                    });
-                }
-                return true;
-            }
-        }
-        false
+    /// Petición de `git status` pendiente de ejecutar en un hilo
+    pub fn take_git_status_request(&mut self) -> Option<(PathBuf, bool)> {
+        self.git_status_req.take()
     }
 
-    /// Consulta de manera no bloqueante el estado Git del repositorio activo
-    pub fn refresh_git_status(&mut self) {
-        self.git_statuses.clear();
-        self.git_root = git_repo_root(&self.root_dir);
-        let Some(repo_root) = self.git_root.clone() else {
-            return;
-        };
-
-        let output = git_command(&repo_root)
-            .args(["status", "--porcelain", "-uall"])
-            .output();
-        let Ok(output) = output else {
-            return;
-        };
-        if !output.status.success() {
+    /// Aplica el mapa de estados de `git status` obtenido en segundo plano
+    pub fn apply_git_statuses(
+        &mut self,
+        repo_root: &Path,
+        statuses: HashMap<PathBuf, GitFileStatus>,
+    ) {
+        if self.remote_session.is_some() || self.git_root.as_deref() != Some(repo_root) {
             return;
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if line.len() < 4 {
-                continue;
+        self.git_statuses = statuses;
+        if self.changes_only {
+            self.items = self.change_items();
+            self.scroll_offset = self.scroll_offset.min(self.items.len().saturating_sub(1));
+        } else {
+            for item in &mut self.items {
+                if item.is_dir {
+                    let has_changes = self.git_statuses.keys().any(|p| p.starts_with(&item.path));
+                    item.git_status = if has_changes {
+                        Some(GitFileStatus::Modified)
+                    } else {
+                        None
+                    };
+                } else {
+                    item.git_status = self.git_statuses.get(&item.path).copied();
+                }
             }
-            let status_code = &line[0..2];
-            // Renombrados: «R  origen -> destino»
-            let rel_path = line[3..].rsplit(" -> ").next().unwrap_or("");
-            let rel_path = rel_path.trim().trim_matches('"');
-            let file_path = repo_root.join(rel_path.replace('/', "\\"));
+        }
+    }
 
-            let status = if status_code.contains('M') {
-                GitFileStatus::Modified
-            } else if status_code.contains('?') {
-                GitFileStatus::Untracked
-            } else if status_code.contains('A') {
-                GitFileStatus::Added
-            } else if status_code.contains('D') {
-                GitFileStatus::Deleted
-            } else if status_code.contains('R') {
-                GitFileStatus::Renamed
-            } else {
-                GitFileStatus::Modified
-            };
+    /// Consulta el estado Git del repositorio activo (en un hilo en la GUI; síncrono en tests)
+    pub fn refresh_git_status(&mut self) {
+        let new_root = git_repo_root(&self.root_dir);
+        if new_root != self.git_root {
+            self.git_statuses.clear();
+            self.git_root = new_root;
+        }
+        let Some(repo_root) = self.git_root.clone() else {
+            self.git_status_req = None;
+            return;
+        };
 
-            self.git_statuses.insert(file_path, status);
+        if cfg!(test) {
+            self.git_statuses = collect_git_statuses(&repo_root, self.changes_only);
+        } else {
+            self.git_status_req = Some((repo_root, self.changes_only));
         }
     }
 
@@ -772,8 +768,8 @@ impl FileExplorer {
         }
 
         // Ordenar alfabéticamente sin distinguir mayúsculas/minúsculas
-        dirs.sort_by_key(|a| a.1.to_lowercase());
-        files.sort_by_key(|a| a.1.to_lowercase());
+        dirs.sort_by(|a, b| cmp_ignore_case(&a.1, &b.1));
+        files.sort_by(|a, b| cmp_ignore_case(&a.1, &b.1));
 
         // Directorios primero
         for (path, name) in dirs {
@@ -918,6 +914,9 @@ impl FileExplorer {
     /// Alterna la visibilidad del explorador de archivos lateral
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
+        if self.visible && self.items.is_empty() && self.remote_session.is_none() {
+            self.refresh();
+        }
     }
 
     /// Obtiene el índice del elemento en la posición Y considerando el desplazamiento superior

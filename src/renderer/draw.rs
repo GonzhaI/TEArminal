@@ -190,15 +190,29 @@ impl TerminalRenderer {
             }
 
             let key = (c, size_bits, semibold);
-            if !self.ui_glyph_cache.contains_key(&key) {
-                let font = if semibold && self.inter_semibold_font.has_glyph(c) {
-                    &self.inter_semibold_font
-                } else if self.inter_font.has_glyph(c) {
-                    &self.inter_font
+            let inter_semibold = &self.inter_semibold_font;
+            let inter_regular = &self.inter_font;
+            let fallback_cell = &self.fallback_font;
+            let (glyph, advance) = self.ui_glyph_cache.entry(key).or_insert_with(|| {
+                let font = if semibold && inter_semibold.has_glyph(c) {
+                    inter_semibold
+                } else if inter_regular.has_glyph(c) {
+                    inter_regular
                 } else {
-                    self.fallback_font()
+                    fallback_cell
+                        .get_or_init(|| {
+                            let windir = std::env::var("WINDIR")
+                                .unwrap_or_else(|_| "C:\\Windows".to_string());
+                            let path = std::path::Path::new(&windir)
+                                .join("Fonts")
+                                .join("seguisym.ttf");
+                            std::fs::read(path).ok().and_then(|bytes| {
+                                fontdue::Font::from_bytes(bytes, font_settings()).ok()
+                            })
+                        })
+                        .as_ref()
                         .filter(|f| f.has_glyph(c))
-                        .unwrap_or(&self.inter_font)
+                        .unwrap_or(inter_regular)
                 };
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
                 let glyph = CachedGlyph {
@@ -208,10 +222,8 @@ impl TerminalRenderer {
                     y_offset: metrics.ymin,
                     bitmap,
                 };
-                self.ui_glyph_cache
-                    .insert(key, (glyph, metrics.advance_width));
-            }
-            let (glyph, advance) = &self.ui_glyph_cache[&key];
+                (glyph, metrics.advance_width)
+            });
 
             let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
             let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;

@@ -15,6 +15,16 @@ pub struct SidebarTabItem {
     pub is_preview: bool,
 }
 
+#[inline]
+pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let h = haystack.as_bytes();
+    let n = needle.as_bytes();
+    if n.is_empty() {
+        return true;
+    }
+    h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
+}
+
 pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
     if tab.is_settings {
         crate::ui::LucideIcon::Settings
@@ -22,22 +32,33 @@ pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
         let ext = std::path::Path::new(&tab.title)
             .extension()
             .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        match ext.as_str() {
-            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "cs" | "html" | "css" => {
-                crate::ui::LucideIcon::FileCode
-            }
-            "toml" | "json" | "yaml" | "yml" => crate::ui::LucideIcon::FileJson,
-            "md" | "txt" | "log" => crate::ui::LucideIcon::FileText,
-            _ => crate::ui::LucideIcon::File,
+            .unwrap_or("");
+        if [
+            "rs", "py", "js", "ts", "go", "c", "cpp", "h", "cs", "html", "css",
+        ]
+        .iter()
+        .any(|e| ext.eq_ignore_ascii_case(e))
+        {
+            crate::ui::LucideIcon::FileCode
+        } else if ["toml", "json", "yaml", "yml"]
+            .iter()
+            .any(|e| ext.eq_ignore_ascii_case(e))
+        {
+            crate::ui::LucideIcon::FileJson
+        } else if ["md", "txt", "log"]
+            .iter()
+            .any(|e| ext.eq_ignore_ascii_case(e))
+        {
+            crate::ui::LucideIcon::FileText
+        } else {
+            crate::ui::LucideIcon::File
         }
-    } else if tab.title.to_lowercase().contains("claude")
-        || tab.title.to_lowercase().contains("agent")
-        || tab.title.to_lowercase().contains("ai")
+    } else if contains_ignore_ascii_case(&tab.title, "claude")
+        || contains_ignore_ascii_case(&tab.title, "agent")
+        || contains_ignore_ascii_case(&tab.title, "ai")
     {
         crate::ui::LucideIcon::Sparkles
-    } else if tab.title.to_lowercase().contains("ssh") {
+    } else if contains_ignore_ascii_case(&tab.title, "ssh") {
         crate::ui::LucideIcon::Server
     } else {
         crate::ui::LucideIcon::Terminal
@@ -71,7 +92,7 @@ pub enum EditingSettingField {
     WindowOpacity,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsPageState {
     pub section: SettingsSection,
     pub hovered_section: Option<SettingsSection>,
@@ -106,6 +127,26 @@ pub struct SettingsPageState {
     pub scroll_y: usize,
     pub editing_setting: Option<EditingSettingField>,
     pub setting_input_buffer: String,
+}
+
+impl SettingsPageState {
+    /// Limpia todos los estados de hover conservando la sección activa, el scroll y la edición en curso.
+    /// Devuelve `true` si algún indicador de hover cambió.
+    pub fn clear_hover(&mut self) -> bool {
+        let cleared = Self {
+            section: self.section,
+            scroll_y: self.scroll_y,
+            editing_setting: self.editing_setting,
+            setting_input_buffer: self.setting_input_buffer.clone(),
+            ..Self::default()
+        };
+        if *self != cleared {
+            *self = cleared;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Default for SettingsPageState {

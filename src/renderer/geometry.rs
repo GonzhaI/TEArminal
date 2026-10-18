@@ -3,6 +3,24 @@
 /// Rectángulo (x, y, ancho, alto) en píxeles
 pub type Rect = (usize, usize, usize, usize);
 
+/// Convierte la posición Y deseada de la parte superior del pulgar (`thumb_top_y`) en un `scroll_offset`
+/// dentro de `0..=max_offset` para una barra de desplazamiento vertical `(track, thumb)`.
+#[inline]
+pub fn scroll_offset_for_thumb_y(
+    track: Rect,
+    thumb: Rect,
+    thumb_top_y: f32,
+    max_offset: usize,
+) -> Option<usize> {
+    let available_travel = track.3.saturating_sub(thumb.3);
+    if available_travel == 0 || max_offset == 0 {
+        return None;
+    }
+    let rel_y = (thumb_top_y - track.1 as f32).clamp(0.0, available_travel as f32);
+    let ratio = rel_y / available_travel as f32;
+    Some(((ratio * max_offset as f32).round() as usize).min(max_offset))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TopTabBarRects {
     pub bar_h: usize,
@@ -538,5 +556,100 @@ impl FileViewerLayout {
             (track_x, track_y, track_w, track_h),
             (thumb_x, track_y, thumb_w, track_h),
         ))
+    }
+}
+
+/// Geometría de la lista vertical de pestañas en la barra lateral (una sola fuente de verdad).
+pub struct SidebarRects;
+
+impl SidebarRects {
+    pub const TAB_ITEM_H: usize = 36;
+    pub const TAB_SPACING: usize = 4;
+    pub const LIST_START_Y: usize = 42;
+    pub const TOGGLE_H: usize = 30;
+
+    #[inline]
+    pub fn list_max_y(usable_h: usize) -> usize {
+        usable_h
+            .saturating_sub(Self::TOGGLE_H + 8)
+            .saturating_sub(8)
+    }
+
+    #[inline]
+    pub fn visible_items(usable_h: usize) -> usize {
+        let max_y = Self::list_max_y(usable_h);
+        if max_y > Self::LIST_START_Y {
+            (max_y - Self::LIST_START_Y) / (Self::TAB_ITEM_H + Self::TAB_SPACING)
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    pub fn tab_at_y(
+        my: usize,
+        usable_h: usize,
+        scroll_offset: usize,
+        total_tabs: usize,
+    ) -> Option<usize> {
+        let max_y = Self::list_max_y(usable_h);
+        if my < Self::LIST_START_Y || my >= max_y {
+            return None;
+        }
+        let rel = my - Self::LIST_START_Y;
+        let stride = Self::TAB_ITEM_H + Self::TAB_SPACING;
+        if rel % stride >= Self::TAB_ITEM_H {
+            return None;
+        }
+        let idx = rel / stride + scroll_offset;
+        (idx < total_tabs).then_some(idx)
+    }
+}
+
+/// Geometría de la zona derecha de la barra de estado (modelo/agente de IA) y de su tarjeta flotante de consumo.
+#[derive(Debug, Clone, Copy)]
+pub struct StatusBarRects {
+    pub ai_badge: Rect,
+}
+
+impl StatusBarRects {
+    pub const BAR_H: usize = 26;
+    pub const POPUP_W: usize = 352;
+
+    /// Rectángulo del badge derecho en la barra de estado para un ancho de etiqueta `label_w` (en px).
+    pub fn compute(width: usize, height: usize, label_w: usize) -> Self {
+        let bar_y = height.saturating_sub(Self::BAR_H);
+        let text_x = width.saturating_sub(label_w + 32);
+        let badge_x = text_x.saturating_sub(6);
+        let badge_w = (label_w + 30).min(width.saturating_sub(badge_x + 4));
+        Self {
+            ai_badge: (badge_x, bar_y, badge_w, Self::BAR_H),
+        }
+    }
+
+    /// Rectángulo del menú flotante de consumo encima de la barra de estado.
+    pub fn popup_rect(width: usize, height: usize, popup_h: usize) -> Rect {
+        let w = Self::POPUP_W.min(width.saturating_sub(16));
+        let x = width.saturating_sub(w + 10);
+        let bar_y = height.saturating_sub(Self::BAR_H);
+        let y = bar_y.saturating_sub(popup_h + 6);
+        (x, y, w, popup_h)
+    }
+
+    #[inline]
+    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+        rect.2 > 0
+            && rect.3 > 0
+            && mx >= rect.0
+            && mx < rect.0 + rect.2
+            && my >= rect.1
+            && my < rect.1 + rect.3
+    }
+
+    /// Mantiene abierto el menú flotante si el ratón está en el badge, en la tarjeta o en el puente de 6px entre ambos.
+    #[inline]
+    pub fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
+        let bridge = (popup.0, popup.1, popup.2, popup.3 + 8);
+        Self::inside(mx, my, badge) || Self::inside(mx, my, bridge)
     }
 }

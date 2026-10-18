@@ -121,8 +121,6 @@ pub fn random_id() -> u32 {
 const THREAD_STACK: usize = 256 * 1024;
 
 pub struct PtyManager {
-    #[allow(dead_code)]
-    pub id: usize,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     to_pty_tx: Sender<Vec<u8>>,
@@ -167,6 +165,9 @@ fn spawn_io_threads(
                 }
             }
             if let Some(p) = &proxy {
+                // ConPTY cierra el pipe unos milisegundos antes de que `try_wait()` vea el fin del proceso:
+                // esperar aquí (en el hilo lector) evita bloquear el hilo de la interfaz.
+                thread::sleep(std::time::Duration::from_millis(30));
                 let _ = p.send_event(AxonEvent::PtyClosed(id));
             }
         })?;
@@ -184,6 +185,33 @@ fn spawn_io_threads(
         })?;
 
     Ok((to_pty_tx, from_pty_rx, pending))
+}
+
+fn build_shell_command(
+    shell: &str,
+    ghostty_prompt: bool,
+    cwd: Option<&std::path::Path>,
+    token: &str,
+    path_env: &str,
+) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(shell);
+    if let Some(dir) = cwd.filter(|d| d.exists()) {
+        cmd.cwd(dir);
+    }
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("AXON_PANE_TOKEN", token);
+    cmd.env("PATH", path_env);
+    if ghostty_prompt {
+        let lower = shell.to_lowercase();
+        if lower.contains("powershell") || lower.contains("pwsh") {
+            cmd.arg("-NoLogo");
+            cmd.arg("-NoExit");
+            cmd.arg("-Command");
+            cmd.arg(INIT_SCRIPT);
+        }
+    }
+    cmd
 }
 
 impl PtyManager {
@@ -204,42 +232,23 @@ impl PtyManager {
             pixel_height: 0,
         })?;
 
-        let mut cmd = CommandBuilder::new(shell);
-        if let Some(dir) = cwd {
-            if dir.exists() {
-                cmd.cwd(dir);
-            }
-        }
-        cmd.env("TERM", "xterm-256color");
-        cmd.env("COLORTERM", "truecolor");
         let token = random_token();
-        cmd.env("AXON_PANE_TOKEN", &token);
-
         // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
-        cmd.env("PATH", &path_env);
-
-        // Si se trata de PowerShell y ghostty_prompt está activo, inyectar el entorno Ghostty nativo
-        if ghostty_prompt {
-            let lower = shell.to_lowercase();
-            if lower.contains("powershell") || lower.contains("pwsh") {
-                cmd.arg("-NoLogo");
-                cmd.arg("-NoExit");
-                cmd.arg("-Command");
-                cmd.arg(INIT_SCRIPT);
-            }
-        }
+        let cmd = build_shell_command(shell, ghostty_prompt, cwd, &token, &path_env);
 
         let child = match pair.slave.spawn_command(cmd) {
             Ok(c) => c,
             Err(e) => {
                 if shell != "powershell.exe" {
-                    let mut fallback_cmd = CommandBuilder::new("powershell.exe");
-                    fallback_cmd.env("TERM", "xterm-256color");
-                    fallback_cmd.env("COLORTERM", "truecolor");
-                    fallback_cmd.env("AXON_PANE_TOKEN", &token);
-                    fallback_cmd.env("PATH", &path_env);
-                    pair.slave.spawn_command(fallback_cmd)?
+                    let fallback = build_shell_command(
+                        "powershell.exe",
+                        ghostty_prompt,
+                        cwd,
+                        &token,
+                        &path_env,
+                    );
+                    pair.slave.spawn_command(fallback)?
                 } else {
                     return Err(e.into());
                 }
@@ -249,7 +258,6 @@ impl PtyManager {
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
 
         Ok(Self {
-            id,
             master: Arc::new(Mutex::new(pair.master)),
             child,
             to_pty_tx,
@@ -297,7 +305,6 @@ impl PtyManager {
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
 
         Ok(Self {
-            id,
             master: Arc::new(Mutex::new(pair.master)),
             child,
             to_pty_tx,
@@ -382,7 +389,7 @@ mod tests {
         // Enviar un comando "echo hello\r\n" a ver si responde
         pty.write_input(b"echo hello\r\n");
         let mut echo_output = String::new();
-        for _ in 0..20 {
+        for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
             while let Some(bytes) = pty.try_recv_output() {
                 let s = String::from_utf8_lossy(&bytes);

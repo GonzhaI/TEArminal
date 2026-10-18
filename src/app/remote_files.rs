@@ -326,9 +326,19 @@ impl AxonApp {
         }
     }
 
+    /// Descarta peticiones en banda cuyos paneles ya se cerraron
+    pub(super) fn prune_pending_remote(&mut self) {
+        let tabs = &self.tabs;
+        self.pending_remote.retain(|p| {
+            tabs.iter()
+                .any(|t| t.panes.iter().any(|pane| pane.id == p.pane_id))
+        });
+    }
+
     /// Peticiones sin respuesta a tiempo (servidor sin bash, línea ocupada...): se intenta la vía lenta
     /// con una segunda conexión SSH. Devuelve el siguiente vencimiento para el bucle de eventos.
     pub(super) fn expire_remote_requests(&mut self) -> Option<Instant> {
+        self.prune_pending_remote();
         let now = Instant::now();
         let (expired, pending): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_remote)
             .into_iter()
@@ -541,6 +551,97 @@ mod tests {
             .remote_file_results
             .push(result());
         app.process_remote_results();
+        assert!(app.pending_remote.is_empty());
+    }
+
+    #[test]
+    fn test_remote_save_verifies_cksum_and_closing_tab_cancels_pending_requests() {
+        let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
+        app.create_new_tab();
+        let pane_id = app.tabs[1].panes[0].id;
+        let path = PathBuf::from("/srv/app.toml");
+        app.push_remote_viewer("user@host", &path, Ok(b"a = 1\n".to_vec()), true);
+        let viewer_tab_idx = app.tabs.len() - 1;
+        {
+            let v = app.tabs[viewer_tab_idx].file_viewer.as_mut().unwrap();
+            v.is_read_only = false;
+            v.insert_char('x');
+            assert!(v.is_dirty);
+        }
+        let content = app.tabs[viewer_tab_idx]
+            .file_viewer
+            .as_mut()
+            .unwrap()
+            .remote_content();
+        let expected = (posix_cksum(content.as_bytes()), content.len());
+        let edit_gen = app.tabs[viewer_tab_idx]
+            .file_viewer
+            .as_ref()
+            .unwrap()
+            .edit_gen;
+
+        // 1. Respuesta con CRC incorrecto: mantiene is_dirty = true y registra save_error
+        app.pending_remote.push(PendingRemote {
+            id: 42,
+            pane_id,
+            job: RemoteJob::Save {
+                dest: "user@host".into(),
+                path: path.clone(),
+                expected,
+                edit_gen,
+            },
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        });
+        app.tabs[1].panes[0]
+            .terminal
+            .remote_file_results
+            .push(crate::terminal::RemoteFileResult {
+                id: 42,
+                ok: true,
+                data: b"0 999".to_vec(),
+            });
+        app.process_remote_results();
+        let v = app.tabs[viewer_tab_idx].file_viewer.as_ref().unwrap();
+        assert!(v.is_dirty);
+        assert!(v.save_error.is_some());
+
+        // 2. Respuesta con CRC exacto: marca como guardado y limpia save_error
+        app.pending_remote.push(PendingRemote {
+            id: 43,
+            pane_id,
+            job: RemoteJob::Save {
+                dest: "user@host".into(),
+                path: path.clone(),
+                expected,
+                edit_gen,
+            },
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        });
+        app.tabs[1].panes[0]
+            .terminal
+            .remote_file_results
+            .push(crate::terminal::RemoteFileResult {
+                id: 43,
+                ok: true,
+                data: format!("{} {}", expected.0, expected.1).into_bytes(),
+            });
+        app.process_remote_results();
+        let v = app.tabs[viewer_tab_idx].file_viewer.as_ref().unwrap();
+        assert!(!v.is_dirty);
+        assert!(v.save_error.is_none());
+
+        // 3. Cerrar la pestaña del panel SSH cancela sus peticiones pendientes
+        app.pending_remote.push(PendingRemote {
+            id: 44,
+            pane_id,
+            job: RemoteJob::Open {
+                dest: "user@host".into(),
+                path,
+                pin: true,
+            },
+            deadline: Instant::now() + REQUEST_TIMEOUT,
+        });
+        app.close_tab(1);
         assert!(app.pending_remote.is_empty());
     }
 }

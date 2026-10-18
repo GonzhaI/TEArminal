@@ -191,9 +191,12 @@ impl TerminalPane {
             }
 
             if let Some(ref mut s) = self.terminal.ssh_session {
-                if let Some(ref d) = latest_prompt_dir {
+                if let Some(d) = latest_prompt_dir
+                    .as_deref()
+                    .and_then(crate::pty::safe_remote_dir)
+                {
                     if s.remote_dir.as_deref() != Some(d) {
-                        s.remote_dir = Some(d.clone());
+                        s.remote_dir = Some(d.to_string());
                         s.remote_git_branch = None; // Reset cached branch on directory change!
                         if let Some(dir) = crate::terminal::performer::accept_cwd(d) {
                             self.terminal.current_dir = Some(dir);
@@ -322,7 +325,7 @@ impl TerminalTab {
         }
 
         let original_lines = lines.clone();
-        let git_base = if is_binary {
+        let git_base = if is_binary || !cfg!(test) {
             None
         } else {
             crate::explorer::git_head_lines(&path)
@@ -332,6 +335,15 @@ impl TerminalTab {
             .and_then(|e| e.to_str())
             .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
             .unwrap_or(false);
+        let local_dir = if path.is_relative() {
+            std::env::current_dir()
+                .ok()
+                .map(|cd| cd.join(&path))
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        } else {
+            path.parent().map(|p| p.to_path_buf())
+        };
+        let local_branch = crate::app::shell_context::get_git_branch(local_dir.as_deref());
         let viewer = FileViewerState {
             path: path.clone(),
             file_name: file_name.clone(),
@@ -352,7 +364,7 @@ impl TerminalTab {
             git_marks: Default::default(),
             selection: None,
             remote_destination: None,
-            remote_branch: None,
+            remote_branch: local_branch,
             is_read_only: true,
             crlf: text_meta.0,
             final_newline: text_meta.1,
@@ -367,6 +379,8 @@ impl TerminalTab {
             visible_cols: 80,
             word_wrap: false,
             folded: Default::default(),
+            needs_autosave: false,
+            last_edit_time: Instant::now(),
             edit_gen: 0,
             fold_gen: 0,
             rows_cache: Default::default(),
@@ -478,6 +492,8 @@ impl TerminalTab {
             visible_cols: 80,
             word_wrap: false,
             folded: Default::default(),
+            needs_autosave: false,
+            last_edit_time: Instant::now(),
             edit_gen: 0,
             fold_gen: 0,
             rows_cache: Default::default(),
@@ -500,11 +516,7 @@ impl TerminalTab {
         if let Some(pane) = self.active_pane_mut() {
             pane.get_git_branch()
         } else if let Some(ref viewer) = self.file_viewer {
-            if viewer.remote_destination.is_some() {
-                viewer.remote_branch.clone()
-            } else {
-                crate::app::shell_context::get_git_branch(viewer.path.parent())
-            }
+            viewer.remote_branch.clone()
         } else {
             None
         }
@@ -538,17 +550,23 @@ impl TerminalTab {
     }
 
     pub fn clean_display_title(raw: &str, cwd: Option<&std::path::Path>) -> String {
-        let raw_lower = raw.trim().to_lowercase();
-        let is_shell_or_path = raw_lower.ends_with("pwsh.exe")
-            || raw_lower.ends_with("powershell.exe")
-            || raw_lower.ends_with("cmd.exe")
-            || raw_lower == "powershell"
-            || raw_lower == "pwsh"
-            || raw_lower == "cmd"
-            || raw_lower == "windows powershell"
-            || raw_lower.contains("powershell\\7\\pwsh.exe")
-            || raw_lower.contains("system32\\cmd.exe")
-            || raw_lower.contains("windowspowershell");
+        use crate::renderer::contains_ignore_ascii_case;
+        let trimmed = raw.trim();
+        let ends_ci = |suf: &str| {
+            trimmed.len() >= suf.len()
+                && trimmed.as_bytes()[trimmed.len() - suf.len()..]
+                    .eq_ignore_ascii_case(suf.as_bytes())
+        };
+        let is_shell_or_path = ends_ci("pwsh.exe")
+            || ends_ci("powershell.exe")
+            || ends_ci("cmd.exe")
+            || trimmed.eq_ignore_ascii_case("powershell")
+            || trimmed.eq_ignore_ascii_case("pwsh")
+            || trimmed.eq_ignore_ascii_case("cmd")
+            || trimmed.eq_ignore_ascii_case("windows powershell")
+            || contains_ignore_ascii_case(trimmed, "powershell\\7\\pwsh.exe")
+            || contains_ignore_ascii_case(trimmed, "system32\\cmd.exe")
+            || contains_ignore_ascii_case(trimmed, "windowspowershell");
 
         if is_shell_or_path {
             if let Some(path) = cwd {

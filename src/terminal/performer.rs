@@ -8,6 +8,7 @@ pub(super) struct Performer<'a> {
 
 impl<'a> Perform for Performer<'a> {
     fn print(&mut self, c: char) {
+        self.state.parser_in_ground = true;
         self.state.put_char(c);
     }
 
@@ -28,7 +29,16 @@ impl<'a> Perform for Performer<'a> {
         }
     }
 
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {
+        self.state.parser_in_ground = true;
+    }
+
+    fn unhook(&mut self) {
+        self.state.parser_in_ground = true;
+    }
+
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        self.state.parser_in_ground = true;
         // Manejo de secuencias privadas DEC (empiezan con '?')
         if intermediates == b"?" {
             let iter = params.iter();
@@ -230,15 +240,13 @@ impl<'a> Perform for Performer<'a> {
                         let cols = self.state.cols;
                         let grid = self.state.active_grid_mut();
                         if cy < grid.len() {
-                            for x in cx..cols {
-                                if x < grid[cy].len() {
-                                    grid[cy][x] = erase_cell;
-                                }
+                            let end = cols.min(grid[cy].len());
+                            if cx < end {
+                                grid[cy][cx..end].fill(erase_cell);
                             }
                             for row in grid.iter_mut().skip(cy + 1) {
-                                for x in 0..cols.min(row.len()) {
-                                    row[x] = erase_cell;
-                                }
+                                let end = cols.min(row.len());
+                                row[..end].fill(erase_cell);
                             }
                         }
                     }
@@ -248,28 +256,20 @@ impl<'a> Perform for Performer<'a> {
                         let cy = self.state.cursor_y;
                         let cols = self.state.cols;
                         let grid = self.state.active_grid_mut();
-                        for y in 0..cy.min(grid.len()) {
-                            for x in 0..cols {
-                                if x < grid[y].len() {
-                                    grid[y][x] = erase_cell;
-                                }
-                            }
+                        for row in grid.iter_mut().take(cy) {
+                            let end = cols.min(row.len());
+                            row[..end].fill(erase_cell);
                         }
                         if cy < grid.len() {
-                            for x in 0..=cx.min(cols.saturating_sub(1)) {
-                                if x < grid[cy].len() {
-                                    grid[cy][x] = erase_cell;
-                                }
-                            }
+                            let end = (cx + 1).min(cols).min(grid[cy].len());
+                            grid[cy][..end].fill(erase_cell);
                         }
                     }
                     2 => {
                         // Borrar pantalla completa activa
                         let grid = self.state.active_grid_mut();
                         for row in grid.iter_mut() {
-                            for cell in row.iter_mut() {
-                                *cell = erase_cell;
-                            }
+                            row.fill(erase_cell);
                         }
                         self.state.cursor_x = 0;
                         self.state.cursor_y = 0;
@@ -279,18 +279,12 @@ impl<'a> Perform for Performer<'a> {
                         // Borrar pantalla completa y limpiar scrollback buffer (usado por clear / cls / ConPTY)
                         let grid = self.state.active_grid_mut();
                         for row in grid.iter_mut() {
-                            for cell in row.iter_mut() {
-                                *cell = default_cell;
-                            }
+                            row.fill(default_cell);
                         }
                         self.state.cursor_x = 0;
                         self.state.cursor_y = 0;
                         if !self.state.is_alt_screen {
-                            self.state.scrollback.clear();
-                            self.state.scroll_offset = 0;
-                            self.state.total_lines_count = self.state.rows;
-                            self.state.command_blocks.clear();
-                            self.state.images.clear();
+                            self.state.clear_scrollback();
                         }
                     }
                     _ => {}
@@ -316,28 +310,15 @@ impl<'a> Perform for Performer<'a> {
                 };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
+                    let row = &mut grid[cy];
+                    let row_end = cols.min(row.len());
                     match mode {
-                        0 => {
-                            for x in cx..cols {
-                                if x < grid[cy].len() {
-                                    grid[cy][x] = erase_cell;
-                                }
-                            }
-                        }
+                        0 if cx < row_end => row[cx..row_end].fill(erase_cell),
                         1 => {
-                            for x in 0..=cx.min(cols.saturating_sub(1)) {
-                                if x < grid[cy].len() {
-                                    grid[cy][x] = erase_cell;
-                                }
-                            }
+                            let end = (cx + 1).min(row_end);
+                            row[..end].fill(erase_cell);
                         }
-                        2 => {
-                            for x in 0..cols {
-                                if x < grid[cy].len() {
-                                    grid[cy][x] = erase_cell;
-                                }
-                            }
-                        }
+                        2 => row[..row_end].fill(erase_cell),
                         _ => {}
                     }
                 }
@@ -364,17 +345,18 @@ impl<'a> Perform for Performer<'a> {
                 };
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() {
-                    let end_x = (cx + count).min(cols);
-                    for x in cx..end_x {
-                        if x < grid[cy].len() {
-                            grid[cy][x] = erase_cell;
-                        }
+                    let row = &mut grid[cy];
+                    let end_x = cx.saturating_add(count).min(cols).min(row.len());
+                    if cx < end_x {
+                        row[cx..end_x].fill(erase_cell);
                     }
                 }
-                crate::logger::log(&format!(
-                    "CSI X (ECH): borrados {} caracteres en ({}, {})",
-                    count, cx, cy
-                ));
+                if crate::logger::enabled() {
+                    crate::logger::log(&format!(
+                        "CSI X (ECH): borrados {} caracteres en ({}, {})",
+                        count, cx, cy
+                    ));
+                }
             }
 
             // DCH - Delete Character (\x1b[PnP): elimina Pn caracteres en el cursor desplazando hacia la izquierda
@@ -393,17 +375,19 @@ impl<'a> Perform for Performer<'a> {
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() && cx < cols {
                     let row = &mut grid[cy];
-                    for _ in 0..count {
-                        if cx < row.len() {
-                            row.remove(cx);
-                            row.push(default_cell);
-                        }
+                    let len = row.len();
+                    if cx < len {
+                        let shift = count.min(len - cx);
+                        row.copy_within(cx + shift..len, cx);
+                        row[len - shift..len].fill(default_cell);
                     }
                 }
-                crate::logger::log(&format!(
-                    "CSI P (DCH): eliminados {} caracteres en ({}, {})",
-                    count, cx, cy
-                ));
+                if crate::logger::enabled() {
+                    crate::logger::log(&format!(
+                        "CSI P (DCH): eliminados {} caracteres en ({}, {})",
+                        count, cx, cy
+                    ));
+                }
             }
 
             // ICH - Insert Character (\x1b[Pn@): inserta Pn espacios en blanco en el cursor desplazando hacia la derecha
@@ -422,17 +406,19 @@ impl<'a> Perform for Performer<'a> {
                 let grid = self.state.active_grid_mut();
                 if cy < grid.len() && cx < cols {
                     let row = &mut grid[cy];
-                    for _ in 0..count {
-                        if cx < row.len() {
-                            row.insert(cx, default_cell);
-                            row.pop();
-                        }
+                    let len = row.len();
+                    if cx < len {
+                        let shift = count.min(len - cx);
+                        row.copy_within(cx..len - shift, cx + shift);
+                        row[cx..cx + shift].fill(default_cell);
                     }
                 }
-                crate::logger::log(&format!(
-                    "CSI @ (ICH): insertados {} espacios en ({}, {})",
-                    count, cx, cy
-                ));
+                if crate::logger::enabled() {
+                    crate::logger::log(&format!(
+                        "CSI @ (ICH): insertados {} espacios en ({}, {})",
+                        count, cx, cy
+                    ));
+                }
             }
 
             // SGR - Select Graphic Rendition (Colores y Estilos)
@@ -443,7 +429,8 @@ impl<'a> Perform for Performer<'a> {
         }
     }
 
-    fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
+    fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        self.state.parser_in_ground = bell_terminated;
         if params.is_empty() {
             return;
         }
@@ -457,8 +444,7 @@ impl<'a> Perform for Performer<'a> {
                     // actualiza el directorio remoto de una sesión ya autenticada por `AxonSSH=start`
                     if let Some((user_host, rest)) = title_str.split_once(':') {
                         if user_host.contains('@') {
-                            let clean_dir = rest.trim();
-                            if clean_dir.starts_with('/') || clean_dir.starts_with('~') {
+                            if let Some(clean_dir) = crate::pty::safe_remote_dir(rest.trim()) {
                                 // Sin sesión SSH (p. ej. el título `user@host: /ruta` de WSL) la ruta no existe en
                                 // Windows: no es un directorio local
                                 if let Some(ref mut sess) = self.state.ssh_session {
@@ -494,8 +480,7 @@ impl<'a> Perform for Performer<'a> {
                         && crate::pty::is_safe_ssh_destination(&dest)
                     {
                         self.state.ssh_session = Some(SshSession {
-                            destination: dest.clone(),
-                            args: vec![dest],
+                            destination: dest,
                             remote_dir: None,
                             remote_git_branch: None,
                             is_active: true,
@@ -676,27 +661,19 @@ impl<'a> Performer<'a> {
                 0 => {
                     self.state.current_fg = self.state.theme.foreground;
                     self.state.current_bg = Color::TRANSPARENT;
-                    self.state.current_bold = false;
-                    self.state.current_dim = false;
-                    self.state.current_italic = false;
-                    self.state.current_underline = false;
-                    self.state.current_strikethrough = false;
-                    self.state.current_inverse = false;
+                    self.state.current_flags = 0;
                 }
-                1 => self.state.current_bold = true,
-                2 => self.state.current_dim = true,
-                3 => self.state.current_italic = true,
-                4 => self.state.current_underline = true,
-                7 => self.state.current_inverse = true,
-                9 => self.state.current_strikethrough = true,
-                22 => {
-                    self.state.current_bold = false;
-                    self.state.current_dim = false;
-                }
-                23 => self.state.current_italic = false,
-                24 => self.state.current_underline = false,
-                27 => self.state.current_inverse = false,
-                29 => self.state.current_strikethrough = false,
+                1 => self.state.current_flags |= Cell::FLAG_BOLD,
+                2 => self.state.current_flags |= Cell::FLAG_DIM,
+                3 => self.state.current_flags |= Cell::FLAG_ITALIC,
+                4 => self.state.current_flags |= Cell::FLAG_UNDERLINE,
+                7 => self.state.current_flags |= Cell::FLAG_INVERSE,
+                9 => self.state.current_flags |= Cell::FLAG_STRIKETHROUGH,
+                22 => self.state.current_flags &= !(Cell::FLAG_BOLD | Cell::FLAG_DIM),
+                23 => self.state.current_flags &= !Cell::FLAG_ITALIC,
+                24 => self.state.current_flags &= !Cell::FLAG_UNDERLINE,
+                27 => self.state.current_flags &= !Cell::FLAG_INVERSE,
+                29 => self.state.current_flags &= !Cell::FLAG_STRIKETHROUGH,
 
                 // Foreground estándar ANSI (30..=37)
                 30..=37 => {
@@ -716,7 +693,7 @@ impl<'a> Performer<'a> {
                     let idx = (val - 40) as usize;
                     self.state.current_bg = self.state.theme.ansi[idx];
                 }
-                // TrueColor & 256 Colors Background (48;2;r;g;b / 48:2:r:g:b / 48;5;n / 48:5:n)
+                // TrueColor & 256 Colors Background (48;2;r;g;b / 48:2:r:g:b / 38;5;n / 38:5:n)
                 48 => {
                     if let Some(c) = parse_sgr_color(param, &mut iter, &self.state.theme) {
                         self.state.current_bg = c;

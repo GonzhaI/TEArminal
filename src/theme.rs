@@ -511,6 +511,26 @@ impl Theme {
         }
     }
 
+    /// Resuelve la paleta activa combinando `theme_mode` ("system", "light", "dark") y `theme`
+    pub fn from_mode_and_name(mode: &str, name: &str) -> Self {
+        if mode.eq_ignore_ascii_case("system") {
+            if is_windows_system_light_mode() {
+                Self::catppuccin_latte()
+            } else {
+                let dark = Self::from_name(name);
+                if dark.is_light() {
+                    Self::catppuccin_frappe()
+                } else {
+                    dark
+                }
+            }
+        } else if mode.eq_ignore_ascii_case("light") {
+            Self::catppuccin_latte()
+        } else {
+            Self::from_name(name)
+        }
+    }
+
     /// Resuelve índices de 256 colores estándar ANSI
     pub fn resolve_256_color(&self, index: u8) -> Color {
         match index {

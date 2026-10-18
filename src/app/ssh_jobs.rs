@@ -31,6 +31,15 @@ pub(super) enum SshDone {
         local_path: String,
         remote_path: Option<String>,
     },
+    AiLocal(super::ai_usage::LocalUsageScan),
+    GitStatus {
+        repo_root: PathBuf,
+        statuses: std::collections::HashMap<PathBuf, crate::explorer::GitFileStatus>,
+    },
+    GitHead {
+        path: PathBuf,
+        lines: Option<Vec<String>>,
+    },
 }
 
 fn remote_path_string(path: &Path) -> String {
@@ -51,6 +60,21 @@ impl AxonApp {
         if let Err(e) = spawned {
             crate::logger::log(&format!("No se pudo lanzar el hilo SSH: {e}"));
         }
+    }
+
+    /// Escanea en un hilo en segundo plano las transcripciones locales de IA sin bloquear el bucle de eventos
+    pub(super) fn spawn_ai_local_scan(&self, ai_status: AiAgentStatus) {
+        self.spawn_ssh(move || {
+            SshDone::AiLocal(super::ai_usage::scan_local_usage_blocking(ai_status))
+        });
+    }
+
+    /// Obtiene `git show HEAD:<path>` en un hilo en segundo plano para el visor de archivos local
+    pub(super) fn spawn_git_head_lines(&self, path: PathBuf) {
+        self.spawn_ssh(move || {
+            let lines = crate::explorer::git_head_lines(&path);
+            SshDone::GitHead { path, lines }
+        });
     }
 
     /// Lee un archivo remoto con una segunda conexión SSH (solo con clave); la pestaña se abre al llegar
@@ -121,7 +145,7 @@ impl AxonApp {
         });
     }
 
-    /// Lanza los listados que el explorador pidió desde cualquier clic (llamar tras cada ronda de eventos)
+    /// Lanza los listados y consultas git que el explorador pidió (llamar tras cada ronda de eventos)
     pub(super) fn pump_explorer_ssh(&mut self) {
         for req in self.file_explorer.take_ssh_requests() {
             self.spawn_ssh(move || {
@@ -131,6 +155,15 @@ impl AxonApp {
                 };
                 let result = ssh::run(&req.dest, &cmd, 4, None, ssh::MAX_LISTING_BYTES);
                 SshDone::Listing { req, result }
+            });
+        }
+        if let Some((repo_root, changes_only)) = self.file_explorer.take_git_status_request() {
+            self.spawn_ssh(move || {
+                let statuses = crate::explorer::collect_git_statuses(&repo_root, changes_only);
+                SshDone::GitStatus {
+                    repo_root,
+                    statuses,
+                }
             });
         }
     }
@@ -201,6 +234,25 @@ impl AxonApp {
                     if let Some(pane) = self.tabs.iter_mut().find_map(|t| t.find_pane_mut(pane_id))
                     {
                         Self::paste_into_pane(pane, &text);
+                    }
+                }
+                SshDone::AiLocal(scan) => {
+                    self.ai_usage.apply_local_scan(scan);
+                }
+                SshDone::GitStatus {
+                    repo_root,
+                    statuses,
+                } => {
+                    self.file_explorer.apply_git_statuses(&repo_root, statuses);
+                }
+                SshDone::GitHead { path, lines } => {
+                    for tab in &mut self.tabs {
+                        if let Some(viewer) = tab.file_viewer.as_mut() {
+                            if viewer.path == path && viewer.remote_destination.is_none() {
+                                viewer.git_base = lines.clone();
+                                viewer.edit_gen = viewer.edit_gen.wrapping_add(1);
+                            }
+                        }
                     }
                 }
             }

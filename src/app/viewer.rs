@@ -10,6 +10,7 @@ pub struct ViewerSnapshot {
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SelectionStats {
@@ -30,6 +31,36 @@ pub struct RowRef {
 pub struct RowsCache {
     key: (u64, u64, usize, bool),
     rows: Rc<Vec<RowRef>>,
+    max_cols_gen: u64,
+    max_cols: usize,
+}
+
+#[inline]
+fn char_byte_idx(s: &str, col: usize) -> usize {
+    if s.is_ascii() {
+        col.min(s.len())
+    } else {
+        s.char_indices().nth(col).map_or(s.len(), |(b, _)| b)
+    }
+}
+
+#[inline]
+fn char_count(s: &str) -> usize {
+    if s.is_ascii() {
+        s.len()
+    } else {
+        s.chars().count()
+    }
+}
+
+#[inline]
+fn line_col_width(s: &str) -> usize {
+    if s.is_ascii() {
+        let tabs = s.bytes().filter(|&b| b == b'\t').count();
+        s.len() + tabs * 3
+    } else {
+        s.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum()
+    }
 }
 
 fn heading_level(line: &str) -> Option<usize> {
@@ -49,7 +80,7 @@ fn indent_of(line: &str) -> Option<usize> {
 /// Parte `line` en tramos de como mucho `cols` columnas, prefiriendo cortar tras un espacio.
 fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
     let cols = cols.max(8);
-    if line.len() <= cols && !line.contains('\t') {
+    if line_col_width(line) <= cols {
         out.push(RowRef {
             line: line_idx,
             start: 0,
@@ -57,14 +88,13 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
         });
         return;
     }
-    let chars: Vec<char> = line.chars().collect();
-    let (mut start, mut width, mut last_break) = (0, 0, None);
-    for (i, ch) in chars.iter().enumerate() {
-        let adv = if *ch == '\t' { 4 } else { 1 };
+    let (mut start, mut width, mut last_break) = (0usize, 0usize, None::<(usize, usize)>);
+    for (i, ch) in line.chars().enumerate() {
+        let adv = if ch == '\t' { 4 } else { 1 };
         if width + adv > cols && i > start {
-            let at = match last_break {
-                Some(b) if b > start + cols / 2 => b,
-                _ => i,
+            let (at, rem_width) = match last_break {
+                Some((b, w_at_b)) if b > start + cols / 2 => (b, width - w_at_b),
+                _ => (i, 0),
             };
             out.push(RowRef {
                 line: line_idx,
@@ -73,14 +103,11 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
             });
             start = at;
             last_break = None;
-            width = chars[start..i]
-                .iter()
-                .map(|c| if *c == '\t' { 4 } else { 1 })
-                .sum();
+            width = rem_width;
         }
         width += adv;
         if ch.is_whitespace() {
-            last_break = Some(i + 1);
+            last_break = Some((i + 1, width));
         }
     }
     out.push(RowRef {
@@ -110,8 +137,8 @@ pub struct FileViewerState {
     /// Con el diff «HEAD vs ahora» a la vista: guarda el estado real del visor para volver a él
     pub diff_stash: Option<Box<DiffStash>>,
     pub hovered_diff_btn: bool,
-    /// Marca de cada línea frente a la base, en caché por `edit_gen`
-    pub git_marks: RefCell<Option<(u64, GitMarks)>>,
+    /// Marca de cada línea frente a la base y si existen cambios, en caché por `edit_gen`
+    pub git_marks: RefCell<Option<(u64, bool, GitMarks)>>,
     pub selection: Option<((usize, usize), (usize, usize))>,
     pub remote_destination: Option<String>,
     pub remote_branch: Option<String>,
@@ -135,6 +162,8 @@ pub struct FileViewerState {
     pub word_wrap: bool,
     /// Líneas plegadas (primera línea de cada región oculta)
     pub folded: BTreeSet<usize>,
+    pub needs_autosave: bool,
+    pub last_edit_time: Instant,
     pub edit_gen: u64,
     pub fold_gen: u64,
     pub rows_cache: RefCell<Option<RowsCache>>,
@@ -196,11 +225,17 @@ impl FileViewerState {
     pub fn rows(&self) -> Rc<Vec<RowRef>> {
         let wrap = self.wrap_active();
         let key = (self.edit_gen, self.fold_gen, self.visible_cols, wrap);
-        if let Some(c) = &*self.rows_cache.borrow() {
-            if c.key == key {
-                return c.rows.clone();
+        let prev_max_cols = {
+            let borrow = self.rows_cache.borrow();
+            if let Some(c) = &*borrow {
+                if c.key == key {
+                    return c.rows.clone();
+                }
+                (c.max_cols_gen == self.edit_gen).then_some(c.max_cols)
+            } else {
+                None
             }
-        }
+        };
         let mut rows = Vec::with_capacity(self.lines.len());
         let mut i = 0;
         while i < self.lines.len() {
@@ -225,10 +260,19 @@ impl FileViewerState {
                 end: usize::MAX,
             });
         }
+        let max_cols = prev_max_cols.unwrap_or_else(|| {
+            self.lines
+                .iter()
+                .map(|l| line_col_width(l))
+                .max()
+                .unwrap_or(0)
+        });
         let rows = Rc::new(rows);
         *self.rows_cache.borrow_mut() = Some(RowsCache {
             key,
             rows: rows.clone(),
+            max_cols_gen: self.edit_gen,
+            max_cols,
         });
         rows
     }
@@ -239,12 +283,11 @@ impl FileViewerState {
         if row.start == 0 && row.end == usize::MAX {
             return line;
         }
-        let byte = |ci: usize| line.char_indices().nth(ci).map_or(line.len(), |(b, _)| b);
-        let from = byte(row.start);
+        let from = char_byte_idx(line, row.start);
         let to = if row.end == usize::MAX {
             line.len()
         } else {
-            byte(row.end)
+            char_byte_idx(line, row.end)
         };
         &line[from..to]
     }
@@ -266,7 +309,7 @@ impl FileViewerState {
         };
         let mut col = lay.col_at(seg, mx, scroll_x);
         if row.end != usize::MAX {
-            col = col.min(seg.chars().count().saturating_sub(1));
+            col = col.min(char_count(seg).saturating_sub(1));
         }
         Some((row.line, row.start + col))
     }
@@ -376,15 +419,22 @@ impl FileViewerState {
 
     /// Ancho en columnas de la línea más larga (tabulador = 4), para el scroll horizontal.
     pub fn max_cols(&self) -> usize {
-        self.lines
+        if let Some(c) = &*self.rows_cache.borrow() {
+            if c.max_cols_gen == self.edit_gen {
+                return c.max_cols;
+            }
+        }
+        let max = self
+            .lines
             .iter()
-            .map(|l| {
-                l.chars()
-                    .map(|c| if c == '\t' { 4 } else { 1 })
-                    .sum::<usize>()
-            })
+            .map(|l| line_col_width(l))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0);
+        if let Some(c) = &mut *self.rows_cache.borrow_mut() {
+            c.max_cols_gen = self.edit_gen;
+            c.max_cols = max;
+        }
+        max
     }
 
     /// Máximo `scroll_offset_x`: deja 2 columnas libres para el cursor al final de la línea más larga.
@@ -392,10 +442,31 @@ impl FileViewerState {
         (self.max_cols() + 2).saturating_sub(self.visible_cols.max(1))
     }
 
-    /// Resumen de la selección: caracteres y líneas
+    /// Resumen de la selección: caracteres y líneas (sin alojar memoria)
     pub fn selection_stats(&self) -> Option<SelectionStats> {
-        let ((l1, _), (l2, _)) = self.selection_ordered()?;
-        let chars = self.selected_text()?.chars().count();
+        let ((l1, c1), (l2, c2)) = self.selection_ordered()?;
+        if (l1 == l2 && c1 == c2) || l1 >= self.lines.len() {
+            return None;
+        }
+        let mut chars = 0usize;
+        let mut parts = 0usize;
+        for line_idx in l1..=l2.min(self.lines.len().saturating_sub(1)) {
+            let line = &self.lines[line_idx];
+            let char_len = char_count(line);
+            let start = if line_idx == l1 { c1.min(char_len) } else { 0 };
+            let end = if line_idx == l2 {
+                c2.min(char_len)
+            } else {
+                char_len
+            };
+            if start < end {
+                chars += end - start;
+                parts += 1;
+            } else if line_idx != l2 {
+                parts += 1;
+            }
+        }
+        chars += parts.saturating_sub(1);
         Some(SelectionStats {
             chars,
             lines: l2 - l1 + 1,
@@ -426,23 +497,15 @@ impl FileViewerState {
         let mut res = Vec::new();
         for line_idx in l1..=l2.min(self.lines.len().saturating_sub(1)) {
             let line = &self.lines[line_idx];
-            let char_count = line.chars().count();
-            let start = if line_idx == l1 {
-                c1.min(char_count)
-            } else {
-                0
-            };
-            let end = if line_idx == l2 {
-                c2.min(char_count)
-            } else {
-                char_count
-            };
+            let len = char_count(line);
+            let start = if line_idx == l1 { c1.min(len) } else { 0 };
+            let end = if line_idx == l2 { c2.min(len) } else { len };
 
             if start < end {
-                let s: String = line.chars().skip(start).take(end - start).collect();
+                let s = &line[char_byte_idx(line, start)..char_byte_idx(line, end)];
                 res.push(s);
             } else if line_idx != l2 {
-                res.push(String::new());
+                res.push("");
             }
         }
         Some(res.join("\n"))
@@ -464,36 +527,19 @@ impl FileViewerState {
         if l1 == l2 {
             if l1 < self.lines.len() {
                 let line = &mut self.lines[l1];
-                let mut char_indices: Vec<usize> =
-                    line.char_indices().map(|(idx, _)| idx).collect();
-                char_indices.push(line.len());
-
-                let start_byte = if c1 < char_indices.len() {
-                    char_indices[c1]
-                } else {
-                    line.len()
-                };
-                let end_byte = if c2 < char_indices.len() {
-                    char_indices[c2]
-                } else {
-                    line.len()
-                };
+                let start_byte = char_byte_idx(line, c1);
+                let end_byte = char_byte_idx(line, c2);
                 line.drain(start_byte..end_byte);
             }
         } else {
-            let line1_len = self.lines[l1].chars().count();
-            let start_char = c1.min(line1_len);
-            let mut prefix: String = self.lines[l1].chars().take(start_char).collect();
+            let prefix_end = char_byte_idx(&self.lines[l1], c1);
+            let mut prefix = self.lines[l1][..prefix_end].to_string();
 
-            let suffix = if l2 < self.lines.len() {
-                let line2_len = self.lines[l2].chars().count();
-                let end_char = c2.min(line2_len);
-                self.lines[l2].chars().skip(end_char).collect::<String>()
-            } else {
-                String::new()
-            };
+            if l2 < self.lines.len() {
+                let suffix_start = char_byte_idx(&self.lines[l2], c2);
+                prefix.push_str(&self.lines[l2][suffix_start..]);
+            }
 
-            prefix.push_str(&suffix);
             self.lines[l1] = prefix;
 
             let drain_end = (l2 + 1).min(self.lines.len());
@@ -515,7 +561,7 @@ impl FileViewerState {
             return;
         }
         let last_line = self.lines.len() - 1;
-        let last_col = self.lines[last_line].chars().count();
+        let last_col = char_count(&self.lines[last_line]);
         self.selection = Some(((0, 0), (last_line, last_col)));
         self.cursor_line = last_line;
         self.cursor_col = last_col;
@@ -558,7 +604,7 @@ impl FileViewerState {
         if self.lines.is_empty() || self.cursor_line >= self.lines.len() {
             return;
         }
-        let line_len = self.lines[self.cursor_line].chars().count();
+        let line_len = char_count(&self.lines[self.cursor_line]);
         self.selection = Some(((self.cursor_line, 0), (self.cursor_line, line_len)));
         self.cursor_col = line_len;
     }
@@ -635,10 +681,9 @@ impl FileViewerState {
         if !self.is_editable() {
             return;
         }
-        if self.has_selection() {
-            self.delete_selection();
+        if !self.delete_selection() {
+            self.push_undo();
         }
-        self.push_undo();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -647,15 +692,7 @@ impl FileViewerState {
         }
 
         let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let byte_pos = if self.cursor_col < char_indices.len() {
-            char_indices[self.cursor_col]
-        } else {
-            line.len()
-        };
-
+        let byte_pos = char_byte_idx(line, self.cursor_col);
         line.insert(byte_pos, ch);
         self.cursor_col += 1;
         self.clear_selection();
@@ -666,10 +703,9 @@ impl FileViewerState {
         if !self.is_editable() || text.is_empty() {
             return;
         }
-        if self.has_selection() {
-            self.delete_selection();
+        if !self.delete_selection() {
+            self.push_undo();
         }
-        self.push_undo();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -682,30 +718,15 @@ impl FileViewerState {
 
         if parts.len() == 1 {
             let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            let byte_pos = if self.cursor_col < char_indices.len() {
-                char_indices[self.cursor_col]
-            } else {
-                line.len()
-            };
-
+            let byte_pos = char_byte_idx(line, self.cursor_col);
             line.insert_str(byte_pos, parts[0]);
-            self.cursor_col += parts[0].chars().count();
+            self.cursor_col += char_count(parts[0]);
         } else {
             let line = &self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
+            let byte_pos = char_byte_idx(line, self.cursor_col);
 
-            let byte_pos = if self.cursor_col < char_indices.len() {
-                char_indices[self.cursor_col]
-            } else {
-                line.len()
-            };
-
-            let prefix = self.lines[self.cursor_line][..byte_pos].to_string();
-            let suffix = self.lines[self.cursor_line][byte_pos..].to_string();
+            let prefix = line[..byte_pos].to_string();
+            let suffix = line[byte_pos..].to_string();
 
             self.lines[self.cursor_line] = format!("{}{}", prefix, parts[0]);
 
@@ -713,7 +734,7 @@ impl FileViewerState {
                 if idx == parts.len() - 1 {
                     self.lines
                         .insert(self.cursor_line + idx, format!("{}{}", part, suffix));
-                    self.cursor_col = part.chars().count();
+                    self.cursor_col = char_count(part);
                 } else {
                     self.lines.insert(self.cursor_line + idx, part.to_string());
                 }
@@ -727,10 +748,9 @@ impl FileViewerState {
         if !self.is_editable() {
             return;
         }
-        if self.has_selection() {
-            self.delete_selection();
+        if !self.delete_selection() {
+            self.push_undo();
         }
-        self.push_undo();
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -738,18 +758,10 @@ impl FileViewerState {
             self.cursor_line = self.lines.len() - 1;
         }
 
-        let line = &self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let byte_pos = if self.cursor_col < char_indices.len() {
-            char_indices[self.cursor_col]
-        } else {
-            line.len()
-        };
-
-        let remainder = self.lines[self.cursor_line][byte_pos..].to_string();
-        self.lines[self.cursor_line].truncate(byte_pos);
+        let line = &mut self.lines[self.cursor_line];
+        let byte_pos = char_byte_idx(line, self.cursor_col);
+        let remainder = line[byte_pos..].to_string();
+        line.truncate(byte_pos);
 
         self.cursor_line += 1;
         self.cursor_col = 0;
@@ -780,12 +792,9 @@ impl FileViewerState {
 
         if self.cursor_col > 0 {
             let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            if self.cursor_col < char_indices.len() {
-                let start_byte = char_indices[self.cursor_col - 1];
-                let end_byte = char_indices[self.cursor_col];
+            let end_byte = char_byte_idx(line, self.cursor_col);
+            let start_byte = char_byte_idx(line, self.cursor_col - 1);
+            if start_byte < end_byte {
                 line.drain(start_byte..end_byte);
                 self.cursor_col -= 1;
                 self.is_dirty = true;
@@ -794,7 +803,7 @@ impl FileViewerState {
             // Unir la línea actual con la anterior
             let cur_line = self.lines.remove(self.cursor_line);
             self.cursor_line -= 1;
-            let prev_len = self.lines[self.cursor_line].chars().count();
+            let prev_len = char_count(&self.lines[self.cursor_line]);
             self.lines[self.cursor_line].push_str(&cur_line);
             self.cursor_col = prev_len;
             self.is_dirty = true;
@@ -817,17 +826,12 @@ impl FileViewerState {
             self.cursor_line = self.lines.len() - 1;
         }
 
-        let line = &self.lines[self.cursor_line];
-        let char_count = line.chars().count();
+        let line = &mut self.lines[self.cursor_line];
+        let start_byte = char_byte_idx(line, self.cursor_col);
 
-        if self.cursor_col < char_count {
-            let line = &mut self.lines[self.cursor_line];
-            let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-            char_indices.push(line.len());
-
-            let start_byte = char_indices[self.cursor_col];
-            let end_byte = char_indices[self.cursor_col + 1];
-            line.drain(start_byte..end_byte);
+        if start_byte < line.len() {
+            let ch_len = line[start_byte..].chars().next().map_or(0, char::len_utf8);
+            line.drain(start_byte..start_byte + ch_len);
             self.is_dirty = true;
         } else if self.cursor_line + 1 < self.lines.len() {
             // Unir la línea siguiente a la actual
@@ -842,6 +846,9 @@ impl FileViewerState {
         if !self.is_editable() || self.lines.is_empty() {
             return;
         }
+        if self.cursor_line >= self.lines.len() {
+            self.cursor_line = self.lines.len() - 1;
+        }
         if self.cursor_col == 0 {
             self.backspace();
             return;
@@ -849,11 +856,8 @@ impl FileViewerState {
         self.push_undo();
         let target_col = self.find_word_boundary_left();
         let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let start_byte = char_indices[target_col];
-        let end_byte = char_indices[self.cursor_col];
+        let start_byte = char_byte_idx(line, target_col);
+        let end_byte = char_byte_idx(line, self.cursor_col);
         line.drain(start_byte..end_byte);
         self.cursor_col = target_col;
         self.is_dirty = true;
@@ -864,7 +868,10 @@ impl FileViewerState {
         if !self.is_editable() || self.lines.is_empty() {
             return;
         }
-        let line_len = self.lines[self.cursor_line].chars().count();
+        if self.cursor_line >= self.lines.len() {
+            self.cursor_line = self.lines.len() - 1;
+        }
+        let line_len = char_count(&self.lines[self.cursor_line]);
         if self.cursor_col >= line_len {
             self.delete();
             return;
@@ -872,11 +879,8 @@ impl FileViewerState {
         self.push_undo();
         let target_col = self.find_word_boundary_right();
         let line = &mut self.lines[self.cursor_line];
-        let mut char_indices: Vec<usize> = line.char_indices().map(|(idx, _)| idx).collect();
-        char_indices.push(line.len());
-
-        let start_byte = char_indices[self.cursor_col];
-        let end_byte = char_indices[target_col];
+        let start_byte = char_byte_idx(line, self.cursor_col);
+        let end_byte = char_byte_idx(line, target_col);
         line.drain(start_byte..end_byte);
         self.is_dirty = true;
     }
@@ -886,7 +890,7 @@ impl FileViewerState {
             return 0;
         }
         let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let mut idx = self.cursor_col;
+        let mut idx = self.cursor_col.min(chars.len());
 
         // Saltar espacios a la izquierda
         while idx > 0 && chars[idx - 1].is_whitespace() {
@@ -943,10 +947,26 @@ impl FileViewerState {
         self.diff_stash.is_some()
     }
 
+    fn ensure_git_marks(&self) {
+        let mut cache = self.git_marks.borrow_mut();
+        if cache.as_ref().map(|c| c.0) != Some(self.edit_gen) {
+            let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+            let marks = diff_marks(base, &self.lines);
+            let has_changes = marks.iter().any(Option::is_some);
+            *cache = Some((self.edit_gen, has_changes, Rc::new(marks)));
+        }
+    }
+
     /// El texto (el real, aunque se esté viendo el diff) difiere de `HEAD`
     pub fn has_git_changes(&self) -> bool {
-        let text = self.diff_stash.as_ref().map_or(&self.lines, |s| &s.lines);
-        self.git_base.as_ref() != Some(text)
+        let Some(base) = &self.git_base else {
+            return true;
+        };
+        if let Some(st) = &self.diff_stash {
+            return base != &st.lines;
+        }
+        self.ensure_git_marks();
+        self.git_marks.borrow().as_ref().is_some_and(|c| c.1)
     }
 
     /// Alterna entre el archivo y su diff unificado contra `HEAD` (la vista de cambios es de solo lectura)
@@ -994,22 +1014,33 @@ impl FileViewerState {
         if self.is_diff() {
             return None;
         }
-        let mut cache = self.git_marks.borrow_mut();
-        if cache.as_ref().map(|c| c.0) != Some(self.edit_gen) {
-            let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
-            *cache = Some((self.edit_gen, Rc::new(diff_marks(base, &self.lines))));
-        }
-        cache.as_ref()?.1.get(line_idx).copied().flatten()
+        self.ensure_git_marks();
+        self.git_marks
+            .borrow()
+            .as_ref()?
+            .2
+            .get(line_idx)
+            .copied()
+            .flatten()
     }
 
-    /// Autoguardado tras editar: solo archivos locales (el remoto se guarda con Ctrl+S, no en cada pulsación)
+    /// Programa el autoguardado para ejecutarse con retardo (antirrebote) tras dejar de teclear
+    pub fn schedule_autosave(&mut self) {
+        if self.remote_destination.is_none() {
+            self.needs_autosave = true;
+            self.last_edit_time = Instant::now();
+        }
+    }
+
+    /// Autoguardado tras editar: solo archivos locales, sin recortar saltos en curso ni borrar el historial de deshacer
     pub fn autosave_local(&mut self) {
         if self.remote_destination.is_none() {
-            let _ = self.save_to_disk();
+            self.needs_autosave = false;
+            let _ = self.save_to_disk_inner(false);
         }
     }
 
-    /// Recorta las líneas vacías finales dejando como máximo una (estándar de los IDE)
+    /// Recorta las líneas vacías finales dejando como máximo una (estándar de los IDE) y mantiene el cursor dentro de rango
     pub fn trim_trailing_blank_lines(&mut self) {
         while self.lines.len() > 1
             && self.lines.last().map(|s| s.is_empty()).unwrap_or(false)
@@ -1017,6 +1048,11 @@ impl FileViewerState {
         {
             self.lines.pop();
             self.edit_gen += 1;
+        }
+        let last = self.lines.len().saturating_sub(1);
+        if self.cursor_line > last {
+            self.cursor_line = last;
+            self.cursor_col = self.lines.get(last).map_or(0, |l| char_count(l));
         }
     }
 
@@ -1036,8 +1072,6 @@ impl FileViewerState {
         self.file_size = self.lines.iter().map(|l| l.len() + 1).sum::<usize>() as u64;
         self.original_lines = self.lines.clone();
         self.edit_gen += 1;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
     }
 
     /// Escribe en `<archivo>.axon-tmp` y renombra encima: un fallo (disco lleno…) deja el original intacto
@@ -1064,12 +1098,19 @@ impl FileViewerState {
     }
 
     pub fn save_to_disk(&mut self) -> Result<(), std::io::Error> {
+        self.needs_autosave = false;
+        self.save_to_disk_inner(true)
+    }
+
+    fn save_to_disk_inner(&mut self, is_explicit_save: bool) -> Result<(), std::io::Error> {
         // En la vista de cambios `lines` es el diff, nunca debe llegar a disco
         if self.is_binary || self.non_utf8 || self.is_diff() {
             return Ok(());
         }
 
-        self.trim_trailing_blank_lines();
+        if is_explicit_save {
+            self.trim_trailing_blank_lines();
+        }
 
         if self.remote_destination.is_some() {
             // El guardado remoto es asíncrono (`AxonApp::ssh_save_viewer`): nunca bloquea aquí
@@ -1083,12 +1124,12 @@ impl FileViewerState {
             return Err(e);
         }
         self.save_error = None;
-        self.is_dirty = false;
         self.file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
-        self.original_lines = self.lines.clone();
+        if is_explicit_save {
+            self.is_dirty = false;
+            self.original_lines = self.lines.clone();
+        }
         self.edit_gen += 1;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
         Ok(())
     }
 }

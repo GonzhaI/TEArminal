@@ -124,7 +124,7 @@ fn test_inline_images_are_downscaled_evicted_and_capped() {
         ))
         .unwrap();
     let osc = format!(
-        "]1337;File=inline=1:{}",
+        "\x1b]1337;File=inline=1:{}\x07",
         BASE64_STANDARD.encode(png.into_inner())
     );
 
@@ -154,7 +154,7 @@ fn test_inline_images_are_downscaled_evicted_and_capped() {
 
     // ED 3 vacía la lista
     term.process_bytes(osc.as_bytes());
-    term.process_bytes(b"[3J");
+    term.process_bytes(b"\x1b[3J");
     assert!(term.images.is_empty());
 
     // Tope total: nunca más de 64 MB, se descartan las más antiguas
@@ -809,7 +809,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
     term.process_bytes(b"\x1b]1337;AxonGit=\x07");
     assert_eq!(term.ssh_session.as_ref().unwrap().remote_git_branch, None);
 
-    term.process_bytes(b"]1337;AxonGit=feature/x");
+    term.process_bytes(b"\x1b]1337;AxonGit=feature/x\x07");
     assert_eq!(
         term.ssh_session
             .as_ref()
@@ -818,7 +818,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
             .as_deref(),
         Some("feature/x")
     );
-    term.process_bytes(b"]1337;AxonGit=-");
+    term.process_bytes(b"\x1b]1337;AxonGit=-\x07");
     assert_eq!(
         term.ssh_session.as_ref().unwrap().remote_git_branch,
         None,
@@ -924,12 +924,12 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
 fn test_private_marker_csi_m_is_not_sgr() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
-    term.process_bytes(b"[>4;2m[>4m[>1u[0 qA");
+    term.process_bytes(b"\x1b[>4;2m\x1b[>4m\x1b[>1u\x1b[0 qA");
     let cell = &term.grid[0][0];
     assert_eq!(cell.c, 'A');
     assert!(!cell.underline() && !cell.dim() && !cell.strikethrough());
     // el SGR de verdad sigue funcionando
-    term.process_bytes(b"[4mB");
+    term.process_bytes(b"\x1b[4mB");
     assert!(term.grid[0][1].underline());
 }
 
@@ -939,9 +939,9 @@ fn test_axon_agent_osc_tracks_running_agent() {
     let theme = Theme::ghostty_dark();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     assert!(!term.agent_running);
-    term.process_bytes(b"]1337;AxonAgent=start");
+    term.process_bytes(b"\x1b]1337;AxonAgent=start\x07");
     assert!(term.agent_running);
-    term.process_bytes(b"]1337;AxonAgent=end");
+    term.process_bytes(b"\x1b]1337;AxonAgent=end\x07");
     assert!(!term.agent_running);
 
     // Al terminar un agente, Axon restaura la región de scroll y modos TUI sin mover el cursor a (0,0)
@@ -960,4 +960,67 @@ fn test_axon_agent_osc_tracks_running_agent() {
     assert!(!term.bracketed_paste_mode);
     assert_eq!(term.cursor_y, cy_before);
     assert_eq!(term.grid[9][4].c, 'U');
+}
+
+#[test]
+fn test_osc_133_blocks_shift_on_scrollback_eviction() {
+    let mut term = TerminalState::new(80, 4, 5, Theme::ghostty_dark());
+    term.process_bytes(
+        b"\x1b]133;A\x07\x1b]133;B\x07old\r\n\x1b]133;C\x07viejo\r\n\x1b]133;D;0\x07",
+    );
+    for i in 0..8 {
+        term.process_bytes(format!("relleno {i}\r\n").as_bytes());
+    }
+    term.process_bytes(
+        b"\x1b]133;A\x07\x1b]133;B\x07cmd\r\n\x1b]133;C\x07salida viva\r\n\x1b]133;D;0\x07",
+    );
+    assert_eq!(
+        term.command_blocks.len(),
+        1,
+        "el primer bloque salió del historial"
+    );
+    assert_eq!(term.get_last_output_text().as_deref(), Some("salida viva"));
+}
+
+#[test]
+fn test_clear_scrollback_and_ed_3() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    for i in 0..50 {
+        term.process_bytes(format!("Línea {i}\r\n").as_bytes());
+    }
+    assert!(!term.scrollback.is_empty());
+    term.scroll_up(10);
+    assert!(term.scroll_offset > 0);
+
+    // CSI 3 J (ED 3: limpiar scrollback y resetear scroll)
+    term.process_bytes(b"\x1b[3J");
+    assert_eq!(term.scrollback.len(), 0);
+    assert_eq!(term.scroll_offset, 0);
+    assert_eq!(term.total_lines_count, term.rows);
+    assert!(term.command_blocks.is_empty());
+    assert!(term.selection.is_none());
+    assert!(term.images.is_empty());
+}
+
+#[test]
+fn bench_csi_cursor_and_erase_churn() {
+    let mut term = TerminalState::new(160, 48, 2000, Theme::ghostty_dark());
+    let mut payload = Vec::with_capacity(64 * 1024);
+    for row in 1..=48 {
+        let chunk = format!(
+            "\x1b[{row};1H\x1b[48;2;24;26;31;38;2;190;210;255mStatus row {row:02}: compiling crate axon::terminal::performer...\x1b[K\x1b[{row};20H\x1b[8X\x1b[4@\x1b[4P\x1b[0m"
+        );
+        payload.extend_from_slice(chunk.as_bytes());
+    }
+    let iterations = if cfg!(debug_assertions) { 10 } else { 250 };
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        term.process_bytes(&payload);
+    }
+    let elapsed = start.elapsed();
+    let total_mb = (payload.len() * iterations) as f64 / (1024.0 * 1024.0);
+    let mb_per_sec = total_mb / elapsed.as_secs_f64();
+    println!(
+        "bench_csi_cursor_and_erase_churn: {iterations} frames TUI ({total_mb:.2} MB) en {elapsed:.2?}: {mb_per_sec:.2} MB/s"
+    );
 }

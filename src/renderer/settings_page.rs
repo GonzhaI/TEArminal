@@ -413,7 +413,9 @@ impl TerminalRenderer {
             .scroll_y
             .min(SettingsPageRects::max_scroll(state.section, viewport_h));
         let tmp_h = top + content_h;
-        let mut tmp = vec![theme.background.to_u32_xrgb(); width * tmp_h];
+        let mut tmp = std::mem::take(&mut self.settings_scratch);
+        tmp.resize(width * tmp_h, 0);
+        tmp.fill(theme.background.to_u32_xrgb());
         let v = SettingsPageRects::compute(page_x, 0, page_w, page_h);
         match state.section {
             SettingsSection::Appearance => self.draw_settings_appearance(
@@ -439,6 +441,7 @@ impl TerminalRenderer {
             let dst = dst_y * width + page_x;
             buffer[dst..dst + page_w].copy_from_slice(&tmp[src..src + page_w]);
         }
+        self.settings_scratch = tmp;
 
         if let Some((track, thumb)) =
             SettingsPageRects::scrollbar(state.section, page_y, width, viewport_h, scroll)

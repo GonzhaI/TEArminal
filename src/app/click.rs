@@ -128,8 +128,12 @@ impl AxonApp {
             }
         }
 
-        // Redimensionamiento de ventana al arrastrar bordes (ventana frameless)
-        if button == MouseButton::Left && state == ElementState::Pressed {
+        // Redimensionamiento de ventana al arrastrar bordes (solo si no está maximizada ni en pantalla completa)
+        let can_resize = self
+            .window
+            .as_ref()
+            .is_some_and(|w| !w.is_maximized() && w.fullscreen().is_none());
+        if can_resize && button == MouseButton::Left && state == ElementState::Pressed {
             let border_margin = 6;
             let at_left = mx < border_margin;
             let at_right = mx >= win_w.saturating_sub(border_margin);
@@ -370,28 +374,19 @@ impl AxonApp {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.sidebar_scrollbar_dragging = true;
                                 self.sidebar_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                self.last_scroll_time = Instant::now();
                             } else {
-                                let available_travel = track.3.saturating_sub(thumb.3);
-                                let tab_item_h = 36;
-                                let tab_spacing = 4;
-                                let list_start_y = 42;
-                                let toggle_h = 30;
-                                let toggle_y = usable_sidebar_h.saturating_sub(toggle_h + 8);
-                                let list_max_y = toggle_y.saturating_sub(8);
-                                let visible_items = if list_max_y > list_start_y {
-                                    (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-                                } else {
-                                    1
-                                };
+                                let visible_items =
+                                    crate::renderer::SidebarRects::visible_items(usable_sidebar_h);
                                 let max_offset = self.tabs.len().saturating_sub(visible_items);
-                                if available_travel > 0 && max_offset > 0 {
-                                    let click_rel =
-                                        (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
-                                    let ratio =
-                                        (click_rel / available_travel as f32).clamp(0.0, 1.0);
-                                    self.sidebar_scroll_offset =
-                                        ((ratio * max_offset as f32).round() as usize)
-                                            .min(max_offset);
+                                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                                    track,
+                                    thumb,
+                                    my.saturating_sub(thumb.3 / 2) as f32,
+                                    max_offset,
+                                ) {
+                                    self.sidebar_scroll_offset = off;
+                                    self.last_scroll_time = Instant::now();
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
@@ -402,12 +397,12 @@ impl AxonApp {
                     }
 
                     // Clic en pestañas o botón cerrar "x"
-                    let tab_item_h = 36;
-                    let tab_spacing = 4;
-                    let list_start_y = 42;
+                    let tab_item_h = crate::renderer::SidebarRects::TAB_ITEM_H;
+                    let tab_spacing = crate::renderer::SidebarRects::TAB_SPACING;
+                    let list_start_y = crate::renderer::SidebarRects::LIST_START_Y;
                     let tab_x = 8;
                     let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
-                    let list_max_y = toggle_btn_y.saturating_sub(8);
+                    let list_max_y = crate::renderer::SidebarRects::list_max_y(usable_sidebar_h);
 
                     if my >= list_start_y && my < list_max_y {
                         let rel_y = my - list_start_y;
@@ -753,8 +748,8 @@ impl AxonApp {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.explorer_scrollbar_dragging = true;
                                 self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                self.last_scroll_time = Instant::now();
                             } else {
-                                let available_travel = track.3.saturating_sub(thumb.3);
                                 let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
                                 let list_start_y = panel_y
                                     + crate::explorer::FileExplorer::HEADER_HEIGHT
@@ -763,14 +758,14 @@ impl AxonApp {
                                 let visible_count = list_h.checked_div(item_h).unwrap_or(1);
                                 let max_offset =
                                     self.file_explorer.items.len().saturating_sub(visible_count);
-                                if available_travel > 0 && max_offset > 0 {
-                                    let click_rel =
-                                        (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
-                                    let ratio =
-                                        (click_rel / available_travel as f32).clamp(0.0, 1.0);
-                                    self.file_explorer.scroll_offset =
-                                        ((ratio * max_offset as f32).round() as usize)
-                                            .min(max_offset);
+                                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                                    track,
+                                    thumb,
+                                    my.saturating_sub(thumb.3 / 2) as f32,
+                                    max_offset,
+                                ) {
+                                    self.file_explorer.scroll_offset = off;
+                                    self.last_scroll_time = Instant::now();
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
@@ -882,6 +877,18 @@ impl AxonApp {
                         }
                     }
                 }
+                return;
+            }
+        }
+
+        // Clics sobre el menú flotante de consumo de IA en la barra de estado: no deben filtrarse al visor ni terminal
+        if self.hovered_ai_badge
+            && self.config.appearance.show_status_bar
+            && !self.tabs[self.active_tab_index].is_settings
+        {
+            let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
+            let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
+            if StatusBarRects::inside(mx, my, popup_rect) {
                 return;
             }
         }
@@ -1014,19 +1021,21 @@ impl AxonApp {
                                     if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                         self.viewer_scrollbar_dragging = true;
                                         self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                        self.last_scroll_time = Instant::now();
                                     } else {
-                                        let available_travel = track.3.saturating_sub(thumb.3);
                                         let visible_lines = lay.content_h / lay.row_h;
                                         let max_offset =
                                             viewer.rows().len().saturating_sub(visible_lines);
-                                        if available_travel > 0 && max_offset > 0 {
-                                            let click_rel =
-                                                (my.saturating_sub(track.1 + thumb.3 / 2)) as f32;
-                                            let ratio = (click_rel / available_travel as f32)
-                                                .clamp(0.0, 1.0);
-                                            viewer.scroll_offset =
-                                                ((ratio * max_offset as f32).round() as usize)
-                                                    .min(max_offset);
+                                        if let Some(off) =
+                                            crate::renderer::scroll_offset_for_thumb_y(
+                                                track,
+                                                thumb,
+                                                my.saturating_sub(thumb.3 / 2) as f32,
+                                                max_offset,
+                                            )
+                                        {
+                                            viewer.scroll_offset = off;
+                                            self.last_scroll_time = Instant::now();
                                             if let Some(w) = &self.window {
                                                 w.request_redraw();
                                             }

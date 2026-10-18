@@ -123,17 +123,12 @@ impl TerminalRenderer {
         );
 
         // 4. Lista de pestañas verticales
-        let tab_item_h = 36;
-        let tab_spacing = 4;
-        let list_start_y = 42;
-        let toggle_h = 30;
+        let tab_item_h = SidebarRects::TAB_ITEM_H;
+        let tab_spacing = SidebarRects::TAB_SPACING;
+        let list_start_y = SidebarRects::LIST_START_Y;
+        let toggle_h = SidebarRects::TOGGLE_H;
         let toggle_y = usable_h.saturating_sub(toggle_h + 8);
-        let list_max_y = toggle_y.saturating_sub(8);
-        let visible_items = if list_max_y > list_start_y {
-            (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-        } else {
-            0
-        };
+        let list_max_y = SidebarRects::list_max_y(usable_h);
 
         for (vis_idx, (idx, tab)) in tabs.iter().enumerate().skip(scroll_offset).enumerate() {
             let tab_y = list_start_y + vis_idx * (tab_item_h + tab_spacing);
@@ -287,34 +282,15 @@ impl TerminalRenderer {
         }
 
         // Barra de desplazamiento de pestañas si la lista excede el espacio visible
-        if tabs.len() > visible_items && visible_items > 0 {
-            let track_w = 6;
-            let track_x = sidebar_width.saturating_sub(track_w + 3);
-            let track_y = list_start_y;
-            let track_h = list_max_y.saturating_sub(list_start_y);
-
-            let total_tabs = tabs.len();
-            let thumb_h = (((visible_items as f32 / total_tabs as f32) * track_h as f32).max(18.0)
-                as usize)
-                .min(track_h);
-            let max_offset = total_tabs.saturating_sub(visible_items);
-            let travel = track_h.saturating_sub(thumb_h);
-            let thumb_y = if max_offset > 0 {
-                track_y + ((scroll_offset as f32 / max_offset as f32) * travel as f32) as usize
-            } else {
-                track_y
-            };
-
-            Self::draw_scrollbar(
+        if let Some((track, thumb)) =
+            Self::sidebar_scrollbar_geometry(sidebar_width, usable_h, tabs.len(), scroll_offset)
+        {
+            Self::draw_scrollbar_rects(
                 buffer,
                 width,
                 height,
-                track_x,
-                track_y,
-                track_w,
-                track_h,
-                thumb_y,
-                thumb_h,
+                track,
+                thumb,
                 is_scrollbar_hovered,
                 self.scrollbars_awake,
                 theme,
@@ -475,17 +451,12 @@ impl TerminalRenderer {
         total_tabs: usize,
         scroll_offset: usize,
     ) -> Option<(Rect, Rect)> {
-        let tab_item_h = 36;
-        let tab_spacing = 4;
-        let list_start_y = 42;
-        let toggle_h = 30;
-        let toggle_y = usable_h.saturating_sub(toggle_h + 8);
-        let list_max_y = toggle_y.saturating_sub(8);
-        let visible_items = if list_max_y > list_start_y {
-            (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-        } else {
-            0
-        };
+        let list_start_y = SidebarRects::LIST_START_Y;
+        let list_max_y = SidebarRects::list_max_y(usable_h);
+        if list_max_y <= list_start_y {
+            return None;
+        }
+        let visible_items = SidebarRects::visible_items(usable_h);
 
         if total_tabs <= visible_items || visible_items == 0 {
             return None;

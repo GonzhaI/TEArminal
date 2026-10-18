@@ -51,18 +51,11 @@ impl AxonApp {
                 crate::logger::log(&format!("PtyClosed recibido para pane_id {}", pane_id));
                 // El EOF del lector de un PTY ya sustituido (shell reabierto tras un agente) no debe cerrar
                 // el panel nuevo: solo cuenta si el hijo del PTY actual ha terminado de verdad.
-                let mut exited = false;
-                for _ in 0..20 {
-                    exited = self
-                        .tabs
-                        .iter_mut()
-                        .find_map(|t| t.find_pane_mut(pane_id))
-                        .is_some_and(|p| p.pty.is_child_exited());
-                    if exited {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
+                let exited = self
+                    .tabs
+                    .iter_mut()
+                    .find_map(|t| t.find_pane_mut(pane_id))
+                    .is_some_and(|p| p.pty.is_child_exited());
                 if exited {
                     self.on_shell_exit(pane_id);
                 }
@@ -104,7 +97,7 @@ impl AxonApp {
             .expect("Error al inicializar superficie de renderizado nativo");
 
         let scale_factor = window.scale_factor();
-        let mut renderer = TerminalRenderer::new(&self.config, scale_factor);
+        let renderer = TerminalRenderer::new(&self.config, scale_factor);
 
         let init_win_w = 1080;
         let init_win_h = 680;
@@ -137,98 +130,17 @@ impl AxonApp {
             }
         }
 
-        // Pre-renderizar el primer frame oscuro en la superficie antes de hacer visible la ventana.
-        // Esto garantiza que el usuario vea la terminal oscura de inmediato sin ningún destello blanco.
-        if let Ok(mut buffer) = surface.buffer_mut() {
-            buffer.fill(self.theme.background.to_u32_xrgb());
-            if self.sidebar_visible {
-                let sidebar_tabs: Vec<SidebarTabItem> = self
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, t)| SidebarTabItem {
-                        id: t.id,
-                        title: t.display_title(),
-                        is_active: idx == self.active_tab_index,
-                        has_unread: t.has_unread,
-                        pane_count: t.panes.len(),
-                        is_settings: t.is_settings,
-                        is_file_viewer: t.file_viewer.is_some(),
-                        is_preview: t.is_preview,
-                    })
-                    .collect();
-
-                renderer.render_sidebar(
-                    &mut buffer,
-                    initial_size.width as usize,
-                    initial_size.height as usize,
-                    SIDEBAR_WIDTH,
-                    status_bar_h,
-                    &sidebar_tabs,
-                    self.sidebar_scroll_offset,
-                    self.hovered_tab,
-                    self.hovered_close,
-                    self.hovered_new_tab,
-                    self.hovered_settings_btn,
-                    self.hovered_toggle_btn,
-                    self.sidebar_scrollbar_hovered,
-                    &self.theme,
-                );
-            }
-
-            let active_tab = &self.tabs[self.active_tab_index];
-            let pane_rects = active_tab.compute_pane_rects(offset, top_offset, total_w, total_h);
-            let dividers = active_tab.compute_dividers(offset, top_offset, total_w, total_h);
-            let has_multiple = pane_rects.len() > 1;
-
-            for rect in &pane_rects {
-                if let Some(pane) = active_tab.find_pane(rect.pane_id) {
-                    let is_active = rect.pane_id == active_tab.active_pane_id;
-                    renderer.render_pane(
-                        &mut buffer,
-                        initial_size.width as usize,
-                        initial_size.height as usize,
-                        rect.x,
-                        rect.y,
-                        rect.width,
-                        rect.height,
-                        &pane.terminal,
-                        &self.theme,
-                        true,
-                        is_active,
-                        has_multiple,
-                    );
-                }
-            }
-
-            let divider_color = crate::theme::Color::from_rgb(38, 38, 43);
-            for Divider {
-                rect: (dx, dy, dw, dh),
-                ..
-            } in dividers
-            {
-                TerminalRenderer::render_pane_divider(
-                    &mut buffer,
-                    initial_size.width as usize,
-                    initial_size.height as usize,
-                    dx,
-                    dy,
-                    dw,
-                    dh,
-                    divider_color,
-                );
-            }
-
-            buffer.present().ok();
-        }
-
-        // Mostrar la ventana una vez que el primer frame oscuro ya está listo y dibujado
-        window.set_visible(true);
-
         self.window = Some(window);
         self.context = Some(context);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
+
+        // Pre-renderizar el primer fotograma completo antes de hacer visible la ventana
+        // para evitar cualquier destello blanco y respetar la disposición activa (horizontal o vertical).
+        self.on_redraw();
+        if let Some(w) = &self.window {
+            w.set_visible(true);
+        }
     }
 
     pub(super) fn window_id(&self) -> Option<WindowId> {
@@ -470,6 +382,26 @@ impl AxonApp {
             self.scroll_hide_armed = false;
             if let Some(w) = &self.window {
                 w.request_redraw();
+            }
+        }
+
+        // Autoguardado diferido tras dejar de escribir (400 ms de inactividad)
+        if self.config.terminal.auto_save {
+            const AUTOSAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+            for tab in &mut self.tabs {
+                if let Some(viewer) = tab.file_viewer.as_mut() {
+                    if viewer.needs_autosave && viewer.remote_destination.is_none() {
+                        let deadline = viewer.last_edit_time + AUTOSAVE_DEBOUNCE;
+                        if now >= deadline {
+                            viewer.autosave_local();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        } else {
+                            earliest(&mut wake, deadline);
+                        }
+                    }
+                }
             }
         }
 

@@ -86,29 +86,16 @@ impl AxonApp {
                 self.tabs.len(),
                 self.sidebar_scroll_offset,
             ) {
-                let track_y = track.1;
-                let track_h = track.3;
-                let thumb_h = thumb.3;
-                let available_travel = track_h.saturating_sub(thumb_h);
-                let tab_item_h = 36;
-                let tab_spacing = 4;
-                let list_start_y = 42;
-                let toggle_h = 30;
-                let toggle_y = usable_h.saturating_sub(toggle_h + 8);
-                let list_max_y = toggle_y.saturating_sub(8);
-                let visible_items = if list_max_y > list_start_y {
-                    (list_max_y - list_start_y) / (tab_item_h + tab_spacing)
-                } else {
-                    1
-                };
+                let visible_items = crate::renderer::SidebarRects::visible_items(usable_h);
                 let max_offset = self.tabs.len().saturating_sub(visible_items);
-                if available_travel > 0 && max_offset > 0 {
-                    let target_thumb_top =
-                        (my as f32 - self.sidebar_scrollbar_drag_offset_y - track_y as f32)
-                            .clamp(0.0, available_travel as f32);
-                    let ratio = target_thumb_top / available_travel as f32;
-                    self.sidebar_scroll_offset =
-                        ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                    track,
+                    thumb,
+                    my as f32 - self.sidebar_scrollbar_drag_offset_y,
+                    max_offset,
+                ) {
+                    self.sidebar_scroll_offset = off;
+                    self.last_scroll_time = Instant::now();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -131,10 +118,6 @@ impl AxonApp {
                 status_bar_h,
                 &self.file_explorer,
             ) {
-                let track_y = track.1;
-                let track_h = track.3;
-                let thumb_h = thumb.3;
-                let available_travel = track_h.saturating_sub(thumb_h);
                 let (_panel_x, panel_y, _panel_w, panel_h) =
                     crate::explorer::FileExplorer::panel_geometry(
                         win_w,
@@ -149,13 +132,14 @@ impl AxonApp {
                 let list_max_y = panel_y + panel_h.saturating_sub(6);
                 let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
                 let max_offset = self.file_explorer.items.len().saturating_sub(visible_items);
-                if available_travel > 0 && max_offset > 0 {
-                    let target_thumb_top =
-                        (my as f32 - self.explorer_scrollbar_drag_offset_y - track_y as f32)
-                            .clamp(0.0, available_travel as f32);
-                    let ratio = target_thumb_top / available_travel as f32;
-                    self.file_explorer.scroll_offset =
-                        ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                    track,
+                    thumb,
+                    my as f32 - self.explorer_scrollbar_drag_offset_y,
+                    max_offset,
+                ) {
+                    self.file_explorer.scroll_offset = off;
+                    self.last_scroll_time = Instant::now();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -182,21 +166,18 @@ impl AxonApp {
                     if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
                         offset, top_offset, viewer_w, viewer_h, viewer, row_h,
                     ) {
-                        let track_y = track.1;
-                        let track_h = track.3;
-                        let thumb_h = thumb.3;
-                        let available_travel = track_h.saturating_sub(thumb_h);
                         let content_h = viewer_h.saturating_sub(38);
                         let visible_lines = (content_h / row_h.max(16)).max(1);
                         let max_offset = viewer.rows().len().saturating_sub(visible_lines);
 
-                        if available_travel > 0 && max_offset > 0 {
-                            let target_thumb_top =
-                                (my as f32 - self.viewer_scrollbar_drag_offset_y - track_y as f32)
-                                    .clamp(0.0, available_travel as f32);
-                            let ratio = target_thumb_top / available_travel as f32;
-                            viewer.scroll_offset =
-                                ((ratio * max_offset as f32).round() as usize).min(max_offset);
+                        if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                            track,
+                            thumb,
+                            my as f32 - self.viewer_scrollbar_drag_offset_y,
+                            max_offset,
+                        ) {
+                            viewer.scroll_offset = off;
+                            self.last_scroll_time = Instant::now();
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
@@ -506,9 +487,9 @@ impl AxonApp {
                 }
 
                 // Hover en pestañas y botón de cerrar "x"
-                let tab_item_h = 36;
-                let tab_spacing = 4;
-                let list_start_y = 42;
+                let tab_item_h = crate::renderer::SidebarRects::TAB_ITEM_H;
+                let tab_spacing = crate::renderer::SidebarRects::TAB_SPACING;
+                let list_start_y = crate::renderer::SidebarRects::LIST_START_Y;
                 let tab_x = 8;
                 let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
                 let list_max_y = toggle_btn_y.saturating_sub(8);
@@ -779,51 +760,8 @@ impl AxonApp {
                 st.hovered_reset_defaults = h_reset;
                 needs_redraw = true;
             }
-        } else if is_settings_active {
-            let st = &mut self.settings_page_state;
-            if st.hovered_section.is_some()
-                || st.hovered_theme.is_some()
-                || st.hovered_theme_mode.is_some()
-                || st.hovered_tab_layout.is_some()
-                || st.hovered_font_minus
-                || st.hovered_font_plus
-                || st.hovered_font_box
-                || st.hovered_spacing_minus
-                || st.hovered_spacing_plus
-                || st.hovered_spacing_box
-                || st.hovered_opacity_minus
-                || st.hovered_opacity_plus
-                || st.hovered_opacity_box
-                || st.hovered_cursor_blink
-                || st.hovered_ghostty_prompt
-                || st.hovered_copy_on_select
-                || st.hovered_status_bar
-                || st.hovered_file_explorer
-                || st.hovered_open_file
-                || st.hovered_reset_defaults
-            {
-                st.hovered_section = None;
-                st.hovered_theme = None;
-                st.hovered_theme_mode = None;
-                st.hovered_tab_layout = None;
-                st.hovered_font_minus = false;
-                st.hovered_font_plus = false;
-                st.hovered_font_box = false;
-                st.hovered_spacing_minus = false;
-                st.hovered_spacing_plus = false;
-                st.hovered_spacing_box = false;
-                st.hovered_opacity_minus = false;
-                st.hovered_opacity_plus = false;
-                st.hovered_opacity_box = false;
-                st.hovered_cursor_blink = false;
-                st.hovered_ghostty_prompt = false;
-                st.hovered_copy_on_select = false;
-                st.hovered_status_bar = false;
-                st.hovered_file_explorer = false;
-                st.hovered_open_file = false;
-                st.hovered_reset_defaults = false;
-                needs_redraw = true;
-            }
+        } else if is_settings_active && self.settings_page_state.clear_hover() {
+            needs_redraw = true;
         }
 
         // Detección de hover dentro del explorador lateral de archivos (si no es settings)
@@ -1187,6 +1125,75 @@ impl AxonApp {
             }
         }
 
+        // Hover en el indicador de modelo/agente de IA en la barra de estado inferior
+        let new_hovered_ai = if self.config.appearance.show_status_bar && !is_settings_active {
+            let active_tab = &self.tabs[self.active_tab_index];
+            let (ssh_host, ai_status) = if let Some(ref viewer) = active_tab.file_viewer {
+                (viewer.remote_destination.as_deref(), AiAgentStatus::None)
+            } else if let Some(pane) = active_tab
+                .panes
+                .iter()
+                .find(|p| p.id == active_tab.active_pane_id)
+            {
+                let s_host = pane
+                    .terminal
+                    .ssh_session
+                    .as_ref()
+                    .filter(|s| s.is_active)
+                    .map(|s| s.destination.as_str());
+                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                (s_host, ai)
+            } else {
+                (None, AiAgentStatus::None)
+            };
+            let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
+                ai_status,
+                ssh_host,
+                self.ai_usage.snapshot.active_model.as_deref(),
+                &self.theme,
+            );
+            let label_w = self
+                .renderer
+                .as_ref()
+                .map(|r| r.measure_ui_text(&badge_label, 11.0, true))
+                .unwrap_or(badge_label.len() * 7);
+            let sb_rects = StatusBarRects::compute(win_w, win_h, label_w);
+            if self.hovered_ai_badge {
+                let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
+                let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
+                StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
+            } else {
+                StatusBarRects::inside(mx, my, sb_rects.ai_badge)
+            }
+        } else {
+            false
+        };
+
+        if new_hovered_ai {
+            is_pointer = true;
+            let just_entered = !self.hovered_ai_badge;
+            let active_tab = &self.tabs[self.active_tab_index];
+            let (term_ref, ai_status) = if active_tab.file_viewer.is_some() {
+                (None, AiAgentStatus::None)
+            } else if let Some(pane) = active_tab
+                .panes
+                .iter()
+                .find(|p| p.id == active_tab.active_pane_id)
+            {
+                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                (Some(&pane.terminal), ai)
+            } else {
+                (None, AiAgentStatus::None)
+            };
+            if self.ai_usage.refresh_if_needed(term_ref, just_entered) {
+                self.spawn_ai_local_scan(ai_status);
+            }
+        }
+        if self.hovered_ai_badge != new_hovered_ai {
+            self.hovered_ai_badge = new_hovered_ai;
+            needs_redraw = true;
+        }
+
         if self.hovered_win_min != new_hovered_min {
             self.hovered_win_min = new_hovered_min;
             needs_redraw = true;
@@ -1200,8 +1207,12 @@ impl AxonApp {
             needs_redraw = true;
         }
 
-        // Detección de bordes para cursor de redimensionamiento (ventana frameless)
-        let border_resize_cursor = {
+        // Detección de bordes para cursor de redimensionamiento (solo en ventana flotante, no maximizada ni pantalla completa)
+        let can_resize = self
+            .window
+            .as_ref()
+            .is_some_and(|w| !w.is_maximized() && w.fullscreen().is_none());
+        let border_resize_cursor = if can_resize {
             let border_margin = 6;
             let at_left = mx < border_margin;
             let at_right = mx >= win_w.saturating_sub(border_margin);
@@ -1221,6 +1232,8 @@ impl AxonApp {
             } else {
                 None
             }
+        } else {
+            None
         };
 
         let divider_cursor = self.divider_at(mx, my).map(|d| d.cursor_icon());
