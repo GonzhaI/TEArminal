@@ -18,7 +18,7 @@ def create_sample_png():
                 # Línea verde de la curva
                 raw_data.extend((80, 230, 120, 255))
             else:
-                # Fondo oscuro gradiente estilo Ghostty
+                # Fondo oscuro gradiente
                 r = int(24 + (x / width) * 20)
                 g = int(26 + (y / height) * 20)
                 b = int(35 + (x / width) * 40)

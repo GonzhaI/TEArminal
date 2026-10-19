@@ -3,15 +3,48 @@
 use super::*;
 
 impl AxonApp {
-    /// Teclado: atajos de la aplicación y traducción de teclas a bytes para el PTY.
-    pub(super) fn on_key_pressed(
+    /// Teclado: atajos de la aplicación y traducción de teclas a bytes para el PTY con soporte de eventos Kitty.
+    pub(super) fn on_key_event(
         &mut self,
         logical_key: Key,
         text: Option<SmolStr>,
         physical_key: PhysicalKey,
+        event_type: KeyEventType,
     ) {
         // Si la terminal no tiene el foco activo, ignorar la entrada de teclado
         if !self.is_focused {
+            return;
+        }
+
+        // En eventos de liberación (Release), solo procesar si Kitty Keyboard Protocol tiene activo el flag 2 (report event types)
+        if event_type == KeyEventType::Release {
+            if let Some(active) = self.tabs[self.active_tab_index].active_pane() {
+                let flags = active.terminal.kitty_keyboard_flags;
+                if (flags & 2) != 0 {
+                    #[cfg(target_os = "windows")]
+                    let (ctrl, shift, alt, _altgr, win) = get_physical_modifiers();
+                    #[cfg(not(target_os = "windows"))]
+                    let (ctrl, shift, alt, _altgr, win) = (
+                        self.modifiers.control_key(),
+                        self.modifiers.shift_key(),
+                        self.modifiers.alt_key(),
+                        false,
+                        self.modifiers.super_key(),
+                    );
+                    if let Some(seq) = encode_kitty_key(
+                        &logical_key,
+                        physical_key,
+                        ctrl,
+                        shift,
+                        alt,
+                        win,
+                        event_type,
+                        flags,
+                    ) {
+                        active.pty.write_input(&seq);
+                    }
+                }
+            }
             return;
         }
 
@@ -142,6 +175,10 @@ impl AxonApp {
             .map(|t| t.is_settings)
             .unwrap_or(false);
         if active_is_settings {
+            if self.settings_page_state.editing_setting == Some(EditingSettingField::ThemeSearch) {
+                self.edit_theme_search(&logical_key, text.as_deref());
+                return;
+            }
             // Edición inline de campo numérico
             if let Some(editing_field) = self.settings_page_state.editing_setting {
                 match &logical_key {
@@ -174,6 +211,7 @@ impl AxonApp {
                                     let _ = self.config.save();
                                 }
                             }
+                            EditingSettingField::ThemeSearch => {}
                             EditingSettingField::WindowOpacity => {
                                 if let Ok(mut val) = input.parse::<f32>() {
                                     if val > 1.0 {
@@ -443,7 +481,7 @@ impl AxonApp {
             }
         }
 
-        // 8. Recarga dinámica de configuración Ghostty (Ctrl + Shift + ,)
+        // 8. Recarga dinámica de configuración (Ctrl + Shift + ,)
         if ctrl && shift && key_is_char(&logical_key, physical_key, ',') {
             self.reload_config();
             return;
@@ -464,7 +502,8 @@ impl AxonApp {
             let top_offset = self.top_offset();
             let status_bar_h = self.status_bar_height();
             let (_, _, _, panel_h) =
-                crate::explorer::FileExplorer::panel_geometry(800, win_h, top_offset, status_bar_h);
+                self.file_explorer
+                    .panel_geometry(800, win_h, top_offset, status_bar_h);
             let list_h = panel_h.saturating_sub(
                 crate::explorer::FileExplorer::HEADER_HEIGHT
                     + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
@@ -644,12 +683,7 @@ impl AxonApp {
                         return;
                     }
                     if let Some(sel_text) = viewer.selected_text() {
-                        if self.clipboard.is_none() {
-                            self.clipboard = arboard::Clipboard::new().ok();
-                        }
-                        if let Some(cb) = &mut self.clipboard {
-                            let _ = cb.set_text(sel_text);
-                        }
+                        super::clipboard::copy_text(&mut self.clipboard, sel_text);
                         viewer.delete_selection();
                         if auto_save {
                             viewer.schedule_autosave();
@@ -675,12 +709,7 @@ impl AxonApp {
                             .map(|line| format!("{}\n", line))
                     };
                     if let Some(txt) = text {
-                        if self.clipboard.is_none() {
-                            self.clipboard = arboard::Clipboard::new().ok();
-                        }
-                        if let Some(cb) = &mut self.clipboard {
-                            let _ = cb.set_text(txt);
-                        }
+                        super::clipboard::copy_text(&mut self.clipboard, txt);
                     }
                 }
                 return;
@@ -719,11 +748,7 @@ impl AxonApp {
                             } else if viewer.cursor_line > 0 {
                                 viewer.cursor_line -= 1;
                             }
-                            let line_len = viewer
-                                .lines
-                                .get(viewer.cursor_line)
-                                .map(|l| l.chars().count())
-                                .unwrap_or(0);
+                            let line_len = viewer.line_len(viewer.cursor_line);
                             if viewer.cursor_col > line_len {
                                 viewer.cursor_col = line_len;
                             }
@@ -744,19 +769,11 @@ impl AxonApp {
                             if ctrl {
                                 // Ctrl + Abajo: al final del archivo
                                 viewer.cursor_line = viewer.lines.len().saturating_sub(1);
-                                viewer.cursor_col = viewer
-                                    .lines
-                                    .get(viewer.cursor_line)
-                                    .map(|l| l.chars().count())
-                                    .unwrap_or(0);
+                                viewer.cursor_col = viewer.line_len(viewer.cursor_line);
                             } else if viewer.cursor_line + 1 < viewer.lines.len() {
                                 viewer.cursor_line += 1;
                             }
-                            let line_len = viewer
-                                .lines
-                                .get(viewer.cursor_line)
-                                .map(|l| l.chars().count())
-                                .unwrap_or(0);
+                            let line_len = viewer.line_len(viewer.cursor_line);
                             if viewer.cursor_col > line_len {
                                 viewer.cursor_col = line_len;
                             }
@@ -779,15 +796,13 @@ impl AxonApp {
                                     viewer.cursor_col = viewer.find_word_boundary_left();
                                 } else if viewer.cursor_line > 0 {
                                     viewer.cursor_line -= 1;
-                                    viewer.cursor_col =
-                                        viewer.lines[viewer.cursor_line].chars().count();
+                                    viewer.cursor_col = viewer.line_len(viewer.cursor_line);
                                 }
                             } else if viewer.cursor_col > 0 {
                                 viewer.cursor_col -= 1;
                             } else if viewer.cursor_line > 0 {
                                 viewer.cursor_line -= 1;
-                                viewer.cursor_col =
-                                    viewer.lines[viewer.cursor_line].chars().count();
+                                viewer.cursor_col = viewer.line_len(viewer.cursor_line);
                             }
                             if is_shift_nav {
                                 let start = viewer.selection.map(|s| s.0).unwrap_or(prev_pos);
@@ -803,12 +818,8 @@ impl AxonApp {
                             return;
                         }
                         Key::Named(NamedKey::ArrowRight) => {
+                            let line_len = viewer.line_len(viewer.cursor_line);
                             if ctrl {
-                                let line_len = viewer
-                                    .lines
-                                    .get(viewer.cursor_line)
-                                    .map(|l| l.chars().count())
-                                    .unwrap_or(0);
                                 if viewer.cursor_col < line_len {
                                     viewer.cursor_col = viewer.find_word_boundary_right();
                                 } else if viewer.cursor_line + 1 < viewer.lines.len() {
@@ -816,11 +827,6 @@ impl AxonApp {
                                     viewer.cursor_col = 0;
                                 }
                             } else {
-                                let line_len = viewer
-                                    .lines
-                                    .get(viewer.cursor_line)
-                                    .map(|l| l.chars().count())
-                                    .unwrap_or(0);
                                 if viewer.cursor_col < line_len {
                                     viewer.cursor_col += 1;
                                 } else if viewer.cursor_line + 1 < viewer.lines.len() {
@@ -863,11 +869,7 @@ impl AxonApp {
                             if ctrl {
                                 viewer.cursor_line = viewer.lines.len().saturating_sub(1);
                             }
-                            let line_len = viewer
-                                .lines
-                                .get(viewer.cursor_line)
-                                .map(|l| l.chars().count())
-                                .unwrap_or(0);
+                            let line_len = viewer.line_len(viewer.cursor_line);
                             viewer.cursor_col = line_len;
                             viewer.ensure_cursor_visible(visible_lines);
                             if is_shift_nav {
@@ -1060,7 +1062,7 @@ impl AxonApp {
             || (ctrl
                 && !shift
                 && key_is_char(&logical_key, physical_key, 'c')
-                && active.terminal.selection.is_some())
+                && active.terminal.has_selection())
         {
             if let Some(sel_text) = active.terminal.copy_selection_text() {
                 if let Some(cb) = &mut self.clipboard {
@@ -1072,6 +1074,31 @@ impl AxonApp {
                 }
             }
             return;
+        }
+
+        // Soporte de Kitty Keyboard Protocol (CSI u) cuando el cliente lo ha activado
+        let kitty_flags = active.terminal.kitty_keyboard_flags;
+        if kitty_flags != 0 {
+            if let Some(seq) = encode_kitty_key(
+                &logical_key,
+                physical_key,
+                ctrl,
+                shift,
+                alt,
+                win,
+                event_type,
+                kitty_flags,
+            ) {
+                let is_enter = matches!(
+                    physical_key,
+                    PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
+                ) || matches!(&logical_key, Key::Named(NamedKey::Enter));
+                if is_enter {
+                    active.terminal.note_enter_sent();
+                }
+                active.pty.write_input(&seq);
+                return;
+            }
         }
 
         // Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + Flechas)
@@ -1145,7 +1172,7 @@ impl AxonApp {
             return;
         }
 
-        // Limpiar pantalla y scrollback buffer al estilo Ghostty (Ctrl + Shift + K)
+        // Limpiar pantalla y scrollback buffer (Ctrl + Shift + K)
         if ctrl && shift && key_is_char(&logical_key, physical_key, 'k') {
             active.terminal.clear_scrollback();
             active.pty.write_input(b"\x0c");

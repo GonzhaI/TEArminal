@@ -88,7 +88,7 @@ impl TerminalRenderer {
         let bg_color = theme.background.to_u32_xrgb();
         let baseline_y = self.baseline_y;
 
-        // 1. Limpieza del área del panel con el fondo oficial Ghostty (#161618)
+        // 1. Limpieza del área del panel con el fondo del tema
         let max_y = (rect_y + rect_h).min(height);
         let max_x = (rect_x + rect_w).min(width);
         let clip: Clip = (rect_x, rect_y, max_x, max_y);
@@ -102,13 +102,7 @@ impl TerminalRenderer {
         let view_start = terminal.visible_line_start();
         let max_cols = max_x.saturating_sub(base_x) / self.char_width;
 
-        let norm_sel = terminal.selection.map(|sel| {
-            let (mut p1, mut p2) = (sel.start, sel.end);
-            if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
-                std::mem::swap(&mut p1, &mut p2);
-            }
-            (p1, p2)
-        });
+        let norm_sel = terminal.selection_ordered();
 
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
@@ -119,13 +113,51 @@ impl TerminalRenderer {
             let cols_in_row = row.len().min(max_cols);
             let row_slice = &row[..cols_in_row];
 
+            let global_row = view_start + row_idx;
+            let line_used = row
+                .iter()
+                .rposition(|cell| {
+                    !(cell.c == ' '
+                        && cell.bg == Color::TRANSPARENT
+                        && (cell.flags
+                            & (Cell::FLAG_UNDERLINE
+                                | Cell::FLAG_STRIKETHROUGH
+                                | Cell::FLAG_INVERSE))
+                            == 0)
+                })
+                .map_or(0, |i| i + 1);
+
             let row_sel = norm_sel.and_then(|(p1, p2)| {
-                if row_idx < p1.1 || row_idx > p2.1 {
+                if global_row < p1.1 || global_row > p2.1 {
                     None
+                } else if p1.1 == p2.1 {
+                    if p1.0 >= line_used && p2.0 >= line_used {
+                        None
+                    } else {
+                        let sc = p1.0.min(line_used);
+                        let ec = p2.0.min(line_used.saturating_sub(1));
+                        if sc <= ec {
+                            Some((sc, ec))
+                        } else {
+                            None
+                        }
+                    }
                 } else {
-                    let start_col = if row_idx == p1.1 { p1.0 } else { 0 };
-                    let end_col = if row_idx == p2.1 { p2.0 } else { usize::MAX };
-                    Some((start_col, end_col))
+                    let sc = if global_row == p1.1 {
+                        p1.0.min(line_used)
+                    } else {
+                        0
+                    };
+                    let ec = if global_row == p2.1 {
+                        p2.0.min(line_used.saturating_sub(1))
+                    } else {
+                        line_used.max(sc).min(cols_in_row.saturating_sub(1))
+                    };
+                    if sc <= ec {
+                        Some((sc, ec))
+                    } else {
+                        None
+                    }
                 }
             });
 
@@ -182,16 +214,29 @@ impl TerminalRenderer {
                 );
             }
 
-            // PASADA 2: Dibujar decoraciones y rasterizar/mezclar glifos
-            for (col_idx, cell) in row_slice.iter().enumerate() {
+            // PASADA 2: Dibujar decoraciones y rasterizar/mezclar glifos (con soporte para ligaduras tipográficas)
+            let is_cursor_row = terminal.scroll_offset == 0
+                && terminal.cursor_visible
+                && cursor_visible
+                && terminal.cursor_y == row_idx;
+
+            let mut col_idx = 0;
+            while col_idx < cols_in_row {
+                let cell = &row_slice[col_idx];
+
                 // Espaciador de carácter ancho o espacio sin decoración: nada más que pintar
                 let decorated = cell.underline() || cell.strikethrough();
                 if cell.width == 0 || (cell.c == ' ' && !decorated) {
+                    col_idx += 1;
                     continue;
                 }
 
                 let cell_x = base_x + (col_idx * self.char_width);
-                let fg_color = compute_cell_fg(cell, theme);
+                let fg_color = if row_sel.is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec) {
+                    theme.selection_fg
+                } else {
+                    compute_cell_fg(cell, theme)
+                };
 
                 // Subrayado (SGR 4) y tachado (SGR 9)
                 if cell.underline() {
@@ -222,18 +267,119 @@ impl TerminalRenderer {
                 }
 
                 if cell.c == ' ' {
+                    col_idx += 1;
                     continue;
                 }
 
-                // Obtener y mezclar glifo (con soporte completo de Nerd Fonts)
+                // Obtener y mezclar glifo (con soporte para clústeres de grafemas y Nerd Fonts)
+                if cell.is_grapheme() {
+                    if let Some(g) = terminal.grapheme_of(cell) {
+                        for ch in g.chars() {
+                            let glyph = self.get_glyph(ch, cell.bold());
+                            let glyph_x = cell_x as i32 + glyph.x_offset;
+                            let glyph_y =
+                                (cell_y + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
+                            blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                        }
+                    }
+                    col_idx += 1;
+                    continue;
+                }
+
+                // Ligaduras tipográficas (operadores y puntuación de programación: ->, !=, ==, ===, =>, etc.)
+                if self.ligatures
+                    && is_ligature_candidate(cell.c)
+                    && (!is_cursor_row || col_idx != terminal.cursor_x)
+                {
+                    let mut run_len = 1usize;
+                    let mut p_buf = [0u8; 8];
+                    p_buf[0] = cell.c as u8;
+
+                    while run_len < 8 && col_idx + run_len < cols_in_row {
+                        let next_col = col_idx + run_len;
+                        if is_cursor_row && next_col == terminal.cursor_x {
+                            break;
+                        }
+                        let next_cell = &row_slice[next_col];
+                        if next_cell.width != 1
+                            || !is_ligature_candidate(next_cell.c)
+                            || next_cell.bold() != cell.bold()
+                        {
+                            break;
+                        }
+                        let next_fg =
+                            if row_sel.is_some_and(|(sc, ec)| next_col >= sc && next_col <= ec) {
+                                theme.selection_fg
+                            } else {
+                                compute_cell_fg(next_cell, theme)
+                            };
+                        if next_fg != fg_color {
+                            break;
+                        }
+                        p_buf[run_len] = next_cell.c as u8;
+                        run_len += 1;
+                    }
+
+                    if run_len >= 2 {
+                        let shaped = self.shape_punctuation_run(&p_buf[..run_len], cell.bold());
+                        for k in 0..run_len {
+                            let cur_col = col_idx + k;
+                            let cur_cell_x = base_x + (cur_col * self.char_width);
+                            let cur_cell = &row_slice[cur_col];
+
+                            if k > 0 {
+                                if cur_cell.underline() {
+                                    let line_y = cell_y + self.row_height - 2;
+                                    fill_rect(
+                                        buffer,
+                                        width,
+                                        clip,
+                                        cur_cell_x,
+                                        line_y,
+                                        self.char_width,
+                                        1,
+                                        fg_color.to_u32_xrgb(),
+                                    );
+                                }
+                                if cur_cell.strikethrough() {
+                                    let line_y = cell_y + (self.row_height / 2);
+                                    fill_rect(
+                                        buffer,
+                                        width,
+                                        clip,
+                                        cur_cell_x,
+                                        line_y,
+                                        self.char_width,
+                                        1,
+                                        fg_color.to_u32_xrgb(),
+                                    );
+                                }
+                            }
+
+                            let gid = shaped.gids[k];
+                            let glyph = self.get_ligature_glyph(gid, cell.bold());
+                            if glyph.width > 0 {
+                                let glyph_x = cur_cell_x as i32 + glyph.x_offset;
+                                let glyph_y = (cell_y + baseline_y) as i32
+                                    - glyph.y_offset
+                                    - glyph.height as i32;
+                                blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                            }
+                        }
+                        col_idx += run_len;
+                        continue;
+                    }
+                }
+
                 let glyph = self.get_glyph(cell.c, cell.bold());
                 let glyph_x = cell_x as i32 + glyph.x_offset;
                 let glyph_y = (cell_y + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
                 blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                col_idx += 1;
             }
         }
 
-        // 3. Renderizar cursor sólido al estilo Ghostty
+        // 3. Renderizar cursor sólido
         if terminal.scroll_offset == 0
             && terminal.cursor_visible
             && cursor_visible
@@ -282,19 +428,40 @@ impl TerminalRenderer {
                 // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
                 if let Some(cell) = cell_under {
                     if cell.c != ' ' && cell.width > 0 {
-                        let glyph = self.get_glyph(cell.c, cell.bold());
-                        let glyph_x = cx as i32 + glyph.x_offset;
-                        let glyph_y =
-                            (cy + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
-                        blit_glyph(
-                            buffer,
-                            width,
-                            clip,
-                            glyph,
-                            glyph_x,
-                            glyph_y,
-                            theme.background,
-                        );
+                        if cell.is_grapheme() {
+                            if let Some(g) = terminal.grapheme_of(cell) {
+                                for ch in g.chars() {
+                                    let glyph = self.get_glyph(ch, cell.bold());
+                                    let glyph_x = cx as i32 + glyph.x_offset;
+                                    let glyph_y = (cy + baseline_y) as i32
+                                        - glyph.y_offset
+                                        - glyph.height as i32;
+                                    blit_glyph(
+                                        buffer,
+                                        width,
+                                        clip,
+                                        glyph,
+                                        glyph_x,
+                                        glyph_y,
+                                        theme.background,
+                                    );
+                                }
+                            }
+                        } else {
+                            let glyph = self.get_glyph(cell.c, cell.bold());
+                            let glyph_x = cx as i32 + glyph.x_offset;
+                            let glyph_y =
+                                (cy + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
+                            blit_glyph(
+                                buffer,
+                                width,
+                                clip,
+                                glyph,
+                                glyph_x,
+                                glyph_y,
+                                theme.background,
+                            );
+                        }
                     }
                 }
             } else {
@@ -384,7 +551,7 @@ impl TerminalRenderer {
 
         // 6. Si hay múltiples paneles, dibujar un borde sutil indicador en el panel activo
         if has_multiple_panes && is_active_pane {
-            let active_border = theme.ansi[2]; // Verde Ghostty sutil
+            let active_border = theme.ansi[2]; // Verde sutil del tema
                                                // Línea superior fina indicadora de foco
             Self::draw_rect(
                 buffer,
@@ -396,6 +563,50 @@ impl TerminalRenderer {
                 2,
                 active_border,
             );
+        }
+
+        // 7. Botón flotante "Ir hasta abajo" cuando hay desplazamiento hacia arriba
+        if terminal.scroll_offset > 0 && !terminal.is_alt_screen {
+            let (btn_x, btn_y, btn_w, btn_h) =
+                crate::renderer::pane_scroll_to_bottom_btn_rect(rect_x, rect_y, rect_w, rect_h);
+            if btn_x + btn_w <= width && btn_y + btn_h <= height {
+                let bg_color = if terminal.scroll_to_bottom_hovered {
+                    theme.surface_hover()
+                } else {
+                    theme.surface_bg()
+                };
+                let border_color = theme.border_color();
+                let icon_color = if terminal.scroll_to_bottom_hovered {
+                    theme.accent_color()
+                } else {
+                    theme.foreground
+                };
+
+                crate::ui::draw_rounded_rect(
+                    buffer, width, height, btn_x, btn_y, btn_w, btn_h, 6, bg_color,
+                );
+                crate::ui::stroke_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    btn_x,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                    6,
+                    border_color,
+                );
+                self.draw_lucide_icon(
+                    buffer,
+                    width,
+                    height,
+                    crate::ui::LucideIcon::ChevronDown,
+                    btn_x + btn_w / 2,
+                    btn_y + btn_h / 2,
+                    14.0,
+                    icon_color,
+                );
+            }
         }
     }
 

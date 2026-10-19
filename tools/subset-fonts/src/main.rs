@@ -52,24 +52,32 @@ fn lucide_codepoints() -> Vec<u32> {
     cps
 }
 
-fn write_subset(src: &Path, dst: &Path, codepoints: &[u32]) {
+fn write_subset(src: &Path, dst: &Path, codepoints: &[u32], keep_calt: bool) {
     let bytes = std::fs::read(src).unwrap_or_else(|e| panic!("{}: {e}", src.display()));
     let font = FontRef::new(&bytes).expect("fuente inválida");
 
     let mut unicodes = IntSet::<u32>::empty();
     unicodes.extend(codepoints.iter().copied());
-    // Sin shaping ni hinting: fontdue solo usa cmap + glyf + hmtx
+
     let mut drop_tables = IntSet::<Tag>::empty();
     drop_tables.extend([DSIG, KERN]);
-    for t in [b"GDEF", b"GSUB", b"GPOS"] {
-        drop_tables.insert(Tag::new(t));
+    drop_tables.insert(Tag::new(b"GDEF"));
+    drop_tables.insert(Tag::new(b"GPOS"));
+    if !keep_calt {
+        drop_tables.insert(Tag::new(b"GSUB"));
     }
+
     let mut scripts = IntSet::<Tag>::empty();
     scripts.invert();
     let mut name_ids = IntSet::<NameId>::empty();
     name_ids.extend([NameId::from(1), NameId::from(2)]);
     let mut langs = IntSet::<u16>::empty();
     langs.insert(0x0409);
+
+    let mut layout_features = IntSet::<Tag>::empty();
+    if keep_calt {
+        layout_features.insert(Tag::new(b"calt"));
+    }
 
     let plan = Plan::new(
         &IntSet::empty(),
@@ -78,7 +86,7 @@ fn write_subset(src: &Path, dst: &Path, codepoints: &[u32]) {
         SubsetFlags::default() | SubsetFlags::SUBSET_FLAGS_NO_HINTING,
         &drop_tables,
         &scripts,
-        &IntSet::empty(),
+        &layout_features,
         &name_ids,
         &langs,
     );
@@ -93,14 +101,51 @@ fn main() {
         let path = src.join(format!("JetBrainsMonoNerdFont-{weight}.ttf"));
         let cps = cmap_codepoints(&std::fs::read(&path).unwrap());
         let core: Vec<u32> = cps.iter().copied().filter(|&c| !is_pua(c)).collect();
-        write_subset(&path, &out.join(format!("JetBrainsMono-{weight}-Core.ttf")), &core);
+        write_subset(&path, &out.join(format!("JetBrainsMono-{weight}-Core.ttf")), &core, true);
         if weight == "Regular" {
             // Los iconos no tienen variante negrita
             let nerd: Vec<u32> = cps.iter().copied().filter(|c| (0xE000..=0xF8FF).contains(c)).collect();
             let md: Vec<u32> = cps.iter().copied().filter(|&c| c >= 0xF0000).collect();
-            write_subset(&path, &out.join("JetBrainsMono-Regular-Nerd.ttf"), &nerd);
-            write_subset(&path, &out.join("JetBrainsMono-Regular-NerdMd.ttf"), &md);
+            write_subset(&path, &out.join("JetBrainsMono-Regular-Nerd.ttf"), &nerd, false);
+            write_subset(&path, &out.join("JetBrainsMono-Regular-NerdMd.ttf"), &md, false);
         }
     }
-    write_subset(&src.join("lucide-full.ttf"), &out.join("lucide.ttf"), &lucide_codepoints());
+    write_subset(&src.join("lucide-full.ttf"), &out.join("lucide.ttf"), &lucide_codepoints(), false);
+}
+
+#[test]
+fn test_calt_ligatures_preserved_in_subsets() {
+    let out_dir = if Path::new(OUT).exists() {
+        Path::new(OUT)
+    } else {
+        Path::new("../../assets/fonts")
+    };
+    let test_strings = [
+        "->", "=>", "!=", "!==", "==", "===", "<=", ">=", ":=", "::",
+        "/*", "*/", "//", "///", "<!--", "-->", "##", "###", "&&", "||",
+        "??", "?.", "|=", "+=", "-=", "*=", "/=", "%=", "^=", "&=",
+        "~=", "<>", "><", "<<=", ">>=", "<<<", ">>>", "...", "..<", "**", "***",
+        "--", "---", "----", "----------------",
+    ];
+    for name in ["JetBrainsMono-Regular-Core.ttf", "JetBrainsMono-Bold-Core.ttf"] {
+        let bytes = std::fs::read(out_dir.join(name)).unwrap();
+        let face = rustybuzz::Face::from_slice(&bytes, 0).expect("fuente válida");
+        for &s in &test_strings {
+            let mut buf = rustybuzz::UnicodeBuffer::new();
+            buf.push_str(s);
+            let glyphs = rustybuzz::shape(&face, &[], buf);
+            assert_eq!(
+                glyphs.len(),
+                s.chars().count(),
+                "Fallo en '{}' para {}: longitud {} vs {}",
+                s,
+                name,
+                glyphs.len(),
+                s.chars().count()
+            );
+            for pos in glyphs.glyph_positions() {
+                assert_eq!(pos.x_advance, 600);
+            }
+        }
+    }
 }

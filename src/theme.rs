@@ -6,25 +6,12 @@ pub struct Color {
     pub a: u8,
 }
 
-#[allow(dead_code)]
 impl Color {
     pub const TRANSPARENT: Self = Self {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
-    };
-    pub const WHITE: Self = Self {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 255,
-    };
-    pub const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 255,
     };
 
     pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
@@ -35,24 +22,23 @@ impl Color {
         Self { r, g, b, a }
     }
 
-    pub const fn from_rgba_premultiplied(r: u8, g: u8, b: u8, a: u8) -> Self {
-        Self { r, g, b, a }
+    #[inline(always)]
+    pub const fn r(self) -> u8 {
+        self.r
     }
 
     #[inline(always)]
-    pub fn r(&self) -> u8 {
-        self.r
-    }
-    #[inline(always)]
-    pub fn g(&self) -> u8 {
+    pub const fn g(self) -> u8 {
         self.g
     }
+
     #[inline(always)]
-    pub fn b(&self) -> u8 {
+    pub const fn b(self) -> u8 {
         self.b
     }
+
     #[inline(always)]
-    pub fn a(&self) -> u8 {
+    pub const fn a(self) -> u8 {
         self.a
     }
 
@@ -80,103 +66,123 @@ impl Color {
     }
 }
 
+/// Temas de iterm2-color-schemes (`.itermcolors` originales de `schemes/`), generados con `tools/fetch-themes.ps1`.
+/// Una línea por tema: nombre, fondo, texto, cursor, selección (fondo y texto) y 16 colores ANSI.
+static THEMES: &str = include_str!("../assets/themes.txt");
+
 #[derive(Clone, Debug)]
 pub struct Theme {
     pub background: Color,
     pub foreground: Color,
     pub cursor: Color,
     pub selection: Color,
+    pub selection_fg: Color,
     pub ansi: [Color; 16],
 }
 
+impl Default for Theme {
+    fn default() -> Self {
+        Self::from_name(Self::DEFAULT_DARK)
+    }
+}
+
+/// Clave de comparación de nombres: sin mayúsculas, acentos ni separadores
+/// (`tokyo night`, `Tokyo-Night` y `TokyoNight` coinciden).
+fn name_key(name: &str) -> String {
+    name.chars()
+        .map(|c| if c == 'é' || c == 'É' { 'e' } else { c })
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn first_field(line: &str) -> &str {
+    line.split('\t').next().unwrap_or("")
+}
+
+fn hex(s: &str) -> Option<Color> {
+    let v = u32::from_str_radix(s, 16).ok().filter(|_| s.len() == 6)?;
+    Some(Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
+/// Interpreta una línea de `themes.txt`; `None` si está malformada.
+fn parse_line(line: &str) -> Option<(&str, Theme)> {
+    let mut f = line.split('\t');
+    let name = f.next()?;
+    let background = hex(f.next()?)?;
+    let foreground = hex(f.next()?)?;
+    let cursor = f.next().and_then(hex).unwrap_or(foreground);
+    let selection = f.next().and_then(hex).unwrap_or(foreground);
+    let selection_fg = f.next().and_then(hex).unwrap_or(background);
+    let mut ansi = [Color::TRANSPARENT; 16];
+    for slot in &mut ansi {
+        *slot = hex(f.next()?)?;
+    }
+    let theme = Theme {
+        background,
+        foreground,
+        cursor,
+        selection,
+        selection_fg,
+        ansi,
+    };
+    Some((name, theme))
+}
+
 impl Theme {
-    /// Paleta oficial y firma de Ghostty Default StyleDark
-    pub fn ghostty_default_styledark() -> Self {
-        Self {
-            background: Color::from_rgb(22, 22, 24), // #161618 - Carbón profundo Ghostty
-            foreground: Color::from_rgb(230, 230, 235), // #e6e6eb - Texto nítido alto contraste
-            cursor: Color::from_rgb(255, 255, 255),  // #ffffff - Cursor blanco sólido
-            selection: Color::from_rgba(54, 61, 89, 220), // #363d59 - Selección azul pizarra Ghostty
-            ansi: [
-                // Colores normales (0 - 7)
-                Color::from_rgb(28, 28, 32),    // 0: Negro
-                Color::from_rgb(244, 56, 65),   // 1: Rojo Ghostty
-                Color::from_rgb(81, 226, 122),  // 2: Verde vibrante
-                Color::from_rgb(246, 196, 66),  // 3: Amarillo
-                Color::from_rgb(78, 146, 249),  // 4: Azul moderno
-                Color::from_rgb(207, 112, 255), // 5: Magenta
-                Color::from_rgb(54, 214, 214),  // 6: Cian
-                Color::from_rgb(225, 227, 232), // 7: Blanco
-                // Colores brillantes (8 - 15)
-                Color::from_rgb(92, 95, 110), // 8: Gris / Negro brillante
-                Color::from_rgb(255, 107, 112), // 9: Rojo brillante
-                Color::from_rgb(120, 247, 156), // 10: Verde brillante
-                Color::from_rgb(255, 220, 107), // 11: Amarillo brillante
-                Color::from_rgb(120, 175, 255), // 12: Azul brillante
-                Color::from_rgb(223, 148, 255), // 13: Magenta brillante
-                Color::from_rgb(101, 237, 237), // 14: Cian brillante
-                Color::from_rgb(255, 255, 255), // 15: Blanco brillante
-            ],
-        }
+    pub const DEFAULT_DARK: &'static str = "Catppuccin Frappe";
+    pub const DEFAULT_LIGHT: &'static str = "Catppuccin Latte";
+
+    /// Nombres de todos los temas incorporados, en orden alfabético.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        THEMES.lines().map(first_field)
     }
 
-    /// Tema oficial Catppuccin Frappé
-    pub fn catppuccin_frappe() -> Self {
-        Self {
-            background: Color::from_rgb(48, 52, 70),    // #303446 (Base)
-            foreground: Color::from_rgb(198, 208, 245), // #c6d0f5 (Text)
-            cursor: Color::from_rgb(242, 213, 207),     // #f2d5cf (Rosewater)
-            selection: Color::from_rgba(81, 87, 109, 220), // #51576d (Surface 1)
-            ansi: [
-                Color::from_rgb(81, 87, 109),   // 0: Surface 1 (#51576d)
-                Color::from_rgb(231, 130, 132), // 1: Red (#e78284)
-                Color::from_rgb(166, 209, 137), // 2: Green (#a6d189)
-                Color::from_rgb(229, 200, 144), // 3: Yellow (#e5c890)
-                Color::from_rgb(140, 170, 238), // 4: Blue (#8caaee)
-                Color::from_rgb(202, 158, 230), // 5: Mauve (#ca9ee6)
-                Color::from_rgb(129, 200, 190), // 6: Teal (#81c8be)
-                Color::from_rgb(181, 191, 226), // 7: Subtext 1 (#b5bfe2)
-                Color::from_rgb(98, 104, 128),  // 8: Surface 2 (#626880)
-                Color::from_rgb(234, 153, 156), // 9: Maroon (#ea999c)
-                Color::from_rgb(166, 209, 137), // 10: Bright Green
-                Color::from_rgb(239, 159, 118), // 11: Peach (#ef9f76)
-                Color::from_rgb(133, 193, 220), // 12: Sapphire (#85c1dc)
-                Color::from_rgb(244, 184, 228), // 13: Pink (#f4b8e4)
-                Color::from_rgb(153, 209, 219), // 14: Sky (#99d1db)
-                Color::from_rgb(198, 208, 245), // 15: Text (#c6d0f5)
-            ],
+    /// Temas cuyo nombre contiene `filter` (sin distinguir mayúsculas ni separadores).
+    pub fn search(filter: &str) -> Vec<&'static str> {
+        let key = name_key(filter);
+        if key.is_empty() {
+            return Self::names().collect();
         }
+        Self::names()
+            .filter(|n| name_key(n).contains(&key))
+            .collect()
     }
 
-    /// Tema oficial Catppuccin Latte (Modo Claro Cálido)
-    pub fn catppuccin_latte() -> Self {
-        Self {
-            background: Color::from_rgb(239, 241, 245), // #eff1f5 (Base)
-            foreground: Color::from_rgb(76, 79, 105),   // #4c4f69 (Text)
-            cursor: Color::from_rgb(220, 138, 120),     // #dc8a78 (Rosewater)
-            selection: Color::from_rgba(188, 192, 204, 220), // #bcc0cc (Surface 1)
-            ansi: [
-                Color::from_rgb(188, 192, 204), // 0: Surface 1 (#bcc0cc)
-                Color::from_rgb(210, 15, 57),   // 1: Red (#d20f39)
-                Color::from_rgb(64, 160, 43),   // 2: Green (#40a02b)
-                Color::from_rgb(223, 142, 29),  // 3: Yellow (#df8e1d)
-                Color::from_rgb(30, 102, 245),  // 4: Blue (#1e66f5)
-                Color::from_rgb(136, 57, 239),  // 5: Mauve (#8839ef)
-                Color::from_rgb(23, 146, 153),  // 6: Teal (#179299)
-                Color::from_rgb(92, 95, 119),   // 7: Subtext 1 (#5c5f77)
-                Color::from_rgb(172, 176, 190), // 8: Surface 2 (#acb0be)
-                Color::from_rgb(230, 69, 83),   // 9: Maroon (#e64553)
-                Color::from_rgb(64, 160, 43),   // 10: Bright Green
-                Color::from_rgb(254, 100, 11),  // 11: Peach (#fe640b)
-                Color::from_rgb(32, 159, 181),  // 12: Sapphire (#209fb5)
-                Color::from_rgb(234, 118, 203), // 13: Pink (#ea76cb)
-                Color::from_rgb(4, 165, 229),   // 14: Sky (#04a5e5)
-                Color::from_rgb(76, 79, 105),   // 15: Text (#4c4f69)
-            ],
+    fn find(name: &str) -> Option<(&'static str, Theme)> {
+        // Camino rápido: el nombre exacto de la lista (la interfaz lo usa en cada fila dibujada)
+        if let Some(line) = THEMES.lines().find(|l| first_field(l) == name) {
+            return parse_line(line);
         }
+        let key = name_key(name);
+        let key = match key.as_str() {
+            // Valores de versiones anteriores de `axon.toml`
+            "frappe" | "dark" | "default" => name_key(Self::DEFAULT_DARK),
+            "latte" => name_key(Self::DEFAULT_LIGHT),
+            "onedark" => name_key("Atom One Dark"),
+            "solarizeddark" => name_key("iTerm2 Solarized Dark"),
+            _ => key,
+        };
+        THEMES
+            .lines()
+            .find(|l| name_key(first_field(l)) == key)
+            .and_then(parse_line)
     }
 
-    /// Determina si el tema activo es de tonalidad clara (Light Mode)
+    /// Nombre canónico del tema configurado (el de por defecto si no existe).
+    pub fn canonical_name(name: &str) -> &'static str {
+        Self::find(name).map_or(Self::DEFAULT_DARK, |(n, _)| n)
+    }
+
+    /// Resuelve el tema configurado; si no existe, usa el de por defecto.
+    pub fn from_name(name: &str) -> Self {
+        Self::find(name)
+            .or_else(|| Self::find(Self::DEFAULT_DARK))
+            .map(|(_, t)| t)
+            .expect("el tema por defecto está en themes.txt")
+    }
+
+    /// Determina si el tema activo es de tonalidad clara
     #[inline]
     pub fn is_light(&self) -> bool {
         let lum = 0.2126 * (self.background.r as f32)
@@ -185,350 +191,59 @@ impl Theme {
         lum > 140.0
     }
 
-    /// Color de fondo optimizado para la barra lateral según la paleta activa
-    pub fn sidebar_bg(&self) -> Color {
-        if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(230, 233, 239) // #e6e9ef Catppuccin Mantle (Latte)
-        } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(41, 44, 60) // #292c3c Catppuccin Mantle (Frappé)
-        } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(18, 18, 20) // Ghostty sidebar
-        } else if self.is_light() {
+    /// Determina si el tema activo es de tonalidad oscura
+    #[inline]
+    pub fn is_dark(&self) -> bool {
+        !self.is_light()
+    }
+
+    /// Desplaza el fondo hacia el blanco (tema oscuro) o hacia el negro (tema claro).
+    fn shade(&self, dark_up: u8, light_down: u8) -> Color {
+        let b = self.background;
+        if self.is_light() {
             Color::from_rgb(
-                (self.background.r as f32 * 0.94).round() as u8,
-                (self.background.g as f32 * 0.94).round() as u8,
-                (self.background.b as f32 * 0.94).round() as u8,
+                b.r.saturating_sub(light_down),
+                b.g.saturating_sub(light_down),
+                b.b.saturating_sub(light_down),
             )
         } else {
             Color::from_rgb(
-                (self.background.r as f32 * 0.84).round() as u8,
-                (self.background.g as f32 * 0.84).round() as u8,
-                (self.background.b as f32 * 0.84).round() as u8,
+                b.r.saturating_add(dark_up),
+                b.g.saturating_add(dark_up),
+                b.b.saturating_add(dark_up),
             )
         }
+    }
+
+    /// Fondo de la barra lateral: algo más oscuro que el terminal
+    pub fn sidebar_bg(&self) -> Color {
+        let k = if self.is_light() { 0.94 } else { 0.84 };
+        let b = self.background;
+        Color::from_rgb(
+            (b.r as f32 * k).round() as u8,
+            (b.g as f32 * k).round() as u8,
+            (b.b as f32 * k).round() as u8,
+        )
     }
 
     /// Color divisorio sutil y fino acorde al tema
     pub fn border_color(&self) -> Color {
-        if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(188, 192, 204) // Catppuccin Surface 1 (Latte)
-        } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(71, 76, 100) // Catppuccin Surface 1 border (Frappé)
-        } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(48, 48, 56) // Ghostty border nítido
-        } else if self.is_light() {
-            Color::from_rgb(
-                self.background.r.saturating_sub(35),
-                self.background.g.saturating_sub(35),
-                self.background.b.saturating_sub(35),
-            )
-        } else {
-            Color::from_rgb(
-                self.background.r.saturating_add(26),
-                self.background.g.saturating_add(26),
-                self.background.b.saturating_add(32),
-            )
-        }
+        self.shade(28, 35)
     }
 
     /// Color de superficie para tarjetas, ítems activos y botones
     pub fn surface_bg(&self) -> Color {
-        if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(220, 224, 232) // #dce0e8 Catppuccin Crust / Surface 0 (Latte)
-        } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(62, 66, 88) // Catppuccin Surface 0
-        } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(34, 34, 39) // Ghostty surface
-        } else if self.is_light() {
-            Color::from_rgb(
-                self.background.r.saturating_sub(20),
-                self.background.g.saturating_sub(20),
-                self.background.b.saturating_sub(20),
-            )
-        } else {
-            Color::from_rgb(
-                self.background.r.saturating_add(18),
-                self.background.g.saturating_add(18),
-                self.background.b.saturating_add(24),
-            )
-        }
+        self.shade(20, 20)
     }
 
     /// Color de superficie para estados hover
     pub fn surface_hover(&self) -> Color {
-        if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(172, 176, 190) // Catppuccin Surface 1 (Latte)
-        } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(86, 92, 116) // Catppuccin Surface 1 (Frappé)
-        } else if self.background == Color::from_rgb(22, 22, 24) {
-            Color::from_rgb(46, 46, 54) // Ghostty hover
-        } else if self.is_light() {
-            Color::from_rgb(
-                self.background.r.saturating_sub(40),
-                self.background.g.saturating_sub(40),
-                self.background.b.saturating_sub(40),
-            )
-        } else {
-            Color::from_rgb(
-                self.background.r.saturating_add(32),
-                self.background.g.saturating_add(32),
-                self.background.b.saturating_add(40),
-            )
-        }
+        self.shade(36, 40)
     }
 
     /// Color de acento de interfaz primario
     pub fn accent_color(&self) -> Color {
-        if self.background == Color::from_rgb(239, 241, 245) {
-            Color::from_rgb(30, 102, 245) // Catppuccin Blue (#1e66f5)
-        } else if self.background == Color::from_rgb(48, 52, 70) {
-            Color::from_rgb(202, 158, 230) // Catppuccin Mauve (#ca9ee6)
-        } else {
-            self.ansi[2] // Verde vibrante Ghostty / ANSI green
-        }
-    }
-
-    /// Alias de compatibilidad para la paleta Ghostty
-    #[allow(dead_code)]
-    pub fn ghostty_dark() -> Self {
-        Self::ghostty_default_styledark()
-    }
-
-    /// Tema Atom / VS Code One Dark
-    pub fn one_dark() -> Self {
-        Self {
-            background: Color::from_rgb(40, 44, 52),
-            foreground: Color::from_rgb(171, 178, 191),
-            cursor: Color::from_rgb(82, 139, 255),
-            selection: Color::from_rgba(62, 68, 81, 220),
-            ansi: [
-                Color::from_rgb(40, 44, 52),
-                Color::from_rgb(224, 108, 117),
-                Color::from_rgb(152, 195, 121),
-                Color::from_rgb(229, 192, 123),
-                Color::from_rgb(97, 175, 239),
-                Color::from_rgb(198, 120, 221),
-                Color::from_rgb(86, 182, 194),
-                Color::from_rgb(171, 178, 191),
-                Color::from_rgb(92, 99, 112),
-                Color::from_rgb(224, 108, 117),
-                Color::from_rgb(152, 195, 121),
-                Color::from_rgb(229, 192, 123),
-                Color::from_rgb(97, 175, 239),
-                Color::from_rgb(198, 120, 221),
-                Color::from_rgb(86, 182, 194),
-                Color::from_rgb(255, 255, 255),
-            ],
-        }
-    }
-
-    /// Tema Tokyo Night
-    pub fn tokyo_night() -> Self {
-        Self {
-            background: Color::from_rgb(26, 27, 38),
-            foreground: Color::from_rgb(192, 202, 245),
-            cursor: Color::from_rgb(192, 202, 245),
-            selection: Color::from_rgba(51, 70, 126, 220),
-            ansi: [
-                Color::from_rgb(21, 22, 30),
-                Color::from_rgb(247, 118, 142),
-                Color::from_rgb(158, 206, 106),
-                Color::from_rgb(224, 175, 104),
-                Color::from_rgb(122, 162, 247),
-                Color::from_rgb(187, 154, 247),
-                Color::from_rgb(125, 207, 255),
-                Color::from_rgb(169, 177, 214),
-                Color::from_rgb(65, 72, 104),
-                Color::from_rgb(247, 118, 142),
-                Color::from_rgb(158, 206, 106),
-                Color::from_rgb(224, 175, 104),
-                Color::from_rgb(122, 162, 247),
-                Color::from_rgb(187, 154, 247),
-                Color::from_rgb(125, 207, 255),
-                Color::from_rgb(192, 202, 245),
-            ],
-        }
-    }
-
-    /// Tema Monokai Pro
-    pub fn monokai_pro() -> Self {
-        Self {
-            background: Color::from_rgb(45, 42, 46),
-            foreground: Color::from_rgb(252, 252, 250),
-            cursor: Color::from_rgb(255, 216, 102),
-            selection: Color::from_rgba(64, 62, 65, 220),
-            ansi: [
-                Color::from_rgb(45, 42, 46),
-                Color::from_rgb(255, 97, 136),
-                Color::from_rgb(169, 220, 103),
-                Color::from_rgb(255, 216, 102),
-                Color::from_rgb(120, 220, 232),
-                Color::from_rgb(171, 157, 242),
-                Color::from_rgb(120, 220, 232),
-                Color::from_rgb(252, 252, 250),
-                Color::from_rgb(114, 112, 114),
-                Color::from_rgb(255, 97, 136),
-                Color::from_rgb(169, 220, 103),
-                Color::from_rgb(255, 216, 102),
-                Color::from_rgb(120, 220, 232),
-                Color::from_rgb(171, 157, 242),
-                Color::from_rgb(120, 220, 232),
-                Color::from_rgb(255, 255, 255),
-            ],
-        }
-    }
-
-    /// Tema Ártico Nord
-    pub fn nord() -> Self {
-        Self {
-            background: Color::from_rgb(46, 52, 64),
-            foreground: Color::from_rgb(216, 222, 233),
-            cursor: Color::from_rgb(216, 222, 233),
-            selection: Color::from_rgba(67, 76, 94, 220),
-            ansi: [
-                Color::from_rgb(59, 66, 82),
-                Color::from_rgb(191, 97, 106),
-                Color::from_rgb(163, 190, 140),
-                Color::from_rgb(235, 203, 139),
-                Color::from_rgb(129, 161, 193),
-                Color::from_rgb(180, 142, 173),
-                Color::from_rgb(136, 192, 208),
-                Color::from_rgb(229, 233, 240),
-                Color::from_rgb(76, 86, 106),
-                Color::from_rgb(191, 97, 106),
-                Color::from_rgb(163, 190, 140),
-                Color::from_rgb(235, 203, 139),
-                Color::from_rgb(129, 161, 193),
-                Color::from_rgb(180, 142, 173),
-                Color::from_rgb(143, 188, 187),
-                Color::from_rgb(236, 239, 244),
-            ],
-        }
-    }
-
-    /// Tema Solarized Dark
-    pub fn solarized_dark() -> Self {
-        Self {
-            background: Color::from_rgb(0, 43, 54),
-            foreground: Color::from_rgb(131, 148, 150),
-            cursor: Color::from_rgb(147, 161, 161),
-            selection: Color::from_rgba(7, 54, 66, 220),
-            ansi: [
-                Color::from_rgb(7, 54, 66),
-                Color::from_rgb(220, 50, 47),
-                Color::from_rgb(133, 153, 0),
-                Color::from_rgb(181, 137, 0),
-                Color::from_rgb(38, 139, 210),
-                Color::from_rgb(211, 54, 130),
-                Color::from_rgb(42, 161, 152),
-                Color::from_rgb(238, 232, 213),
-                Color::from_rgb(0, 43, 54),
-                Color::from_rgb(203, 75, 22),
-                Color::from_rgb(88, 110, 117),
-                Color::from_rgb(101, 123, 131),
-                Color::from_rgb(131, 148, 150),
-                Color::from_rgb(108, 113, 196),
-                Color::from_rgb(147, 161, 161),
-                Color::from_rgb(253, 246, 227),
-            ],
-        }
-    }
-
-    /// Lista de temas oficiales disponibles en Axon
-    pub const AVAILABLE_THEMES: &'static [&'static str] = &[
-        "Ghostty Dark",
-        "Catppuccin Frappé",
-        "Catppuccin Latte",
-        "One Dark",
-        "Tokyo Night",
-        "Monokai Pro",
-        "Nord",
-        "Solarized Dark",
-    ];
-
-    /// Comprueba de forma flexible si dos nombres de tema corresponden al mismo tema visual
-    pub fn is_same_theme(cfg_theme: &str, display_name: &str) -> bool {
-        let c1 = cfg_theme.trim().to_lowercase().replace(['-', '_'], " ");
-        let c2 = display_name.trim().to_lowercase().replace(['-', '_'], " ");
-        if c1 == c2 {
-            return true;
-        }
-        if (c1.contains("frappe") || c1.contains("frappé") || c1 == "dark" || c1 == "default")
-            && (c2.contains("frappe") || c2.contains("frappé"))
-        {
-            return true;
-        }
-        if c1.contains("latte") && c2.contains("latte") {
-            return true;
-        }
-        if c1.contains("ghostty") && c2.contains("ghostty") {
-            return true;
-        }
-        if c1.contains("one") && c2.contains("one") {
-            return true;
-        }
-        if c1.contains("tokyo") && c2.contains("tokyo") {
-            return true;
-        }
-        if c1.contains("monokai") && c2.contains("monokai") {
-            return true;
-        }
-        if c1.contains("nord") && c2.contains("nord") {
-            return true;
-        }
-        if c1.contains("solarized") && c2.contains("solarized") {
-            return true;
-        }
-        false
-    }
-
-    /// Resuelve el tema configurado por nombre
-    pub fn from_name(name: &str) -> Self {
-        let clean = name.trim().to_lowercase().replace(['-', '_'], " ");
-        if clean.contains("ghostty") {
-            Self::ghostty_default_styledark()
-        } else if clean.contains("latte") {
-            Self::catppuccin_latte()
-        } else if clean.contains("catppuccin")
-            || clean.contains("frappe")
-            || clean.contains("frappé")
-            || clean == "dark"
-            || clean == "default"
-        {
-            Self::catppuccin_frappe()
-        } else if clean.contains("one") {
-            Self::one_dark()
-        } else if clean.contains("tokyo") {
-            Self::tokyo_night()
-        } else if clean.contains("monokai") {
-            Self::monokai_pro()
-        } else if clean.contains("nord") {
-            Self::nord()
-        } else if clean.contains("solarized") {
-            Self::solarized_dark()
-        } else {
-            Self::catppuccin_frappe()
-        }
-    }
-
-    /// Resuelve la paleta activa combinando `theme_mode` ("system", "light", "dark") y `theme`
-    pub fn from_mode_and_name(mode: &str, name: &str) -> Self {
-        if mode.eq_ignore_ascii_case("system") {
-            if is_windows_system_light_mode() {
-                Self::catppuccin_latte()
-            } else {
-                let dark = Self::from_name(name);
-                if dark.is_light() {
-                    Self::catppuccin_frappe()
-                } else {
-                    dark
-                }
-            }
-        } else if mode.eq_ignore_ascii_case("light") {
-            Self::catppuccin_latte()
-        } else {
-            Self::from_name(name)
-        }
+        self.ansi[2]
     }
 
     /// Resuelve índices de 256 colores estándar ANSI
@@ -592,32 +307,46 @@ pub fn is_windows_system_light_mode() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_catppuccin_latte_and_light_mode() {
-        let latte = crate::theme::Theme::catppuccin_latte();
-        assert!(
-            latte.is_light(),
-            "Catppuccin Latte debe reportar is_light() == true"
-        );
+    fn test_all_builtin_themes_parse() {
+        let lines = THEMES.lines().count();
+        assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
+        assert_eq!(Theme::names().count(), lines);
+        assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
+    }
+
+    #[test]
+    fn test_theme_matches_upstream_values() {
+        let t = Theme::from_name("Catppuccin Frappe");
+        assert_eq!(t.background, Color::from_rgb(0x30, 0x34, 0x46));
+        assert_eq!(t.foreground, Color::from_rgb(0xc6, 0xd0, 0xf5));
+        assert_eq!(t.selection, Color::from_rgb(0xf2, 0xd5, 0xcf));
+        assert_eq!(t.ansi[1], Color::from_rgb(0xe7, 0x82, 0x84));
+        assert!(!t.is_light());
+        assert!(Theme::from_name("Catppuccin Latte").is_light());
+    }
+
+    #[test]
+    fn test_theme_name_lookup() {
+        assert_eq!(Theme::canonical_name("tokyo night"), "TokyoNight");
+        assert_eq!(Theme::canonical_name("DRACULA"), "Dracula");
+        // Valores de configuraciones antiguas
+        assert_eq!(Theme::canonical_name("frappe"), Theme::DEFAULT_DARK);
         assert_eq!(
-            latte.background,
-            crate::theme::Color::from_rgb(0xef, 0xf1, 0xf5)
+            Theme::canonical_name("Catppuccin Frappé"),
+            Theme::DEFAULT_DARK
         );
+        assert_eq!(Theme::canonical_name("latte"), Theme::DEFAULT_LIGHT);
+        assert_eq!(Theme::canonical_name("one dark"), "Atom One Dark");
         assert_eq!(
-            latte.foreground,
-            crate::theme::Color::from_rgb(0x4c, 0x4f, 0x69)
+            Theme::canonical_name("solarized dark"),
+            "iTerm2 Solarized Dark"
         );
-
-        let frappe = crate::theme::Theme::catppuccin_frappe();
-        assert!(
-            !frappe.is_light(),
-            "Catppuccin Frappé debe reportar is_light() == false"
-        );
-
-        assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Latte"));
-        assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Frappé"));
-
-        let resolved_latte = crate::theme::Theme::from_name("latte");
-        assert!(resolved_latte.is_light());
+        // Desconocido: tema por defecto
+        assert_eq!(Theme::canonical_name("no existe"), Theme::DEFAULT_DARK);
+        assert!(!Theme::search("solarized dark").is_empty());
+        assert!(Theme::search("zzzz").is_empty());
     }
 }

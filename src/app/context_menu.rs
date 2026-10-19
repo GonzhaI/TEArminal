@@ -32,12 +32,16 @@ pub enum MenuAction {
     ClearTerminal,
     // Pestañas y ventana
     PinTab(usize),
+    MoveTabToNewWindow(usize),
+    MoveTabToOtherWindow(usize),
     CloseTab(usize),
     CloseOtherTabs(usize),
     NewTab,
     NewWindow,
     OpenSettings,
     ToggleExplorer,
+    TriggerUpdate,
+    OpenUrl(String),
     // Explorador
     ExplorerOpen(usize),
     ExplorerCopyPath(PathBuf),
@@ -211,20 +215,14 @@ impl AxonApp {
         } else if self.tabs[self.active_tab_index].is_settings {
             return false;
         } else if self.file_explorer.visible && {
-            let (px, py, pw, ph) = crate::explorer::FileExplorer::panel_geometry(
-                win_w,
-                win_h,
-                top_offset,
-                status_bar_h,
-            );
+            let (px, py, pw, ph) =
+                self.file_explorer
+                    .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             mx >= px && mx < px + pw && my >= py && my < py + ph
         } {
-            let (_, panel_y, _, _) = crate::explorer::FileExplorer::panel_geometry(
-                win_w,
-                win_h,
-                top_offset,
-                status_bar_h,
-            );
+            let (_, panel_y, _, _) =
+                self.file_explorer
+                    .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             let idx = self.file_explorer.item_at_y(my, panel_y);
             self.file_explorer.is_focused = true;
             let mut items = Vec::new();
@@ -285,7 +283,41 @@ impl AxonApp {
             if !in_viewer {
                 return false;
             }
-            self.viewer_menu()
+            let clicked_url =
+                if let Some(viewer) = self.tabs[self.active_tab_index].file_viewer.as_ref() {
+                    let row_h = self.renderer.as_ref().map_or(20, |r| r.row_height);
+                    let content_y = top_offset + 38;
+                    if my >= content_y {
+                        let clicked_row = viewer.scroll_offset + (my - content_y) / row_h.max(16);
+                        let lay = self.renderer.as_ref().map(|r| {
+                            let viewer_w = win_w.saturating_sub(offset + right_offset);
+                            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+                            crate::renderer::FileViewerLayout::compute(
+                                offset,
+                                top_offset,
+                                viewer_w,
+                                viewer_h,
+                                r.row_height,
+                                r.char_width,
+                                viewer.lines.len(),
+                            )
+                        });
+                        if let Some(lay) = lay {
+                            if let Some((l, c)) = viewer.hit_test(clicked_row, mx, &lay) {
+                                viewer.link_at(l, c)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+            self.viewer_menu(clicked_url)
         } else {
             let area_w = win_w.saturating_sub(offset + right_offset);
             let area_h = win_h.saturating_sub(top_offset + status_bar_h);
@@ -305,9 +337,21 @@ impl AxonApp {
             if pane.terminal.is_mouse_reporting_active() && !shift {
                 return false;
             }
-            let has_selection = pane.terminal.selection.is_some();
+            let clicked_url = if let Some(renderer) = &self.renderer {
+                let term_x = mx.saturating_sub(rect.x);
+                let term_y = my.saturating_sub(rect.y);
+                let col = term_x.saturating_sub(renderer.margin_x) / renderer.char_width;
+                let col = col.min(pane.terminal.cols.saturating_sub(1));
+                let row_in_view = term_y.saturating_sub(renderer.margin_y) / renderer.row_height;
+                let row_in_view = row_in_view.min(pane.terminal.rows.saturating_sub(1));
+                let global_line = pane.terminal.visible_line_start() + row_in_view;
+                pane.terminal.url_at(col, global_line)
+            } else {
+                None
+            };
+            let has_selection = pane.terminal.has_selection();
             tab.active_pane_id = rect.pane_id;
-            self.terminal_menu(has_selection)
+            self.terminal_menu(has_selection, clicked_url)
         };
 
         let w = self
@@ -321,7 +365,7 @@ impl AxonApp {
         true
     }
 
-    fn tab_or_window_menu(&self, tab: Option<usize>) -> Vec<MenuItem> {
+    pub(super) fn tab_or_window_menu(&self, tab: Option<usize>) -> Vec<MenuItem> {
         let mut items = Vec::new();
         if let Some(idx) = tab {
             if self.tabs.get(idx).is_some_and(|t| t.is_preview) {
@@ -330,6 +374,24 @@ impl AxonApp {
                     LucideIcon::Check,
                     "",
                     MenuAction::PinTab(idx),
+                    true,
+                ));
+            }
+            if self.tabs.len() > 1 && !self.tabs[idx].is_settings {
+                items.push(MenuItem::new(
+                    "Mover a nueva ventana",
+                    LucideIcon::ExternalLink,
+                    "",
+                    MenuAction::MoveTabToNewWindow(idx),
+                    true,
+                ));
+            }
+            if self.has_other_windows && !self.tabs[idx].is_settings {
+                items.push(MenuItem::new(
+                    "Acoplar a otra ventana",
+                    LucideIcon::ChevronRight,
+                    "",
+                    MenuAction::MoveTabToOtherWindow(idx),
                     true,
                 ));
             }
@@ -346,6 +408,16 @@ impl AxonApp {
                 "",
                 MenuAction::CloseOtherTabs(idx),
                 self.tabs.len() > 1,
+            ));
+            items.push(MenuItem::separator());
+        }
+        if crate::updater::get_available_update().is_some() {
+            items.push(MenuItem::new(
+                "Actualizar Axon",
+                LucideIcon::ArrowUp,
+                "",
+                MenuAction::TriggerUpdate,
+                true,
             ));
             items.push(MenuItem::separator());
         }
@@ -380,8 +452,19 @@ impl AxonApp {
         items
     }
 
-    fn terminal_menu(&self, has_selection: bool) -> Vec<MenuItem> {
-        vec![
+    fn terminal_menu(&self, has_selection: bool, clicked_url: Option<String>) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        if let Some(url) = clicked_url {
+            items.push(MenuItem::new(
+                "Abrir enlace",
+                LucideIcon::ExternalLink,
+                "",
+                MenuAction::OpenUrl(url),
+                true,
+            ));
+            items.push(MenuItem::separator());
+        }
+        items.extend([
             MenuItem::new(
                 "Copiar",
                 LucideIcon::Copy,
@@ -433,10 +516,11 @@ impl AxonApp {
                 MenuAction::NewTab,
                 true,
             ),
-        ]
+        ]);
+        items
     }
 
-    fn viewer_menu(&self) -> Vec<MenuItem> {
+    fn viewer_menu(&self, clicked_url: Option<String>) -> Vec<MenuItem> {
         let Some(v) = self.tabs[self.active_tab_index].file_viewer.as_ref() else {
             return Vec::new();
         };
@@ -446,7 +530,18 @@ impl AxonApp {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
-        let mut items = vec![
+        let mut items = Vec::new();
+        if let Some(url) = clicked_url {
+            items.push(MenuItem::new(
+                "Abrir enlace",
+                LucideIcon::ExternalLink,
+                "",
+                MenuAction::OpenUrl(url),
+                true,
+            ));
+            items.push(MenuItem::separator());
+        }
+        items.extend([
             MenuItem::new(
                 "Copiar",
                 LucideIcon::Copy,
@@ -498,7 +593,7 @@ impl AxonApp {
                 MenuAction::ViewerSave,
                 v.is_dirty,
             ),
-        ];
+        ]);
         let foldable = (0..v.lines.len()).any(|i| v.fold_end(i).is_some());
         items.push(MenuItem::separator());
         items.push(MenuItem::new(
@@ -587,15 +682,6 @@ impl AxonApp {
             true,
         ));
         items
-    }
-
-    pub(super) fn set_clipboard_text(&mut self, text: String) {
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
-        if let Some(cb) = &mut self.clipboard {
-            let _ = cb.set_text(text);
-        }
     }
 
     /// Filas de texto visibles en el visor de la pestaña activa
@@ -751,12 +837,18 @@ impl AxonApp {
                     t.is_preview = false;
                 }
             }
+            MenuAction::MoveTabToNewWindow(i) => self.detach_tab_to_new_window(i),
+            MenuAction::MoveTabToOtherWindow(i) => self.move_tab_to_other_window = Some(i),
             MenuAction::CloseTab(i) => self.close_tab(i),
             MenuAction::CloseOtherTabs(keep) => self.close_other_tabs(keep),
             MenuAction::NewTab => self.create_new_tab(),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),
+            MenuAction::TriggerUpdate => crate::updater::trigger_update(),
+            MenuAction::OpenUrl(url) => {
+                crate::app::platform::shell_open_url(&url);
+            }
             MenuAction::ExplorerOpen(i) => {
                 if let Some(item) = self.file_explorer.items.get(i).cloned() {
                     if item.is_dir {

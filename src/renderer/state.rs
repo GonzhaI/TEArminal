@@ -2,12 +2,9 @@
 
 #[derive(Debug, Clone)]
 pub struct SidebarTabItem {
-    #[allow(dead_code)]
-    pub id: usize,
     pub title: String,
     pub is_active: bool,
     pub has_unread: bool,
-    #[allow(dead_code)]
     pub pane_count: usize,
     pub is_settings: bool,
     pub is_file_viewer: bool,
@@ -90,6 +87,7 @@ pub enum EditingSettingField {
     UiFontSize,
     LineSpacing,
     WindowOpacity,
+    ThemeSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,7 +110,7 @@ pub struct SettingsPageState {
     pub hovered_opacity_plus: bool,
     pub hovered_opacity_box: bool,
     pub hovered_cursor_blink: bool,
-    pub hovered_ghostty_prompt: bool,
+    pub hovered_shell_integration: bool,
     pub hovered_copy_on_select: bool,
     pub hovered_status_bar: bool,
     pub hovered_file_explorer: bool,
@@ -120,6 +118,7 @@ pub struct SettingsPageState {
     pub hovered_auto_save: bool,
     pub hovered_word_wrap: bool,
     pub hovered_ssh_integration: bool,
+    pub hovered_ligatures: bool,
     pub hovered_open_file: bool,
     pub hovered_reset_defaults: bool,
     pub hovered_scrollbar: bool,
@@ -127,25 +126,82 @@ pub struct SettingsPageState {
     pub scroll_y: usize,
     pub editing_setting: Option<EditingSettingField>,
     pub setting_input_buffer: String,
+    /// Texto del buscador de temas y primera fila visible de la lista filtrada
+    pub theme_filter: String,
+    pub filtered_themes: Vec<&'static str>,
+    pub theme_scroll: usize,
+    /// Ranura que edita la lista de temas: `false` = oscuro, `true` = claro
+    pub theme_slot_light: bool,
+    pub hovered_theme_slot: Option<usize>,
 }
 
 impl SettingsPageState {
     /// Limpia todos los estados de hover conservando la sección activa, el scroll y la edición en curso.
     /// Devuelve `true` si algún indicador de hover cambió.
     pub fn clear_hover(&mut self) -> bool {
-        let cleared = Self {
-            section: self.section,
-            scroll_y: self.scroll_y,
-            editing_setting: self.editing_setting,
-            setting_input_buffer: self.setting_input_buffer.clone(),
-            ..Self::default()
-        };
-        if *self != cleared {
-            *self = cleared;
-            true
-        } else {
-            false
+        let changed = self.hovered_section.is_some()
+            || self.hovered_theme.is_some()
+            || self.hovered_theme_mode.is_some()
+            || self.hovered_tab_layout.is_some()
+            || self.hovered_font_minus
+            || self.hovered_font_plus
+            || self.hovered_font_box
+            || self.hovered_ui_font_minus
+            || self.hovered_ui_font_plus
+            || self.hovered_ui_font_box
+            || self.hovered_spacing_minus
+            || self.hovered_spacing_plus
+            || self.hovered_spacing_box
+            || self.hovered_opacity_minus
+            || self.hovered_opacity_plus
+            || self.hovered_opacity_box
+            || self.hovered_cursor_blink
+            || self.hovered_shell_integration
+            || self.hovered_copy_on_select
+            || self.hovered_status_bar
+            || self.hovered_file_explorer
+            || self.hovered_restore_session
+            || self.hovered_auto_save
+            || self.hovered_word_wrap
+            || self.hovered_ssh_integration
+            || self.hovered_ligatures
+            || self.hovered_open_file
+            || self.hovered_reset_defaults
+            || self.hovered_scrollbar
+            || self.hovered_theme_slot.is_some();
+        if changed {
+            self.hovered_section = None;
+            self.hovered_theme = None;
+            self.hovered_theme_mode = None;
+            self.hovered_tab_layout = None;
+            self.hovered_font_minus = false;
+            self.hovered_font_plus = false;
+            self.hovered_font_box = false;
+            self.hovered_ui_font_minus = false;
+            self.hovered_ui_font_plus = false;
+            self.hovered_ui_font_box = false;
+            self.hovered_spacing_minus = false;
+            self.hovered_spacing_plus = false;
+            self.hovered_spacing_box = false;
+            self.hovered_opacity_minus = false;
+            self.hovered_opacity_plus = false;
+            self.hovered_opacity_box = false;
+            self.hovered_cursor_blink = false;
+            self.hovered_shell_integration = false;
+            self.hovered_copy_on_select = false;
+            self.hovered_status_bar = false;
+            self.hovered_file_explorer = false;
+            self.hovered_restore_session = false;
+            self.hovered_auto_save = false;
+            self.hovered_word_wrap = false;
+            self.hovered_ssh_integration = false;
+            self.hovered_ligatures = false;
+            self.hovered_open_file = false;
+            self.hovered_reset_defaults = false;
+            self.hovered_scrollbar = false;
+            self.hovered_theme_slot = None;
         }
+        changed
     }
 }
 
@@ -170,7 +226,7 @@ impl Default for SettingsPageState {
             hovered_opacity_plus: false,
             hovered_opacity_box: false,
             hovered_cursor_blink: false,
-            hovered_ghostty_prompt: false,
+            hovered_shell_integration: false,
             hovered_copy_on_select: false,
             hovered_status_bar: false,
             hovered_file_explorer: false,
@@ -178,12 +234,18 @@ impl Default for SettingsPageState {
             hovered_auto_save: false,
             hovered_word_wrap: false,
             hovered_ssh_integration: false,
+            hovered_ligatures: false,
             hovered_open_file: false,
             hovered_reset_defaults: false,
             hovered_scrollbar: false,
             scroll_y: 0,
             editing_setting: None,
             setting_input_buffer: String::new(),
+            theme_filter: String::new(),
+            filtered_themes: crate::theme::Theme::names().collect(),
+            theme_scroll: 0,
+            theme_slot_light: false,
+            hovered_theme_slot: None,
         }
     }
 }

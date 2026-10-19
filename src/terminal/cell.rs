@@ -18,6 +18,7 @@ impl Cell {
     pub const FLAG_UNDERLINE: u8 = 1 << 3;
     pub const FLAG_STRIKETHROUGH: u8 = 1 << 4;
     pub const FLAG_INVERSE: u8 = 1 << 5;
+    pub const FLAG_GRAPHEME: u8 = 1 << 6;
 
     #[inline(always)]
     pub fn bold(&self) -> bool {
@@ -44,6 +45,11 @@ impl Cell {
         self.flags & Self::FLAG_INVERSE != 0
     }
 
+    #[inline(always)]
+    pub fn is_grapheme(&self) -> bool {
+        self.flags & Self::FLAG_GRAPHEME != 0
+    }
+
     pub fn default_with_theme(theme: &Theme) -> Self {
         Self {
             c: ' ',
@@ -55,8 +61,7 @@ impl Cell {
     }
 }
 
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InlineImage {
     pub id: u64,
     pub line_index: usize,
@@ -66,6 +71,28 @@ pub struct InlineImage {
     pub width_px: u32,
     pub height_px: u32,
     pub rgba_data: Vec<u8>,
+}
+
+impl InlineImage {
+    /// Imagen ya escalada a `cols` x `rows` celdas, anclada en (`col`, `line_index`)
+    pub fn new(
+        id: u64,
+        (col, line_index): (usize, usize),
+        (cols, rows): (usize, usize),
+        rgba: image::RgbaImage,
+    ) -> Self {
+        let (width_px, height_px) = rgba.dimensions();
+        Self {
+            id,
+            line_index,
+            col,
+            width_cols: cols,
+            height_rows: rows,
+            width_px,
+            height_px,
+            rgba_data: rgba.into_raw(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -85,8 +112,8 @@ pub struct SshSession {
     pub is_active: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelectionRange {
-    pub start: (usize, usize), // (col, row_in_view)
+    pub start: (usize, usize), // (col, global_line)
     pub end: (usize, usize),
 }

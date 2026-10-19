@@ -8,7 +8,7 @@ fn test_clipboard_image_saving_and_paste_formatting() {
     let config = AxonConfig::load_or_default();
     let app = AxonApp::new(config, None);
 
-    // Crear una imagen RGBA de prueba (4x4 pixels en verde Ghostty)
+    // Crear una imagen RGBA de prueba (4x4 píxeles de un color sólido)
     let width = 4;
     let height = 4;
     let mut bytes = Vec::with_capacity(width * height * 4);
@@ -72,10 +72,50 @@ fn test_settings_tab_actions_and_theme_switching() {
     assert!(!app.tabs[app.active_tab_index].is_settings);
 
     // 2. Cambio de temas
-    app.apply_theme("Nord");
+    app.pick_theme("Nord");
     assert_eq!(app.config.appearance.theme, "Nord");
     assert!(!app.theme.ansi.is_empty());
-    assert!(crate::theme::Theme::AVAILABLE_THEMES.contains(&"Catppuccin Frappé"));
+    assert!(crate::theme::Theme::names().any(|n| n == "Catppuccin Frappe"));
+
+    // Temas por ranura: cada modo usa el suyo y el selector edita la ranura elegida
+    app.set_theme_mode("dark");
+    assert!(!app.settings_page_state.theme_slot_light);
+    app.pick_theme("Dracula");
+    assert_eq!(
+        app.theme.background,
+        crate::theme::Theme::from_name("Dracula").background
+    );
+    app.settings_page_state.theme_slot_light = true;
+    app.pick_theme("One Half Light");
+    assert_eq!(
+        app.config.appearance.theme, "Dracula",
+        "la ranura oscura no cambia"
+    );
+    assert_eq!(
+        app.theme.background,
+        crate::theme::Theme::from_name("Dracula").background,
+        "en modo oscuro sigue activo el tema oscuro"
+    );
+    app.set_theme_mode("light");
+    assert!(app.settings_page_state.theme_slot_light);
+    assert_eq!(
+        app.theme.background,
+        crate::theme::Theme::from_name("One Half Light").background
+    );
+    app.set_theme_mode("system");
+    let sys_light = crate::theme::is_windows_system_light_mode();
+    assert_eq!(app.settings_page_state.theme_slot_light, sys_light);
+    assert_eq!(app.system_light, sys_light);
+
+    // La lista se desplaza acotada
+    app.scroll_theme_list(-9999);
+    assert_eq!(app.settings_page_state.theme_scroll, 0);
+    app.scroll_theme_list(5);
+    assert_eq!(app.settings_page_state.theme_scroll, 5);
+    app.scroll_theme_list(9999);
+    let last =
+        crate::theme::Theme::names().count() - crate::renderer::SettingsPageRects::THEME_ROWS;
+    assert_eq!(app.settings_page_state.theme_scroll, last);
 
     // 3. Ajuste de opacidad e interlineado
     let initial_op = app.config.appearance.window_opacity;
@@ -91,9 +131,9 @@ fn test_settings_tab_actions_and_theme_switching() {
     app.toggle_cursor_blink();
     assert_eq!(app.config.terminal.cursor_blink, !init_blink);
 
-    let init_prompt = app.config.terminal.ghostty_prompt;
-    app.toggle_ghostty_prompt();
-    assert_eq!(app.config.terminal.ghostty_prompt, !init_prompt);
+    let init_prompt = app.config.terminal.shell_integration;
+    app.toggle_shell_integration();
+    assert_eq!(app.config.terminal.shell_integration, !init_prompt);
 }
 
 #[test]
@@ -125,7 +165,10 @@ fn test_settings_reset_to_defaults() {
     assert_eq!(app.config.appearance.font_size, 15.0);
     assert_eq!(app.config.appearance.ui_font_size, 15.0);
     assert_eq!(app.config.appearance.window_opacity, 1.0);
-    assert_eq!(app.config.appearance.theme, "frappe");
+    assert_eq!(
+        app.config.appearance.theme,
+        crate::theme::Theme::DEFAULT_DARK
+    );
     assert_eq!(app.config.appearance.tab_layout, "horizontal");
     assert!(app.config.terminal.cursor_blink);
 }
@@ -163,7 +206,7 @@ fn test_split_panes_layout_and_tree() {
     use crate::terminal::TerminalState;
     use crate::theme::Theme;
 
-    let theme = Theme::ghostty_default_styledark();
+    let theme = Theme::default();
     let pty1 = PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).expect("Pty 1");
     let term1 = TerminalState::new(80, 24, 1000, theme.clone());
     let pane1 = TerminalPane::new(1, pty1, term1, (80, 24));
@@ -344,6 +387,53 @@ fn test_file_viewer_editing_and_dirty_state() {
     let _ = std::fs::remove_file(temp_file);
 }
 
+/// Guardar un archivo remoto conserva su fin de línea y su salto final: abrir y guardar sin editar devuelve los
+/// mismos bytes
+#[test]
+fn test_remote_viewer_save_keeps_line_endings() {
+    for original in ["a\r\nb\r\n", "a\nb\n", "a\r\nb", "a\nb"] {
+        let mut tab = TerminalTab::new_remote_file_viewer_from(
+            1,
+            "host".into(),
+            std::path::PathBuf::from("/srv/x.txt"),
+            None,
+            Ok(original.as_bytes().to_vec()),
+        );
+        let viewer = tab.file_viewer.as_mut().unwrap();
+        assert_eq!(viewer.remote_content(), original, "{original:?}");
+    }
+}
+
+/// Un cambio hecho por otro programa (un agente) no se pisa al guardar: el autoguardado se detiene y el guardado
+/// explícito avisa y solo sobrescribe si se repite
+#[test]
+fn test_viewer_does_not_overwrite_external_changes() {
+    let path = std::env::temp_dir().join(format!("axon_test_extchg_{}.txt", std::process::id()));
+    std::fs::write(&path, "uno").unwrap();
+    let mut tab = TerminalTab::new_file_viewer(102, path.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.is_read_only = false;
+    viewer.insert_text("X");
+
+    // Otro programa escribe el archivo con una fecha distinta
+    std::fs::write(&path, "del agente").unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
+        .unwrap();
+    drop(file);
+
+    viewer.autosave_local();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "del agente");
+    assert!(viewer.save_error.is_some());
+    assert!(viewer.save_to_disk().is_err());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "del agente");
+    // Repetir el guardado explícito confirma la sobrescritura
+    assert!(viewer.save_to_disk().is_ok());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "Xuno");
+
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn test_file_viewer_undo_redo() {
     let temp_dir = std::env::temp_dir();
@@ -478,7 +568,7 @@ fn test_file_viewer_selection_and_deletion() {
 
 #[test]
 fn test_terminal_pane_git_branch_ssh_isolation() {
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
     let pty =
         crate::pty::PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).expect("pty");
     let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
@@ -686,7 +776,7 @@ fn test_status_bar_ssh_with_cwd_and_branch() {
     let config = crate::config::AxonConfig::default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let mut buffer = vec![0u32; 1000 * 600];
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
 
     // Renderizar barra de estado con SSH Host, CWD y rama Git simultáneamente
     renderer.render_status_bar(
@@ -868,6 +958,46 @@ fn test_file_viewer_word_wrap_splits_long_lines_into_rows() {
     // el cursor al final de la línea larga cae en su última fila
     let last = rows.iter().rposition(|r| r.line == 0).expect("fila");
     assert_eq!(v.row_of(0, v.lines[0].chars().count()), Some(last));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_file_viewer_grapheme_clustering() {
+    let (mut tab, path) = viewer_with("grapheme.txt", "e\u{0301} 🤖 👍🏽 fin");
+    let v = tab.file_viewer.as_mut().expect("viewer");
+    v.is_read_only = false;
+
+    // En code points hay 11 chars, pero en clústeres de grafemas hay exactamente 9
+    assert_eq!(v.line_len(0), 9, "Debe contar 9 clústeres de grafemas");
+
+    // Situar el cursor tras el primer grafema ("e\u{0301}") y borrar con Backspace
+    v.cursor_col = 1;
+    v.backspace();
+    assert_eq!(
+        v.lines[0], " 🤖 👍🏽 fin",
+        "Backspace debe eliminar el clúster completo, no solo el diacrítico"
+    );
+    assert_eq!(v.cursor_col, 0);
+
+    // Borrar con Delete sobre el espacio
+    v.delete();
+    assert_eq!(v.lines[0], "🤖 👍🏽 fin");
+
+    // Borrar con Delete sobre el emoji '🤖'
+    v.delete();
+    assert_eq!(v.lines[0], " 👍🏽 fin");
+
+    // Borrar con Delete sobre el espacio
+    v.delete();
+    assert_eq!(v.lines[0], "👍🏽 fin");
+
+    // Borrar con Delete sobre el clúster '👍🏽' (emoji + skin tone)
+    v.delete();
+    assert_eq!(
+        v.lines[0], " fin",
+        "Delete debe eliminar el emoji con modificador de tono como un solo clúster"
+    );
+
     let _ = std::fs::remove_file(path);
 }
 
@@ -1283,6 +1413,26 @@ fn tab_with_panes(app: &mut AxonApp, n: usize) {
 }
 
 #[test]
+fn test_explorer_edge_drag_resizes_and_clamps_width() {
+    use crate::explorer::{FileExplorer, FILE_EXPLORER_MIN_WIDTH};
+    let mut ex = FileExplorer::new(None, false);
+    ex.visible = true;
+    let (win_w, win_h) = (1000, 600);
+    // El borde izquierdo está en `win_w - width - 8`
+    let (px, py, _, _) = ex.panel_geometry(win_w, win_h, 40, 26);
+    assert!(ex.on_resize_edge(px, py + 10, win_w, win_h, 40, 26));
+    assert!(!ex.on_resize_edge(px + 50, py + 10, win_w, win_h, 40, 26));
+    // Arrastrar a la izquierda ensancha; el ratón queda sobre el borde nuevo
+    ex.set_width_from_edge(600, win_w);
+    assert_eq!(ex.width, 392);
+    // Límites: mínimo fijo y como máximo la mitad de la ventana
+    ex.set_width_from_edge(990, win_w);
+    assert_eq!(ex.width, FILE_EXPLORER_MIN_WIDTH);
+    ex.set_width_from_edge(0, win_w);
+    assert_eq!(ex.width, 500);
+}
+
+#[test]
 fn test_divider_drag_moves_split_and_respects_minimum_size() {
     let mut app = AxonApp::new(AxonConfig::default(), None);
     tab_with_panes(&mut app, 2);
@@ -1397,6 +1547,7 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
         active_tab_index: 7, // fuera de rango
         sidebar_visible: true,
         file_explorer_visible: false,
+        file_explorer_width: 300,
         tabs: vec![TabSession {
             title: "T".into(),
             layout: gone,
@@ -1407,11 +1558,13 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
     assert_eq!(app.tabs.len(), 1);
     assert_eq!(app.active_tab_index, 0);
     assert!(app.tabs[0].active_pane().is_some());
+    assert_eq!(app.file_explorer.width, 300);
 
     let empty = WindowSession {
         active_tab_index: 0,
         sidebar_visible: true,
         file_explorer_visible: false,
+        file_explorer_width: 240,
         tabs: Vec::new(),
     };
     let app = AxonApp::from_session(AxonConfig::default(), None, Some(empty));
@@ -1711,63 +1864,218 @@ fn test_sync_fs_watcher_behavior() {
 }
 
 #[test]
-fn test_border_resize_direction_excludes_top_bar() {
-    let mut config = AxonConfig::default();
-    config.appearance.tab_layout = "horizontal".to_string();
-    let app = AxonApp::new(config.clone(), None);
+fn test_border_resize_direction_all_edges() {
+    use winit::window::ResizeDirection::*;
+    let (w, h) = (1000, 700);
+    for layout in ["horizontal", "vertical"] {
+        let mut config = AxonConfig::default();
+        config.appearance.tab_layout = layout.to_string();
+        let app = AxonApp::new(config, None);
+        let dir = |x, y| app.compute_border_resize_direction(x, y, w, h);
 
-    let win_w = 1000;
-    let win_h = 700;
+        // Ocho direcciones: lados, esquinas y también la barra superior.
+        assert_eq!(dir(w / 2, 0), Some(North));
+        assert_eq!(dir(0, 0), Some(NorthWest));
+        assert_eq!(dir(w - 1, 0), Some(NorthEast));
+        assert_eq!(dir(0, 100), Some(West));
+        assert_eq!(dir(w - 1, 100), Some(East));
+        assert_eq!(dir(w / 2, h - 1), Some(South));
+        assert_eq!(dir(0, h - 1), Some(SouthWest));
+        assert_eq!(dir(w - 1, h - 1), Some(SouthEast));
 
-    // 1. La barra superior (y < 38) NUNCA debe redimensionar la ventana hacia el norte ni en diagonales,
-    // garantizando que mover la ventana o cambiar de monitor no agrande su tamaño sin parar.
-    for y in 0..38 {
-        assert_eq!(
-            app.compute_border_resize_direction(0, y, win_w, win_h),
-            None,
-            "Borde superior izquierdo en y={y} no debe redimensionar"
-        );
-        assert_eq!(
-            app.compute_border_resize_direction(win_w / 2, y, win_w, win_h),
-            None,
-            "Borde superior centro en y={y} no debe redimensionar"
-        );
-        assert_eq!(
-            app.compute_border_resize_direction(win_w - 1, y, win_w, win_h),
-            None,
-            "Borde superior derecho en y={y} no debe redimensionar"
-        );
+        // El interior, y la barra superior fuera del borde fino, siguen siendo del contenido.
+        assert_eq!(dir(w / 2, 20), None);
+        assert_eq!(dir(w / 2, h / 2), None);
     }
+}
 
-    // 2. Bordes laterales debajo de la barra superior sí deben redimensionar
-    assert_eq!(
-        app.compute_border_resize_direction(0, 100, win_w, win_h),
-        Some(winit::window::ResizeDirection::West)
-    );
-    assert_eq!(
-        app.compute_border_resize_direction(win_w - 1, 100, win_w, win_h),
-        Some(winit::window::ResizeDirection::East)
-    );
+#[test]
+fn test_detach_tab_to_new_window() {
+    let config = AxonConfig::load_or_default();
+    let mut app = AxonApp::new(config.clone(), None);
 
-    // 3. Borde inferior y esquinas inferiores
-    assert_eq!(
-        app.compute_border_resize_direction(win_w / 2, win_h - 1, win_w, win_h),
-        Some(winit::window::ResizeDirection::South)
-    );
-    assert_eq!(
-        app.compute_border_resize_direction(0, win_h - 1, win_w, win_h),
-        Some(winit::window::ResizeDirection::SouthWest)
-    );
-    assert_eq!(
-        app.compute_border_resize_direction(win_w - 1, win_h - 1, win_w, win_h),
-        Some(winit::window::ResizeDirection::SouthEast)
-    );
+    // Añadir una segunda pestaña
+    app.create_new_tab();
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab_index, 1);
 
-    // 4. Modo vertical también excluye la barra de título superior
-    config.appearance.tab_layout = "vertical".to_string();
-    let app_vert = AxonApp::new(config, None);
+    // Desprender la segunda pestaña
+    app.detach_tab_to_new_window(1);
+
+    // La ventana original debe quedar con 1 pestaña y new_window_with_tab activo
+    assert_eq!(app.tabs.len(), 1);
+    assert_eq!(app.active_tab_index, 0);
+    assert!(app.new_window_with_tab.is_some());
+
+    // Crear la nueva ventana con la pestaña transferida
+    let detached_tab = app.new_window_with_tab.take().unwrap();
+    let new_window = AxonApp::from_tab(config, None, detached_tab);
+    assert_eq!(new_window.tabs.len(), 1);
+    assert_eq!(new_window.active_tab_index, 0);
+    assert!(!new_window.tabs[0].is_settings);
+}
+
+#[test]
+fn test_attach_tab_and_re_docking() {
+    let config = AxonConfig::load_or_default();
+    let mut app1 = AxonApp::new(config.clone(), None);
+    let mut app2 = AxonApp::new(config.clone(), None);
+
+    // Añadir una segunda pestaña a app1
+    app1.create_new_tab();
+    assert_eq!(app1.tabs.len(), 2);
+
+    // Desprender pestaña de app1
+    app1.detach_tab_to_new_window(1);
+    assert_eq!(app1.tabs.len(), 1);
+    let tab_to_transfer = app1.new_window_with_tab.take().unwrap();
+
+    // Acoplar la pestaña en app2 (re-docking)
+    assert_eq!(app2.tabs.len(), 1);
+    app2.attach_tab(tab_to_transfer);
+    assert_eq!(app2.tabs.len(), 2);
+    assert_eq!(app2.active_tab_index, 1);
+    assert_eq!(app2.tabs[1].title, "Terminal 2");
+
+    // Verificar que el menú contextual muestra "Acoplar a otra ventana" cuando has_other_windows == true
+    app2.has_other_windows = true;
+    let menu_items = app2.tab_or_window_menu(Some(0));
+    assert!(menu_items
+        .iter()
+        .any(|item| item.label == "Acoplar a otra ventana"));
+}
+
+#[test]
+fn test_encode_kitty_key_various_combinations() {
+    use super::{encode_kitty_key, KeyEventType};
+    use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+
+    let enter_key = Key::Named(NamedKey::Enter);
+    let phys_enter = PhysicalKey::Code(KeyCode::Enter);
+
+    // Con flags = 0, no se codifica nada
     assert_eq!(
-        app_vert.compute_border_resize_direction(win_w / 2, 2, win_w, win_h),
+        encode_kitty_key(
+            &enter_key,
+            phys_enter,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            0
+        ),
         None
+    );
+
+    // Shift + Enter con flag 1 (disambiguate): \x1b[13;2u
+    assert_eq!(
+        encode_kitty_key(
+            &enter_key,
+            phys_enter,
+            false,
+            true,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        Some(b"\x1b[13;2u".to_vec())
+    );
+
+    // Ctrl + C con flag 1: \x1b[99;5u
+    let c_key = Key::Character(winit::keyboard::SmolStr::new("c"));
+    let phys_c = PhysicalKey::Code(KeyCode::KeyC);
+    assert_eq!(
+        encode_kitty_key(
+            &c_key,
+            phys_c,
+            true,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        Some(b"\x1b[99;5u".to_vec())
+    );
+
+    // Ctrl + Shift + Z con flag 1: \x1b[122;6u
+    let z_key = Key::Character(winit::keyboard::SmolStr::new("z"));
+    let phys_z = PhysicalKey::Code(KeyCode::KeyZ);
+    assert_eq!(
+        encode_kitty_key(
+            &z_key,
+            phys_z,
+            true,
+            true,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        Some(b"\x1b[122;6u".to_vec())
+    );
+
+    // Flecha arriba con Ctrl con flag 1: \x1b[57362;5u
+    let up_key = Key::Named(NamedKey::ArrowUp);
+    let phys_up = PhysicalKey::Code(KeyCode::ArrowUp);
+    assert_eq!(
+        encode_kitty_key(
+            &up_key,
+            phys_up,
+            true,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        Some(b"\x1b[57362;5u".to_vec())
+    );
+
+    // Evento de liberación (Release) sin flag 2 no genera secuencia
+    assert_eq!(
+        encode_kitty_key(
+            &c_key,
+            phys_c,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Release,
+            1
+        ),
+        None
+    );
+
+    // Evento de liberación (Release) con flag 2: \x1b[99;1:3u
+    assert_eq!(
+        encode_kitty_key(
+            &c_key,
+            phys_c,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Release,
+            2
+        ),
+        Some(b"\x1b[99;1:3u".to_vec())
+    );
+
+    // Pulsación con flag 2 reporta event_type 1: \x1b[99;1:1u
+    assert_eq!(
+        encode_kitty_key(
+            &c_key,
+            phys_c,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            2
+        ),
+        Some(b"\x1b[99;1:1u".to_vec())
     );
 }

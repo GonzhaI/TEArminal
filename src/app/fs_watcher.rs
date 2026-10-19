@@ -58,7 +58,7 @@ impl Drop for FsWatcher {
 #[cfg(target_os = "windows")]
 fn run_watcher_windows(dir: PathBuf, stop: Arc<AtomicBool>, proxy: EventLoopProxy<AxonEvent>) {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::Storage::FileSystem::{
         FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
         FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
@@ -84,8 +84,8 @@ fn run_watcher_windows(dir: PathBuf, stop: Arc<AtomicBool>, proxy: EventLoopProx
         // Espera de hasta 500 ms por evento del kernel o chequeo de parada
         let res = unsafe { WaitForSingleObject(handle, 500) };
         if res == WAIT_OBJECT_0 {
-            // Debounce de 250 ms para unificar ráfagas de escritura rápida (git commit, guardado, compilación)
-            std::thread::sleep(Duration::from_millis(250));
+            // Debounce de 500 ms para unificar ráfagas de escritura rápida (git commit, guardado, compilación)
+            std::thread::sleep(Duration::from_millis(500));
 
             unsafe {
                 FindNextChangeNotification(handle);
@@ -98,6 +98,18 @@ fn run_watcher_windows(dir: PathBuf, stop: Arc<AtomicBool>, proxy: EventLoopProx
             if !stop.load(Ordering::Relaxed) {
                 let _ = proxy.send_event(AxonEvent::FsChanged);
             }
+
+            // Como mucho un aviso cada ~2 s: una compilación (`target/`) escribe sin parar y cada aviso relee el
+            // explorador y lanza `git status`. Lo que cambie durante la pausa queda pendiente en el manejador.
+            for _ in 0..6 {
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+            }
+        } else if res != WAIT_TIMEOUT {
+            // WAIT_FAILED (carpeta borrada, unidad retirada): sin esto la espera vuelve al instante y gira al 100 % de CPU
+            break;
         }
     }
 

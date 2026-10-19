@@ -159,12 +159,21 @@ impl TerminalRenderer {
             let _ = adv;
         }
 
-        // 3. Derecha: Badge de Agente/Modelo IA o estado de conexión (REMOTO / LOCAL)
+        // 3. Derecha: Badge de Actualización si hay una disponible
+        let update_info = crate::updater::get_available_update();
+        let update_text = update_info
+            .as_ref()
+            .map(|u| format!("v{} disponible", u.latest_version));
+        let update_w = update_text
+            .as_ref()
+            .map(|t| self.measure_ui_text(t, 11.0, true));
+
+        // Derecha: Badge de Agente/Modelo IA o estado de conexión (REMOTO / LOCAL)
         let (ai_icon, badge_label, ai_fg) =
             Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
 
         let ai_text_w = self.measure_ui_text(&badge_label, 11.0, true);
-        let rects = StatusBarRects::compute(width, height, ai_text_w);
+        let rects = StatusBarRects::compute(width, height, ai_text_w, update_w);
         let (bx, by, bw, bh) = rects.ai_badge;
 
         if hovered_ai_badge {
@@ -205,6 +214,55 @@ impl TerminalRenderer {
             11.0,
             true,
         );
+
+        // Badge de actualización disponible
+        if let (Some((ub_x, ub_y, ub_w, ub_h)), Some(utext)) = (rects.update_badge, update_text) {
+            let accent = theme.accent_color();
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                ub_x,
+                ub_y + 3,
+                ub_w,
+                ub_h.saturating_sub(5),
+                5,
+                Color::from_rgba(accent.r(), accent.g(), accent.b(), 38),
+            );
+            crate::ui::stroke_rounded_rect(
+                buffer,
+                width,
+                height,
+                ub_x,
+                ub_y + 3,
+                ub_w,
+                ub_h.saturating_sub(5),
+                5,
+                Color::from_rgba(accent.r(), accent.g(), accent.b(), 90),
+            );
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::ArrowUp,
+                ub_x + 6,
+                center_y,
+                11.0,
+                accent,
+            );
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &utext,
+                ub_x + 18,
+                baseline,
+                ub_x + ub_w,
+                accent,
+                11.0,
+                true,
+            );
+        }
     }
 
     pub fn status_bar_badge_info(
@@ -228,13 +286,6 @@ impl TerminalRenderer {
                         theme.ansi[2],
                     );
                 }
-                if let Some(m) = active_model.filter(|m| !m.is_empty()) {
-                    return (
-                        crate::ui::LucideIcon::Sparkles,
-                        format!("IA · {m}"),
-                        theme.ansi[6],
-                    );
-                }
                 return (
                     crate::ui::LucideIcon::Dot,
                     "LOCAL".to_string(),
@@ -249,22 +300,67 @@ impl TerminalRenderer {
         (icon, label, fg)
     }
 
-    /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
-    pub fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
-        let mut h = 58; // Cabecera + modelo activo
-        let quota_rows = snapshot.quotas.len().max(1);
-        h += 22 + quota_rows * 40; // Sección de cuotas y ventanas por modelo
-        h += 22 + 58; // Sección de tokens (Ventana 5h · Sesión · 24h)
-        if !snapshot.agents.is_empty() {
-            h += 20 + snapshot.agents.len() * 20;
-        }
-        if snapshot.terminal_hint.is_some() {
-            h += 22;
-        }
-        h + 12
+    /// Alto de una fila de límite: etiqueta + barra + reinicio
+    pub(crate) const LIMIT_ROW_H: usize = 38;
+
+    /// Alto del bloque de un agente: cabecera + límites reales + (ventana 5h y sesión, o un aviso si no
+    /// hay tokens) + hueco
+    fn ai_agent_block_height(usage: &crate::app::AiAgentUsage, limits: usize) -> usize {
+        let tokens = if usage.has_tokens() {
+            16 + 18 + 16 + 18
+        } else {
+            18
+        };
+        let note = if Self::ai_limits_note(usage.kind).is_some() {
+            18
+        } else {
+            0
+        };
+        20 + note + limits * Self::LIMIT_ROW_H + tokens + 10
     }
 
-    /// Renderiza el menú flotante con todos los consumos de IA, ventanas de 5 horas y cuotas por modelo.
+    /// Aviso de los agentes sin fuente legítima de límites: AGY no guarda su cuota en disco y su servidor
+    /// local exige un token CSRF interno, así que no se inventa un porcentaje.
+    fn ai_limits_note(kind: AiAgentStatus) -> Option<&'static str> {
+        (kind == AiAgentStatus::Agy).then_some("Límites no disponibles para AGY")
+    }
+
+    /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
+    pub fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
+        let mut h = 14; // padding superior
+        h += 20; // cabecera: icono + título
+        h += 8 + 1 + 10; // divisor 1
+
+        // Un bloque por agente activo en la pestaña
+        if snapshot.usages.is_empty() {
+            h += 20 + 10; // mensaje "Sin agente de IA activo"
+        } else {
+            h += snapshot
+                .usages
+                .iter()
+                .map(|u| Self::ai_agent_block_height(u, snapshot.limits_for(u.kind).len()))
+                .sum::<usize>();
+        }
+        h += 1 + 10; // divisor 2 (el hueco de 8 px ya lo deja el bloque)
+        h += 16; // Últimas 24h
+
+        // Agentes y herramientas configurados
+        if !snapshot.agents.is_empty() {
+            h += 8 + 1 + 10; // divisor 3
+            h += 16; // título "AGENTES Y HERRAMIENTAS"
+            h += snapshot.agents.len() * 20;
+        }
+
+        if snapshot.terminal_hint.is_some() {
+            h += 8 + 16;
+        }
+
+        h += 14; // padding inferior
+        h
+    }
+
+    /// Renderiza el menú flotante de consumo de IA: un bloque por agente de la pestaña (cada uno con su
+    /// color, modelo y ventanas), el total de 24 h y los agentes configurados.
     pub fn render_ai_usage_popup(
         &mut self,
         buffer: &mut [u32],
@@ -294,19 +390,20 @@ impl TerminalRenderer {
         crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.surface_bg());
         crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.border_color());
 
-        let pad_x = x + 14;
-        let max_x = x + w - 14;
+        let pad_x = x + 16;
+        let max_x = x + w - 16;
+        let divider_w = w.saturating_sub(32);
         let accent = theme.accent_color();
         let mut cur_y = y + 14;
 
-        // 1. Cabecera: Icono + Título + Plan/Estado a la derecha
+        // Cabecera: icono + título
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::Sparkles,
             pad_x + 6,
-            cur_y + 6,
+            cur_y + 5,
             13.0,
             accent,
         );
@@ -314,7 +411,7 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            "Consumo y Cuotas de IA",
+            "Consumo de IA",
             pad_x + 18,
             cur_y + 10,
             max_x,
@@ -322,253 +419,305 @@ impl TerminalRenderer {
             12.0,
             true,
         );
-        if let Some(ref plan) = snapshot.active_plan {
-            let pw = self.measure_ui_text(plan, 10.5, true);
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                plan,
-                max_x.saturating_sub(pw),
-                cur_y + 10,
-                max_x,
-                theme.ansi[6],
-                10.5,
-                true,
-            );
-        }
         cur_y += 20;
 
-        let active_model_label = match snapshot.active_model.as_deref() {
-            Some(m) => format!("Modelo en uso: {m}"),
-            None => "Modelo en uso: Sin agente activo".to_string(),
-        };
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &active_model_label,
-            pad_x,
-            cur_y + 8,
-            max_x,
-            theme.ansi[7],
-            11.0,
-            false,
-        );
-        cur_y += 18;
-
-        // Divisor horizontal
+        cur_y += 8;
         Self::draw_rect(
             buffer,
             width,
             height,
             pad_x,
             cur_y,
-            w.saturating_sub(28),
+            divider_w,
             1,
             theme.border_color(),
         );
-        cur_y += 8;
+        cur_y += 1 + 10;
 
-        // 2. Sección: Ventanas de 5h y Cuotas por Modelo
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            "VENTANAS Y CUOTAS POR MODELO",
-            pad_x,
-            cur_y + 9,
-            max_x,
-            theme.ansi[8],
-            10.0,
-            true,
-        );
-        cur_y += 16;
-
-        if snapshot.quotas.is_empty() {
+        if snapshot.usages.is_empty() {
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                "Sin cuotas activas reportadas en esta sesión",
+                "Sin agente de IA activo en esta pestaña",
                 pad_x,
-                cur_y + 14,
+                cur_y + 10,
                 max_x,
-                theme.ansi[8],
+                theme.ansi[7],
                 11.0,
                 false,
             );
-            cur_y += 40;
-        } else {
-            let bar_w = w.saturating_sub(28);
-            for q in &snapshot.quotas {
-                let used_pct = (q.used_fraction * 100.0).round().clamp(0.0, 100.0);
-                let rem_pct = (100.0 - used_pct).max(0.0);
-                let bar_color = if used_pct >= 85.0 {
+            cur_y += 20 + 10;
+        }
+
+        for u in &snapshot.usages {
+            let (_, name, brand) = Self::status_bar_badge_info(u.kind, None, None, theme);
+
+            // Cabecera: barra de color + agente + modelo + plan/modo a la derecha
+            crate::ui::draw_rounded_rect(buffer, width, height, pad_x, cur_y + 3, 3, 14, 1, brand);
+            let name_end = self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &name,
+                pad_x + 10,
+                cur_y + 10,
+                max_x,
+                brand,
+                11.0,
+                true,
+            );
+            let plan_w = u
+                .plan
+                .as_deref()
+                .map_or(0, |p| self.measure_ui_text(p, 10.0, true) + 20);
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &u.model,
+                name_end + 8,
+                cur_y + 10,
+                max_x.saturating_sub(plan_w),
+                theme.foreground,
+                11.0,
+                true,
+            );
+            if let Some(plan) = u.plan.as_deref() {
+                let pill_w = plan_w - 8;
+                let pill_x = max_x.saturating_sub(pill_w);
+                crate::ui::draw_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    pill_x,
+                    cur_y + 3,
+                    pill_w,
+                    14,
+                    3,
+                    Color::from_rgba(brand.r, brand.g, brand.b, 40),
+                );
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    plan,
+                    pill_x + 6,
+                    cur_y + 13,
+                    max_x,
+                    brand,
+                    10.0,
+                    true,
+                );
+            }
+            cur_y += 20;
+
+            if let Some(note) = Self::ai_limits_note(u.kind) {
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    note,
+                    pad_x + 10,
+                    cur_y + 10,
+                    max_x,
+                    theme.ansi[7],
+                    10.5,
+                    false,
+                );
+                cur_y += 18;
+            }
+
+            // Límites reales de la cuenta: porcentaje, barra y reinicio
+            for lim in snapshot.limits_for(u.kind) {
+                let bar_fg = if lim.percent >= 85.0 {
                     theme.ansi[1]
-                } else if used_pct >= 60.0 {
+                } else if lim.percent >= 60.0 {
                     theme.ansi[3]
                 } else {
                     theme.ansi[2]
                 };
-
-                let name_fg = if q.is_active {
-                    theme.foreground
-                } else {
-                    theme.ansi[7]
-                };
+                let bar_x = pad_x + 10;
+                let bar_w = divider_w.saturating_sub(10);
+                let pct = format!("{:.0}% usado", lim.percent);
+                let pct_w = self.measure_ui_text(&pct, 10.5, true);
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
-                    &q.name,
-                    pad_x,
+                    &lim.label,
+                    bar_x,
                     cur_y + 10,
-                    max_x.saturating_sub(95),
-                    name_fg,
+                    max_x.saturating_sub(pct_w + 8),
+                    theme.foreground,
                     11.0,
-                    q.is_active,
+                    false,
                 );
-
-                let pct_str = format!("{used_pct:.1}% usado");
-                let pct_w = self.measure_ui_text(&pct_str, 10.5, true);
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
-                    &pct_str,
+                    &pct,
                     max_x.saturating_sub(pct_w),
                     cur_y + 10,
                     max_x,
-                    bar_color,
+                    bar_fg,
                     10.5,
                     true,
                 );
-
-                // Barra de progreso de cuota
                 let bar_y = cur_y + 15;
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
                     height,
-                    pad_x,
+                    bar_x,
                     bar_y,
                     bar_w,
                     5,
                     2,
                     theme.border_color(),
                 );
-                let fill_w = ((bar_w as f32 * q.used_fraction).round() as usize)
-                    .clamp(if q.used_fraction > 0.002 { 4 } else { 0 }, bar_w);
+                let fill_w = ((bar_w as f32 * lim.percent / 100.0).round() as usize)
+                    .clamp(usize::from(lim.percent > 0.2) * 4, bar_w);
                 if fill_w > 0 {
                     crate::ui::draw_rounded_rect(
-                        buffer, width, height, pad_x, bar_y, fill_w, 5, 2, bar_color,
+                        buffer, width, height, bar_x, bar_y, fill_w, 5, 2, bar_fg,
                     );
                 }
-
-                // Subtítulo: ventana de reinicio y % disponible
-                let sub = format!("{} · {rem_pct:.1}% libre", q.reset_label);
+                let reset = lim.resets_in_secs().map_or_else(
+                    || "Sin fecha de reinicio".to_string(),
+                    |s| format!("Reinicia en {}", crate::app::format_duration(s)),
+                );
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
-                    &sub,
-                    pad_x,
-                    cur_y + 32,
+                    &reset,
+                    bar_x,
+                    cur_y + 28,
                     max_x,
-                    theme.ansi[8],
+                    theme.ansi[7],
                     10.0,
                     false,
                 );
-                cur_y += 40;
+                cur_y += Self::LIMIT_ROW_H;
             }
+
+            if !u.has_tokens() {
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    "Sin consumo local registrado",
+                    pad_x + 10,
+                    cur_y + 10,
+                    max_x,
+                    theme.ansi[7],
+                    10.5,
+                    false,
+                );
+                cur_y += 18 + 10;
+                continue;
+            }
+
+            // Ventana de 5 h y sesión actual: etiqueta, valor de color y detalle
+            let window_label = match u.window_5h.reset_in_secs {
+                Some(rem) if rem > 0 => format!(
+                    "Ventana 5h · reinicia en {}",
+                    crate::app::format_duration(rem)
+                ),
+                _ => "Ventana 5h".to_string(),
+            };
+            let rows = [
+                (
+                    window_label,
+                    &u.window_5h,
+                    brand,
+                    format!(
+                        "Entrada: {} · Caché: {} · Salida: {}",
+                        crate::app::format_tokens(u.window_5h.input_tokens),
+                        crate::app::format_tokens(u.window_5h.cache_tokens),
+                        crate::app::format_tokens(u.window_5h.output_tokens),
+                    ),
+                ),
+                (
+                    "Sesión actual".to_string(),
+                    &u.session,
+                    accent,
+                    format!(
+                        "Entrada: {} · Salida: {}",
+                        crate::app::format_tokens(u.session.input_tokens),
+                        crate::app::format_tokens(u.session.output_tokens),
+                    ),
+                ),
+            ];
+            for (label, win, value_fg, detail) in rows {
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    &label,
+                    pad_x + 10,
+                    cur_y + 10,
+                    max_x,
+                    theme.foreground,
+                    11.0,
+                    false,
+                );
+                let value = format!(
+                    "{} tok ({} turnos)",
+                    crate::app::format_tokens(win.total_tokens()),
+                    win.turns
+                );
+                let value_w = self.measure_ui_text(&value, 11.0, true);
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    &value,
+                    max_x.saturating_sub(value_w),
+                    cur_y + 10,
+                    max_x,
+                    value_fg,
+                    11.0,
+                    true,
+                );
+                cur_y += 16;
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    &detail,
+                    pad_x + 10,
+                    cur_y + 10,
+                    max_x,
+                    theme.ansi[7],
+                    10.0,
+                    false,
+                );
+                cur_y += 18;
+            }
+            cur_y += 10;
         }
 
-        // Divisor horizontal
+        // Divisor y total de 24 h de todos los agentes
         Self::draw_rect(
             buffer,
             width,
             height,
             pad_x,
             cur_y,
-            w.saturating_sub(28),
+            divider_w,
             1,
             theme.border_color(),
         );
-        cur_y += 6;
+        cur_y += 1 + 10;
 
-        // 3. Sección: Consumo de Tokens (Ventana 5h · Sesión · 24h)
-        let win5_header = match snapshot.window_5h.reset_in_secs {
-            Some(rem) if rem > 0 => format!(
-                "TOKENS · VENTANA 5H (REINICIA EN {})",
-                crate::app::format_duration(rem).to_uppercase()
-            ),
-            _ => "TOKENS · VENTANA 5H Y SESIÓN".to_string(),
-        };
         self.draw_ui_text(
             buffer,
             width,
             height,
-            &win5_header,
-            pad_x,
-            cur_y + 9,
-            max_x,
-            theme.ansi[8],
-            10.0,
-            true,
-        );
-        cur_y += 16;
-
-        let w5 = &snapshot.window_5h;
-        let w5_line = format!(
-            "Ventana 5h: {} tok ({} turnos)",
-            crate::app::format_tokens(w5.total_tokens()),
-            w5.turns
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &w5_line,
-            pad_x,
-            cur_y + 10,
-            max_x,
-            theme.foreground,
-            11.0,
-            true,
-        );
-        let w5_detail = format!(
-            "Ent: {} · Caché: {} · Sal: {}",
-            crate::app::format_tokens(w5.input_tokens),
-            crate::app::format_tokens(w5.cache_tokens),
-            crate::app::format_tokens(w5.output_tokens),
-        );
-        let w5_dw = self.measure_ui_text(&w5_detail, 10.0, false);
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &w5_detail,
-            max_x.saturating_sub(w5_dw),
-            cur_y + 10,
-            max_x,
-            theme.ansi[8],
-            10.0,
-            false,
-        );
-        cur_y += 19;
-
-        let ses = &snapshot.current_session;
-        let ses_line = format!(
-            "Sesión actual: {} tok ({} turnos)",
-            crate::app::format_tokens(ses.total_tokens()),
-            ses.turns
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &ses_line,
+            "Últimas 24h · todos los agentes",
             pad_x,
             cur_y + 10,
             max_x,
@@ -576,82 +725,98 @@ impl TerminalRenderer {
             11.0,
             false,
         );
-        let ses_detail = format!(
-            "Ent: {} · Sal: {}",
-            crate::app::format_tokens(ses.input_tokens),
-            crate::app::format_tokens(ses.output_tokens),
-        );
-        let ses_dw = self.measure_ui_text(&ses_detail, 10.0, false);
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &ses_detail,
-            max_x.saturating_sub(ses_dw),
-            cur_y + 10,
-            max_x,
-            theme.ansi[8],
-            10.0,
-            false,
-        );
-        cur_y += 19;
-
         let d24_line = format!(
-            "Últimas 24h: {} tok ({} sesiones)",
+            "{} tok ({} sesiones)",
             crate::app::format_tokens(snapshot.window_24h_tokens),
             snapshot.window_24h_sessions
         );
+        let d24_lw = self.measure_ui_text(&d24_line, 10.5, true);
         self.draw_ui_text(
             buffer,
             width,
             height,
             &d24_line,
-            pad_x,
+            max_x.saturating_sub(d24_lw),
             cur_y + 10,
             max_x,
-            theme.ansi[8],
+            theme.foreground,
             10.5,
-            false,
+            true,
         );
-        cur_y += 18;
+        cur_y += 16;
 
-        // 4. Agentes y Modelos configurados
+        // Agentes y modelos configurados
         if !snapshot.agents.is_empty() {
+            cur_y += 8;
             Self::draw_rect(
                 buffer,
                 width,
                 height,
                 pad_x,
                 cur_y,
-                w.saturating_sub(28),
+                divider_w,
                 1,
                 theme.border_color(),
             );
-            cur_y += 14;
+            cur_y += 1 + 10;
+
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                "AGENTES Y HERRAMIENTAS",
+                pad_x,
+                cur_y + 10,
+                max_x,
+                theme.ansi[7],
+                10.0,
+                true,
+            );
+            cur_y += 16;
+
             for ag in &snapshot.agents {
-                let left = format!("{}: {}", ag.agent, ag.model);
+                let brand_fg = match ag.agent.to_uppercase().as_str() {
+                    "AGY" => theme.ansi[6],
+                    "CLAUDE" => theme.ansi[5],
+                    "GEMINI" => theme.ansi[4],
+                    _ => theme.ansi[7],
+                };
+                let tag = format!("{}: ", ag.agent);
+                let next_x = self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    &tag,
+                    pad_x,
+                    cur_y + 10,
+                    max_x,
+                    brand_fg,
+                    10.5,
+                    true,
+                );
+                let dw = self.measure_ui_text(&ag.detail, 10.0, false);
+                let model_max_x = max_x.saturating_sub(dw + 8);
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
-                    &left,
-                    pad_x,
-                    cur_y + 4,
-                    max_x.saturating_sub(110),
-                    theme.ansi[7],
+                    &ag.model,
+                    next_x,
+                    cur_y + 10,
+                    model_max_x,
+                    theme.foreground,
                     10.5,
                     false,
                 );
-                let dw = self.measure_ui_text(&ag.detail, 10.0, false);
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
                     &ag.detail,
                     max_x.saturating_sub(dw),
-                    cur_y + 4,
+                    cur_y + 10,
                     max_x,
-                    theme.ansi[8],
+                    theme.ansi[7],
                     10.0,
                     false,
                 );
@@ -660,13 +825,14 @@ impl TerminalRenderer {
         }
 
         if let Some(ref hint) = snapshot.terminal_hint {
+            cur_y += 8;
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 hint,
                 pad_x,
-                cur_y + 8,
+                cur_y + 10,
                 max_x,
                 theme.ansi[6],
                 10.0,

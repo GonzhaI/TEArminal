@@ -120,45 +120,117 @@ impl AxonApp {
         self.apply_loaded_config();
     }
 
-    pub fn apply_theme(&mut self, theme_name: &str) {
-        self.config.appearance.theme = theme_name.to_string();
-        self.theme = Theme::from_name(theme_name);
-        for tab in &mut self.tabs {
-            for pane in &mut tab.panes {
-                pane.terminal.theme = self.theme.clone();
+    /// Asigna un tema de la lista a la ranura que se está editando (oscuro o claro).
+    pub(super) fn pick_theme(&mut self, name: &str) {
+        if self.settings_page_state.theme_slot_light {
+            self.config.appearance.theme_light = name.to_string();
+        } else {
+            self.config.appearance.theme = name.to_string();
+        }
+        self.refresh_theme();
+    }
+
+    /// Desplaza la lista de temas `rows` filas (positivo = hacia abajo).
+    pub(super) fn scroll_theme_list(&mut self, rows: isize) {
+        let n = self.settings_page_state.filtered_themes.len();
+        let max = n.saturating_sub(SettingsPageRects::THEME_ROWS);
+        let cur = self.settings_page_state.theme_scroll.min(max) as isize;
+        self.settings_page_state.theme_scroll = (cur + rows).clamp(0, max as isize) as usize;
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Deja visible el tema activo en la lista (al abrir Ajustes).
+    pub(super) fn reveal_current_theme(&mut self) {
+        let a = &self.config.appearance;
+        let current = Theme::canonical_name(if self.settings_page_state.theme_slot_light {
+            &a.theme_light
+        } else {
+            &a.theme
+        });
+        let matches = &self.settings_page_state.filtered_themes;
+        let idx = matches.iter().position(|&n| n == current).unwrap_or(0);
+        self.settings_page_state.theme_scroll = idx.saturating_sub(2);
+    }
+
+    /// Teclado del buscador de temas: escribe, borra, Enter aplica el primer resultado y Esc limpia.
+    pub(super) fn edit_theme_search(&mut self, key: &Key, text: Option<&str>) {
+        let st = &mut self.settings_page_state;
+        match key {
+            Key::Named(NamedKey::Enter) => {
+                st.editing_setting = None;
+                if let Some(&name) = st.filtered_themes.first() {
+                    self.pick_theme(name);
+                }
+            }
+            Key::Named(NamedKey::Escape) => {
+                st.editing_setting = None;
+                st.theme_filter.clear();
+                st.filtered_themes = Theme::search("");
+                st.theme_scroll = 0;
+                self.reveal_current_theme();
+            }
+            Key::Named(NamedKey::Backspace) => {
+                st.theme_filter.pop();
+                st.filtered_themes = Theme::search(&st.theme_filter);
+                st.theme_scroll = 0;
+            }
+            _ => {
+                let mut changed = false;
+                for ch in text.unwrap_or("").chars().filter(|c| !c.is_control()) {
+                    if st.theme_filter.chars().count() < 32 {
+                        st.theme_filter.push(ch);
+                        changed = true;
+                    }
+                }
+                if changed {
+                    st.filtered_themes = Theme::search(&st.theme_filter);
+                    st.theme_scroll = 0;
+                }
             }
         }
-        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Recalcula el tema activo (modo + tema de Windows) y lo aplica a ventana y paneles.
+    pub(super) fn apply_active_theme(&mut self) {
+        self.system_light = crate::theme::is_windows_system_light_mode();
+        self.theme = self.config.appearance.resolve_theme(self.system_light);
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                let was_dark = pane.terminal.theme.is_dark();
+                pane.terminal.theme = self.theme.clone();
+                let now_dark = pane.terminal.theme.is_dark();
+                if pane.terminal.report_color_scheme_mode && was_dark != now_dark {
+                    let report = pane.terminal.color_scheme_report_bytes();
+                    pane.pty.write_input(&report);
+                }
+            }
+        }
         if let Some(w) = &self.window {
             update_windows_theme(w, &self.theme);
             w.request_redraw();
         }
     }
 
+    /// Igual que `apply_active_theme`, tras un cambio de configuración que se guarda.
+    fn refresh_theme(&mut self) {
+        self.apply_active_theme();
+        let _ = self.config.save();
+    }
+
     pub fn set_theme_mode(&mut self, mode: &str) {
         self.config.appearance.theme_mode = mode.to_string();
-        if mode.eq_ignore_ascii_case("system") {
-            let is_light = crate::theme::is_windows_system_light_mode();
-            let target = if is_light {
-                "Catppuccin Latte".to_string()
-            } else {
-                let cur = Theme::from_name(&self.config.appearance.theme);
-                if cur.is_light() {
-                    "Catppuccin Frappé".to_string()
-                } else {
-                    self.config.appearance.theme.clone()
-                }
-            };
-            self.apply_theme(&target);
-        } else if mode.eq_ignore_ascii_case("light") {
-            self.apply_theme("Catppuccin Latte");
-        } else if self.theme.is_light() {
-            self.apply_theme("Catppuccin Frappé");
-        }
-        let _ = self.config.save();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+        // La lista pasa a editar el tema que ahora está en uso
+        self.settings_page_state.theme_slot_light = self
+            .config
+            .appearance
+            .uses_light_theme(crate::theme::is_windows_system_light_mode());
+        self.reveal_current_theme();
+        self.refresh_theme();
     }
 
     pub fn set_tab_layout(&mut self, layout: &str) {
@@ -211,8 +283,8 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_ghostty_prompt(&mut self) {
-        self.config.terminal.ghostty_prompt = !self.config.terminal.ghostty_prompt;
+    pub fn toggle_shell_integration(&mut self) {
+        self.config.terminal.shell_integration = !self.config.terminal.shell_integration;
         let _ = self.config.save();
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -251,6 +323,17 @@ impl AxonApp {
         }
     }
 
+    pub fn toggle_ligatures(&mut self) {
+        self.config.terminal.ligatures = !self.config.terminal.ligatures;
+        if let Some(r) = &mut self.renderer {
+            r.ligatures = self.config.terminal.ligatures;
+        }
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub fn toggle_auto_save(&mut self) {
         self.config.terminal.auto_save = !self.config.terminal.auto_save;
         let _ = self.config.save();
@@ -282,18 +365,11 @@ impl AxonApp {
     }
 
     fn apply_loaded_config(&mut self) {
-        self.theme = Theme::from_mode_and_name(
-            &self.config.appearance.theme_mode,
-            &self.config.appearance.theme,
-        );
-        for tab in &mut self.tabs {
-            for pane in &mut tab.panes {
-                pane.terminal.theme = self.theme.clone();
-            }
-        }
+        self.apply_active_theme();
         self.apply_ssh_integration_env();
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
+            renderer.ligatures = self.config.terminal.ligatures;
             renderer.update_scale(&self.config, scale_factor);
             update_windows_theme(window, &self.theme);
             apply_window_opacity_native(window, self.config.appearance.window_opacity);

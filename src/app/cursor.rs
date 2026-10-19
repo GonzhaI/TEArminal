@@ -119,12 +119,8 @@ impl AxonApp {
                 &self.file_explorer,
             ) {
                 let (_panel_x, panel_y, _panel_w, panel_h) =
-                    crate::explorer::FileExplorer::panel_geometry(
-                        win_w,
-                        win_h,
-                        top_offset,
-                        status_bar_h,
-                    );
+                    self.file_explorer
+                        .panel_geometry(win_w, win_h, top_offset, status_bar_h);
                 let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
                 let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
                 let list_y = panel_y + header_h + sub_h + 4;
@@ -249,6 +245,17 @@ impl AxonApp {
             return;
         }
 
+        // Arrastre del borde izquierdo del explorador: el PTY se redimensiona al soltar o al detenerse
+        if self.explorer_resizing {
+            self.file_explorer.set_width_from_edge(mx, win_w);
+            self.schedule_pty_resize();
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::ColResize);
+                w.request_redraw();
+            }
+            return;
+        }
+
         // Arrastre de un divisor entre paneles
         if let Some(icon) = self.divider_drag.as_ref().map(Divider::cursor_icon) {
             self.drag_divider(mx, my);
@@ -258,10 +265,17 @@ impl AxonApp {
             return;
         }
 
-        // Reordenar pestañas: la arrastrada salta a la posición bajo el ratón
+        // Reordenar pestañas: la arrastrada salta a la posición bajo el ratón solo dentro de la barra
         if let Some(from) = self.tab_drag {
-            if let Some(to) = self.tab_slot_at(mx, my).filter(|&to| to != from) {
-                self.move_tab(from, to);
+            let in_tab_bar = if self.is_horizontal_tabs() {
+                my < TopTabBarRects::HEIGHT + 10 && mx < win_w
+            } else {
+                mx < SIDEBAR_WIDTH + 10 && my < win_h
+            };
+            if in_tab_bar {
+                if let Some(to) = self.tab_slot_at(mx, my).filter(|&to| to != from) {
+                    self.move_tab(from, to);
+                }
             }
         }
 
@@ -591,6 +605,7 @@ impl AxonApp {
             }
 
             let mut h_theme = None;
+            let mut h_ts = None;
             let mut h_tm = None;
             let mut h_tl = None;
             let mut h_fm = false;
@@ -614,17 +629,20 @@ impl AxonApp {
             let mut h_as = false;
             let mut h_ww = false;
             let mut h_si = false;
+            let mut h_lig = false;
             let mut h_of = false;
             let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
 
             match self.settings_page_state.section {
                 SettingsSection::Appearance => {
-                    for (idx, r) in rects.theme_buttons.iter().enumerate() {
-                        if SettingsPageRects::inside(mx, my, *r) {
-                            h_theme = Some(idx);
-                            break;
-                        }
-                    }
+                    h_theme = rects.theme_row_at(mx, my);
+                    h_ts = if SettingsPageRects::inside(mx, my, rects.theme_slot_dark_btn) {
+                        Some(0)
+                    } else if SettingsPageRects::inside(mx, my, rects.theme_slot_light_btn) {
+                        Some(1)
+                    } else {
+                        None
+                    };
                     if SettingsPageRects::inside(mx, my, rects.theme_mode_system_btn) {
                         h_tm = Some(0);
                     } else if SettingsPageRects::inside(mx, my, rects.theme_mode_dark_btn) {
@@ -654,7 +672,7 @@ impl AxonApp {
                 }
                 SettingsSection::Terminal => {
                     h_cb = SettingsPageRects::inside(mx, my, rects.cursor_blink_btn);
-                    h_gp = SettingsPageRects::inside(mx, my, rects.ghostty_prompt_btn);
+                    h_gp = SettingsPageRects::inside(mx, my, rects.shell_integration_btn);
                     h_cs = SettingsPageRects::inside(mx, my, rects.copy_on_select_btn);
                     h_sb = SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn);
                     h_fe = SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn);
@@ -662,6 +680,7 @@ impl AxonApp {
                     h_as = SettingsPageRects::inside(mx, my, rects.auto_save_btn);
                     h_ww = SettingsPageRects::inside(mx, my, rects.word_wrap_btn);
                     h_si = SettingsPageRects::inside(mx, my, rects.ssh_integration_btn);
+                    h_lig = SettingsPageRects::inside(mx, my, rects.ligatures_btn);
                     h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
                     h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
                 }
@@ -673,6 +692,7 @@ impl AxonApp {
             }
 
             if h_theme.is_some()
+                || h_ts.is_some()
                 || h_tm.is_some()
                 || h_tl.is_some()
                 || h_fm
@@ -696,6 +716,7 @@ impl AxonApp {
                 || h_as
                 || h_ww
                 || h_si
+                || h_lig
                 || h_of
                 || h_reset
             {
@@ -705,6 +726,7 @@ impl AxonApp {
             let st = &mut self.settings_page_state;
             if st.hovered_section != h_sec
                 || st.hovered_theme != h_theme
+                || st.hovered_theme_slot != h_ts
                 || st.hovered_theme_mode != h_tm
                 || st.hovered_tab_layout != h_tl
                 || st.hovered_font_minus != h_fm
@@ -720,7 +742,7 @@ impl AxonApp {
                 || st.hovered_opacity_plus != h_op
                 || st.hovered_opacity_box != h_ob
                 || st.hovered_cursor_blink != h_cb
-                || st.hovered_ghostty_prompt != h_gp
+                || st.hovered_shell_integration != h_gp
                 || st.hovered_copy_on_select != h_cs
                 || st.hovered_status_bar != h_sb
                 || st.hovered_file_explorer != h_fe
@@ -728,11 +750,13 @@ impl AxonApp {
                 || st.hovered_auto_save != h_as
                 || st.hovered_word_wrap != h_ww
                 || st.hovered_ssh_integration != h_si
+                || st.hovered_ligatures != h_lig
                 || st.hovered_open_file != h_of
                 || st.hovered_reset_defaults != h_reset
             {
                 st.hovered_section = h_sec;
                 st.hovered_theme = h_theme;
+                st.hovered_theme_slot = h_ts;
                 st.hovered_theme_mode = h_tm;
                 st.hovered_tab_layout = h_tl;
                 st.hovered_font_minus = h_fm;
@@ -748,7 +772,7 @@ impl AxonApp {
                 st.hovered_opacity_plus = h_op;
                 st.hovered_opacity_box = h_ob;
                 st.hovered_cursor_blink = h_cb;
-                st.hovered_ghostty_prompt = h_gp;
+                st.hovered_shell_integration = h_gp;
                 st.hovered_copy_on_select = h_cs;
                 st.hovered_status_bar = h_sb;
                 st.hovered_file_explorer = h_fe;
@@ -756,6 +780,7 @@ impl AxonApp {
                 st.hovered_auto_save = h_as;
                 st.hovered_word_wrap = h_ww;
                 st.hovered_ssh_integration = h_si;
+                st.hovered_ligatures = h_lig;
                 st.hovered_open_file = h_of;
                 st.hovered_reset_defaults = h_reset;
                 needs_redraw = true;
@@ -768,12 +793,8 @@ impl AxonApp {
         if !is_settings_active && self.file_explorer.visible {
             let status_bar_h = self.status_bar_height();
             let (panel_x, panel_y, panel_w, panel_h) =
-                crate::explorer::FileExplorer::panel_geometry(
-                    win_w,
-                    win_h,
-                    top_offset,
-                    status_bar_h,
-                );
+                self.file_explorer
+                    .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
                 let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
                 let back_x = panel_x + 8;
@@ -787,6 +808,10 @@ impl AxonApp {
                 let up_x = fwd_x + 24;
                 let is_up_hover =
                     mx >= up_x && mx < up_x + 22 && my >= sub_y + 4 && my < sub_y + 24;
+
+                let (px, py, pw, ph) =
+                    crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
+                let is_pin_hover = mx >= px && mx < px + pw && my >= py && my < py + ph;
 
                 let is_over_scrollbar = if let Some((track, _thumb)) =
                     TerminalRenderer::explorer_scrollbar_geometry(
@@ -810,16 +835,23 @@ impl AxonApp {
                     self.file_explorer.item_at_y(my, panel_y)
                 };
 
-                if is_back_hover || is_fwd_hover || is_up_hover || item_hover.is_some() {
+                if is_pin_hover
+                    || is_back_hover
+                    || is_fwd_hover
+                    || is_up_hover
+                    || item_hover.is_some()
+                {
                     is_pointer = true;
                 }
 
-                if self.file_explorer.hovered_back_btn != is_back_hover
+                if self.file_explorer.hovered_pin_btn != is_pin_hover
+                    || self.file_explorer.hovered_back_btn != is_back_hover
                     || self.file_explorer.hovered_forward_btn != is_fwd_hover
                     || self.file_explorer.hovered_up_btn != is_up_hover
                     || self.file_explorer.hovered_index != item_hover
                     || self.file_explorer.hovered_scrollbar != is_over_scrollbar
                 {
+                    self.file_explorer.hovered_pin_btn = is_pin_hover;
                     self.file_explorer.hovered_back_btn = is_back_hover;
                     self.file_explorer.hovered_forward_btn = is_fwd_hover;
                     self.file_explorer.hovered_up_btn = is_up_hover;
@@ -827,12 +859,14 @@ impl AxonApp {
                     self.file_explorer.hovered_scrollbar = is_over_scrollbar;
                     needs_redraw = true;
                 }
-            } else if self.file_explorer.hovered_back_btn
+            } else if self.file_explorer.hovered_pin_btn
+                || self.file_explorer.hovered_back_btn
                 || self.file_explorer.hovered_forward_btn
                 || self.file_explorer.hovered_up_btn
                 || self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
             {
+                self.file_explorer.hovered_pin_btn = false;
                 self.file_explorer.hovered_back_btn = false;
                 self.file_explorer.hovered_forward_btn = false;
                 self.file_explorer.hovered_up_btn = false;
@@ -880,6 +914,30 @@ impl AxonApp {
                         false
                     };
 
+                    let is_over_scroll_to_bottom =
+                        if pane.terminal.scroll_offset > 0 && !pane.terminal.is_alt_screen {
+                            let (bx, by, bw, bh) = crate::renderer::pane_scroll_to_bottom_btn_rect(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            );
+                            mx >= bx && mx < bx + bw && my >= by && my < by + bh
+                        } else {
+                            false
+                        };
+
+                    if is_over_scroll_to_bottom {
+                        is_pointer = true;
+                        if !pane.terminal.scroll_to_bottom_hovered {
+                            pane.terminal.scroll_to_bottom_hovered = true;
+                            needs_redraw = true;
+                        }
+                    } else if pane.terminal.scroll_to_bottom_hovered {
+                        pane.terminal.scroll_to_bottom_hovered = false;
+                        needs_redraw = true;
+                    }
+
                     if is_over_scrollbar {
                         is_pointer = true;
                         if !pane.terminal.scrollbar_hovered {
@@ -892,7 +950,28 @@ impl AxonApp {
                             needs_redraw = true;
                         }
                         if !pane.terminal.is_mouse_reporting_active() || bypass {
-                            is_text = true;
+                            let mut is_link = false;
+                            if self.modifiers.control_key() {
+                                if let Some(renderer) = &self.renderer {
+                                    let term_x = mx.saturating_sub(rect.x);
+                                    let term_y = my.saturating_sub(rect.y);
+                                    let col = term_x.saturating_sub(renderer.margin_x)
+                                        / renderer.char_width;
+                                    let col = col.min(pane.terminal.cols.saturating_sub(1));
+                                    let row_in_view = term_y.saturating_sub(renderer.margin_y)
+                                        / renderer.row_height;
+                                    let row_in_view =
+                                        row_in_view.min(pane.terminal.rows.saturating_sub(1));
+                                    let global_line =
+                                        pane.terminal.visible_line_start() + row_in_view;
+                                    is_link = pane.terminal.url_at(col, global_line).is_some();
+                                }
+                            }
+                            if is_link {
+                                is_pointer = true;
+                            } else {
+                                is_text = true;
+                            }
                         }
                     }
 
@@ -947,14 +1026,66 @@ impl AxonApp {
                         if let Some(renderer) = &self.renderer {
                             let term_x = mx.saturating_sub(rect.x);
                             let term_y = my.saturating_sub(rect.y);
-                            if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
-                                let col = (term_x - renderer.margin_x) / renderer.char_width;
-                                let row = (term_y - renderer.margin_y) / renderer.row_height;
-                                if let Some(start) = self.drag_start {
-                                    pane.terminal.selection = Some(SelectionRange {
-                                        start,
-                                        end: (col, row),
-                                    });
+                            let col =
+                                term_x.saturating_sub(renderer.margin_x) / renderer.char_width;
+                            let col = col.min(pane.terminal.cols.saturating_sub(1));
+
+                            // Auto-scroll si el cursor se arrastra por encima o por debajo del panel
+                            let mut scrolled = false;
+                            if my < rect.y + renderer.margin_y
+                                && pane.terminal.scroll_offset < pane.terminal.scrollback.len()
+                            {
+                                pane.terminal.scroll_up(1);
+                                scrolled = true;
+                            } else if my >= rect.y + rect.height && pane.terminal.scroll_offset > 0
+                            {
+                                pane.terminal.scroll_down(1);
+                                scrolled = true;
+                            }
+                            if scrolled {
+                                self.last_scroll_time = Instant::now();
+                            }
+
+                            let row_in_view =
+                                term_y.saturating_sub(renderer.margin_y) / renderer.row_height;
+                            let row_in_view = row_in_view.min(pane.terminal.rows.saturating_sub(1));
+                            let global_line = pane.terminal.visible_line_start() + row_in_view;
+
+                            let new_sel = if let Some(anchor) = self.drag_anchor {
+                                // Tras doble/triple clic: extiende por palabra/línea.
+                                pane.terminal.selection = Some(anchor);
+                                if self.terminal_click_count >= 3 {
+                                    pane.terminal.select_line_at(global_line);
+                                } else {
+                                    pane.terminal.select_word_at(col, global_line);
+                                }
+                                pane.terminal
+                                    .selection
+                                    .map(|unit| {
+                                        let key = |p: (usize, usize)| (p.1, p.0);
+                                        let (a, b) = (anchor.start, anchor.end);
+                                        let (u0, u1) = (unit.start, unit.end);
+                                        if key(u0) < key(a) {
+                                            SelectionRange { start: u0, end: b }
+                                        } else {
+                                            let end = if key(u1) > key(b) { u1 } else { b };
+                                            SelectionRange { start: a, end }
+                                        }
+                                    })
+                                    .or_else(|| {
+                                        pane.terminal.selection = Some(anchor);
+                                        None
+                                    })
+                            } else {
+                                self.drag_start.map(|start| SelectionRange {
+                                    start,
+                                    end: (col, global_line),
+                                })
+                            };
+                            if let Some(new_sel) = new_sel {
+                                let new_sel = Some(new_sel);
+                                if pane.terminal.selection != new_sel {
+                                    pane.terminal.selection = new_sel;
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
@@ -1119,78 +1250,115 @@ impl AxonApp {
                     let scrollbar_margin = 16;
                     let text_max_x = (offset + viewer_w).saturating_sub(scrollbar_margin);
                     if mx >= (offset + gutter_w) && mx < text_max_x {
-                        is_text = true;
+                        let clicked_row = viewer.scroll_offset + (my - content_y) / row_h.max(16);
+                        let is_link = if viewer.render_markdown || self.modifiers.control_key() {
+                            viewer
+                                .hit_test(clicked_row, mx, &lay)
+                                .and_then(|(l, c)| viewer.link_at(l, c))
+                                .is_some()
+                        } else {
+                            false
+                        };
+                        if is_link {
+                            is_pointer = true;
+                        } else {
+                            is_text = true;
+                        }
                     }
                 }
             }
         }
 
-        // Hover en el indicador de modelo/agente de IA en la barra de estado inferior
-        let new_hovered_ai = if self.config.appearance.show_status_bar && !is_settings_active {
-            let active_tab = &self.tabs[self.active_tab_index];
-            let (ssh_host, ai_status) = if let Some(ref viewer) = active_tab.file_viewer {
-                (viewer.remote_destination.as_deref(), AiAgentStatus::None)
-            } else if let Some(pane) = active_tab
-                .panes
-                .iter()
-                .find(|p| p.id == active_tab.active_pane_id)
-            {
-                let s_host = pane
-                    .terminal
-                    .ssh_session
+        // Hover en el indicador de modelo/agente de IA y de actualización en la barra de estado inferior
+        let (new_hovered_ai, new_hovered_update) =
+            if self.config.appearance.show_status_bar && !is_settings_active {
+                let active_tab = &self.tabs[self.active_tab_index];
+                let (ssh_host, ai_status) = if let Some(ref viewer) = active_tab.file_viewer {
+                    (viewer.remote_destination.as_deref(), AiAgentStatus::None)
+                } else if let Some(pane) = active_tab
+                    .panes
+                    .iter()
+                    .find(|p| p.id == active_tab.active_pane_id)
+                {
+                    let s_host = pane
+                        .terminal
+                        .ssh_session
+                        .as_ref()
+                        .filter(|s| s.is_active)
+                        .map(|s| s.destination.as_str());
+                    let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                    (s_host, ai)
+                } else {
+                    (None, AiAgentStatus::None)
+                };
+                let active_model = self.ai_usage.snapshot.model_for(ai_status);
+                let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
+                    ai_status,
+                    ssh_host,
+                    active_model,
+                    &self.theme,
+                );
+                let label_w = self
+                    .renderer
                     .as_ref()
-                    .filter(|s| s.is_active)
-                    .map(|s| s.destination.as_str());
-                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
-                (s_host, ai)
+                    .map(|r| r.measure_ui_text(&badge_label, 11.0, true))
+                    .unwrap_or(badge_label.len() * 7);
+
+                let update_info = crate::updater::get_available_update();
+                let update_text = update_info
+                    .as_ref()
+                    .map(|u| format!("v{} disponible", u.latest_version));
+                let update_w = update_text.as_ref().map(|t| {
+                    self.renderer
+                        .as_ref()
+                        .map(|r| r.measure_ui_text(t, 11.0, true))
+                        .unwrap_or(t.len() * 7)
+                });
+
+                let sb_rects = StatusBarRects::compute(win_w, win_h, label_w, update_w);
+                let ai_hov = if self.hovered_ai_badge {
+                    let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
+                    let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
+                    StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
+                } else {
+                    StatusBarRects::inside(mx, my, sb_rects.ai_badge)
+                };
+                let update_hov = sb_rects
+                    .update_badge
+                    .is_some_and(|r| StatusBarRects::inside(mx, my, r));
+                (ai_hov, update_hov)
             } else {
-                (None, AiAgentStatus::None)
+                (false, false)
             };
-            let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
-                ai_status,
-                ssh_host,
-                self.ai_usage.snapshot.active_model.as_deref(),
-                &self.theme,
-            );
-            let label_w = self
-                .renderer
-                .as_ref()
-                .map(|r| r.measure_ui_text(&badge_label, 11.0, true))
-                .unwrap_or(badge_label.len() * 7);
-            let sb_rects = StatusBarRects::compute(win_w, win_h, label_w);
-            if self.hovered_ai_badge {
-                let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
-                let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
-                StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
-            } else {
-                StatusBarRects::inside(mx, my, sb_rects.ai_badge)
-            }
-        } else {
-            false
-        };
 
         if new_hovered_ai {
             is_pointer = true;
             let just_entered = !self.hovered_ai_badge;
             let active_tab = &self.tabs[self.active_tab_index];
-            let (term_ref, ai_status) = if active_tab.file_viewer.is_some() {
-                (None, AiAgentStatus::None)
+            let (term_ref, agents) = if active_tab.file_viewer.is_some() {
+                (None, Vec::new())
             } else if let Some(pane) = active_tab
                 .panes
                 .iter()
                 .find(|p| p.id == active_tab.active_pane_id)
             {
-                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
-                (Some(&pane.terminal), ai)
+                (Some(&pane.terminal), active_agents(active_tab))
             } else {
-                (None, AiAgentStatus::None)
+                (None, Vec::new())
             };
             if self.ai_usage.refresh_if_needed(term_ref, just_entered) {
-                self.spawn_ai_local_scan(ai_status);
+                self.spawn_ai_local_scan(agents);
             }
+        }
+        if new_hovered_update {
+            is_pointer = true;
         }
         if self.hovered_ai_badge != new_hovered_ai {
             self.hovered_ai_badge = new_hovered_ai;
+            needs_redraw = true;
+        }
+        if self.hovered_update_badge != new_hovered_update {
+            self.hovered_update_badge = new_hovered_update;
             needs_redraw = true;
         }
 
@@ -1207,33 +1375,47 @@ impl AxonApp {
             needs_redraw = true;
         }
 
-        // Detección de bordes para cursor de redimensionamiento (solo en ventana flotante, no maximizada ni pantalla completa).
-        // Toda la barra superior se reserva para arrastrar la ventana y controles de pestañas.
+        // Cursor de redimensionamiento en los bordes (solo en ventana flotante, no maximizada ni pantalla completa).
         let can_resize = self
             .window
             .as_ref()
             .is_some_and(|w| !w.is_maximized() && w.fullscreen().is_none());
         let border_resize_cursor = if can_resize {
+            use winit::window::ResizeDirection;
             self.compute_border_resize_direction(mx, my, win_w, win_h)
                 .map(|dir| match dir {
-                    winit::window::ResizeDirection::SouthWest => {
+                    ResizeDirection::NorthEast | ResizeDirection::SouthWest => {
                         winit::window::CursorIcon::NeswResize
                     }
-                    winit::window::ResizeDirection::SouthEast => {
+                    ResizeDirection::NorthWest | ResizeDirection::SouthEast => {
                         winit::window::CursorIcon::NwseResize
                     }
-                    winit::window::ResizeDirection::West | winit::window::ResizeDirection::East => {
+                    ResizeDirection::West | ResizeDirection::East => {
                         winit::window::CursorIcon::EwResize
                     }
-                    winit::window::ResizeDirection::South => winit::window::CursorIcon::NsResize,
-                    _ => winit::window::CursorIcon::Default,
+                    ResizeDirection::North | ResizeDirection::South => {
+                        winit::window::CursorIcon::NsResize
+                    }
                 })
         } else {
             None
         };
 
         let divider_cursor = self.divider_at(mx, my).map(|d| d.cursor_icon());
-        let cursor_icon = if let Some(resize_cur) = border_resize_cursor.or(divider_cursor) {
+        let explorer_edge_cursor = (!is_settings_active
+            && self.file_explorer.on_resize_edge(
+                mx,
+                my,
+                win_w,
+                win_h,
+                top_offset,
+                self.status_bar_height(),
+            ))
+        .then_some(winit::window::CursorIcon::ColResize);
+        let cursor_icon = if let Some(resize_cur) = border_resize_cursor
+            .or(explorer_edge_cursor)
+            .or(divider_cursor)
+        {
             resize_cur
         } else if is_pointer {
             winit::window::CursorIcon::Pointer

@@ -9,14 +9,14 @@ $reset = "$esc[0m"
 $bold = "$esc[1m"
 $dim = "$esc[2m"
 
-# Colores Ghostty
-$bg_panel = "$esc[48;2;28;28;32m"
-$fg_accent = "$esc[38;2;81;226;122m"      # Verde Ghostty
-$fg_blue = "$esc[38;2;78;146;249m"        # Azul Ghostty
-$fg_amber = "$esc[38;2;250;189;47m"       # Ámbar Ghostty
-$fg_red = "$esc[38;2;244;56;65m"          # Rojo Ghostty
-$fg_text = "$esc[38;2;230;230;235m"       # Blanco hueso Ghostty
-$fg_dim = "$esc[38;2;120;125;140m"
+# Colores de la paleta ANSI (siguen el tema activo)
+$bg_panel = "$esc[49m"
+$fg_accent = "$esc[32m"      # Verde
+$fg_blue = "$esc[34m"        # Azul
+$fg_amber = "$esc[33m"       # Ámbar
+$fg_red = "$esc[31m"          # Rojo
+$fg_text = "$esc[39m"       # Texto
+$fg_dim = "$esc[90m"
 
 function Draw-Screen {
     param([string]$selectedAgent = "Coder", [string]$lastEvent = "Listo. Haz clic en cualquier panel con el ratón.")

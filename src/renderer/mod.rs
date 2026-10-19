@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod context_menu;
+pub mod d3d11;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
@@ -23,11 +24,13 @@ mod top_bar;
 
 use draw::{blit_glyph, fill_rect, Clip};
 use glyphs::{
-    font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD, EMBEDDED_LUCIDE,
+    font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
+    EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
 };
 
+pub use d3d11::D3D11Presenter;
 pub use geometry::*;
-pub use glyphs::CachedGlyph;
+pub use glyphs::{is_ligature_candidate, CachedGlyph};
 pub use state::*;
 
 use crate::config::AxonConfig;
@@ -64,6 +67,11 @@ pub struct TerminalRenderer {
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
+    pub ligatures: bool,
+    regular_face: Option<rustybuzz::Face<'static>>,
+    bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
+    ligature_cache: FastMap<(u16, bool), CachedGlyph>,
+    shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
     pub(super) settings_scratch: Vec<u32>,
     md_blocks_cache: Option<(
         std::path::PathBuf,
@@ -76,6 +84,11 @@ impl TerminalRenderer {
     pub fn new(config: &AxonConfig, scale_factor: f64) -> Self {
         // JetBrains Mono Nerd Font Regular (o la fuente del usuario); negrita y fallback son perezosas
         let (regular_font, custom_font) = Self::load_regular_font(config);
+        let regular_face = if custom_font {
+            None
+        } else {
+            rustybuzz::Face::from_slice(EMBEDDED_JETBRAINS_REGULAR, 0)
+        };
 
         let inter_font = fontdue::Font::from_bytes(EMBEDDED_INTER_MEDIUM, font_settings())
             .expect("Error al inicializar fuente Inter Medium");
@@ -108,6 +121,11 @@ impl TerminalRenderer {
             margin_x: 0,
             margin_y: 0,
             scrollbars_awake: false,
+            ligatures: config.terminal.ligatures,
+            regular_face,
+            bold_face_rb: OnceCell::new(),
+            ligature_cache: FastMap::default(),
+            shaped_ligatures: FastMap::default(),
             settings_scratch: Vec::new(),
             md_blocks_cache: None,
         };
@@ -146,6 +164,7 @@ impl TerminalRenderer {
         self.ui_glyph_cache.clear();
         self.ui_advance_cache.borrow_mut().clear();
         self.icon_glyph_cache.clear();
+        self.ligature_cache.clear();
     }
 
     /// Calcula las columnas y filas que caben en un panel según sus dimensiones en píxeles

@@ -108,7 +108,7 @@ impl TerminalRenderer {
             viewer.git_base.is_some(),
         );
         let accent = theme.accent_color();
-        let chip_bg = Color::from_rgba(255, 255, 255, 8);
+        let chip_bg = theme.surface_bg();
         let tint = |c: Color, a: u8| Color::from_rgba(c.r(), c.g(), c.b(), a);
 
         if let Some(rect) = header_rects.md_btn {
@@ -573,15 +573,21 @@ impl TerminalRenderer {
                     let mut acc = cur_x;
                     let mut sx: Option<i32> = None;
                     let mut ex = cur_x;
-                    for (ci, ch) in seg.chars().enumerate() {
+                    use unicode_segmentation::UnicodeSegmentation;
+                    for (ci, g) in seg.graphemes(true).enumerate() {
                         let col = row.start + ci;
-                        let adv = if ch == '\t' { tab_adv } else { char_w as i32 };
+                        let adv = if g == "\t" {
+                            tab_adv
+                        } else {
+                            use unicode_width::UnicodeWidthStr;
+                            char_w as i32 * g.width().max(1) as i32
+                        };
                         if (line_idx > l1 || col >= c1) && (line_idx < l2 || col < c2) {
                             sx.get_or_insert(acc);
                             ex = acc + adv;
-                            match ch {
-                                ' ' => marks.push((acc + adv / 2, false)),
-                                '\t' => marks.push((acc, true)),
+                            match g {
+                                " " => marks.push((acc + adv / 2, false)),
+                                "\t" => marks.push((acc, true)),
                                 _ => {}
                             }
                         }
@@ -703,10 +709,18 @@ impl TerminalRenderer {
                 && col >= row.start
                 && (is_last_segment || col < row.end)
             {
+                use unicode_segmentation::UnicodeSegmentation;
                 let offset: i32 = seg
-                    .chars()
+                    .graphemes(true)
                     .take(col - row.start)
-                    .map(|c| if c == '\t' { tab_adv } else { char_w as i32 })
+                    .map(|g| {
+                        if g == "\t" {
+                            tab_adv
+                        } else {
+                            use unicode_width::UnicodeWidthStr;
+                            char_w as i32 * g.width().max(1) as i32
+                        }
+                    })
                     .sum();
                 let cursor_x = cur_x + offset;
                 if cursor_x >= (sep_x + 1) as i32 && cursor_x < text_max_x as i32 {
@@ -1132,6 +1146,43 @@ impl TerminalRenderer {
             }
 
             // Símbolos, delimitadores y operadores
+            if self.ligatures && is_ligature_candidate(ch) {
+                let mut op_buf = [0u8; 8];
+                op_buf[0] = ch as u8;
+                let mut run_len = 1usize;
+                let mut peek_i = next_i;
+                while run_len < 8 && peek_i < len {
+                    let b = bytes[peek_i];
+                    if b < 128 && is_ligature_candidate(b as char) {
+                        op_buf[run_len] = b;
+                        run_len += 1;
+                        peek_i += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if run_len >= 2 {
+                    let shaped = self.shape_punctuation_run(&op_buf[..run_len], false);
+                    let symbol_fg = theme.ansi[6];
+                    for k in 0..run_len {
+                        if cur_x >= max_x_i32 {
+                            break;
+                        }
+                        let gid = shaped.gids[k];
+                        let glyph = self.get_ligature_glyph(gid, false);
+                        if glyph.width > 0 {
+                            let gx = cur_x + glyph.x_offset;
+                            let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+                            blit_glyph(buffer, width, clip, glyph, gx, gy, symbol_fg);
+                        }
+                        cur_x += char_w_i32;
+                    }
+                    i = peek_i;
+                    continue;
+                }
+            }
+
             let symbol_fg = if matches!(ch, '{' | '}' | '(' | ')' | '[' | ']') {
                 theme.ansi[7]
             } else if matches!(

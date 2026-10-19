@@ -6,13 +6,13 @@
 $OutputEncoding = [System.Text.Encoding]::UTF8
 Import-Module PSReadLine -ErrorAction SilentlyContinue
 Set-PSReadLineOption -Colors @{
-    Command   = ([char]27 + '[38;2;81;226;122m')
-    Parameter = ([char]27 + '[38;2;78;146;249m')
-    Operator  = ([char]27 + '[38;2;246;196;66m')
-    String    = ([char]27 + '[38;2;120;247;156m')
-    Number    = ([char]27 + '[38;2;207;112;255m')
-    Member    = ([char]27 + '[38;2;54;214;214m')
-    Error     = ([char]27 + '[38;2;244;56;65m')
+    Command   = ([char]27 + '[32m')
+    Parameter = ([char]27 + '[34m')
+    Operator  = ([char]27 + '[33m')
+    String    = ([char]27 + '[92m')
+    Number    = ([char]27 + '[35m')
+    Member    = ([char]27 + '[36m')
+    Error     = ([char]27 + '[31m')
 } -ErrorAction SilentlyContinue
 Set-PSReadLineKeyHandler -Chord 'Alt+Backspace' -Function BackwardKillWord -ErrorAction SilentlyContinue
 Set-PSReadLineKeyHandler -Chord 'Alt+Enter' -Function AddLine -ErrorAction SilentlyContinue
@@ -51,24 +51,24 @@ function prompt {
         if ($head -and [IO.File]::Exists($head)) {
             $l = [IO.File]::ReadAllText($head).Trim()
             $b = if ($l.StartsWith('ref: refs/heads/')) { $l.Substring(16) } else { $l.Substring(0, [Math]::Min(7, $l.Length)) }
-            if ($b) { $git = ' ' + $esc + '[38;2;81;226;122m' + [char]0xe0a0 + ' ' + $b + $esc + '[0m' }
+            if ($b) { $git = ' ' + $esc + '[32m' + [char]0xe0a0 + ' ' + $b + $esc + '[0m' }
             break
         }
     }
-    return $osc7 + $esc + ']133;A' + $bel + $esc + '[38;2;78;146;249m' + [char]0xf07b + ' ' + $p + $esc + '[0m' + $git +
-        [Environment]::NewLine + $esc + '[38;2;81;226;122m' + [char]0xf432 + ' ' + $esc + '[0m' + $esc + ']133;B' + $bel
+    return $osc7 + $esc + ']133;A' + $bel + $esc + '[34m' + [char]0xf07b + ' ' + $p + $esc + '[0m' + $git +
+        [Environment]::NewLine + $esc + '[32m' + [char]0xf432 + ' ' + $esc + '[0m' + $esc + ']133;B' + $bel
 }
 
 # ls: eza > lsd > listado propio con iconos Nerd Font (la búsqueda se hace una sola vez por sesión)
 $script:AxonLister = $null
 $script:AxonIcons = @{
-    '.rs'   = @('244;56;65', 0xe7a8);   '.toml' = @('246;196;66', 0xe6b2);  '.yaml' = @('246;196;66', 0xe6b2)
-    '.yml'  = @('246;196;66', 0xe6b2);  '.json' = @('246;196;66', 0xe60b);  '.md'   = @('78;146;249', 0xe73e)
-    '.ps1'  = @('54;214;214', 0xe70f);  '.bat'  = @('54;214;214', 0xe70f);  '.cmd'  = @('54;214;214', 0xe70f)
-    '.exe'  = @('81;226;122', 0xf489);  '.dll'  = @('207;112;255', 0xf013); '.png'  = @('207;112;255', 0xf1c5)
-    '.jpg'  = @('207;112;255', 0xf1c5); '.svg'  = @('246;196;66', 0xf1c5);  '.zip'  = @('255;220;107', 0xf1c6)
-    '.tar'  = @('255;220;107', 0xf1c6); '.gz'   = @('255;220;107', 0xf1c6); '.lock' = @('120;247;156', 0xf023)
-    '.py'   = @('246;196;66', 0xe73c);  '.js'   = @('246;196;66', 0xe74e);  '.ts'   = @('78;146;249', 0xe628)
+    '.rs'   = @('31', 0xe7a8);   '.toml' = @('33', 0xe6b2);  '.yaml' = @('33', 0xe6b2)
+    '.yml'  = @('33', 0xe6b2);  '.json' = @('33', 0xe60b);  '.md'   = @('34', 0xe73e)
+    '.ps1'  = @('36', 0xe70f);  '.bat'  = @('36', 0xe70f);  '.cmd'  = @('36', 0xe70f)
+    '.exe'  = @('32', 0xf489);  '.dll'  = @('35', 0xf013); '.png'  = @('35', 0xf1c5)
+    '.jpg'  = @('35', 0xf1c5); '.svg'  = @('33', 0xf1c5);  '.zip'  = @('93', 0xf1c6)
+    '.tar'  = @('93', 0xf1c6); '.gz'   = @('93', 0xf1c6); '.lock' = @('92', 0xf023)
+    '.py'   = @('33', 0xe73c);  '.js'   = @('33', 0xe74e);  '.ts'   = @('34', 0xe628)
 }
 function ls {
     param([Parameter(Position = 0, ValueFromPipeline = $true)][string]$Path = '.', [switch]$a, [switch]$Force)
@@ -99,15 +99,15 @@ function ls {
     foreach ($item in $items) {
         $padded = $item.Name.PadRight($colWidth)
         if ($item.PSIsContainer) {
-            $icon = $esc + '[38;2;78;146;249m' + [char]0xf07b + $esc + '[0m'
-            $name = $esc + '[1;38;2;78;146;249m' + $padded + $esc + '[0m'
+            $icon = $esc + '[34m' + [char]0xf07b + $esc + '[0m'
+            $name = $esc + '[1;34m' + $padded + $esc + '[0m'
             $size = $esc + '[2m' + '<DIR>'.PadLeft(9) + $esc + '[0m'
         } else {
             $known = $script:AxonIcons[$item.Extension]
             if ($known) { $color = $known[0]; $glyph = $known[1] }
-            else { $glyph = 0xf15b; $color = if ($item.Name.StartsWith('.')) { '92;95;110' } else { '230;230;235' } }
-            $icon = $esc + '[38;2;' + $color + 'm' + [char]$glyph + $esc + '[0m'
-            $name = $esc + '[38;2;230;230;235m' + $padded + $esc + '[0m'
+            else { $glyph = 0xf15b; $color = if ($item.Name.StartsWith('.')) { '90' } else { '39' } }
+            $icon = $esc + '[' + $color + 'm' + [char]$glyph + $esc + '[0m'
+            $name = $esc + '[39m' + $padded + $esc + '[0m'
             $len = $item.Length
             $str = if ($len -gt 1GB) { '{0:N1} GB' -f ($len / 1GB) } elseif ($len -gt 1MB) { '{0:N1} MB' -f ($len / 1MB) } elseif ($len -gt 1KB) { '{0:N1} KB' -f ($len / 1KB) } else { '{0} B' -f $len }
             $size = $esc + '[2m' + ($str.PadLeft(9)) + $esc + '[0m'
@@ -208,7 +208,7 @@ function ssh {
     foreach ($a in $rawArgs) { if ($a -in @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'
-__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;AxonGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;AxonLs=%s\007' $(ls -1Ap 2>/dev/null|head -300|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__axon_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 524288 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -300|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;AxonFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__axon_req';fi
+__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;AxonGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;AxonLs=%s\007' $(ls -1Ap 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__axon_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 10485760 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;AxonFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__axon_req';fi
 '@
         $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
         $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;exec ${SHELL:-/bin/sh} -l'

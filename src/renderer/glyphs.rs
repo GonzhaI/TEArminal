@@ -54,13 +54,67 @@ impl Hasher for FastHasher {
 
 pub(super) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
 
-/// Ajustes de fuente comunes. Sin shaping (rejilla monoespaciada, un glifo por carácter),
-/// así que no se cargan las sustituciones GSUB.
+/// Ajustes de fuente comunes. Carga sustituciones GSUB para soportar ligaduras de programación.
 pub(super) fn font_settings() -> fontdue::FontSettings {
     fontdue::FontSettings {
-        load_substitutions: false,
+        load_substitutions: true,
         ..Default::default()
     }
+}
+
+/// Clave compacta (10 bytes, Copy) para la caché de secuencias de ligadura puntuadas
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct PunctKey {
+    pub bytes: [u8; 8],
+    pub len: u8,
+    pub bold: bool,
+}
+
+impl PunctKey {
+    #[inline]
+    pub fn new(slice: &[u8], bold: bool) -> Self {
+        let mut bytes = [0u8; 8];
+        let len = slice.len().min(8);
+        bytes[..len].copy_from_slice(&slice[..len]);
+        Self {
+            bytes,
+            len: len as u8,
+            bold,
+        }
+    }
+}
+
+/// GIDs de una secuencia con ligadura dada forma (hasta 8 glifos, 16 bytes, Copy)
+#[derive(Clone, Copy)]
+pub struct ShapedGids {
+    pub gids: [u16; 8],
+}
+
+/// Comprueba si un carácter puede formar parte de una ligadura de programación
+#[inline]
+pub fn is_ligature_candidate(c: char) -> bool {
+    matches!(
+        c,
+        '!' | '#'
+            | '$'
+            | '%'
+            | '&'
+            | '*'
+            | '+'
+            | '-'
+            | '.'
+            | '/'
+            | ':'
+            | '<'
+            | '='
+            | '>'
+            | '?'
+            | '@'
+            | '\\'
+            | '^'
+            | '|'
+            | '~'
+    )
 }
 
 pub struct CachedGlyph {
@@ -168,5 +222,98 @@ impl TerminalRenderer {
             self.glyph_cache.insert((c, bold), glyph);
         }
         &self.glyph_cache[&(c, bold)]
+    }
+
+    pub(super) fn get_regular_face(&self) -> Option<&rustybuzz::Face<'static>> {
+        self.regular_face.as_ref()
+    }
+
+    pub(super) fn get_bold_face_rb(&self) -> Option<&rustybuzz::Face<'static>> {
+        if self.custom_font {
+            return None;
+        }
+        self.bold_face_rb
+            .get_or_init(|| rustybuzz::Face::from_slice(EMBEDDED_JETBRAINS_BOLD, 0))
+            .as_ref()
+    }
+
+    /// Obtiene o rasteriza un glifo de ligadura por su GID de OpenType
+    pub fn get_ligature_glyph(&mut self, gid: u16, bold: bool) -> &CachedGlyph {
+        if !self.ligature_cache.contains_key(&(gid, bold)) {
+            let font = if bold {
+                self.bold_font()
+            } else {
+                &self.regular_font
+            };
+            let (metrics, bitmap) = font.rasterize_indexed(gid, self.font_size);
+            let glyph = CachedGlyph {
+                width: metrics.width,
+                height: metrics.height,
+                x_offset: metrics.xmin,
+                y_offset: metrics.ymin,
+                bitmap,
+            };
+            self.ligature_cache.insert((gid, bold), glyph);
+        }
+        &self.ligature_cache[&(gid, bold)]
+    }
+
+    /// Da forma a una secuencia de puntuación ASCII (hasta 8 bytes).
+    /// Devuelve un `ShapedGids` que contiene los GIDs de cada carácter.
+    pub fn shape_punctuation_run(&mut self, slice: &[u8], bold: bool) -> ShapedGids {
+        let key = PunctKey::new(slice, bold);
+        if let Some(&cached) = self.shaped_ligatures.get(&key) {
+            return cached;
+        }
+
+        let face_opt = if bold {
+            self.get_bold_face_rb()
+        } else {
+            self.get_regular_face()
+        };
+
+        let mut gids = [0u16; 8];
+        let len = slice.len().min(8);
+
+        if let Some(face) = face_opt {
+            if let Ok(text) = std::str::from_utf8(&slice[..len]) {
+                let mut buf = rustybuzz::UnicodeBuffer::new();
+                buf.push_str(text);
+                let glyphs = rustybuzz::shape(face, &[], buf);
+                let infos = glyphs.glyph_infos();
+                if infos.len() == len {
+                    for (i, info) in infos.iter().take(8).enumerate() {
+                        gids[i] = info.glyph_id as u16;
+                    }
+                } else {
+                    // Si el moldeado devuelve menos glifos que caracteres (p. ej. compresión no monospaciada),
+                    // recurrir al glifo estándar de cada carácter para no dejar GID 0 (.notdef) en celdas intermedias
+                    let font = if bold {
+                        self.bold_font()
+                    } else {
+                        &self.regular_font
+                    };
+                    for (i, &b) in slice[..len].iter().enumerate() {
+                        gids[i] = font.lookup_glyph_index(b as char);
+                    }
+                }
+            }
+        } else {
+            let font = if bold {
+                self.bold_font()
+            } else {
+                &self.regular_font
+            };
+            for (i, &b) in slice[..len].iter().enumerate() {
+                gids[i] = font.lookup_glyph_index(b as char);
+            }
+        }
+
+        let shaped = ShapedGids { gids };
+        if self.shaped_ligatures.len() >= 2048 {
+            self.shaped_ligatures.clear();
+        }
+        self.shaped_ligatures.insert(key, shaped);
+        shaped
     }
 }

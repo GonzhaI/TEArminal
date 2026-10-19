@@ -41,6 +41,30 @@ impl AxonApp {
         self.last_scroll_time = Instant::now();
 
         if self.tabs[self.active_tab_index].is_settings {
+            // Sobre la lista de temas la rueda la desplaza a ella, no a la página
+            if self.settings_page_state.section == SettingsSection::Appearance {
+                let rects = SettingsPageRects::compute(
+                    offset,
+                    top_offset,
+                    win_w.saturating_sub(offset),
+                    win_h.saturating_sub(top_offset),
+                );
+                let page_y = if my >= top_offset + SettingsPageRects::CONTENT_TOP {
+                    my + self.settings_scroll()
+                } else {
+                    my
+                };
+                if rects.theme_row_at(mx, page_y).is_some() {
+                    let rows = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => (-y * 3.0).round() as isize,
+                        MouseScrollDelta::PixelDelta(pos) => {
+                            -(pos.y / SettingsPageRects::THEME_ROW_H as f64).round() as isize
+                        }
+                    };
+                    self.scroll_theme_list(rows);
+                    return;
+                }
+            }
             let dy = match delta {
                 MouseScrollDelta::LineDelta(_, y) => (y * 48.0) as isize,
                 MouseScrollDelta::PixelDelta(pos) => pos.y as isize,
@@ -82,12 +106,8 @@ impl AxonApp {
 
         if self.file_explorer.visible && !self.tabs[self.active_tab_index].is_settings {
             let (panel_x, panel_y, panel_w, panel_h) =
-                crate::explorer::FileExplorer::panel_geometry(
-                    win_w,
-                    win_h,
-                    top_offset,
-                    status_bar_h,
-                );
+                self.file_explorer
+                    .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
                 let lines = match delta {
                     MouseScrollDelta::LineDelta(_, y) => (y * 3.0).round() as isize,
@@ -132,13 +152,14 @@ impl AxonApp {
                         (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(max_x);
                 }
             } else if dx != 0 {
-                // Rueda horizontal nativa
+                // Rueda horizontal nativa: winit da dx > 0 cuando el CONTENIDO se mueve a la
+                // derecha (la vista va a la izquierda), igual que dy > 0 sube la vista
                 if dx > 0 {
                     viewer.scroll_offset_x =
-                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(max_x);
+                        viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
                 } else if dx < 0 {
                     viewer.scroll_offset_x =
-                        viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
+                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(max_x);
                 }
             } else {
                 // Scroll vertical estándar
@@ -224,22 +245,21 @@ impl AxonApp {
                     }
                 }
             } else {
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => (y.abs() as usize).max(1) * 3,
-                    MouseScrollDelta::PixelDelta(pos) => {
-                        ((pos.y.abs() / 20.0).ceil() as usize).max(1) * 3
-                    }
+                // 3 líneas por muesca; el resto fraccionario se acumula para que un touchpad
+                // (muchos eventos con y < 1) avance al ritmo de sus dedos y no 3 líneas por evento
+                let notches = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
                 };
+                self.wheel_remainder += notches * 3.0;
+                let lines = self.wheel_remainder.trunc();
+                self.wheel_remainder -= lines;
+                let lines = lines as isize;
 
-                let is_up = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y > 0.0,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
-                };
-
-                if is_up {
-                    pane.terminal.scroll_up(lines);
-                } else {
-                    pane.terminal.scroll_down(lines);
+                if lines > 0 {
+                    pane.terminal.scroll_up(lines as usize);
+                } else if lines < 0 {
+                    pane.terminal.scroll_down(lines.unsigned_abs());
                 }
 
                 self.last_scroll_time = Instant::now();

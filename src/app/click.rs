@@ -49,10 +49,11 @@ impl AxonApp {
             return;
         }
 
-        // Soltar un divisor: tamaño final de los PTY y disposición a la sesión
+        // Soltar un divisor o el borde del explorador: tamaño final de los PTY y disposición a la sesión
+        // (`|` y no `||`: hay que soltar ambos estados)
         if button == MouseButton::Left
             && state == ElementState::Released
-            && self.divider_drag.take().is_some()
+            && (self.divider_drag.take().is_some() | std::mem::take(&mut self.explorer_resizing))
         {
             self.resize_deadline = None;
             self.recompute_grid_for_all_tabs();
@@ -63,7 +64,60 @@ impl AxonApp {
             return;
         }
         if button == MouseButton::Left && state == ElementState::Released {
-            self.tab_drag = None;
+            if let Some(drag_idx) = self.tab_drag.take() {
+                let torn_off = if self.is_horizontal_tabs() {
+                    my >= TopTabBarRects::HEIGHT + 15 || my >= win_h || mx >= win_w
+                } else {
+                    mx >= SIDEBAR_WIDTH + 15 || my >= win_h || mx >= win_w
+                };
+                if torn_off && drag_idx < self.tabs.len() && !self.tabs[drag_idx].is_settings {
+                    // Si hay más de una pestaña, o hay otras ventanas abiertas a donde acoplar
+                    if self.tabs.len() > 1 || self.has_other_windows {
+                        let screen_pos = crate::app::platform::get_screen_cursor_pos()
+                            .or_else(|| {
+                                self.window.as_ref().and_then(|w| {
+                                    w.outer_position()
+                                        .ok()
+                                        .map(|p| (p.x + mx as i32, p.y + my as i32))
+                                })
+                            })
+                            .unwrap_or((mx as i32, my as i32));
+
+                        if let Some(viewer) = self.tabs[drag_idx].file_viewer.as_mut() {
+                            if viewer.needs_autosave {
+                                viewer.autosave_local();
+                            }
+                        }
+
+                        let tab = self.tabs.remove(drag_idx);
+                        self.prune_pending_remote();
+
+                        if self.active_tab_index >= self.tabs.len() {
+                            self.active_tab_index = self.tabs.len().saturating_sub(1);
+                        }
+                        if self.last_terminal_tab_index >= self.tabs.len() {
+                            self.last_terminal_tab_index = self.tabs.len().saturating_sub(1);
+                        }
+
+                        if !self.tabs.is_empty() {
+                            self.tabs[self.active_tab_index].has_unread = false;
+                            self.sync_file_explorer_root();
+                            self.clamp_sidebar_scroll();
+                            self.update_window_title();
+                            self.save_session();
+                        } else {
+                            // Se transfirió la última pestaña: la ventana se cierra
+                            self.closing = true;
+                        }
+
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+
+                        self.tab_drop_action = Some(TabDropAction { tab, screen_pos });
+                    }
+                }
+            }
         }
 
         // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
@@ -129,8 +183,6 @@ impl AxonApp {
         }
 
         // Redimensionamiento de ventana al arrastrar bordes (solo si no está maximizada ni en pantalla completa).
-        // Toda la barra superior (título/pestañas) se reserva para mover la ventana (drag_window) y controles,
-        // evitando falsos positivos de redimensionamiento hacia el norte que agrandan la ventana sin parar.
         let can_resize = self
             .window
             .as_ref()
@@ -503,19 +555,42 @@ impl AxonApp {
                 // Contenido de la sección activa
                 match self.settings_page_state.section {
                     SettingsSection::Appearance => {
-                        for (idx, r) in rects.theme_buttons.iter().enumerate() {
-                            if SettingsPageRects::inside(mx, my, *r) {
-                                if let Some(th_name) = Theme::AVAILABLE_THEMES.get(idx) {
-                                    crate::logger::log(&format!("-> Clic en tema: {}", th_name));
-                                    self.config.appearance.theme_mode =
-                                        if th_name.eq_ignore_ascii_case("Catppuccin Latte") {
-                                            "light".to_string()
-                                        } else {
-                                            "dark".to_string()
-                                        };
-                                    self.apply_theme(th_name);
-                                    return;
+                        for (i, r) in [rects.theme_slot_dark_btn, rects.theme_slot_light_btn]
+                            .into_iter()
+                            .enumerate()
+                        {
+                            if SettingsPageRects::inside(mx, my, r) {
+                                self.settings_page_state.theme_slot_light = i == 1;
+                                self.reveal_current_theme();
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
                                 }
+                                return;
+                            }
+                        }
+                        let searching = SettingsPageRects::inside(mx, my, rects.theme_search_box);
+                        if searching {
+                            self.settings_page_state.editing_setting =
+                                Some(crate::renderer::EditingSettingField::ThemeSearch);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        } else if self.settings_page_state.editing_setting
+                            == Some(crate::renderer::EditingSettingField::ThemeSearch)
+                        {
+                            self.settings_page_state.editing_setting = None;
+                        }
+                        if let Some(row) = rects.theme_row_at(mx, my) {
+                            let matches = &self.settings_page_state.filtered_themes;
+                            let first = self
+                                .settings_page_state
+                                .theme_scroll
+                                .min(matches.len().saturating_sub(SettingsPageRects::THEME_ROWS));
+                            if let Some(&th_name) = matches.get(first + row) {
+                                crate::logger::log(&format!("-> Clic en tema: {}", th_name));
+                                self.pick_theme(th_name);
+                                return;
                             }
                         }
                         if SettingsPageRects::inside(mx, my, rects.theme_mode_system_btn) {
@@ -630,9 +705,9 @@ impl AxonApp {
                             crate::logger::log("-> Clic en parpadeo del cursor");
                             self.toggle_cursor_blink();
                             return;
-                        } else if SettingsPageRects::inside(mx, my, rects.ghostty_prompt_btn) {
-                            crate::logger::log("-> Clic en prompt Ghostty");
-                            self.toggle_ghostty_prompt();
+                        } else if SettingsPageRects::inside(mx, my, rects.shell_integration_btn) {
+                            crate::logger::log("-> Clic en integración de shell");
+                            self.toggle_shell_integration();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.copy_on_select_btn) {
                             crate::logger::log("-> Clic en copiar al seleccionar");
@@ -662,6 +737,9 @@ impl AxonApp {
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.ssh_integration_btn) {
                             self.toggle_ssh_integration();
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.ligatures_btn) {
+                            self.toggle_ligatures();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
                             crate::logger::log("-> Clic en abrir archivo axon.toml");
@@ -698,13 +776,18 @@ impl AxonApp {
         if self.file_explorer.visible && !is_settings_active {
             let top_offset = self.top_offset();
             let status_bar_h = self.status_bar_height();
+            if state == ElementState::Pressed
+                && button == MouseButton::Left
+                && self
+                    .file_explorer
+                    .on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
+            {
+                self.explorer_resizing = true;
+                return;
+            }
             let (panel_x, panel_y, panel_w, panel_h) =
-                crate::explorer::FileExplorer::panel_geometry(
-                    win_w,
-                    win_h,
-                    top_offset,
-                    status_bar_h,
-                );
+                self.file_explorer
+                    .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     // Clic en la barra de desplazamiento del explorador de archivos
@@ -749,6 +832,16 @@ impl AxonApp {
                             }
                             return;
                         }
+                    }
+
+                    let (px, py, pw, ph) =
+                        crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
+                    if mx >= px && mx < px + pw && my >= py && my < py + ph {
+                        self.file_explorer.toggle_pinned();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
                     }
 
                     let (bx, by, bw, bh) =
@@ -867,6 +960,17 @@ impl AxonApp {
             if StatusBarRects::inside(mx, my, popup_rect) {
                 return;
             }
+        }
+
+        // Clic sobre el badge de actualización disponible en la barra de estado
+        if self.hovered_update_badge
+            && self.config.appearance.show_status_bar
+            && !self.tabs[self.active_tab_index].is_settings
+            && state == ElementState::Pressed
+            && button == MouseButton::Left
+        {
+            crate::updater::trigger_update();
+            return;
         }
 
         // Clics dentro del visor de archivos si la pestaña activa es un file viewer
@@ -1048,6 +1152,16 @@ impl AxonApp {
                                     return;
                                 };
 
+                                // Si es enlace externo (en modo Markdown preview o con Ctrl pulsado): abrir en navegador
+                                if (viewer.render_markdown || self.modifiers.control_key())
+                                    && !self.modifiers.shift_key()
+                                {
+                                    if let Some(url) = viewer.link_at(target_line, target_col) {
+                                        crate::app::platform::shell_open_url(&url);
+                                        return;
+                                    }
+                                }
+
                                 if self.modifiers.shift_key() {
                                     let start = viewer
                                         .selection
@@ -1061,8 +1175,10 @@ impl AxonApp {
                                     let is_quick_click =
                                         now.duration_since(self.last_viewer_click_time).as_millis()
                                             < 400
-                                            && self.last_viewer_click_pos
-                                                == Some((target_line, target_col));
+                                            && self.last_viewer_click_pos.is_some_and(|(l, c)| {
+                                                l == target_line
+                                                    && (c as isize - target_col as isize).abs() <= 1
+                                            });
 
                                     viewer.cursor_line = target_line;
                                     viewer.cursor_col = target_col;
@@ -1130,6 +1246,30 @@ impl AxonApp {
             }
 
             if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                // Clic en botón flotante "Ir hasta abajo"
+                if pane.terminal.scroll_offset > 0 && !pane.terminal.is_alt_screen {
+                    let (bx, by, bw, bh) = crate::renderer::pane_scroll_to_bottom_btn_rect(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                    );
+                    if mx >= bx
+                        && mx < bx + bw
+                        && my >= by
+                        && my < by + bh
+                        && button == MouseButton::Left
+                        && state == ElementState::Pressed
+                    {
+                        pane.terminal.reset_scroll();
+                        self.last_scroll_time = Instant::now();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                }
+
                 // Clic en scrollbar de este panel
                 if let Some(renderer) = &self.renderer {
                     if let Some((_thumb_x, thumb_y, _thumb_w, thumb_h)) = renderer
@@ -1237,22 +1377,97 @@ impl AxonApp {
                                 if let Some(renderer) = &self.renderer {
                                     let term_x = mx.saturating_sub(rect.x);
                                     let term_y = my.saturating_sub(rect.y);
-                                    if term_x >= renderer.margin_x && term_y >= renderer.margin_y {
-                                        let col =
-                                            (term_x - renderer.margin_x) / renderer.char_width;
-                                        let row =
-                                            (term_y - renderer.margin_y) / renderer.row_height;
-                                        self.drag_start = Some((col, row));
-                                        pane.terminal.selection = None;
-                                        if let Some(w) = &self.window {
-                                            w.request_redraw();
+                                    let col = term_x.saturating_sub(renderer.margin_x)
+                                        / renderer.char_width;
+                                    let col = col.min(pane.terminal.cols.saturating_sub(1));
+                                    let row_in_view = term_y.saturating_sub(renderer.margin_y)
+                                        / renderer.row_height;
+                                    let row_in_view =
+                                        row_in_view.min(pane.terminal.rows.saturating_sub(1));
+                                    let global_line =
+                                        pane.terminal.visible_line_start() + row_in_view;
+
+                                    // 1. Ctrl+Click en enlace externo: abrir en el navegador
+                                    if self.modifiers.control_key() {
+                                        if let Some(url) = pane.terminal.url_at(col, global_line) {
+                                            crate::app::platform::shell_open_url(&url);
+                                            self.drag_start = None;
+                                            return;
                                         }
+                                    }
+
+                                    // 2. Doble y triple clic para palabra y línea
+                                    let now = Instant::now();
+                                    let is_quick_click = self.last_terminal_click_pane_id
+                                        == Some(pane.id)
+                                        && now
+                                            .duration_since(self.last_terminal_click_time)
+                                            .as_millis()
+                                            < 400
+                                        && self.last_terminal_click_pos.is_some_and(|(c, l)| {
+                                            l == global_line
+                                                && (c as isize - col as isize).abs() <= 1
+                                        });
+
+                                    if is_quick_click && self.terminal_click_count == 1 {
+                                        pane.terminal.select_word_at(col, global_line);
+                                        self.terminal_click_count = 2;
+                                        self.drag_start = None;
+                                        self.drag_anchor = pane.terminal.selection;
+                                        if self.config.terminal.copy_on_select {
+                                            if let Some(text) = pane.terminal.copy_selection_text()
+                                            {
+                                                if let Some(cb) = &mut self.clipboard {
+                                                    let _ = cb.set_text(text);
+                                                }
+                                            }
+                                        }
+                                    } else if is_quick_click && self.terminal_click_count == 2 {
+                                        pane.terminal.select_line_at(global_line);
+                                        self.terminal_click_count = 3;
+                                        self.drag_start = None;
+                                        self.drag_anchor = pane.terminal.selection;
+                                        if self.config.terminal.copy_on_select {
+                                            if let Some(text) = pane.terminal.copy_selection_text()
+                                            {
+                                                if let Some(cb) = &mut self.clipboard {
+                                                    let _ = cb.set_text(text);
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        pane.terminal.selection = None;
+                                        self.terminal_click_count = 1;
+                                        self.drag_anchor = None;
+                                        self.drag_start = Some((col, global_line));
+                                    }
+                                    self.last_terminal_click_time = now;
+                                    self.last_terminal_click_pos = Some((col, global_line));
+                                    self.last_terminal_click_pane_id = Some(pane.id);
+
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
                                     }
                                 }
                             }
                             ElementState::Released => {
                                 self.mouse_down = false;
                                 self.drag_start = None;
+                                self.drag_anchor = None;
+                                if pane.terminal.selection.is_some_and(|s| s.start == s.end) {
+                                    pane.terminal.selection = None;
+                                } else if self.config.terminal.copy_on_select
+                                    && pane.terminal.selection.is_some()
+                                {
+                                    if let Some(text) = pane.terminal.copy_selection_text() {
+                                        if let Some(cb) = &mut self.clipboard {
+                                            let _ = cb.set_text(text);
+                                        }
+                                    }
+                                }
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
                             }
                         },
                         MouseButton::Middle if state == ElementState::Pressed => {
@@ -1266,9 +1481,8 @@ impl AxonApp {
     }
 
     /// Determina la dirección de redimensionamiento de ventana al interactuar con los bordes.
-    /// La barra superior completa (pestañas/título) queda reservada para arrastrar la ventana
-    /// y controles nativos, eliminando cualquier redimensionamiento hacia el norte que pudiera
-    /// agrandar la ventana sin control al interactuar o mover de monitor.
+    /// El borde norte es más fino que los demás para no restarle superficie a la barra superior
+    /// (arrastre de ventana, pestañas y botones de control).
     pub(crate) fn compute_border_resize_direction(
         &self,
         mx: usize,
@@ -1276,28 +1490,25 @@ impl AxonApp {
         win_w: usize,
         win_h: usize,
     ) -> Option<winit::window::ResizeDirection> {
-        let top_bar_h = if self.is_horizontal_tabs() {
-            TopTabBarRects::HEIGHT
-        } else {
-            TopTitleBarRects::HEIGHT
-        };
-        let border_margin = 6;
-        let at_left = mx < border_margin && my >= top_bar_h;
-        let at_right = mx >= win_w.saturating_sub(border_margin) && my >= top_bar_h;
-        let at_bottom = my >= win_h.saturating_sub(border_margin);
+        use winit::window::ResizeDirection::*;
+        let scale = self.window.as_ref().map_or(1.0, |w| w.scale_factor());
+        let margin = (6.0 * scale).round() as usize;
+        let top_margin = (4.0 * scale).round() as usize;
+        let at_left = mx < margin;
+        let at_right = mx >= win_w.saturating_sub(margin);
+        let at_top = my < top_margin;
+        let at_bottom = my >= win_h.saturating_sub(margin);
 
-        if at_bottom && at_left {
-            Some(winit::window::ResizeDirection::SouthWest)
-        } else if at_bottom && at_right {
-            Some(winit::window::ResizeDirection::SouthEast)
-        } else if at_left {
-            Some(winit::window::ResizeDirection::West)
-        } else if at_right {
-            Some(winit::window::ResizeDirection::East)
-        } else if at_bottom {
-            Some(winit::window::ResizeDirection::South)
-        } else {
-            None
+        match (at_top, at_bottom, at_left, at_right) {
+            (true, _, true, _) => Some(NorthWest),
+            (true, _, _, true) => Some(NorthEast),
+            (_, true, true, _) => Some(SouthWest),
+            (_, true, _, true) => Some(SouthEast),
+            (_, _, true, _) => Some(West),
+            (_, _, _, true) => Some(East),
+            (true, ..) => Some(North),
+            (_, true, ..) => Some(South),
+            _ => None,
         }
     }
 }

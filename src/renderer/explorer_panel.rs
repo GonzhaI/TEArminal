@@ -19,7 +19,7 @@ impl TerminalRenderer {
         }
 
         let (panel_x, panel_y, panel_w, panel_h) =
-            crate::explorer::FileExplorer::panel_geometry(width, height, top_offset, status_bar_h);
+            explorer.panel_geometry(width, height, top_offset, status_bar_h);
         if width <= panel_w + 16 || panel_h == 0 {
             return;
         }
@@ -94,9 +94,9 @@ impl TerminalRenderer {
             let (bx, by, bw, bh) =
                 crate::explorer::FileExplorer::changes_btn_rect(panel_x, panel_y, panel_w);
             let (btn_bg, btn_fg) = if explorer.changes_only {
-                (Color::from_rgba(255, 255, 255, 18), theme.accent_color())
+                (theme.surface_hover(), theme.accent_color())
             } else {
-                (Color::from_rgba(255, 255, 255, 6), theme.ansi[7])
+                (theme.surface_bg(), theme.ansi[7])
             };
             crate::ui::draw_rounded_rect(buffer, width, height, bx, by, bw, bh, 5, btn_bg);
             crate::ui::stroke_rounded_rect(
@@ -126,6 +126,43 @@ impl TerminalRenderer {
             );
         }
 
+        // Botón para fijar el explorador (evita que se mueva al cambiar de directorio o pestaña)
+        let (px, py, pw, ph) =
+            crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
+        let (pin_bg, pin_fg) = if explorer.is_pinned {
+            (theme.surface_hover(), theme.accent_color())
+        } else if explorer.hovered_pin_btn {
+            (theme.surface_hover(), theme.foreground)
+        } else {
+            (theme.surface_bg(), theme.ansi[7])
+        };
+        crate::ui::draw_rounded_rect(buffer, width, height, px, py, pw, ph, 5, pin_bg);
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            px,
+            py,
+            pw,
+            ph,
+            5,
+            if explorer.is_pinned {
+                theme.accent_color()
+            } else {
+                border_color
+            },
+        );
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::Lock,
+            px + pw / 2,
+            py + ph / 2,
+            11.0,
+            pin_fg,
+        );
+
         // 3. Sub-encabezado con botones de navegación [<] [>] [^] y ruta actual (28px)
         let sub_y = panel_y + header_h;
         let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
@@ -138,7 +175,7 @@ impl TerminalRenderer {
         let back_bg = if explorer.hovered_back_btn && can_back {
             theme.surface_hover()
         } else {
-            Color::from_rgba(255, 255, 255, 6)
+            theme.surface_bg()
         };
         crate::ui::draw_rounded_rect(buffer, width, height, back_x, sub_y + 4, 22, 20, 5, back_bg);
         crate::ui::stroke_rounded_rect(
@@ -178,7 +215,7 @@ impl TerminalRenderer {
         let fwd_bg = if explorer.hovered_forward_btn && can_fwd {
             theme.surface_hover()
         } else {
-            Color::from_rgba(255, 255, 255, 6)
+            theme.surface_bg()
         };
         crate::ui::draw_rounded_rect(buffer, width, height, fwd_x, sub_y + 4, 22, 20, 5, fwd_bg);
         crate::ui::stroke_rounded_rect(
@@ -217,7 +254,7 @@ impl TerminalRenderer {
         let up_bg = if explorer.hovered_up_btn {
             theme.surface_hover()
         } else {
-            Color::from_rgba(255, 255, 255, 6)
+            theme.surface_bg()
         };
         crate::ui::draw_rounded_rect(buffer, width, height, up_x, sub_y + 4, 22, 20, 5, up_bg);
         crate::ui::stroke_rounded_rect(
@@ -342,7 +379,7 @@ impl TerminalRenderer {
                 let sel_bg = if explorer.is_focused {
                     theme.surface_hover()
                 } else {
-                    Color::from_rgba(255, 255, 255, 10)
+                    theme.surface_bg()
                 };
                 crate::ui::draw_rounded_rect(
                     buffer,
@@ -372,7 +409,7 @@ impl TerminalRenderer {
                     pill_color,
                 );
             } else if is_hovered {
-                let hover_row_bg = Color::from_rgba(255, 255, 255, 12);
+                let hover_row_bg = theme.surface_hover();
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
@@ -585,7 +622,7 @@ impl TerminalRenderer {
             return None;
         }
         let (panel_x, panel_y, panel_w, panel_h) =
-            crate::explorer::FileExplorer::panel_geometry(width, height, top_offset, status_bar_h);
+            explorer.panel_geometry(width, height, top_offset, status_bar_h);
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
         let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
         let list_y = panel_y + header_h + sub_h + 4;

@@ -3,6 +3,7 @@
 mod app;
 mod config;
 pub mod explorer;
+mod json;
 pub mod logger;
 mod pty;
 mod renderer;
@@ -11,6 +12,7 @@ mod terminal;
 mod theme;
 pub mod tools;
 pub mod ui;
+pub mod updater;
 
 use app::{AxonEvent, AxonHost};
 use config::AxonConfig;
@@ -24,7 +26,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::<AxonEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
-    // 3. Instanciar el anfitrión de ventanas de Axon
+    // 3. Comprobación de actualizaciones en segundo plano si está activado
+    if config.terminal.auto_check_updates {
+        updater::check_for_updates_background(Some(proxy.clone()));
+    }
+
+    // 4. Instanciar el anfitrión de ventanas de Axon
     // Antes de crearlo: la primera pestaña lanza el shell en `new` y debe heredar la variable
     std::env::set_var(
         "AXON_SSH_INTEGRATION",
@@ -36,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut host = AxonHost::new(config, Some(proxy));
 
-    // 4. Iniciar ciclo de eventos del sistema operativo
+    // 5. Iniciar ciclo de eventos del sistema operativo
     event_loop.run_app(&mut host)?;
 
     Ok(())

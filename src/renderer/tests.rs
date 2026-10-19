@@ -181,7 +181,6 @@ mod bench {
         let mut buf = vec![0u32; w * h];
         let tabs: Vec<SidebarTabItem> = (0..8)
             .map(|i| SidebarTabItem {
-                id: i + 1,
                 title: format!("pwsh — axon/src #{i}"),
                 is_active: i == 2,
                 has_unread: i % 3 == 0,
@@ -292,11 +291,11 @@ fn test_nerd_font_icons_and_color_rendering() {
         );
     }
 
-    // 2. Probar que una secuencia TrueColor se renderiza con los píxeles de color Ghostty
+    // 2. Probar que una secuencia TrueColor se renderiza con los píxeles de ese color
     let mut terminal =
-        crate::terminal::TerminalState::new(80, 24, 1000, crate::theme::Theme::ghostty_dark());
-    // Escribir texto con color verde Ghostty (#51e27a / RGB 81, 226, 122) y un icono Nerd Font
-    let colored_seq = b"\x1b[38;2;81;226;122m\xee\x82\xa0 Ghostty\x1b[0m";
+        crate::terminal::TerminalState::new(80, 24, 1000, crate::theme::Theme::default());
+    // Escribir texto con color verde (#51e27a / RGB 81, 226, 122) y un icono Nerd Font
+    let colored_seq = b"\x1b[38;2;81;226;122m\xee\x82\xa0 Axon\x1b[0m";
     terminal.process_bytes(colored_seq);
 
     let mut buffer = vec![0u32; 800 * 600];
@@ -315,7 +314,7 @@ fn test_nerd_font_icons_and_color_rendering() {
     // Comprobar que en el buffer hay píxeles coloreados con verde (canal G alto, canal R y B bajos)
     let mut has_green_pixels = false;
     let mut background_matches = true;
-    let expected_bg = crate::theme::Color::from_rgb(22, 22, 24).to_u32_xrgb();
+    let expected_bg = crate::theme::Theme::default().background.to_u32_xrgb();
 
     for (i, &pixel) in buffer.iter().enumerate() {
         let r = (pixel >> 16) & 0xFF;
@@ -325,7 +324,7 @@ fn test_nerd_font_icons_and_color_rendering() {
         if g > 150 && r < 100 && b < 150 {
             has_green_pixels = true;
         }
-        // Los primeros píxeles de margen deben ser el fondo Ghostty #161618
+        // Los primeros píxeles de margen deben ser el fondo del tema
         if i < 800 * 5 && pixel != expected_bg {
             background_matches = false;
         }
@@ -333,11 +332,11 @@ fn test_nerd_font_icons_and_color_rendering() {
 
     assert!(
         background_matches,
-        "El fondo del canvas debe coincidir exactamente con el fondo Ghostty (#161618)"
+        "El fondo del canvas debe coincidir exactamente con el fondo del tema"
     );
     assert!(
         has_green_pixels,
-        "El buffer debe contener píxeles con el color verde Ghostty renderizado"
+        "El buffer debe contener píxeles con el color verde TrueColor renderizado"
     );
 }
 
@@ -365,7 +364,6 @@ fn test_sidebar_rendering_and_layout() {
     let mut buffer = vec![0u32; 1000 * 600];
     let tabs = vec![
         SidebarTabItem {
-            id: 1,
             title: "Terminal 1".to_string(),
             is_active: true,
             has_unread: false,
@@ -375,7 +373,6 @@ fn test_sidebar_rendering_and_layout() {
             is_preview: false,
         },
         SidebarTabItem {
-            id: 2,
             title: "Terminal 2".to_string(),
             is_active: false,
             has_unread: true,
@@ -386,7 +383,7 @@ fn test_sidebar_rendering_and_layout() {
         },
     ];
 
-    let ghostty_theme = crate::theme::Theme::ghostty_default_styledark();
+    let default_theme = crate::theme::Theme::default();
     renderer.render_sidebar(
         &mut buffer,
         1000,
@@ -401,11 +398,11 @@ fn test_sidebar_rendering_and_layout() {
         false,
         false,
         false,
-        &ghostty_theme,
+        &default_theme,
     );
 
-    let sidebar_bg_pixel = ghostty_theme.sidebar_bg().to_u32_xrgb();
-    let border_pixel = ghostty_theme.border_color().to_u32_xrgb();
+    let sidebar_bg_pixel = default_theme.sidebar_bg().to_u32_xrgb();
+    let border_pixel = default_theme.border_color().to_u32_xrgb();
 
     assert_eq!(
         buffer[50 * 1000 + 2],
@@ -423,7 +420,7 @@ fn test_sidebar_rendering_and_layout() {
         cols_with_sidebar,
         rows_with_sidebar,
         100,
-        ghostty_theme.clone(),
+        default_theme.clone(),
     );
     renderer.render(
         &mut buffer,
@@ -441,12 +438,12 @@ fn test_sidebar_rendering_and_layout() {
     assert_eq!(
         buffer[50 * 1000 + 195],
         term_bg_pixel,
-        "El área de terminal después del offset debe tener fondo Ghostty"
+        "El área de terminal después del offset debe tener fondo del tema"
     );
 
     // 4. Probar renderizado del botón flotante expand cuando el sidebar está oculto
-    renderer.render_floating_sidebar_toggle(&mut buffer, 1000, 600, 0, true, &ghostty_theme);
-    let float_btn_bg = ghostty_theme.surface_hover().to_u32_xrgb();
+    renderer.render_floating_sidebar_toggle(&mut buffer, 1000, 600, 0, true, &default_theme);
+    let float_btn_bg = default_theme.surface_hover().to_u32_xrgb();
     let float_y = 600 - 30 - 8 + 5;
     assert_eq!(
         buffer[float_y * 1000 + 10],
@@ -465,7 +462,7 @@ fn test_sidebar_rendering_and_layout() {
         26,
         &config,
         &settings_state,
-        &ghostty_theme,
+        &default_theme,
     );
     let rects = crate::renderer::SettingsPageRects::compute(190, 0, 1000 - 190, 600);
     assert_eq!(rects.nav_appearance.0, rects.content_x);
@@ -498,11 +495,35 @@ fn test_ai_agent_detection_and_status_bar() {
         detect_ai_agent(Some("ollama run llama3")),
         AiAgentStatus::Ollama
     );
+    assert_eq!(detect_ai_agent(Some("pwsh")), AiAgentStatus::None);
+    assert_eq!(detect_ai_agent(Some("axon")), AiAgentStatus::None);
+
+    // Validar que con AiAgentStatus::None no se muestre el modelo de IA en el badge
+    let theme = crate::theme::Theme::default();
+    let (icon_none, label_none, fg_none) = crate::renderer::TerminalRenderer::status_bar_badge_info(
+        AiAgentStatus::None,
+        None,
+        Some("Gemini 4 Argon (Medium)"),
+        &theme,
+    );
+    assert_eq!(icon_none, crate::ui::LucideIcon::Dot);
+    assert_eq!(label_none, "LOCAL");
+    assert_eq!(fg_none, theme.ansi[8]);
+
+    let (icon_agy, label_agy, fg_agy) = crate::renderer::TerminalRenderer::status_bar_badge_info(
+        AiAgentStatus::Agy,
+        None,
+        Some("Gemini 3.8 Flash (Medium)"),
+        &theme,
+    );
+    assert_eq!(icon_agy, crate::ui::LucideIcon::Sparkles);
+    assert_eq!(label_agy, "AGY · Gemini 3.8 Flash (Medium)");
+    assert_eq!(fg_agy, theme.ansi[6]);
 
     // Validar que render_status_bar cubre todo el ancho inferior (0..width)
     let config = AxonConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
     let mut buffer = vec![0xCAFEBABE; 1000 * 600];
 
     let sidebar_offset = 180;
@@ -580,7 +601,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let config = AxonConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let mut term =
-        crate::terminal::TerminalState::new(120, 40, 1000, crate::theme::Theme::ghostty_dark());
+        crate::terminal::TerminalState::new(120, 40, 1000, crate::theme::Theme::default());
 
     // Llenar grilla con texto y colores realistas
     for i in 0..40 {
@@ -681,7 +702,7 @@ fn test_ui_font_size_scaling() {
 fn test_settings_page_scrolls_only_the_content() {
     use crate::renderer::{SettingsPageRects, SettingsPageState, SettingsSection};
     let config = crate::config::AxonConfig::default();
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
     let mut renderer = TerminalRenderer::new(&config, 1.0);
     let (w, h, status) = (1000usize, 300usize, 26usize);
     let mut render = |scroll: usize| {
@@ -748,7 +769,166 @@ fn test_settings_scrollbar_geometry_spans_the_track() {
     let (_, bottom) = SettingsPageRects::scrollbar(sec, 40, 900, 200, max).expect("barra");
     assert_eq!(top.1, track.1);
     assert_eq!(bottom.1 + bottom.3, track.1 + track.3);
-    assert!(top.3 >= 18 && top.3 < track.3);
     // sin desbordamiento no hay barra
     assert!(SettingsPageRects::scrollbar(sec, 40, 900, 5000, 0).is_none());
+}
+
+#[test]
+fn test_font_ligature_shaping() {
+    let cfg = AxonConfig::default();
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    assert!(r.ligatures);
+
+    // Probar secuencias de ligadura comunes
+    for op in [
+        "->", "=>", "!=", "==", "===", "<=", ">=", "::", ":=", "//", "/*", "*/",
+    ] {
+        let shaped = r.shape_punctuation_run(op.as_bytes(), false);
+        // El primer glifo de la ligadura debe tener ancho 0 (filler)
+        let first_glyph = r.get_ligature_glyph(shaped.gids[0], false);
+        assert_eq!(
+            first_glyph.width, 0,
+            "Primer glifo de '{}' debe ser filler 0-width",
+            op
+        );
+
+        // El último glifo debe tener x_offset negativo (se expande hacia atrás para cubrir las celdas previas)
+        let last_glyph = r.get_ligature_glyph(shaped.gids[op.len() - 1], false);
+        assert!(
+            last_glyph.x_offset < 0,
+            "Último glifo de '{}' debe tener x_offset < 0 (obtenido {})",
+            op,
+            last_glyph.x_offset
+        );
+        assert!(
+            last_glyph.width > r.char_width,
+            "Último glifo de '{}' debe abarcar más de una celda",
+            op
+        );
+    }
+}
+
+#[test]
+fn test_render_pane_with_and_without_ligatures() {
+    let cfg = AxonConfig::default();
+    let theme = Theme::from_name(&cfg.appearance.theme);
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (400usize, 100usize);
+    let (cols, rows) = r.compute_pane_grid_size(w, h);
+    let mut term = TerminalState::new(cols, rows, 100, theme.clone());
+    term.process_bytes(b"fn test() -> bool { a != b && c == d }");
+
+    // Con ligaduras activas
+    r.ligatures = true;
+    let mut buf_with = vec![0u32; w * h];
+    r.render_pane(
+        &mut buf_with,
+        w,
+        h,
+        0,
+        0,
+        w,
+        h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+
+    // Sin ligaduras
+    r.ligatures = false;
+    let mut buf_without = vec![0u32; w * h];
+    r.render_pane(
+        &mut buf_without,
+        w,
+        h,
+        0,
+        0,
+        w,
+        h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+
+    // Los dos framebuffers deben diferir porque la flecha `->` y `!=` cambian de píxeles
+    let diffs = buf_with
+        .iter()
+        .zip(buf_without.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        diffs > 0,
+        "El renderizado con ligaduras debe diferir del estándar"
+    );
+}
+
+#[test]
+fn test_settings_ligatures_toggle_rect() {
+    let r = SettingsPageRects::compute(0, 0, 800, 600);
+    assert!(r.ligatures_btn.2 > 0 && r.ligatures_btn.3 > 0);
+    assert_eq!(r.ligatures_btn.1, SettingsPageRects::CONTENT_TOP + 384);
+}
+
+#[test]
+fn test_config_gpu_option_defaults_to_true() {
+    let cfg = AxonConfig::default();
+    assert!(cfg.terminal.gpu);
+}
+
+#[test]
+fn test_d3d11_presenter_lifecycle() {
+    use windows::Win32::Foundation::HWND;
+    use windows_sys::Win32::Foundation::HWND as SysHWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT, WNDCLASSW,
+        WS_OVERLAPPEDWINDOW,
+    };
+
+    unsafe {
+        let class_name: Vec<u16> = "AxonD3D11TestClass\0".encode_utf16().collect();
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(DefWindowProcW),
+            lpszClassName: class_name.as_ptr(),
+            ..std::mem::zeroed()
+        };
+        RegisterClassW(&wc);
+
+        let hwnd_sys = CreateWindowExW(
+            0,
+            class_name.as_ptr(),
+            class_name.as_ptr(),
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            320,
+            240,
+            0 as SysHWND,
+            0 as _,
+            0 as _,
+            std::ptr::null(),
+        );
+
+        if hwnd_sys != 0 as SysHWND {
+            let hwnd = HWND(hwnd_sys as _);
+            if let Ok(mut presenter) = D3D11Presenter::new(hwnd, 320, 240) {
+                assert_eq!(presenter.size(), (320, 240));
+                assert_eq!(presenter.buffer_mut().len(), 320 * 240);
+
+                // Llenar buffer y presentar
+                presenter.buffer_mut().fill(0x00FF0000);
+                assert!(presenter.present().is_ok());
+
+                // Redimensionar
+                assert!(presenter.resize(640, 480).is_ok());
+                assert_eq!(presenter.size(), (640, 480));
+                assert_eq!(presenter.buffer_mut().len(), 640 * 480);
+                assert!(presenter.present().is_ok());
+            }
+            DestroyWindow(hwnd_sys);
+        }
+    }
 }

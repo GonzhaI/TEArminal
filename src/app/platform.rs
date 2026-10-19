@@ -2,6 +2,13 @@
 
 use super::*;
 
+/// Evita la ventana de consola parpadeante al lanzar un proceso auxiliar (`CREATE_NO_WINDOW`) y le baja la
+/// prioridad (`BELOW_NORMAL_PRIORITY_CLASS`): todos corren en segundo plano y no deben quitar CPU a la interfaz
+pub fn hide_console(cmd: &mut std::process::Command) -> &mut std::process::Command {
+    use std::os::windows::process::CommandExt;
+    cmd.creation_flags(0x0800_0000 | 0x0000_4000)
+}
+
 /// Abre un archivo con su programa asociado (`ShellExecuteW`): sin `cmd /C start`, donde `&`, `^` o `%` de la
 /// ruta se interpretarían como sintaxis del shell. `false` si Windows no pudo abrirlo.
 pub(super) fn shell_open(path: &std::path::Path) -> bool {
@@ -27,6 +34,35 @@ pub(super) fn shell_open(path: &std::path::Path) -> bool {
     result > 32 // por contrato de ShellExecute, un valor ≤ 32 es un código de error
 }
 
+/// Abre una URL web externa con el navegador predeterminado del sistema (`ShellExecuteW`).
+/// Solo permite esquemas http:// y https:// por seguridad.
+pub fn shell_open_url(url: &str) -> bool {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return false;
+    }
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(Some(0))
+            .collect()
+    };
+    let (verb, file) = (wide("open"), wide(url));
+    let result = unsafe {
+        ShellExecuteW(
+            0,
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    result > 32
+}
+
 pub(super) fn create_native_icon() -> Icon {
     const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon-256.png");
     if let Ok(img) = image::load_from_memory(ICON_BYTES) {
@@ -50,7 +86,7 @@ pub(super) fn create_native_icon() -> Icon {
             let in_cursor = (18..=24).contains(&x) && (y == 21 || y == 22);
 
             if in_arrow_top || in_arrow_bot || in_cursor {
-                rgba[idx] = 0x51; // Verde Ghostty #51e27a
+                rgba[idx] = 0x51; // Color de respaldo del icono (#51e27a)
                 rgba[idx + 1] = 0xe2;
                 rgba[idx + 2] = 0x7a;
                 rgba[idx + 3] = 255;
@@ -216,4 +252,21 @@ pub(super) fn get_physical_modifiers() -> (bool, bool, bool, bool, bool) {
 #[cfg(not(target_os = "windows"))]
 pub(super) fn get_physical_modifiers() -> (bool, bool, bool, bool, bool) {
     (false, false, false, false, false)
+}
+
+#[cfg(target_os = "windows")]
+pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut pt = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut pt) } != 0 {
+        Some((pt.x, pt.y))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
+    None
 }

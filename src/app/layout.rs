@@ -291,6 +291,8 @@ impl TerminalTab {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "archivo".to_string());
 
+        // La fecha se toma antes de leer: una escritura posterior cuenta como cambio externo
+        let disk_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let mut is_binary = false;
         let mut lines = Vec::new();
@@ -380,6 +382,7 @@ impl TerminalTab {
             visible_cols: 80,
             word_wrap: false,
             folded: Default::default(),
+            disk_mtime,
             needs_autosave: false,
             last_edit_time: Instant::now(),
             edit_gen: 0,
@@ -417,6 +420,8 @@ impl TerminalTab {
         let mut is_binary = false;
         let mut file_size = 0;
         let mut non_utf8 = false;
+        // Fin de línea y salto final del archivo remoto: `remote_content` los conserva al guardar
+        let (mut crlf, mut final_newline) = (false, true);
 
         match data {
             Ok(bytes) => {
@@ -437,6 +442,8 @@ impl TerminalTab {
                     let d = crate::app::viewer::DecodedText::decode(&bytes);
                     lines = d.lines;
                     non_utf8 = d.non_utf8;
+                    crlf = d.crlf;
+                    final_newline = d.final_newline;
                 }
             }
             Err(err) if err.contains("Permission denied") => {
@@ -483,9 +490,8 @@ impl TerminalTab {
             remote_destination: Some(dest),
             remote_branch,
             is_read_only: true,
-            // El guardado remoto siempre usa LF y salto final (`remote_content`)
-            crlf: false,
-            final_newline: true,
+            crlf,
+            final_newline,
             non_utf8,
             save_error: None,
             render_markdown: is_markdown,
@@ -497,6 +503,7 @@ impl TerminalTab {
             visible_cols: 80,
             word_wrap: false,
             folded: Default::default(),
+            disk_mtime: None,
             needs_autosave: false,
             last_edit_time: Instant::now(),
             edit_gen: 0,

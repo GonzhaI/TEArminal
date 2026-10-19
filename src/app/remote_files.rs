@@ -442,20 +442,24 @@ mod tests {
 
         let run = |request_content: &str| -> (String, String) {
             let file = format!("/tmp/axon_hook_test_{}", std::process::id());
-            let script = std::env::temp_dir().join(format!("axon_hook_{}.sh", std::process::id()));
-            std::fs::write(
-                &script,
-                format!(
-                    "{hook}\nREADLINE_LINE='#AXR#7 put {} {request_content}'\nREADLINE_POINT=0\n__axon_req 2>/dev/null\nprintf '\\n@@@'\ncat {file}\nrm -f {file}\n",
-                    pct_encode(file.as_bytes())
-                ),
-            )
-            .unwrap();
-            let out = std::process::Command::new("bash")
-                .arg(&script)
-                .output()
+            let script_content = format!(
+                "{hook}\nREADLINE_LINE='#AXR#7 put {} {request_content}'\nREADLINE_POINT=0\n__axon_req 2>/dev/null\nprintf '\\n@@@'\ncat {file}\nrm -f {file}\n",
+                pct_encode(file.as_bytes())
+            );
+            use std::io::Write;
+            let mut child = std::process::Command::new("bash")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
                 .unwrap();
-            let _ = std::fs::remove_file(&script);
+            child
+                .stdin
+                .as_mut()
+                .unwrap()
+                .write_all(script_content.as_bytes())
+                .unwrap();
+            let out = child.wait_with_output().unwrap();
             let text = String::from_utf8_lossy(&out.stdout).replace('\r', "");
             let (osc, written) = text.split_once("\n@@@").expect("salida del gancho");
             let body = osc

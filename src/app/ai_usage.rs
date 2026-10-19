@@ -6,18 +6,118 @@
 //! 2. Lectura de la rejilla de la terminal activa por si una TUI muestra métricas de contexto/coste en pantalla.
 
 use super::*;
+use crate::json::{extract_json_str, extract_json_u64};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Cuota de un modelo o familia de modelos (con ventana de reinicio de 5h o multi-día)
+/// Límite de la cuenta (ventana de 5 h, semanal…) tal como lo informa el servidor
 #[derive(Debug, Clone)]
-pub struct AiModelQuota {
-    pub name: String,
-    /// Fracción consumida `0.0..=1.0` (`1.0 - remainingFraction`)
-    pub used_fraction: f32,
-    /// Etiqueta de ventana / reinicio (p. ej. `"5h · Reinicia en 4h 48m"`)
-    pub reset_label: String,
-    pub is_active: bool,
+pub struct AiLimit {
+    pub label: String,
+    /// Consumido, `0.0..=100.0`
+    pub percent: f32,
+    /// Instante Unix del reinicio
+    pub resets_at: Option<u64>,
+}
+
+impl AiLimit {
+    pub fn resets_in_secs(&self) -> Option<u64> {
+        let left = self.resets_at?.saturating_sub(now_unix_secs());
+        (left > 0).then_some(left)
+    }
+}
+
+const USAGE_ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
+
+/// Token de la sesión iniciada de Claude Code (`~/.claude/.credentials.json`). Solo lectura: nunca se
+/// renueva (rotaría el refresh token y cerraría la sesión de Claude Code); caducado → `None` hasta que
+/// Claude lo renueve. El token no se registra ni se muestra.
+fn token_from_credentials(creds: &str, now_epoch: u64) -> Option<String> {
+    let oauth = &creds[creds.find("\"claudeAiOauth\"")?..];
+    if extract_json_u64(oauth, "expiresAt")? / 1000 <= now_epoch + 30 {
+        return None;
+    }
+    // Va como cabecera HTTP: nada de saltos de línea ni caracteres de control
+    extract_json_str(oauth, "accessToken")
+        .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+}
+
+/// Pide los límites reales a la API de uso con la sesión de Claude Code. Vacío si no hay sesión válida,
+/// no hay red o la respuesta no es la esperada.
+fn fetch_claude_limits(home: &Path, now_epoch: u64) -> Vec<AiLimit> {
+    let Ok(creds) = std::fs::read_to_string(home.join(".claude").join(".credentials.json")) else {
+        return Vec::new();
+    };
+    let Some(token) = token_from_credentials(&creds, now_epoch) else {
+        return Vec::new();
+    };
+    let mut cmd = Command::new("curl.exe");
+    // `-H @-` lee las cabeceras de stdin: el token no aparece en la lista de procesos
+    cmd.args([
+        "-s",
+        "--max-time",
+        "5",
+        "-H",
+        "@-",
+        "-H",
+        "anthropic-beta: oauth-2025-04-20",
+        "-H",
+        "User-Agent: Axon-Terminal",
+        USAGE_ENDPOINT,
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    super::platform::hide_console(&mut cmd);
+    let Ok(mut child) = cmd.spawn() else {
+        return Vec::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = writeln!(stdin, "Authorization: Bearer {token}");
+    }
+    match child.wait_with_output() {
+        Ok(out) if out.status.success() => {
+            parse_claude_limits(&String::from_utf8_lossy(&out.stdout))
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Número `"key": 45.0` del texto (los helpers de `crate::json` solo leen enteros)
+fn json_f32(text: &str, key: &str) -> Option<f32> {
+    let marker = format!("\"{key}\":");
+    let rest = text[text.find(&marker)? + marker.len()..].trim_start();
+    let end = rest
+        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
+/// Entradas del arreglo `limits` de la respuesta (`kind`, `percent`, `resets_at`)
+fn parse_claude_limits(body: &str) -> Vec<AiLimit> {
+    let Some(start) = body.find("\"limits\":[") else {
+        return Vec::new();
+    };
+    let list = body[start..].split(']').next().unwrap_or_default();
+    list.split('{')
+        .skip(1)
+        .filter_map(|obj| {
+            let kind = extract_json_str(obj, "kind")?;
+            let percent = json_f32(obj, "percent")?;
+            let label = match kind.as_str() {
+                "session" => "Sesión (5 h)".to_string(),
+                "weekly_all" => "Semana (todos los modelos)".to_string(),
+                other => other.replace('_', " "),
+            };
+            Some(AiLimit {
+                label,
+                percent: percent.clamp(0.0, 100.0),
+                resets_at: extract_json_str(obj, "resets_at").and_then(|s| parse_iso8601_utc(&s)),
+            })
+        })
+        .collect()
 }
 
 /// Estadísticas de tokens acumulados en un intervalo (Sesión actual, Ventana 5h, Últimas 24h)
@@ -45,14 +145,62 @@ pub struct AiAgentSummary {
     pub detail: String,
 }
 
+/// Consumo de un agente de IA con sesión en la pestaña activa: cada uno con su modelo y sus ventanas
+#[derive(Debug, Clone)]
+pub struct AiAgentUsage {
+    pub kind: AiAgentStatus,
+    pub model: String,
+    /// Plan (Claude) o modo (AGY)
+    pub plan: Option<String>,
+    pub window_5h: AiTokenWindow,
+    pub session: AiTokenWindow,
+}
+
+impl AiUsageSnapshot {
+    /// Límites reales de un agente (hoy solo Claude los expone)
+    pub fn limits_for(&self, kind: AiAgentStatus) -> &[AiLimit] {
+        if kind == AiAgentStatus::Claude {
+            &self.claude_limits
+        } else {
+            &[]
+        }
+    }
+
+    /// Modelo de un agente: el del último escaneo o, antes del primero, el de su configuración
+    pub fn model_for(&self, kind: AiAgentStatus) -> Option<&str> {
+        let name = match kind {
+            AiAgentStatus::Claude => "Claude",
+            AiAgentStatus::Agy => "AGY",
+            AiAgentStatus::Gemini => "Gemini",
+            _ => "",
+        };
+        self.usages
+            .iter()
+            .find(|u| u.kind == kind)
+            .map(|u| u.model.as_str())
+            .or_else(|| {
+                self.agents
+                    .iter()
+                    .find(|a| a.agent == name)
+                    .map(|a| a.model.as_str())
+            })
+    }
+}
+
+impl AiAgentUsage {
+    /// Hay tokens registrados localmente (Aider, Copilot y Ollama no dejan transcripciones)
+    pub fn has_tokens(&self) -> bool {
+        self.window_5h.total_tokens() > 0 || self.session.total_tokens() > 0
+    }
+}
+
 /// Instantánea lista para renderizar en el menú flotante de la barra de estado
 #[derive(Debug, Clone, Default)]
 pub struct AiUsageSnapshot {
-    pub active_model: Option<String>,
-    pub active_plan: Option<String>,
-    pub quotas: Vec<AiModelQuota>,
-    pub window_5h: AiTokenWindow,
-    pub current_session: AiTokenWindow,
+    /// Un bloque por agente distinto en los paneles de la pestaña activa; el del panel enfocado primero
+    pub usages: Vec<AiAgentUsage>,
+    /// Límites reales de la cuenta de Claude según el servidor (vacío si no hay sesión o no respondió)
+    pub claude_limits: Vec<AiLimit>,
     pub window_24h_tokens: u64,
     pub window_24h_sessions: u32,
     pub agents: Vec<AiAgentSummary>,
@@ -61,26 +209,44 @@ pub struct AiUsageSnapshot {
 
 /// Resultado del escaneo en segundo plano de configuraciones y transcripciones locales (`.jsonl`)
 pub(super) struct LocalUsageScan {
-    pub active_model: Option<String>,
-    pub active_plan: Option<String>,
-    pub window_5h: AiTokenWindow,
-    pub current_session: AiTokenWindow,
+    /// `Some` solo si en este escaneo se consultó al servidor (vacío = sin sesión válida o sin respuesta)
+    pub claude_limits: Option<Vec<AiLimit>>,
+    pub usages: Vec<AiAgentUsage>,
     pub window_24h_tokens: u64,
     pub window_24h_sessions: u32,
     pub agents: Vec<AiAgentSummary>,
 }
 
+/// Agentes de IA distintos de la pestaña, el del panel enfocado primero
+pub(super) fn active_agents(tab: &TerminalTab) -> Vec<AiAgentStatus> {
+    let mut found = Vec::new();
+    let focused = tab.panes.iter().filter(|p| p.id == tab.active_pane_id);
+    let others = tab.panes.iter().filter(|p| p.id != tab.active_pane_id);
+    for pane in focused.chain(others) {
+        let kind = shell_context::detect_ai_agent(pane.terminal.window_title.as_deref());
+        if kind != AiAgentStatus::None && !found.contains(&kind) {
+            found.push(kind);
+        }
+    }
+    found
+}
+
 pub struct AiUsageState {
     pub snapshot: AiUsageSnapshot,
     last_local_scan: Option<Instant>,
+    last_limits_fetch: Option<Instant>,
     pub local_scan_in_flight: bool,
 }
+
+/// Cada cuánto se consulta al servidor (no es una API pensada para sondeo)
+const LIMITS_REFRESH: Duration = Duration::from_secs(60);
 
 impl Default for AiUsageState {
     fn default() -> Self {
         let mut state = Self {
             snapshot: AiUsageSnapshot::default(),
             last_local_scan: None,
+            last_limits_fetch: None,
             local_scan_in_flight: false,
         };
         state.refresh_config_only();
@@ -106,39 +272,27 @@ impl AiUsageState {
         should_scan
     }
 
+    /// Si toca consultar los límites de Claude (solo con Claude en la pestaña y como mucho 1 vez por minuto)
+    pub(super) fn limits_due(&mut self, agents: &[AiAgentStatus]) -> bool {
+        let due = agents.contains(&AiAgentStatus::Claude)
+            && self
+                .last_limits_fetch
+                .is_none_or(|t| t.elapsed() >= LIMITS_REFRESH);
+        if due {
+            self.last_limits_fetch = Some(Instant::now());
+        }
+        due
+    }
+
     pub(super) fn apply_local_scan(&mut self, scan: LocalUsageScan) {
         self.local_scan_in_flight = false;
-        self.snapshot.active_model = scan.active_model;
-        self.snapshot.active_plan = scan.active_plan;
-        self.snapshot.window_5h = scan.window_5h;
-        self.snapshot.current_session = scan.current_session;
+        if let Some(limits) = scan.claude_limits {
+            self.snapshot.claude_limits = limits;
+        }
+        self.snapshot.usages = scan.usages;
         self.snapshot.window_24h_tokens = scan.window_24h_tokens;
         self.snapshot.window_24h_sessions = scan.window_24h_sessions;
         self.snapshot.agents = scan.agents;
-        self.rebuild_quota_rows();
-    }
-
-    fn rebuild_quota_rows(&mut self) {
-        let mut rows = Vec::new();
-        if self.snapshot.window_5h.total_tokens() > 0 {
-            let reset_label = match self.snapshot.window_5h.reset_in_secs {
-                Some(rem) if rem > 0 => format!("5h · Reinicia en {}", format_duration(rem)),
-                _ => "Ventana 5h activa".to_string(),
-            };
-            let model_name = self
-                .snapshot
-                .active_model
-                .clone()
-                .unwrap_or_else(|| "Modelo activo (ventana 5h)".to_string());
-            let approx_frac = (self.snapshot.window_5h.turns as f32 / 150.0).clamp(0.02, 0.99);
-            rows.push(AiModelQuota {
-                name: model_name,
-                used_fraction: approx_frac,
-                reset_label,
-                is_active: true,
-            });
-        }
-        self.snapshot.quotas = rows;
     }
 
     /// Lectura ligera al arrancar: solo los JSON de configuración (< 4 KB), sin abrir transcripciones `.jsonl`
@@ -175,12 +329,97 @@ impl AiUsageState {
                 }
             }
         }
-        self.snapshot.active_model = agy_model.or(claude_model).or(gemini_model);
-        self.snapshot.active_plan = claude_plan.or(agy_mode);
+        self.snapshot.usages.clear();
+        let mut agents = Vec::new();
+        if let Some(m) = agy_model {
+            let detail = agy_mode
+                .as_deref()
+                .map(|mode| format!("Modo: {mode}"))
+                .unwrap_or_else(|| "Listo".to_string());
+            agents.push(AiAgentSummary {
+                agent: "AGY".to_string(),
+                model: m,
+                detail,
+            });
+        }
+        if let Some(m) = claude_model.or_else(|| claude_plan.clone()) {
+            let detail = claude_plan
+                .as_deref()
+                .map(|p| format!("Plan: {p}"))
+                .unwrap_or_else(|| "Configurado".to_string());
+            agents.push(AiAgentSummary {
+                agent: "Claude".to_string(),
+                model: m,
+                detail,
+            });
+        }
+        if let Some(gm) = gemini_model {
+            agents.push(AiAgentSummary {
+                agent: "Gemini".to_string(),
+                model: gm,
+                detail: "CLI local".to_string(),
+            });
+        }
+        self.snapshot.agents = agents;
     }
 }
 
-pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageScan {
+/// Acumulado de un agente con transcripciones locales (cada uno con sus propias ventanas)
+#[derive(Default)]
+struct AgentAcc {
+    win: AiTokenWindow,
+    session: AiTokenWindow,
+    oldest_in_5h: Option<u64>,
+    tokens_24h: u64,
+    sessions_24h: u32,
+    /// Modelo de la transcripción más reciente (las siguientes, más antiguas, no lo pisan)
+    transcript_model: Option<String>,
+}
+
+impl AgentAcc {
+    fn add(&mut self, idx: usize, stats: TranscriptScan) {
+        if idx == 0 {
+            self.session = stats.session;
+        }
+        if self.transcript_model.is_none() {
+            self.transcript_model = stats.last_model;
+        }
+        self.win.input_tokens += stats.win_5h.input_tokens;
+        self.win.cache_tokens += stats.win_5h.cache_tokens;
+        self.win.output_tokens += stats.win_5h.output_tokens;
+        self.win.turns += stats.win_5h.turns;
+        if stats.tokens_24h > 0 {
+            self.tokens_24h += stats.tokens_24h;
+            self.sessions_24h += 1;
+        }
+    }
+
+    fn finish(&mut self, now_epoch: u64) {
+        if let Some(oldest) = self.oldest_in_5h {
+            let expires_at = oldest + 5 * 3600;
+            if expires_at > now_epoch {
+                self.win.reset_in_secs = Some(expires_at - now_epoch);
+            }
+        }
+    }
+}
+
+fn claude_plan_name(org_type: &str) -> String {
+    match org_type {
+        "claude_pro" => "Claude Pro".to_string(),
+        "claude_max" => "Claude Max".to_string(),
+        "claude_team" => "Claude Team".to_string(),
+        "claude_enterprise" => "Claude Enterprise".to_string(),
+        other => other.replace('_', " "),
+    }
+}
+
+/// `active` son los agentes de los paneles de la pestaña (el enfocado primero): cada uno recibe su
+/// propio modelo, plan y ventanas, sin mezclar los tokens de otro agente.
+pub(super) fn scan_local_usage_blocking(
+    active: &[AiAgentStatus],
+    fetch_limits: bool,
+) -> LocalUsageScan {
     let home = std::env::var("USERPROFILE").ok().map(PathBuf::from);
     let now_epoch = now_unix_secs();
 
@@ -189,17 +428,8 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
     let mut claude_model: Option<String> = None;
     let mut claude_plan: Option<String> = None;
     let mut gemini_model: Option<String> = None;
-
-    let mut window_5h = AiTokenWindow::default();
-    let mut current_session = AiTokenWindow::default();
-    let mut window_24h_tokens = 0u64;
-    let mut window_24h_sessions = 0u32;
-    let mut oldest_in_5h: Option<u64> = None;
-
-    let mut agy_5h_tokens = 0u64;
-    let mut agy_5h_turns = 0u32;
-    let mut claude_5h_tokens = 0u64;
-    let mut claude_5h_turns = 0u32;
+    let mut agy = AgentAcc::default();
+    let mut claude = AgentAcc::default();
 
     if let Some(ref home_dir) = home {
         // 1. Configuración y transcripts de Antigravity (AGY)
@@ -233,43 +463,16 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
                 if age_secs > 48 * 3600 && idx > 0 {
                     continue;
                 }
-                let stats = scan_agy_transcript(path, now_epoch, &mut oldest_in_5h);
-                if idx == 0 {
-                    current_session = stats.session;
-                    if stats.last_model.is_some() && agy_model.is_none() {
-                        agy_model = stats.last_model;
-                    }
-                }
-                window_5h.input_tokens += stats.win_5h.input_tokens;
-                window_5h.cache_tokens += stats.win_5h.cache_tokens;
-                window_5h.output_tokens += stats.win_5h.output_tokens;
-                window_5h.turns += stats.win_5h.turns;
-                agy_5h_tokens += stats.win_5h.total_tokens();
-                agy_5h_turns += stats.win_5h.turns;
-
-                if stats.tokens_24h > 0 {
-                    window_24h_tokens += stats.tokens_24h;
-                    window_24h_sessions += 1;
-                }
+                let stats = scan_agy_transcript(path, now_epoch, &mut agy.oldest_in_5h);
+                agy.add(idx, stats);
             }
         }
 
         // 2. Configuración y proyectos de Claude Code
         if let Some(claude_cfg) = read_transcript_tail(&home_dir.join(".claude.json"), 64 * 1024) {
-            if let Some(org_type) = extract_json_str(&claude_cfg, "organizationType") {
-                claude_plan = Some(match org_type.as_str() {
-                    "claude_pro" => "Claude Pro".to_string(),
-                    "claude_max" => "Claude Max".to_string(),
-                    "claude_team" => "Claude Team".to_string(),
-                    "claude_enterprise" => "Claude Enterprise".to_string(),
-                    other => other.replace('_', " "),
-                });
-            }
-            if let Some(m) = extract_json_str(&claude_cfg, "model") {
-                if !m.starts_with('<') {
-                    claude_model = Some(m);
-                }
-            }
+            claude_plan =
+                extract_json_str(&claude_cfg, "organizationType").map(|t| claude_plan_name(&t));
+            claude_model = extract_json_str(&claude_cfg, "model").filter(|m| !m.starts_with('<'));
         }
         if let Ok(c_set) = std::fs::read_to_string(home_dir.join(".claude").join("settings.json")) {
             if let Some(m) = extract_json_str(&c_set, "model") {
@@ -311,25 +514,8 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
                 if age_secs > 48 * 3600 {
                     continue;
                 }
-                let stats = scan_claude_transcript(path, now_epoch, &mut oldest_in_5h);
-                if idx == 0
-                    && (ai_status == AiAgentStatus::Claude || current_session.total_tokens() == 0)
-                {
-                    current_session = stats.session;
-                }
-                if stats.last_model.is_some() {
-                    claude_model = stats.last_model;
-                }
-                window_5h.input_tokens += stats.win_5h.input_tokens;
-                window_5h.cache_tokens += stats.win_5h.cache_tokens;
-                window_5h.output_tokens += stats.win_5h.output_tokens;
-                window_5h.turns += stats.win_5h.turns;
-                claude_5h_tokens += stats.win_5h.total_tokens();
-                claude_5h_turns += stats.win_5h.turns;
-                if stats.tokens_24h > 0 {
-                    window_24h_tokens += stats.tokens_24h;
-                    window_24h_sessions += 1;
-                }
+                let stats = scan_claude_transcript(path, now_epoch, &mut claude.oldest_in_5h);
+                claude.add(idx, stats);
             }
         }
 
@@ -339,64 +525,93 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
         }
     }
 
-    if let Some(oldest) = oldest_in_5h {
-        let expires_at = oldest + 5 * 3600;
-        if expires_at > now_epoch {
-            window_5h.reset_in_secs = Some(expires_at - now_epoch);
-        }
+    agy.finish(now_epoch);
+    claude.finish(now_epoch);
+    // La transcripción manda sobre la configuración: refleja el modelo realmente usado
+    if let Some(m) = claude.transcript_model.clone() {
+        claude_model = Some(m);
+    }
+    if agy_model.is_none() {
+        agy_model = agy.transcript_model.clone();
     }
 
-    let active_model = match ai_status {
-        AiAgentStatus::Claude => claude_model.clone().or_else(|| agy_model.clone()),
-        AiAgentStatus::Agy => agy_model.clone(),
-        AiAgentStatus::Gemini => gemini_model.clone().or_else(|| agy_model.clone()),
-        _ => agy_model
-            .clone()
-            .or_else(|| claude_model.clone())
-            .or_else(|| gemini_model.clone()),
-    };
+    let usages = active
+        .iter()
+        .filter_map(|&kind| {
+            let (model, plan, acc) = match kind {
+                AiAgentStatus::Claude => (
+                    claude_model.clone().unwrap_or_else(|| "Claude".to_string()),
+                    claude_plan.clone(),
+                    Some(&claude),
+                ),
+                AiAgentStatus::Agy => (
+                    agy_model
+                        .clone()
+                        .unwrap_or_else(|| "Antigravity".to_string()),
+                    agy_mode.as_ref().map(|m| format!("Modo: {m}")),
+                    Some(&agy),
+                ),
+                AiAgentStatus::Gemini => (
+                    gemini_model
+                        .clone()
+                        .unwrap_or_else(|| "Gemini CLI".to_string()),
+                    None,
+                    None,
+                ),
+                AiAgentStatus::Aider => ("Aider".to_string(), None, None),
+                AiAgentStatus::Copilot => ("Copilot".to_string(), None, None),
+                AiAgentStatus::Ollama => ("Ollama".to_string(), None, None),
+                AiAgentStatus::None => return None,
+            };
+            Some(AiAgentUsage {
+                kind,
+                model,
+                plan,
+                window_5h: acc.map(|a| a.win.clone()).unwrap_or_default(),
+                session: acc.map(|a| a.session.clone()).unwrap_or_default(),
+            })
+        })
+        .collect();
 
     let mut agents = Vec::new();
-    if agy_model.is_some() || agy_5h_tokens > 0 {
-        let m = agy_model
-            .clone()
-            .unwrap_or_else(|| "Gemini / Claude".to_string());
-        let detail = if agy_5h_tokens > 0 {
+    let claude_present =
+        claude_plan.is_some() || claude_model.is_some() || claude.win.total_tokens() > 0;
+    for (name, model, acc, fallback, present) in [
+        (
+            "AGY",
+            agy_model
+                .clone()
+                .unwrap_or_else(|| "Gemini / Claude".to_string()),
+            &agy,
+            agy_mode.as_ref().map(|m| format!("Modo: {m}")),
+            agy_model.is_some() || agy.win.total_tokens() > 0,
+        ),
+        (
+            "Claude",
+            claude_model
+                .clone()
+                .or_else(|| claude_plan.clone())
+                .unwrap_or_else(|| "Claude Sonnet / Opus".to_string()),
+            &claude,
+            claude_plan.as_ref().map(|p| format!("Plan: {p}")),
+            claude_present,
+        ),
+    ] {
+        if !present {
+            continue;
+        }
+        let detail = if acc.win.total_tokens() > 0 {
             format!(
                 "5h: {} tok ({} turnos)",
-                format_tokens(agy_5h_tokens),
-                agy_5h_turns
+                format_tokens(acc.win.total_tokens()),
+                acc.win.turns
             )
-        } else if let Some(ref mode) = agy_mode {
-            format!("Modo: {mode}")
         } else {
-            "Listo".to_string()
+            fallback.unwrap_or_else(|| "Listo".to_string())
         };
         agents.push(AiAgentSummary {
-            agent: "AGY".to_string(),
-            model: m,
-            detail,
-        });
-    }
-    if claude_plan.is_some() || claude_model.is_some() || claude_5h_tokens > 0 {
-        let m = claude_model
-            .clone()
-            .or_else(|| claude_plan.clone())
-            .unwrap_or_else(|| "Claude Sonnet / Opus".to_string());
-        let detail = if claude_5h_tokens > 0 {
-            format!(
-                "5h: {} tok ({} turnos)",
-                format_tokens(claude_5h_tokens),
-                claude_5h_turns
-            )
-        } else if let Some(ref plan) = claude_plan {
-            format!("Plan: {plan}")
-        } else {
-            "Configurado".to_string()
-        };
-        agents.push(AiAgentSummary {
-            agent: "Claude".to_string(),
-            model: m,
+            agent: name.to_string(),
+            model,
             detail,
         });
     }
@@ -408,13 +623,16 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
         });
     }
 
+    let claude_limits = home
+        .as_deref()
+        .filter(|_| fetch_limits)
+        .map(|h| fetch_claude_limits(h, now_epoch));
+
     LocalUsageScan {
-        active_model,
-        active_plan: claude_plan.or(agy_mode),
-        window_5h,
-        current_session,
-        window_24h_tokens,
-        window_24h_sessions,
+        claude_limits,
+        usages,
+        window_24h_tokens: agy.tokens_24h + claude.tokens_24h,
+        window_24h_sessions: agy.sessions_24h + claude.sessions_24h,
         agents,
     }
 }
@@ -426,18 +644,19 @@ fn read_transcript_tail(path: &Path, max_bytes: u64) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
-    if len <= max_bytes {
-        let mut buf = Vec::with_capacity(len as usize);
-        f.read_to_end(&mut buf).ok()?;
-        return Some(String::from_utf8_lossy(&buf).into_owned());
+    let truncated = len > max_bytes;
+    if truncated {
+        let seek_pos = len.saturating_sub(max_bytes);
+        if f.seek(SeekFrom::Start(seek_pos)).is_err() {
+            let _ = f.seek(SeekFrom::Start(0));
+        }
     }
-    f.seek(SeekFrom::Start(len - max_bytes)).ok()?;
-    let mut buf = Vec::with_capacity(max_bytes as usize);
-    f.read_to_end(&mut buf).ok()?;
+    let mut buf = Vec::with_capacity((len.min(max_bytes)) as usize);
+    f.take(max_bytes).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
     Some(match text.split_once('\n') {
-        Some((_, rest)) => rest.to_string(),
-        None => text.into_owned(),
+        Some((_, rest)) if truncated => rest.to_string(),
+        _ => text.into_owned(),
     })
 }
 
@@ -575,7 +794,7 @@ fn scan_claude_transcript(
 /// Busca en las últimas líneas visibles de la terminal indicadores de contexto/tokens/coste de TUIs
 fn scrape_terminal_usage_line(term: &TerminalState) -> Option<String> {
     for row in term.grid.iter().rev().take(8) {
-        let line: String = row.iter().map(|c| c.c).collect();
+        let line = term.row_text_to_string(row);
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -652,37 +871,6 @@ pub(crate) fn parse_iso8601_utc(s: &str) -> Option<u64> {
     Some(days as u64 * 86400 + hh * 3600 + mm * 60 + ss)
 }
 
-fn extract_json_str(text: &str, key: &str) -> Option<String> {
-    let pattern = format!("\"{key}\"");
-    let idx = text.find(&pattern)?;
-    let rest = text[idx + pattern.len()..].trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            if let Some(esc) = chars.next() {
-                out.push(esc);
-            }
-        } else if c == '"' {
-            return Some(out);
-        } else {
-            out.push(c);
-        }
-    }
-    None
-}
-
-fn extract_json_u64(text: &str, key: &str) -> Option<u64> {
-    let pattern = format!("\"{key}\"");
-    let idx = text.find(&pattern)?;
-    let rest = text[idx + pattern.len()..].trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -712,28 +900,58 @@ mod tests {
     #[test]
     fn test_ai_usage_popup_renders_and_hit_tests() {
         let cfg = AxonConfig::default();
-        let theme = Theme::ghostty_dark();
+        let theme = Theme::default();
         let mut renderer = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (900, 600);
         let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
 
         let mut state = AiUsageState::default();
-        state.snapshot.active_model = Some("Gemini 4 Argon (Medium)".to_string());
-        state.snapshot.active_plan = Some("Claude Pro".to_string());
-        state.snapshot.quotas = vec![
-            AiModelQuota {
-                name: "Gemini 4 Argon / 3.8 Flash".to_string(),
-                used_fraction: 0.12,
-                reset_label: "Reinicia en 4h 30m".to_string(),
-                is_active: true,
+        let usage = |kind, model: &str, plan: Option<&str>, tokens| AiAgentUsage {
+            kind,
+            model: model.to_string(),
+            plan: plan.map(String::from),
+            window_5h: AiTokenWindow {
+                input_tokens: tokens,
+                turns: 3,
+                reset_in_secs: Some(3600),
+                ..Default::default()
             },
-            AiModelQuota {
-                name: "Claude Opus 5.5 (Low / Med / High)".to_string(),
-                used_fraction: 0.55,
-                reset_label: "Reinicia en 2d".to_string(),
-                is_active: false,
-            },
+            session: AiTokenWindow::default(),
+        };
+        state.snapshot.usages = vec![
+            usage(AiAgentStatus::Agy, "Gemini 4 Argon (Medium)", None, 120),
+            usage(
+                AiAgentStatus::Claude,
+                "claude-sonnet-5-5",
+                Some("Claude Pro"),
+                0,
+            ),
         ];
+
+        let no_limits_h = TerminalRenderer::ai_usage_popup_height(&state.snapshot);
+        state.snapshot.claude_limits = vec![AiLimit {
+            label: "Sesión (5 h)".to_string(),
+            percent: 45.0,
+            resets_at: Some(now_unix_secs() + 3 * 3600),
+        }];
+        assert_eq!(
+            TerminalRenderer::ai_usage_popup_height(&state.snapshot),
+            no_limits_h + TerminalRenderer::LIMIT_ROW_H,
+            "cada límite añade una fila al popup"
+        );
+
+        // AGY avisa de que no hay límites reales (fila extra) y Gemini, con los mismos datos, no
+        let height_of = |kind| {
+            let snap = AiUsageSnapshot {
+                usages: vec![usage(kind, "m", None, 120)],
+                ..Default::default()
+            };
+            TerminalRenderer::ai_usage_popup_height(&snap)
+        };
+        assert_eq!(
+            height_of(AiAgentStatus::Agy),
+            height_of(AiAgentStatus::Gemini) + 18
+        );
 
         renderer.render_status_bar_with_ai(
             &mut buf,
@@ -746,7 +964,7 @@ mod tests {
             100,
             30,
             AiAgentStatus::Agy,
-            state.snapshot.active_model.as_deref(),
+            state.snapshot.model_for(AiAgentStatus::Agy),
             true,
             false,
             &theme,
@@ -760,7 +978,7 @@ mod tests {
 
         let popup_h = TerminalRenderer::ai_usage_popup_height(&state.snapshot);
         let popup_rect = StatusBarRects::popup_rect(w, h, popup_h);
-        let sb_rects = StatusBarRects::compute(w, h, 180);
+        let sb_rects = StatusBarRects::compute(w, h, 180, None);
         assert!(StatusBarRects::inside_badge_or_popup(
             sb_rects.ai_badge.0 + 4,
             sb_rects.ai_badge.1 + 4,
@@ -792,5 +1010,111 @@ mod tests {
         );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_read_transcript_tail() {
+        let temp_dir = std::env::temp_dir().join(format!("axon-test-tail-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let path = temp_dir.join("tail.txt");
+
+        // Archivo pequeño: no debe cortar la primera línea
+        std::fs::write(&path, "line 1\nline 2\nline 3\n").unwrap();
+        let res = read_transcript_tail(&path, 1024).unwrap();
+        assert_eq!(res, "line 1\nline 2\nline 3\n");
+
+        // Archivo truncado a cola: descarta la primera línea incompleta
+        std::fs::write(
+            &path,
+            "first_long_line_to_be_truncated\nsecond_line\nthird_line\n",
+        )
+        .unwrap();
+        let res = read_transcript_tail(&path, 25).unwrap();
+        assert!(res.contains("third_line"));
+        assert!(!res.contains("first_long_line"));
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_claude_limits_from_real_response() {
+        // Respuesta real de la API de uso (recortada): 45 % de la sesión de 5 h y 15 % de la semana
+        let body = r#"{"five_hour":{"utilization":45.0,"resets_at":"2026-10-19T21:49:59.538313+00:00"},"seven_day":{"utilization":15.0,"resets_at":"2026-10-24T18:59:59.538334+00:00"},"limits":[{"kind":"session","group":"session","percent":45,"severity":"normal","resets_at":"2026-10-19T21:49:59.538313+00:00","scope":null,"is_active":true},{"kind":"weekly_all","group":"weekly","percent":15,"severity":"normal","resets_at":"2026-10-24T18:59:59.538334+00:00","scope":null,"is_active":false}],"spend":{"used":{"amount_minor":0},"percent":0}}"#;
+        let limits = parse_claude_limits(body);
+        assert_eq!(limits.len(), 2, "el bloque `spend` no es un límite");
+        assert_eq!(limits[0].label, "Sesión (5 h)");
+        assert_eq!(limits[0].percent, 45.0);
+        assert_eq!(
+            limits[0].resets_at,
+            parse_iso8601_utc("2026-10-19T21:49:59Z")
+        );
+        assert_eq!(limits[1].label, "Semana (todos los modelos)");
+        assert_eq!(limits[1].percent, 15.0);
+
+        assert!(parse_claude_limits(r#"{"error":"unauthorized"}"#).is_empty());
+        assert_eq!(json_f32(r#"{"percent": 12.5}"#, "percent"), Some(12.5));
+    }
+
+    #[test]
+    fn test_token_from_credentials_rejects_expired_and_unsafe_tokens() {
+        let creds = |exp: u64, token: &str| {
+            format!(
+                r#"{{"claudeAiOauth":{{"accessToken":"{token}","refreshToken":"r","expiresAt":{exp}}}}}"#
+            )
+        };
+        let now = 1_000_000;
+        assert_eq!(
+            token_from_credentials(&creds((now + 3600) * 1000, "tok"), now).as_deref(),
+            Some("tok")
+        );
+        assert_eq!(
+            token_from_credentials(&creds((now - 1) * 1000, "tok"), now),
+            None
+        );
+        // Un token con salto de línea inyectaría cabeceras HTTP
+        assert_eq!(
+            token_from_credentials(&creds((now + 3600) * 1000, "a\nX-Evil: 1"), now),
+            None
+        );
+        assert_eq!(token_from_credentials("{}", now), None);
+    }
+
+    #[test]
+    fn test_limits_are_fetched_at_most_once_a_minute_and_only_for_claude() {
+        let mut state = AiUsageState::default();
+        assert!(!state.limits_due(&[AiAgentStatus::Agy]));
+        assert!(state.limits_due(&[AiAgentStatus::Agy, AiAgentStatus::Claude]));
+        assert!(!state.limits_due(&[AiAgentStatus::Claude]), "caché de 60 s");
+    }
+
+    #[test]
+    fn test_agent_acc_keeps_newest_model_and_does_not_mix_agents() {
+        let scan = |model: &str, tokens: u64| TranscriptScan {
+            session: AiTokenWindow::default(),
+            win_5h: AiTokenWindow {
+                input_tokens: tokens,
+                turns: 1,
+                ..Default::default()
+            },
+            tokens_24h: tokens,
+            last_model: Some(model.to_string()),
+        };
+        let mut claude = AgentAcc::default();
+        claude.add(0, scan("claude-sonnet-5-5", 10));
+        claude.add(1, scan("claude-opus-5-5", 5));
+        assert_eq!(
+            claude.transcript_model.as_deref(),
+            Some("claude-sonnet-5-5")
+        );
+        assert_eq!((claude.win.total_tokens(), claude.win.turns), (15, 2));
+        assert_eq!(claude.sessions_24h, 2);
+
+        let agy = AgentAcc::default();
+        assert_eq!(
+            agy.win.total_tokens(),
+            0,
+            "cada agente lleva su propia ventana"
+        );
     }
 }

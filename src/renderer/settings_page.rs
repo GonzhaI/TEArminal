@@ -474,7 +474,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         // Tarjeta 1: Temas
-        let th_card_h = 150;
+        let th_card_h = SettingsPageRects::THEME_CARD_H;
         self.draw_card(
             buffer,
             width,
@@ -487,26 +487,132 @@ impl TerminalRenderer {
             theme,
         );
 
-        for (idx, &theme_name) in Theme::AVAILABLE_THEMES.iter().enumerate() {
-            let r = rects.theme_buttons[idx];
-            let is_current = Theme::is_same_theme(&config.appearance.theme, theme_name);
-            let is_hover = state.hovered_theme == Some(idx);
-            let btn_bg = if is_current || is_hover {
-                theme.surface_hover()
-            } else {
-                theme.surface_bg()
-            };
-            crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3, 7, btn_bg);
+        // Ranuras: el tema oscuro y el claro se eligen por separado (el modo decide cuál se usa)
+        let slot_names = [
+            Theme::canonical_name(&config.appearance.theme),
+            Theme::canonical_name(&config.appearance.theme_light),
+        ];
+        for (i, (rect, label)) in [
+            (rects.theme_slot_dark_btn, "Oscuro"),
+            (rects.theme_slot_light_btn, "Claro"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            self.draw_button(
+                buffer,
+                width,
+                height,
+                rect,
+                &format!("{label}: {}", slot_names[i]),
+                state.hovered_theme_slot == Some(i),
+                state.theme_slot_light == (i == 1),
+                theme,
+            );
+        }
 
-            let border_c = if is_current {
-                theme.accent_color()
-            } else if is_hover {
-                theme.ansi[8]
-            } else {
-                theme.border_color()
-            };
-            crate::ui::stroke_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3, 7, border_c);
+        // Buscador
+        let sb = rects.theme_search_box;
+        let searching = state.editing_setting == Some(EditingSettingField::ThemeSearch);
+        let matches = &state.filtered_themes;
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            sb.0,
+            sb.1,
+            sb.2,
+            sb.3,
+            7,
+            theme.surface_bg(),
+        );
+        let search_border = if searching {
+            theme.accent_color()
+        } else {
+            theme.border_color()
+        };
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            sb.0,
+            sb.1,
+            sb.2,
+            sb.3,
+            7,
+            search_border,
+        );
+        let count = format!("{}/{}", matches.len(), Theme::names().count());
+        let count_w = self.measure_ui_text(&count, 11.0, false);
+        let text_y = sb.1 + sb.3 / 2 + 4;
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &count,
+            sb.0 + sb.2 - count_w - 12,
+            text_y,
+            sb.0 + sb.2,
+            theme.ansi[8],
+            11.0,
+            false,
+        );
+        let (query, query_color) = if state.theme_filter.is_empty() && !searching {
+            ("Buscar tema...".to_string(), theme.ansi[8])
+        } else {
+            (
+                format!("{}{}", state.theme_filter, if searching { "|" } else { "" }),
+                theme.foreground,
+            )
+        };
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &query,
+            sb.0 + 12,
+            text_y,
+            sb.0 + sb.2 - count_w - 20,
+            query_color,
+            11.0,
+            false,
+        );
 
+        // Lista desplazable: el tema activo se resalta y cada fila muestra una vista previa de su paleta
+        let current = slot_names[state.theme_slot_light as usize];
+        let first = state
+            .theme_scroll
+            .min(matches.len().saturating_sub(SettingsPageRects::THEME_ROWS));
+        if matches.is_empty() {
+            let l = rects.theme_list;
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                "Sin resultados",
+                l.0 + 12,
+                l.1 + 18,
+                l.0 + l.2,
+                theme.ansi[8],
+                11.0,
+                false,
+            );
+        }
+        for i in 0..SettingsPageRects::THEME_ROWS {
+            let Some(&name) = matches.get(first + i) else {
+                break;
+            };
+            let r = rects.theme_row(i);
+            let is_current = name == current;
+            let is_hover = state.hovered_theme == Some(i);
+            if is_current || is_hover {
+                let bg = if is_current {
+                    theme.surface_hover()
+                } else {
+                    theme.surface_bg()
+                };
+                crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3 - 2, 6, bg);
+            }
             let fg = if is_current {
                 theme.accent_color()
             } else if is_hover {
@@ -514,28 +620,60 @@ impl TerminalRenderer {
             } else {
                 theme.ansi[7]
             };
-
-            let display_name = theme_name;
-            let cy = r.1 + (r.3 / 2);
-            let base_y = cy + 4;
-            let text_w = self.measure_ui_text(display_name, 11.0, is_current);
-            let tx = r.0 + (r.2.saturating_sub(text_w) / 2);
+            let preview = Theme::from_name(name);
+            let chips = [preview.background, preview.foreground]
+                .into_iter()
+                .chain(preview.ansi[1..=6].iter().copied());
+            let chip_w = 10;
+            let chips_x = r.0 + r.2 - 14 - 8 * (chip_w + 3);
+            for (k, c) in chips.enumerate() {
+                let cx = chips_x + k * (chip_w + 3);
+                crate::ui::draw_rounded_rect(buffer, width, height, cx, r.1 + 6, chip_w, 12, 3, c);
+                crate::ui::stroke_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    cx,
+                    r.1 + 6,
+                    chip_w,
+                    12,
+                    3,
+                    theme.border_color(),
+                );
+            }
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                display_name,
-                tx,
-                base_y,
-                r.0 + r.2,
+                name,
+                r.0 + 12,
+                r.1 + r.3 / 2 + 3,
+                chips_x - 8,
                 fg,
                 11.0,
                 is_current,
             );
         }
+        if matches.len() > SettingsPageRects::THEME_ROWS {
+            let l = rects.theme_list;
+            let thumb_h = (l.3 * SettingsPageRects::THEME_ROWS / matches.len()).max(18);
+            let max_first = matches.len() - SettingsPageRects::THEME_ROWS;
+            let thumb_y = l.1 + first * (l.3 - thumb_h) / max_first;
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                l.0 + l.2 - 5,
+                thumb_y,
+                3,
+                thumb_h,
+                1,
+                theme.border_color(),
+            );
+        }
 
         // Paleta de chips de color del tema activo (ocupa todo el ancho de la tarjeta)
-        let swatch_y = card_y + 116;
+        let swatch_y = card_y + SettingsPageRects::THEME_CARD_H - 28;
         let swatch_h = 18;
         let pad_x = 20;
         let avail_w = card_w.saturating_sub(pad_x * 2);
@@ -560,7 +698,7 @@ impl TerminalRenderer {
         }
 
         // Tarjeta 2: Modo de Tema y Disposición de Pestañas
-        let card2_y = card_y + 160;
+        let card2_y = card_y + SettingsPageRects::THEME_CARD_H + 10;
         let card2_h = 114;
         self.draw_card(
             buffer,
@@ -932,12 +1070,12 @@ impl TerminalRenderer {
             width,
             height,
             content_x + 20,
-            rects.ghostty_prompt_btn.1,
+            rects.shell_integration_btn.1,
             content_x + 250,
-            "Prompt Ghostty nativo (OSC 133):",
+            "Integración de shell (OSC 133):",
             theme,
         );
-        let prompt_str = if config.terminal.ghostty_prompt {
+        let prompt_str = if config.terminal.shell_integration {
             "Activado"
         } else {
             "Desactivado"
@@ -946,10 +1084,10 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            rects.ghostty_prompt_btn,
+            rects.shell_integration_btn,
             prompt_str,
-            state.hovered_ghostty_prompt,
-            config.terminal.ghostty_prompt,
+            state.hovered_shell_integration,
+            config.terminal.shell_integration,
             theme,
         );
 
@@ -1122,6 +1260,26 @@ impl TerminalRenderer {
             on_off(config.terminal.ssh_integration),
             state.hovered_ssh_integration,
             config.terminal.ssh_integration,
+            theme,
+        );
+        self.draw_label(
+            buffer,
+            width,
+            height,
+            content_x + 20,
+            rects.ligatures_btn.1,
+            content_x + 250,
+            "Ligaduras de código (->, !=, ==):",
+            theme,
+        );
+        self.draw_button(
+            buffer,
+            width,
+            height,
+            rects.ligatures_btn,
+            on_off(config.terminal.ligatures),
+            state.hovered_ligatures,
+            config.terminal.ligatures,
             theme,
         );
 
@@ -1323,11 +1481,12 @@ impl TerminalRenderer {
         );
 
         let start_y = card_y + 42;
+        let version_title = format!("Axon Terminal  v{}", env!("CARGO_PKG_VERSION"));
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Axon Terminal",
+            &version_title,
             content_x + 20,
             start_y + 16,
             content_x + card_w,
@@ -1335,6 +1494,25 @@ impl TerminalRenderer {
             14.0,
             true,
         );
+
+        if let Some(info) = crate::updater::get_available_update() {
+            let note = format!(
+                "• ¡Nueva versión v{} disponible! Haz clic en la barra o menú para actualizar",
+                info.latest_version
+            );
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &note,
+                content_x + 200,
+                start_y + 16,
+                content_x + card_w,
+                theme.accent_color(),
+                11.0,
+                true,
+            );
+        }
 
         self.draw_ui_text(
             buffer,
@@ -1355,7 +1533,7 @@ impl TerminalRenderer {
             "• Protocolo iTerm2 / OSC 1337 para renderizado inline de imágenes PNG/JPG.",
             "• Integración completa para sesiones remotas SSH (clonación de splits y SCP).",
             "• Portapapeles remoto bidireccional mediante OSC 52 en base64.",
-            "• Temas oficiales Catppuccin Frappé y Latte, con sincronización de tema del sistema.",
+            "• 819 temas de iterm2-color-schemes, con sincronización de tema del sistema.",
             "• Barra de estado inferior informativa con rama Git y detección de agentes de IA.",
         ];
 

@@ -2,62 +2,28 @@
 
 use super::*;
 
-/// Obtiene rutas de archivos copiados al portapapeles desde el Explorador de Windows (CF_HDROP)
-#[cfg(target_os = "windows")]
-pub(super) fn get_clipboard_files() -> Option<Vec<String>> {
-    use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, GetClipboardData, OpenClipboard,
-    };
-    use windows_sys::Win32::UI::Shell::DragQueryFileW;
-    const CF_HDROP: u32 = 15;
-
-    struct ClipboardLock;
-    impl Drop for ClipboardLock {
-        fn drop(&mut self) {
-            unsafe {
-                CloseClipboard();
-            }
-        }
+/// Abre el portapapeles la primera vez que se necesita (puede fallar si otro proceso lo tiene)
+pub(super) fn lazy_clipboard(
+    slot: &mut Option<arboard::Clipboard>,
+) -> Option<&mut arboard::Clipboard> {
+    if slot.is_none() {
+        *slot = arboard::Clipboard::new().ok();
     }
-
-    unsafe {
-        if OpenClipboard(0) == 0 {
-            return None;
-        }
-        let _lock = ClipboardLock;
-
-        let handle = GetClipboardData(CF_HDROP);
-        if handle == 0 {
-            return None;
-        }
-
-        let count = DragQueryFileW(handle as _, 0xFFFFFFFF, std::ptr::null_mut(), 0);
-        let mut paths = Vec::with_capacity(count as usize);
-
-        for i in 0..count {
-            let len = DragQueryFileW(handle as _, i, std::ptr::null_mut(), 0);
-            if len > 0 {
-                let mut buf = vec![0u16; (len + 1) as usize];
-                DragQueryFileW(handle as _, i, buf.as_mut_ptr(), len + 1);
-                let path = String::from_utf16_lossy(&buf[..len as usize]);
-                paths.push(path);
-            }
-        }
-
-        if paths.is_empty() {
-            None
-        } else {
-            Some(paths)
-        }
-    }
+    slot.as_mut()
 }
 
-#[cfg(not(target_os = "windows"))]
-pub(super) fn get_clipboard_files() -> Option<Vec<String>> {
-    None
+/// Copia `text` al portapapeles; recibe el campo y no `&mut self` para poder usarse con el visor prestado
+pub(super) fn copy_text(slot: &mut Option<arboard::Clipboard>, text: String) {
+    if let Some(cb) = lazy_clipboard(slot) {
+        let _ = cb.set_text(text);
+    }
 }
 
 impl AxonApp {
+    pub(super) fn set_clipboard_text(&mut self, text: String) {
+        copy_text(&mut self.clipboard, text);
+    }
+
     pub(super) fn paste_text(&mut self, text: &str) {
         let active_tab = &mut self.tabs[self.active_tab_index];
         if let Some(active_pane) = active_tab.active_pane_mut() {
@@ -65,7 +31,7 @@ impl AxonApp {
         }
     }
 
-    /// Pega en un panel concreto (no necesariamente el activo: p. ej. al terminar una subida por `scp`)
+    /// Pega en un panel concreto (no necesariamente el activo: p. ej. al terminar una subida por `ssh`)
     pub(super) fn paste_into_pane(pane: &mut TerminalPane, text: &str) {
         let normalized = sanitize_paste(text);
         if normalized.contains(['\n', '\r']) {
@@ -90,9 +56,7 @@ impl AxonApp {
         if self.tabs[self.active_tab_index].is_settings {
             return;
         }
-        if self.clipboard.is_none() {
-            self.clipboard = arboard::Clipboard::new().ok();
-        }
+        lazy_clipboard(&mut self.clipboard);
         if self.tabs[self.active_tab_index].file_viewer.is_some() {
             let text = self.clipboard.as_mut().and_then(|cb| cb.get_text().ok());
             let (auto_save, visible) =
@@ -150,14 +114,14 @@ impl AxonApp {
                 return;
             }
 
-            // Si estamos en una sesión remota SSH, transferimos la imagen mediante scp
+            // Si estamos en una sesión remota SSH, transferimos la imagen por ssh
             // y pegamos la ruta remota /tmp/axon_img_... en lugar de una ruta local de Windows
             if is_ssh {
                 if let Some(session) = ssh_session {
                     if let (Some(local_path), Some(pane_id)) =
                         (self.save_clipboard_image(&img), active_pane_id)
                     {
-                        // `scp` en un hilo: al terminar se pega la ruta remota (o la local si falló)
+                        // `ssh` en un hilo: al terminar se pega la ruta remota (o la local si falló)
                         self.ssh_upload_image(pane_id, local_path, &session.destination);
                         return;
                     }
@@ -174,10 +138,14 @@ impl AxonApp {
         }
 
         // 3. Si no hay texto ni bitmap directo, comprobar si se copiaron archivos desde el Explorador de Windows (CF_HDROP)
-        if let Some(files) = get_clipboard_files() {
+        let files = self
+            .clipboard
+            .as_mut()
+            .and_then(|cb| cb.get().file_list().ok());
+        if let Some(files) = files {
             let formatted = files
                 .into_iter()
-                .map(|p| format!("\"{}\"", p))
+                .map(|p| format!("\"{}\"", p.display()))
                 .collect::<Vec<_>>()
                 .join(" ");
             if !formatted.is_empty() {

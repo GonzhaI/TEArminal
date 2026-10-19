@@ -84,3 +84,151 @@ pub fn key_is_char(key: &Key, physical: PhysicalKey, target: char) -> bool {
         _ => false,
     }
 }
+
+/// Tipo de evento de tecla para el Kitty Keyboard Protocol
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum KeyEventType {
+    Press,
+    Repeat,
+    Release,
+}
+
+/// Resuelve el número de tecla según la especificación del Kitty Keyboard Protocol
+pub fn kitty_key_number(logical_key: &Key, physical_key: PhysicalKey) -> Option<u32> {
+    match logical_key {
+        Key::Named(NamedKey::Enter) => Some(13),
+        Key::Named(NamedKey::Tab) => Some(9),
+        Key::Named(NamedKey::Backspace) => Some(127),
+        Key::Named(NamedKey::Escape) => Some(27),
+        Key::Named(NamedKey::Delete) => Some(57359),
+        Key::Named(NamedKey::Insert) => Some(57358),
+        Key::Named(NamedKey::ArrowLeft) => Some(57360),
+        Key::Named(NamedKey::ArrowRight) => Some(57361),
+        Key::Named(NamedKey::ArrowUp) => Some(57362),
+        Key::Named(NamedKey::ArrowDown) => Some(57363),
+        Key::Named(NamedKey::PageUp) => Some(57364),
+        Key::Named(NamedKey::PageDown) => Some(57365),
+        Key::Named(NamedKey::Home) => Some(57366),
+        Key::Named(NamedKey::End) => Some(57367),
+        Key::Named(NamedKey::CapsLock) => Some(57368),
+        Key::Named(NamedKey::ScrollLock) => Some(57369),
+        Key::Named(NamedKey::NumLock) => Some(57370),
+        Key::Named(NamedKey::PrintScreen) => Some(57371),
+        Key::Named(NamedKey::Pause) => Some(57372),
+        Key::Named(NamedKey::ContextMenu) => Some(57373),
+        Key::Named(NamedKey::F1) => Some(57376),
+        Key::Named(NamedKey::F2) => Some(57377),
+        Key::Named(NamedKey::F3) => Some(57378),
+        Key::Named(NamedKey::F4) => Some(57379),
+        Key::Named(NamedKey::F5) => Some(57380),
+        Key::Named(NamedKey::F6) => Some(57381),
+        Key::Named(NamedKey::F7) => Some(57382),
+        Key::Named(NamedKey::F8) => Some(57383),
+        Key::Named(NamedKey::F9) => Some(57384),
+        Key::Named(NamedKey::F10) => Some(57385),
+        Key::Named(NamedKey::F11) => Some(57386),
+        Key::Named(NamedKey::F12) => Some(57387),
+        Key::Character(s) => s.chars().next().map(|c| c.to_ascii_lowercase() as u32),
+        _ => {
+            if let PhysicalKey::Code(code) = physical_key {
+                match code {
+                    KeyCode::Enter => Some(13),
+                    KeyCode::NumpadEnter => Some(57414),
+                    KeyCode::Tab => Some(9),
+                    KeyCode::Backspace => Some(127),
+                    KeyCode::Escape => Some(27),
+                    KeyCode::Delete => Some(57359),
+                    KeyCode::Insert => Some(57358),
+                    KeyCode::ArrowLeft => Some(57360),
+                    KeyCode::ArrowRight => Some(57361),
+                    KeyCode::ArrowUp => Some(57362),
+                    KeyCode::ArrowDown => Some(57363),
+                    KeyCode::PageUp => Some(57364),
+                    KeyCode::PageDown => Some(57365),
+                    KeyCode::Home => Some(57366),
+                    KeyCode::End => Some(57367),
+                    KeyCode::F1 => Some(57376),
+                    KeyCode::F2 => Some(57377),
+                    KeyCode::F3 => Some(57378),
+                    KeyCode::F4 => Some(57379),
+                    KeyCode::F5 => Some(57380),
+                    KeyCode::F6 => Some(57381),
+                    KeyCode::F7 => Some(57382),
+                    KeyCode::F8 => Some(57383),
+                    KeyCode::F9 => Some(57384),
+                    KeyCode::F10 => Some(57385),
+                    KeyCode::F11 => Some(57386),
+                    KeyCode::F12 => Some(57387),
+                    _ => key_code_to_char(code).map(|c| c.to_ascii_lowercase() as u32),
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Codifica una pulsación o liberación según las banderas activas del Kitty Keyboard Protocol (CSI u)
+#[allow(clippy::too_many_arguments)]
+pub fn encode_kitty_key(
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    win: bool,
+    event_type: KeyEventType,
+    flags: u8,
+) -> Option<Vec<u8>> {
+    if flags == 0 {
+        return None;
+    }
+
+    // Los eventos de liberación solo se reportan si el flag 2 (report event types) está activo
+    if event_type == KeyEventType::Release && (flags & 2) == 0 {
+        return None;
+    }
+
+    let key_num = kitty_key_number(logical_key, physical_key)?;
+
+    let mut mod_mask = 0u8;
+    if shift {
+        mod_mask |= 1;
+    }
+    if alt {
+        mod_mask |= 2;
+    }
+    if ctrl {
+        mod_mask |= 4;
+    }
+    if win {
+        mod_mask |= 8;
+    }
+    let mod_val = 1 + mod_mask;
+
+    let is_functional = key_num >= 57358 || matches!(key_num, 9 | 13 | 27 | 127);
+    let should_encode = (flags & 8) != 0 // Reportar todas las teclas como secuencias de escape
+        || (flags & 2) != 0 // Reportar tipos de evento
+        || mod_val > 1 // Algún modificador activo
+        || is_functional; // Teclas funcionales o ambiguas
+
+    if !should_encode {
+        return None;
+    }
+
+    let event_code = match event_type {
+        KeyEventType::Press => 1,
+        KeyEventType::Repeat => 2,
+        KeyEventType::Release => 3,
+    };
+
+    let seq = if (flags & 2) != 0 {
+        format!("\x1b[{key_num};{mod_val}:{event_code}u")
+    } else if mod_val > 1 {
+        format!("\x1b[{key_num};{mod_val}u")
+    } else {
+        format!("\x1b[{key_num}u")
+    };
+
+    Some(seq.into_bytes())
+}

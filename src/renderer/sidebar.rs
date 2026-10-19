@@ -3,7 +3,7 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Renderiza la barra lateral vertical con la lista de instancias / pestañas al estilo Ghostty
+    /// Renderiza la barra lateral vertical con la lista de instancias / pestañas
     pub fn render_sidebar(
         &mut self,
         buffer: &mut [u32],

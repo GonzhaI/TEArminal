@@ -25,11 +25,14 @@ impl AxonApp {
             self.tabs.push(TerminalTab::new_settings(tab_id));
             self.switch_to_tab(self.tabs.len() - 1);
         }
+        self.settings_page_state.theme_slot_light =
+            self.config.appearance.uses_light_theme(self.system_light);
+        self.reveal_current_theme();
     }
 
     /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
     pub fn sync_file_explorer_root(&mut self) {
-        if !self.file_explorer.visible {
+        if !self.file_explorer.visible || self.file_explorer.is_pinned {
             self.sync_fs_watcher();
             return;
         }
@@ -224,7 +227,7 @@ impl AxonApp {
         let pty = match PtyManager::new(
             pane_id,
             &self.config.terminal.default_shell,
-            self.config.terminal.ghostty_prompt,
+            self.config.terminal.shell_integration,
             cols as u16,
             rows as u16,
             None,
@@ -296,6 +299,68 @@ impl AxonApp {
         }
     }
 
+    /// Desprende la pestaña `index` y solicita al anfitrión transferirla a una nueva ventana
+    pub fn detach_tab_to_new_window(&mut self, index: usize) {
+        if index >= self.tabs.len() || self.tabs.len() <= 1 || self.tabs[index].is_settings {
+            return;
+        }
+
+        if let Some(viewer) = self.tabs[index].file_viewer.as_mut() {
+            if viewer.needs_autosave {
+                viewer.autosave_local();
+            }
+        }
+
+        let tab = self.tabs.remove(index);
+        self.prune_pending_remote();
+
+        if index < self.active_tab_index {
+            self.active_tab_index -= 1;
+        } else if self.active_tab_index >= self.tabs.len() {
+            self.active_tab_index = self.tabs.len() - 1;
+        }
+        if index < self.last_terminal_tab_index {
+            self.last_terminal_tab_index -= 1;
+        } else if self.last_terminal_tab_index >= self.tabs.len() {
+            self.last_terminal_tab_index = self.tabs.len() - 1;
+        }
+        self.tabs[self.active_tab_index].has_unread = false;
+        self.sync_file_explorer_root();
+        self.clamp_sidebar_scroll();
+        self.update_window_title();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+
+        crate::logger::log(&format!(
+            "Desprendiendo pestaña '{}' a nueva ventana",
+            tab.display_title()
+        ));
+        self.new_window_with_tab = Some(tab);
+    }
+
+    /// Acopla una pestaña existente (transferida desde otra ventana) en esta ventana
+    pub fn attach_tab(&mut self, mut tab: TerminalTab) {
+        tab.id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let new_idx = self.tabs.len();
+        self.tabs.push(tab);
+        self.active_tab_index = new_idx;
+        if !self.tabs[new_idx].is_settings {
+            self.last_terminal_tab_index = new_idx;
+        }
+        self.recompute_grid_for_all_tabs();
+        self.tabs[new_idx].has_unread = false;
+        self.sync_file_explorer_root();
+        self.clamp_sidebar_scroll();
+        self.update_window_title();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub fn close_other_tabs(&mut self, keep: usize) {
         let Some(id) = self.tabs.get(keep).map(|t| t.id) else {
             return;
@@ -343,82 +408,48 @@ impl AxonApp {
 
         let (cols, rows) = (80, 24);
 
-        let (pty, initial_ssh) = if let Some(ref ssh) = ssh_session {
-            if ssh.is_active {
+        // Con sesión SSH activa se reconecta al mismo host; si falla (o no hay sesión) se abre un shell local
+        let ssh_pty = ssh_session
+            .as_ref()
+            .filter(|s| s.is_active)
+            .and_then(|ssh| {
                 crate::logger::log(&format!(
                     "Split pane: reconectando automáticamente vía SSH a {}",
                     ssh.destination
                 ));
-                match PtyManager::new_ssh(
+                PtyManager::new_ssh(
                     new_pane_id,
                     &ssh.destination,
                     ssh.remote_dir.as_deref(),
                     cols as u16,
                     rows as u16,
                     self.proxy.clone(),
-                ) {
-                    Ok(p) => (p, Some(ssh.clone())),
-                    Err(e) => {
-                        crate::logger::log(&format!(
-                            "Fallo al conectar SSH para split: {:?}, usando local",
-                            e
-                        ));
-                        let local_p = match PtyManager::new(
-                            new_pane_id,
-                            &self.config.terminal.default_shell,
-                            self.config.terminal.ghostty_prompt,
-                            cols as u16,
-                            rows as u16,
-                            cwd_ref,
-                            self.proxy.clone(),
-                        ) {
-                            Ok(p) => p,
-                            Err(e2) => {
-                                crate::pty::report_spawn_error(
-                                    &self.config.terminal.default_shell,
-                                    &e2,
-                                );
-                                return;
-                            }
-                        };
-                        (local_p, None)
-                    }
-                }
-            } else {
-                let local_p = match PtyManager::new(
-                    new_pane_id,
-                    &self.config.terminal.default_shell,
-                    self.config.terminal.ghostty_prompt,
-                    cols as u16,
-                    rows as u16,
-                    cwd_ref,
-                    self.proxy.clone(),
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        crate::pty::report_spawn_error(&self.config.terminal.default_shell, &e);
-                        return;
-                    }
-                };
-                (local_p, None)
-            }
-        } else {
-            let local_p = match PtyManager::new(
+                )
+                .map_err(|e| {
+                    crate::logger::log(&format!(
+                        "Fallo al conectar SSH para split: {:?}, usando local",
+                        e
+                    ))
+                })
+                .ok()
+            });
+        let (pty, initial_ssh) = match ssh_pty {
+            Some(p) => (p, ssh_session),
+            None => match PtyManager::new(
                 new_pane_id,
                 &self.config.terminal.default_shell,
-                self.config.terminal.ghostty_prompt,
+                self.config.terminal.shell_integration,
                 cols as u16,
                 rows as u16,
                 cwd_ref,
                 self.proxy.clone(),
             ) {
-                Ok(p) => p,
+                Ok(p) => (p, None),
                 Err(e) => {
                     crate::pty::report_spawn_error(&self.config.terminal.default_shell, &e);
                     return;
                 }
-            };
-            (local_p, None)
+            },
         };
 
         let mut terminal = TerminalState::new(
@@ -478,7 +509,7 @@ impl AxonApp {
         match PtyManager::new(
             pane_id,
             &self.config.terminal.default_shell,
-            self.config.terminal.ghostty_prompt,
+            self.config.terminal.shell_integration,
             cols as u16,
             rows as u16,
             cwd.as_deref(),

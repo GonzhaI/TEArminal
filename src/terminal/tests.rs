@@ -4,16 +4,16 @@ use super::*;
 use std::time::Instant;
 
 #[test]
-fn test_ghostty_palette() {
-    let theme = Theme::ghostty_dark();
-    assert_eq!(theme.background, Color::from_rgb(22, 22, 24));
-    assert_eq!(theme.cursor, Color::from_rgb(255, 255, 255));
+fn test_default_theme_palette() {
+    let theme = Theme::default();
+    assert_eq!(theme.background, Color::from_rgb(0x30, 0x34, 0x46));
+    assert_eq!(theme.cursor, Color::from_rgb(0xf2, 0xd5, 0xcf));
     assert_eq!(theme.ansi.len(), 16);
 }
 
 #[test]
 fn test_truecolor_parsing() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     // Secuencia TrueColor: RGB(120, 200, 250)
     let seq = b"\x1b[38;2;120;200;250mHola TrueColor\x1b[0m";
@@ -26,7 +26,7 @@ fn test_truecolor_parsing() {
 
 #[test]
 fn test_cursor_and_clear_screen() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Escribir en posición (10, 5)
@@ -43,7 +43,7 @@ fn test_cursor_and_clear_screen() {
 
 #[test]
 fn test_scrollback_retention() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 10, 500, theme);
 
     // Insertar 50 líneas (más que el tamaño de pantalla)
@@ -61,7 +61,7 @@ fn test_scrollback_retention() {
 
 #[test]
 fn bench_throughput_massive_stream() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(120, 40, 50_000, theme);
 
     // Generar un bloque representativo de logs de agentes/compilador con colores ANSI
@@ -92,7 +92,7 @@ fn bench_throughput_massive_stream() {
 
 #[test]
 fn test_iterm2_image_protocol() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // PNG 1x1 codificado en Base64
@@ -131,7 +131,7 @@ fn test_inline_images_are_downscaled_evicted_and_capped() {
 
     // Se guarda al tamaño de dibujo (640x540), no el RGBA completo (700x600)
     assert!(osc.len() < 1024, "{}", osc.len());
-    let mut term = TerminalState::new(80, 24, 100, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 100, Theme::default());
     term.process_bytes(osc.as_bytes());
     let img = &term.images[0];
     assert!(
@@ -159,7 +159,7 @@ fn test_inline_images_are_downscaled_evicted_and_capped() {
     assert!(term.images.is_empty());
 
     // Tope total: nunca más de 64 MB, se descartan las más antiguas
-    let mut term = TerminalState::new(80, 24, 10_000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 10_000, Theme::default());
     for _ in 0..50 {
         term.process_bytes(osc.as_bytes());
     }
@@ -170,7 +170,7 @@ fn test_inline_images_are_downscaled_evicted_and_capped() {
 
 #[test]
 fn test_alt_screen_buffer_tmux() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // 1. Escribir en buffer principal
@@ -202,7 +202,7 @@ fn test_alt_screen_buffer_tmux() {
 
 #[test]
 fn test_decstbm_tmux_split_margins() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 20, 1000, theme);
 
     // Definir margen de desplazamiento de la línea 5 a la 10 (split pane de tmux)
@@ -213,7 +213,7 @@ fn test_decstbm_tmux_split_margins() {
 
 #[test]
 fn bench_massive_scrollback_100k_lines() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     // 100.000 líneas de scrollback en memoria
     let mut term = TerminalState::new(120, 40, 100_000, theme);
 
@@ -253,7 +253,7 @@ fn bench_massive_scrollback_100k_lines() {
 
 #[test]
 fn test_osc_52_clipboard() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Enviar secuencia OSC 52 con texto "Hello from SSH!" en base64 (SGVsbG8gZnJvbSBTU0gh)
@@ -281,7 +281,7 @@ fn test_osc_52_payload_is_capped_at_100kb() {
 
 #[test]
 fn test_osc_133_semantic_prompts() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Simulación de secuencia Shell Integration OSC 133
@@ -312,7 +312,7 @@ fn test_osc_133_semantic_prompts() {
 
 #[test]
 fn test_bracketed_paste_mode() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     assert!(!term.bracketed_paste_mode);
@@ -326,7 +326,7 @@ fn test_bracketed_paste_mode() {
 
 #[test]
 fn test_powershell_full_startup_stream() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     let raw = b"\x1b[?9001h\x1b[?1004h\x1b[?25l\x1b[2J\x1b[m\x1b[HWindows PowerShell\r\nCopyright (C) Microsoft Corporation. All rights reserved.\x1b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\x07\x1b[?25h\x1b[?25l\x1b[4;1H\x1b[?25hPS C:\\Users\\gmora> ";
     term.process_bytes(raw);
@@ -366,7 +366,7 @@ fn test_powershell_full_startup_stream() {
 
 #[test]
 fn test_unicode_double_width_emojis_and_cjk() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Imprimir emoji robot (🤖) y texto "AI"
@@ -394,7 +394,7 @@ fn test_unicode_double_width_emojis_and_cjk() {
 
 #[test]
 fn test_unicode_box_drawing_and_braille_patterns() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Caracteres de diagramación (Box Drawing) y patrones Braille (utilizados por btop / spinners)
@@ -410,8 +410,169 @@ fn test_unicode_box_drawing_and_braille_patterns() {
 }
 
 #[test]
+fn test_terminal_grapheme_clustering_combining_diacritics() {
+    let theme = Theme::default();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+
+    // Letra 'e' seguida de acento agudo combinatorio (U+0301) y luego 'X'
+    let text = "e\u{0301}X";
+    term.process_bytes(text.as_bytes());
+
+    // 'e' + '\u{0301}' deben agruparse en la celda 0 con ancho 1
+    let cell_e = &term.grid[0][0];
+    assert!(
+        cell_e.is_grapheme(),
+        "La celda debe marcarse como clúster de grafema"
+    );
+    assert_eq!(cell_e.width, 1);
+    assert_eq!(term.grapheme_of(cell_e), Some("e\u{0301}"));
+
+    // 'X' debe estar en la columna 1
+    assert_eq!(term.grid[0][1].c, 'X');
+    assert_eq!(term.grid[0][1].width, 1);
+    assert_eq!(term.cursor_x, 2);
+
+    // Múltiples diacríticos combinatorios: 'o' + horn (U+031B) + acute (U+0301)
+    let mut term2 = TerminalState::new(80, 24, 1000, Theme::default());
+    term2.process_bytes("o\u{031B}\u{0301}".as_bytes());
+    let cell_o = &term2.grid[0][0];
+    assert!(cell_o.is_grapheme());
+    assert_eq!(cell_o.width, 1);
+    assert_eq!(term2.grapheme_of(cell_o), Some("o\u{031B}\u{0301}"));
+    assert_eq!(term2.cursor_x, 1);
+}
+
+#[test]
+fn test_terminal_grapheme_clustering_emoji_modifiers_and_zwj() {
+    let theme = Theme::default();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+
+    // Pulgar arriba con tono de piel medio (U+1F44D U+1F3FD)
+    term.process_bytes("👍🏽!".as_bytes());
+    let cell_thumb = &term.grid[0][0];
+    assert!(cell_thumb.is_grapheme());
+    assert_eq!(cell_thumb.width, 2);
+    assert_eq!(term.grapheme_of(cell_thumb), Some("👍🏽"));
+    assert_eq!(term.grid[0][1].width, 0); // espaciador
+    assert_eq!(term.grid[0][2].c, '!');
+    assert_eq!(term.cursor_x, 3);
+
+    // Secuencia ZWJ (U+1F468 U+200D U+1F469: 👨‍👩)
+    let mut term_zwj = TerminalState::new(80, 24, 1000, Theme::default());
+    term_zwj.process_bytes("👨\u{200D}👩".as_bytes());
+    let cell_zwj = &term_zwj.grid[0][0];
+    assert!(cell_zwj.is_grapheme());
+    assert_eq!(cell_zwj.width, 2);
+    assert_eq!(term_zwj.grapheme_of(cell_zwj), Some("👨\u{200D}👩"));
+    assert_eq!(term_zwj.cursor_x, 2);
+}
+
+#[test]
+fn test_terminal_grapheme_clustering_copy_selection_text() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    term.process_bytes("AI: e\u{0301} y 👍🏽\r\n".as_bytes());
+
+    term.selection = Some(SelectionRange {
+        start: (0, 0),
+        end: (12, 0),
+    });
+
+    let copied = term
+        .copy_selection_text()
+        .expect("Debe haber texto seleccionado");
+    assert!(
+        copied.contains("e\u{0301}"),
+        "El texto copiado debe conservar el grafema"
+    );
+    assert!(
+        copied.contains("👍🏽"),
+        "El texto copiado debe conservar el emoji"
+    );
+}
+
+#[test]
+fn test_terminal_selection_tracks_text_when_scrolled() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    for i in 0..40 {
+        term.process_bytes(format!("echo line {i}\r\n").as_bytes());
+    }
+
+    assert!(term.scrollback.len() >= 16);
+
+    // Seleccionar "echo line 5" que ahora está en el scrollback
+    term.selection = Some(SelectionRange {
+        start: (0, 5),
+        end: (11, 5),
+    });
+
+    let text_at_rest = term.copy_selection_text().expect("texto seleccionado");
+    assert_eq!(text_at_rest, "echo line 5");
+
+    // Desplazar la terminal hacia arriba (scroll_offset > 0)
+    term.scroll_offset = 10;
+    let text_scrolled = term
+        .copy_selection_text()
+        .expect("texto seleccionado al scrollear");
+    assert_eq!(
+        text_scrolled, "echo line 5",
+        "El texto seleccionado debe mantenerse idéntico sin importar el scroll_offset"
+    );
+
+    // Desplazar de nuevo hacia abajo al fondo
+    term.scroll_offset = 0;
+    assert_eq!(
+        term.copy_selection_text().as_deref(),
+        Some("echo line 5"),
+        "El texto seleccionado debe persistir al volver al prompt activo"
+    );
+}
+
+#[test]
+fn test_terminal_selection_trims_trailing_empty_space() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    term.process_bytes("cargo build\r\n".as_bytes());
+
+    // Seleccionar desde el inicio hasta la columna 70 (que es espacio vacío en la pantalla)
+    term.selection = Some(SelectionRange {
+        start: (0, 0),
+        end: (70, 0),
+    });
+
+    let copied = term.copy_selection_text().expect("texto copiado");
+    assert_eq!(
+        copied, "cargo build",
+        "La copia no debe incluir los 59 espacios vacíos de la rejilla"
+    );
+}
+
+#[test]
+fn test_terminal_selection_shifts_on_scrollback_eviction() {
+    let mut term = TerminalState::new(80, 5, 5, Theme::default());
+    for i in 0..5 {
+        term.process_bytes(format!("line {i}\r\n").as_bytes());
+    }
+    // Llenar scrollback hasta su límite (5 líneas)
+    for i in 5..10 {
+        term.process_bytes(format!("line {i}\r\n").as_bytes());
+    }
+    assert_eq!(term.scrollback.len(), 5);
+
+    // Seleccionar línea 2
+    term.selection = Some(SelectionRange {
+        start: (0, 2),
+        end: (6, 2),
+    });
+
+    // Añadir una línea nueva que provoca la expulsión de la línea 0 de scrollback
+    term.process_bytes(b"line new\r\n");
+    let sel = term.selection.expect("debe existir selección");
+    assert_eq!(sel.start.1, 1, "La selección debió decrementarse de 2 a 1");
+    assert_eq!(sel.end.1, 1);
+}
+
+#[test]
 fn test_truecolor_24bit_rgb_semicolon_and_colon() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // 1. TrueColor formato punto y coma estándar (38;2;R;G;B y 48;2;R;G;B)
@@ -436,7 +597,7 @@ fn test_truecolor_24bit_rgb_semicolon_and_colon() {
 
 #[test]
 fn test_sgr_text_styles_dim_bold_underline_strikethrough() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Estilos combinados: 1 (bold), 2 (dim), 4 (underline), 9 (strikethrough)
@@ -460,7 +621,7 @@ fn test_sgr_text_styles_dim_bold_underline_strikethrough() {
 
 #[test]
 fn test_tui_mouse_and_sync_protocols() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     assert!(!term.is_mouse_reporting_active());
@@ -487,7 +648,7 @@ fn test_tui_mouse_and_sync_protocols() {
 
 #[test]
 fn test_pwsh_startup_prompt() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     let raw = b"\x1b[?9001h\x1b[?1004h\x1b[2J\x1b[?25l\x1b[2J\x1b[m\x1b[H\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\x1b[H\x1b]0;pwsh.exe\x07\x1b[?25h\x1b[38;2;78;146;249m\xef\x81\xbb ~\x1b[38;2;81;226;122m\r\n\xef\x90\xb2 ";
     term.process_bytes(raw);
@@ -504,7 +665,7 @@ fn test_pwsh_startup_prompt() {
 
 #[test]
 fn test_ech_erase_characters() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Escribir "hello world"
@@ -524,7 +685,7 @@ fn test_ech_erase_characters() {
 
 #[test]
 fn test_bce_erase_in_line() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Establecer color de fondo azul (44) y borrar línea con \x1b[2K
@@ -535,7 +696,7 @@ fn test_bce_erase_in_line() {
 
 #[test]
 fn test_osc_cwd_reporting() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Test OSC 7
@@ -555,7 +716,7 @@ fn test_osc_cwd_reporting() {
 
 #[test]
 fn test_osc_cwd_rejects_network_paths() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Ninguna ruta de red (UNC) puede llegar a `current_dir`: Windows abriría SMB y filtraría el hash NTLM
@@ -581,7 +742,7 @@ fn test_osc_7_decodes_every_percent_escape() {
     assert_eq!(percent_decode("%4"), "%4");
     assert_eq!(percent_decode("%zz%+1"), "%zz%+1");
 
-    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
     term.process_bytes(b"\x1b]7;file://localhost/C:/Users/Jos%C3%A9/mi%20carpeta%23\x07");
     assert_eq!(
         term.current_dir.as_deref(),
@@ -612,20 +773,24 @@ fn test_hook_osc_7_round_trips_special_directory_names() {
     let start = init.find("$hook = @'\n").expect("gancho") + "$hook = @'\n".len();
     let hook = &init[start..start + init[start..].find("\n'@").expect("fin del gancho")];
     let dir = format!("/tmp/axon_osc7_{}/a b%41", std::process::id());
-    let script = std::env::temp_dir().join(format!("axon_osc7_{}.sh", std::process::id()));
-    std::fs::write(
-        &script,
-        format!(
-            "mkdir -p '{dir}' && cd '{dir}'\nHOSTNAME=srv\n{hook}\nprintf '\\n@@@%s' \"$PWD\"\nrm -rf '/tmp/axon_osc7_{}'\n",
-            std::process::id()
-        ),
-    )
-    .unwrap();
-    let out = std::process::Command::new("bash")
-        .arg(&script)
-        .output()
+    let script_content = format!(
+        "mkdir -p '{dir}' && cd '{dir}'\nHOSTNAME=srv\n{hook}\nprintf '\\n@@@%s' \"$PWD\"\nrm -rf '/tmp/axon_osc7_{}'\n",
+        std::process::id()
+    );
+    use std::io::Write;
+    let mut child = std::process::Command::new("bash")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .unwrap();
-    let _ = std::fs::remove_file(&script);
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(script_content.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).replace('\r', "");
     let (osc, pwd) = text.split_once("\n@@@").expect("salida del gancho");
     let uri = osc
@@ -639,7 +804,7 @@ fn test_hook_osc_7_round_trips_special_directory_names() {
 
 #[test]
 fn test_title_with_path_only_sets_cwd_inside_an_authenticated_ssh_session() {
-    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
     term.pane_token = "t0k3n".into();
     // Título de WSL (`user@host: /ruta`): la ruta no existe en Windows, no es un directorio local
     term.process_bytes(b"\x1b]0;user@host: /home/user/proyecto\x07");
@@ -660,7 +825,7 @@ fn test_title_with_path_only_sets_cwd_inside_an_authenticated_ssh_session() {
 
 #[test]
 fn test_resize_respects_max_scrollback() {
-    let mut term = TerminalState::new(80, 24, 3, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 3, Theme::default());
     for i in 0..24 {
         term.process_bytes(format!("fila {i}\r\n").as_bytes());
     }
@@ -671,7 +836,7 @@ fn test_resize_respects_max_scrollback() {
 
 #[test]
 fn test_osc_window_title_does_not_infer_ssh() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Envío de título de ventana tradicional OSC 0
@@ -690,7 +855,7 @@ fn test_osc_window_title_does_not_infer_ssh() {
 
 #[test]
 fn test_osc_axon_ssh_signaling() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     term.pane_token = "t0k3n".into();
 
@@ -724,14 +889,14 @@ fn test_osc_axon_ssh_signaling() {
 
 #[test]
 fn test_axon_ssh_start_ignored_without_pane_token() {
-    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
     term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=host;token=\x07");
     assert!(term.ssh_session.is_none());
 }
 
 #[test]
 fn test_osc_7_remote_host_ssh() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     term.pane_token = "t0k3n".into();
 
@@ -765,7 +930,7 @@ fn test_cell_memory_footprint_16_bytes() {
 /// (se interpola en una orden de PowerShell al dividir un panel).
 #[test]
 fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
-    let new = || TerminalState::new(80, 24, 100, Theme::ghostty_dark());
+    let new = || TerminalState::new(80, 24, 100, Theme::default());
 
     let mut t = new();
     t.process_bytes(b"\x1b]0;ssh: user@host\x07");
@@ -804,7 +969,7 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
 #[test]
 fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
     let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
     let mut term = TerminalState::new(80, 24, 100, theme);
     term.pane_token = "t0k3n".into();
     term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
@@ -855,11 +1020,33 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
         )
     );
 
+    // Un directorio grande conserva los archivos ocultos que quedan al final (p. ej. `.env`)
+    let many: String = (0..1000)
+        .map(|i| {
+            format!(
+                "f{i}
+"
+            )
+        })
+        .chain([".env
+"
+        .into()])
+        .collect();
+    let osc = format!("]1337;AxonLs={}", hex(&many));
+    term.process_bytes(osc.as_bytes());
+    let listed = term.remote_listing.as_deref().unwrap();
+    assert_eq!(listed.len(), 1001);
+    assert_eq!(listed.last().map(String::as_str), Some(".env"));
+
     // Un listado desmesurado se ignora y al terminar la sesión todo se reinicia
-    let huge = format!("\x1b]1337;AxonLs={}\x07", "ab".repeat(100 * 1024));
+    let huge = format!("\x1b]1337;AxonLs={}\x07", "ab".repeat(300 * 1024));
     term.remote_listing = None;
     term.process_bytes(huge.as_bytes());
-    assert_eq!(term.remote_listing, None);
+    // El búfer OSC acota la secuencia: lo que queda no es un nombre válido
+    assert!(term
+        .remote_listing
+        .as_deref()
+        .is_none_or(<[String]>::is_empty));
     term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
     assert!(!term.remote_integration && term.remote_listing.is_none());
 
@@ -871,7 +1058,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
 #[test]
 fn test_remote_file_responses_are_reassembled_and_bounded() {
     let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let theme = crate::theme::Theme::ghostty_default_styledark();
+    let theme = crate::theme::Theme::default();
     let mut term = TerminalState::new(80, 24, 100, theme);
 
     // Sin integración no se puede pedir nada (los bytes irían a otro programa)
@@ -937,7 +1124,7 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
 /// dejar subrayado/tenue activos (subrayaba la primera fila del banner, también los espacios).
 #[test]
 fn test_private_marker_csi_m_is_not_sgr() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     term.process_bytes(b"\x1b[>4;2m\x1b[>4m\x1b[>1u\x1b[0 qA");
     let cell = &term.grid[0][0];
@@ -951,7 +1138,7 @@ fn test_private_marker_csi_m_is_not_sgr() {
 /// El wrapper de agentes avisa con OSC 1337 AxonAgent; Axon lo usa para reabrir el shell si muere con el agente.
 #[test]
 fn test_axon_agent_osc_tracks_running_agent() {
-    let theme = Theme::ghostty_dark();
+    let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     assert!(!term.agent_running);
     term.process_bytes(b"\x1b]1337;AxonAgent=start\x07");
@@ -979,7 +1166,7 @@ fn test_axon_agent_osc_tracks_running_agent() {
 
 #[test]
 fn test_osc_133_blocks_shift_on_scrollback_eviction() {
-    let mut term = TerminalState::new(80, 4, 5, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 4, 5, Theme::default());
     term.process_bytes(
         b"\x1b]133;A\x07\x1b]133;B\x07old\r\n\x1b]133;C\x07viejo\r\n\x1b]133;D;0\x07",
     );
@@ -999,7 +1186,7 @@ fn test_osc_133_blocks_shift_on_scrollback_eviction() {
 
 #[test]
 fn test_clear_scrollback_and_ed_3() {
-    let mut term = TerminalState::new(80, 24, 1000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
     for i in 0..50 {
         term.process_bytes(format!("Línea {i}\r\n").as_bytes());
     }
@@ -1019,7 +1206,7 @@ fn test_clear_scrollback_and_ed_3() {
 
 #[test]
 fn bench_csi_cursor_and_erase_churn() {
-    let mut term = TerminalState::new(160, 48, 2000, Theme::ghostty_dark());
+    let mut term = TerminalState::new(160, 48, 2000, Theme::default());
     let mut payload = Vec::with_capacity(64 * 1024);
     for row in 1..=48 {
         let chunk = format!(
@@ -1038,4 +1225,398 @@ fn bench_csi_cursor_and_erase_churn() {
     println!(
         "bench_csi_cursor_and_erase_churn: {iterations} frames TUI ({total_mb:.2} MB) en {elapsed:.2?}: {mb_per_sec:.2} MB/s"
     );
+}
+
+#[test]
+fn test_kitty_graphics_query_support() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Consulta con ID específico: \x1b_Ga=q,i=42\x1b\
+    term.process_bytes(b"\x1b_Ga=q,i=42\x1b\\");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=42;OK\x1b\\");
+
+    // Consulta sin ID y terminada con BEL (\x07)
+    term.pty_write_queue.clear();
+    term.process_bytes(b"\x1b_Ga=q;somepayload\x07");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=0;OK\x1b\\");
+
+    // Consulta con modo silencioso (q=2): no debe encolar respuesta
+    term.pty_write_queue.clear();
+    term.process_bytes(b"\x1b_Ga=q,i=100,q=2\x1b\\");
+    assert!(term.pty_write_queue.is_empty());
+}
+
+#[test]
+fn test_kitty_graphics_transmit_and_display_png() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Crear un PNG mínimo de 2x2 píxeles
+    let img = image::RgbaImage::new(2, 2);
+    let mut png_bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut png_bytes);
+    img.write_to(&mut cursor, image::ImageFormat::Png).unwrap();
+    let b64 = BASE64_STANDARD.encode(&png_bytes);
+
+    let seq = format!("\x1b_Ga=T,f=100,i=15;{b64}\x1b\\");
+    term.process_bytes(seq.as_bytes());
+
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 15);
+    assert_eq!(term.images[0].width_cols, 1);
+    assert!(term.kitty_stored_images.contains_key(&15));
+
+    // Confirmación OK enviada al PTY porque i > 0 y q == 0
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=15;OK\x1b\\");
+}
+
+#[test]
+fn test_kitty_graphics_raw_rgba_and_rgb() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Raw RGBA 32 bits (f=32), 2x2 = 16 bytes
+    let raw_rgba = vec![255u8; 16];
+    let b64_rgba = BASE64_STANDARD.encode(&raw_rgba);
+    let seq_rgba = format!("\x1b_Ga=T,f=32,s=2,v=2,i=16;{b64_rgba}\x1b\\");
+    term.process_bytes(seq_rgba.as_bytes());
+
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 16);
+
+    // Raw RGB 24 bits (f=24), 2x2 = 12 bytes
+    let raw_rgb = vec![128u8; 12];
+    let b64_rgb = BASE64_STANDARD.encode(&raw_rgb);
+    let seq_rgb = format!("\x1b_Ga=T,f=24,s=2,v=2,i=17;{b64_rgb}\x1b\\");
+    term.process_bytes(seq_rgb.as_bytes());
+
+    assert_eq!(term.images.len(), 2);
+    assert_eq!(term.images[1].id, 17);
+}
+
+#[test]
+fn test_kitty_graphics_chunked_transmission() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    let raw_rgba = vec![200u8; 16]; // 2x2 RGBA
+    let b64 = BASE64_STANDARD.encode(&raw_rgba);
+
+    // Dividir en 2 fragmentos (m=1 y m=0)
+    let (chunk1, chunk2) = b64.split_at(b64.len() / 2);
+
+    let seq1 = format!("\x1b_Ga=T,f=32,s=2,v=2,i=25,m=1;{chunk1}\x1b\\");
+    let seq2 = format!("\x1b_Gm=0;{chunk2}\x1b\\");
+
+    term.process_bytes(seq1.as_bytes());
+    // Aún no debe haberse añadido la imagen a la lista visible
+    assert_eq!(term.images.len(), 0);
+    assert!(term.kitty_chunk_data.is_some());
+
+    term.process_bytes(seq2.as_bytes());
+    // Ahora debe estar completa
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 25);
+    assert!(term.kitty_chunk_data.is_none());
+}
+
+#[test]
+fn test_kitty_graphics_transmit_put_and_delete() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    let raw_rgba = vec![255u8; 16];
+    let b64 = BASE64_STANDARD.encode(&raw_rgba);
+
+    // 1. Transmitir solo (a=t): se guarda pero no se añade a images
+    let seq_t = format!("\x1b_Ga=t,f=32,s=2,v=2,i=30;{b64}\x1b\\");
+    term.process_bytes(seq_t.as_bytes());
+    assert_eq!(term.images.len(), 0);
+    assert!(term.kitty_stored_images.contains_key(&30));
+
+    // 2. Colocar / mostrar (a=p)
+    term.process_bytes(b"\x1b_Ga=p,i=30\x1b\\");
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 30);
+
+    // 3. Borrar por ID (a=d, d=i, i=30)
+    term.process_bytes(b"\x1b_Ga=d,d=i,i=30\x1b\\");
+    assert_eq!(term.images.len(), 0);
+    assert!(!term.kitty_stored_images.contains_key(&30));
+
+    // 4. Colocar otra y borrar todas (a=d, d=a)
+    let seq_t2 = format!("\x1b_Ga=T,f=32,s=2,v=2,i=31;{b64}\x1b\\");
+    term.process_bytes(seq_t2.as_bytes());
+    assert_eq!(term.images.len(), 1);
+    term.process_bytes(b"\x1b_Ga=d,d=a\x1b\\");
+    assert_eq!(term.images.len(), 0);
+    assert!(term.kitty_stored_images.is_empty());
+}
+
+/// Al pasar de 32 imágenes guardadas se expulsa la más antigua (no una al azar) y la recién guardada sobrevive
+#[test]
+fn test_kitty_store_evicts_the_oldest_image() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    let b64 = BASE64_STANDARD.encode(vec![255u8; 16]);
+    for id in 1..=40u64 {
+        let seq = format!("\x1b_Ga=t,f=32,s=2,v=2,i={id},q=2;{b64}\x1b\\");
+        term.process_bytes(seq.as_bytes());
+    }
+    assert_eq!(term.kitty_stored_images.len(), 32);
+    assert!(term.kitty_stored_images.contains_key(&40));
+    assert!(term.kitty_stored_images.contains_key(&9));
+    assert!(!term.kitty_stored_images.contains_key(&8));
+}
+
+/// Entrada hostil: dimensiones que desbordan `u32`, un PNG con ancho fuera de tope y paneles estrechos no
+/// producen pánico ni imagen, y quien espera confirmación recibe un error
+#[test]
+fn test_kitty_rejects_hostile_images_without_panicking() {
+    use base64::prelude::*;
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // s * v * 4 = 2^34: con aritmética de 32 bits coincidiría con un tamaño pequeño
+    let seq = format!(
+        "\x1b_Ga=T,f=32,s=65536,v=65536,i=60;{}\x1b\\",
+        BASE64_STANDARD.encode([1u8, 2, 3, 4])
+    );
+    term.process_bytes(seq.as_bytes());
+    assert!(term.images.is_empty());
+    assert!(String::from_utf8_lossy(&term.pty_write_queue[0]).contains("EBADPNG"));
+
+    // PNG diminuto (comprime muy bien) cuyo ancho supera el tope de 16384
+    let mut png = Vec::new();
+    image::RgbaImage::new(20_000, 1)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let seq = format!(
+        "\x1b_Ga=T,f=100,i=61,q=2;{}\x1b\\",
+        BASE64_STANDARD.encode(&png)
+    );
+    term.process_bytes(seq.as_bytes());
+    assert!(term.images.is_empty());
+
+    // Panel de 5 columnas: antes `clamp(10, cols)` entraba en pánico
+    let mut narrow = TerminalState::new(5, 24, 1000, Theme::default());
+    let seq = format!(
+        "\x1b_Ga=T,f=32,s=2,v=2;{}\x1b\\",
+        BASE64_STANDARD.encode(vec![9u8; 16])
+    );
+    narrow.process_bytes(seq.as_bytes());
+    assert_eq!(narrow.images.len(), 1);
+}
+
+#[test]
+fn test_kitty_graphics_stream_split_across_buffers() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Secuencia \x1b_Ga=q,i=77\x1b\ dividida en varias llamadas
+    term.process_bytes(b"\x1b");
+    term.process_bytes(b"_");
+    term.process_bytes(b"Ga=q,i=");
+    term.process_bytes(b"77\x1b");
+    term.process_bytes(b"\\");
+
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=77;OK\x1b\\");
+}
+
+#[test]
+fn test_synchronized_rendering_dec_2026_and_timeout() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    assert!(!term.is_in_sync_update());
+
+    // Activar modo 2026
+    term.process_bytes(b"\x1b[?2026h");
+    assert!(term.sync_update_mode);
+    assert!(term.sync_update_start.is_some());
+    assert!(term.is_in_sync_update());
+
+    // Desactivar modo 2026
+    term.process_bytes(b"\x1b[?2026l");
+    assert!(!term.sync_update_mode);
+    assert!(term.sync_update_start.is_none());
+    assert!(!term.is_in_sync_update());
+
+    // Timeout de seguridad si pasan más de 200 ms
+    term.process_bytes(b"\x1b[?2026h");
+    assert!(term.is_in_sync_update());
+    term.sync_update_start =
+        Some(std::time::Instant::now() - std::time::Duration::from_millis(250));
+    assert!(
+        !term.is_in_sync_update(),
+        "El timeout de seguridad de 200ms debe desbloquear el render"
+    );
+}
+
+#[test]
+fn test_osc_10_and_11_color_queries() {
+    let theme = Theme::default();
+    let mut term = TerminalState::new(80, 24, 1000, theme.clone());
+
+    // Consulta de color de primer plano (OSC 10;?)
+    term.process_bytes(b"\x1b]10;?\x07");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    let fg = theme.foreground;
+    let expected_fg = format!(
+        "\x1b]10;rgb:{:04x}/{:04x}/{:04x}\x1b\\",
+        fg.r as u16 * 0x0101,
+        fg.g as u16 * 0x0101,
+        fg.b as u16 * 0x0101
+    );
+    assert_eq!(term.pty_write_queue[0], expected_fg.as_bytes());
+
+    term.pty_write_queue.clear();
+
+    // Consulta de color de fondo (OSC 11;?)
+    term.process_bytes(b"\x1b]11;?\x1b\\");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    let bg = theme.background;
+    let expected_bg = format!(
+        "\x1b]11;rgb:{:04x}/{:04x}/{:04x}\x1b\\",
+        bg.r as u16 * 0x0101,
+        bg.g as u16 * 0x0101,
+        bg.b as u16 * 0x0101
+    );
+    assert_eq!(term.pty_write_queue[0], expected_bg.as_bytes());
+}
+
+#[test]
+fn test_dec_2031_color_scheme_mode() {
+    let dark_theme = Theme::from_name(Theme::DEFAULT_DARK);
+    let mut term = TerminalState::new(80, 24, 1000, dark_theme);
+
+    // Activar DEC 2031 (modo oscuro reporta 1)
+    term.process_bytes(b"\x1b[?2031h");
+    assert!(term.report_color_scheme_mode);
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?2031;1$y");
+
+    term.pty_write_queue.clear();
+
+    // Consulta DECRQM \x1b[?2031$p
+    term.process_bytes(b"\x1b[?2031$p");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?2031;1$y");
+
+    term.pty_write_queue.clear();
+
+    // Desactivar DEC 2031
+    term.process_bytes(b"\x1b[?2031l");
+    assert!(!term.report_color_scheme_mode);
+
+    // Tema claro reporta 2
+    let light_theme = Theme::from_name(Theme::DEFAULT_LIGHT);
+    let mut light_term = TerminalState::new(80, 24, 1000, light_theme);
+    light_term.process_bytes(b"\x1b[?2031h");
+    assert_eq!(light_term.pty_write_queue[0], b"\x1b[?2031;2$y");
+}
+
+#[test]
+fn test_kitty_keyboard_protocol_csi_u_push_pop_and_query() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Query flags inicial (debe ser 0)
+    term.process_bytes(b"\x1b[?u");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?0u");
+    term.pty_write_queue.clear();
+
+    // Push flag 1 (disambiguate)
+    term.process_bytes(b"\x1b[>1u");
+    assert_eq!(term.kitty_keyboard_flags, 1);
+    assert_eq!(term.kitty_keyboard_stack, vec![0]);
+
+    // Push OR flag 2 (report event types): mode 2
+    term.process_bytes(b"\x1b[>2;2u");
+    assert_eq!(term.kitty_keyboard_flags, 3);
+    assert_eq!(term.kitty_keyboard_stack, vec![0, 1]);
+
+    // Query flags activas (debe ser 3)
+    term.process_bytes(b"\x1b[?u");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?3u");
+    term.pty_write_queue.clear();
+
+    // Pop 1
+    term.process_bytes(b"\x1b[<u");
+    assert_eq!(term.kitty_keyboard_flags, 1);
+    assert_eq!(term.kitty_keyboard_stack, vec![0]);
+
+    // Pop final
+    term.process_bytes(b"\x1b[<1u");
+    assert_eq!(term.kitty_keyboard_flags, 0);
+    assert!(term.kitty_keyboard_stack.is_empty());
+}
+
+#[test]
+fn test_scrollback_preserves_reading_position_when_new_output_arrives() {
+    let theme = Theme::from_name(Theme::DEFAULT_DARK);
+    let mut term = TerminalState::new(80, 5, 100, theme);
+
+    // Escribir 10 líneas de contenido
+    for i in 1..=10 {
+        term.process_bytes(format!("Línea {i}\r\n").as_bytes());
+    }
+
+    // El scrollback tiene 6 líneas (filas 1..=6) y la pantalla tiene 5 líneas (filas 7..=10 + línea actual)
+    assert!(term.scrollback.len() >= 5);
+    assert_eq!(term.scroll_offset, 0);
+
+    // El usuario se desplaza 3 líneas hacia arriba para leer
+    term.scroll_up(3);
+    assert_eq!(term.scroll_offset, 3);
+    let visible_before: Vec<String> = term
+        .visible_rows()
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+
+    // Llega nueva salida de fondo (2 líneas más)
+    term.process_bytes(b"Nueva linea 11\r\nNueva linea 12\r\n");
+
+    // scroll_offset se ajustó automáticamente para mantener la misma vista
+    assert_eq!(term.scroll_offset, 5);
+    let visible_after: Vec<String> = term
+        .visible_rows()
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+
+    // Las filas visibles para el usuario son EXACTAMENTE las mismas (no se movieron)
+    assert_eq!(visible_before, visible_after);
+
+    // Cuando el usuario regresa al fondo, scroll_offset vuelve a 0 y ve la nueva salida
+    term.reset_scroll();
+    assert_eq!(term.scroll_offset, 0);
+    let visible_bottom: Vec<String> = term
+        .visible_rows()
+        .iter()
+        .map(|r| {
+            r.iter()
+                .map(|c| c.c)
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    assert!(visible_bottom
+        .iter()
+        .any(|line| line.contains("Nueva linea 12")));
 }

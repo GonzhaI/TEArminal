@@ -39,8 +39,70 @@ impl<'a> Perform for Performer<'a> {
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         self.state.parser_in_ground = true;
+
+        // Kitty Keyboard Protocol (CSI u): push (>), pop (<), set (=) y query (?)
+        if action == 'u' {
+            match intermediates {
+                b"?" => {
+                    let flags = self.state.kitty_keyboard_flags;
+                    let resp = format!("\x1b[?{flags}u");
+                    self.state.pty_write_queue.push(resp.into_bytes());
+                    return;
+                }
+                b">" => {
+                    let mut iter = params.iter();
+                    let flags = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                    let mode = iter.next().and_then(|p| p.first()).copied().unwrap_or(1);
+                    let cur = self.state.kitty_keyboard_flags;
+                    let new_flags = match mode {
+                        1 => flags,
+                        2 => cur | flags,
+                        3 => cur & !flags,
+                        _ => flags,
+                    };
+                    if self.state.kitty_keyboard_stack.len() < 16 {
+                        self.state.kitty_keyboard_stack.push(cur);
+                    }
+                    self.state.kitty_keyboard_flags = new_flags;
+                    return;
+                }
+                b"<" => {
+                    let count = params
+                        .iter()
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(1)
+                        .max(1) as usize;
+                    for _ in 0..count {
+                        if let Some(prev) = self.state.kitty_keyboard_stack.pop() {
+                            self.state.kitty_keyboard_flags = prev;
+                        } else {
+                            self.state.kitty_keyboard_flags = 0;
+                            break;
+                        }
+                    }
+                    return;
+                }
+                b"=" => {
+                    let mut iter = params.iter();
+                    let flags = iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8;
+                    let mode = iter.next().and_then(|p| p.first()).copied().unwrap_or(1);
+                    let cur = self.state.kitty_keyboard_flags;
+                    self.state.kitty_keyboard_flags = match mode {
+                        1 => flags,
+                        2 => cur | flags,
+                        3 => cur & !flags,
+                        _ => flags,
+                    };
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         // Manejo de secuencias privadas DEC (empiezan con '?')
-        if intermediates == b"?" {
+        if intermediates == b"?" || intermediates == b"?$" {
             let iter = params.iter();
             for param in iter {
                 let mode = param.first().copied().unwrap_or(0);
@@ -59,7 +121,16 @@ impl<'a> Perform for Performer<'a> {
                         // Reporte de foco (\x1b[I, \x1b[O)
                         1004 => self.state.focus_event_reporting = true,
                         // Renderizado sincronizado (DEC 2026 anti-flicker)
-                        2026 => self.state.sync_update_mode = true,
+                        2026 => {
+                            self.state.sync_update_mode = true;
+                            self.state.sync_update_start = Some(std::time::Instant::now());
+                        }
+                        // Reporte de modo claro/oscuro (DEC 2031)
+                        2031 => {
+                            self.state.report_color_scheme_mode = true;
+                            let resp = self.state.color_scheme_report_bytes();
+                            self.state.pty_write_queue.push(resp);
+                        }
                         // Activar Bracketed Paste Mode (negociado con Claude Code, Aider, shells)
                         2004 => self.state.bracketed_paste_mode = true,
                         _ => {}
@@ -78,19 +149,29 @@ impl<'a> Perform for Performer<'a> {
                         // Desactivar reporte de foco
                         1004 => self.state.focus_event_reporting = false,
                         // Finalizar renderizado sincronizado
-                        2026 => self.state.sync_update_mode = false,
+                        2026 => {
+                            self.state.sync_update_mode = false;
+                            self.state.sync_update_start = None;
+                        }
+                        // Desactivar reporte de modo claro/oscuro (DEC 2031)
+                        2031 => self.state.report_color_scheme_mode = false,
                         // Desactivar Bracketed Paste Mode
                         2004 => self.state.bracketed_paste_mode = false,
                         _ => {}
                     },
+                    // Consulta DECRQM: \x1b[?2031$p o similares
+                    'p' if mode == 2031 => {
+                        let resp = self.state.color_scheme_report_bytes();
+                        self.state.pty_write_queue.push(resp);
+                    }
                     _ => {}
                 }
             }
             return;
         }
 
-        // Con marcador privado o intermedio (`CSI > 4 ; 2 m` modifyOtherKeys, `CSI > 1 u` kitty,
-        // `CSI SP q` DECSCUSR...) no es SGR, cursor ni borrado: ignorarlas evita, por ejemplo,
+        // Con marcador privado o intermedio (`CSI > 4 ; 2 m` modifyOtherKeys, `CSI SP q` DECSCUSR...)
+        // no es SGR, cursor ni borrado: ignorarlas evita, por ejemplo,
         // que `>4;2m` active subrayado y tenue en el texto siguiente.
         if !intermediates.is_empty() {
             return;
@@ -610,6 +691,26 @@ impl<'a> Perform for Performer<'a> {
                     self.state.current_dir = Some(dir);
                 }
             }
+            // Consulta de color de primer plano (OSC 10)
+            b"10" if params.len() > 1 => {
+                if params[1] == b"?" {
+                    let fg = self.state.theme.foreground;
+                    let r = (fg.r as u16) * 0x0101;
+                    let g = (fg.g as u16) * 0x0101;
+                    let b = (fg.b as u16) * 0x0101;
+                    let resp = format!("\x1b]10;rgb:{:04x}/{:04x}/{:04x}\x1b\\", r, g, b);
+                    self.state.pty_write_queue.push(resp.into_bytes());
+                }
+            }
+            // Consulta de color de fondo (OSC 11)
+            b"11" if params.len() > 1 && params[1] == b"?" => {
+                let bg = self.state.theme.background;
+                let r = (bg.r as u16) * 0x0101;
+                let g = (bg.g as u16) * 0x0101;
+                let b = (bg.b as u16) * 0x0101;
+                let resp = format!("\x1b]11;rgb:{:04x}/{:04x}/{:04x}\x1b\\", r, g, b);
+                self.state.pty_write_queue.push(resp.into_bytes());
+            }
             _ => {}
         }
     }
@@ -821,8 +922,8 @@ impl<'a> Performer<'a> {
 
                 use base64::prelude::*;
                 if let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) {
-                    if let Ok(dyn_img) = image::load_from_memory(&decoded) {
-                        let (w, h) = (dyn_img.width(), dyn_img.height());
+                    if let Some(src_img) = super::kitty::decode_untrusted(&decoded) {
+                        let (w, h) = src_img.dimensions();
 
                         // Dimensiones en celdas de terminal (aprox. 8px ancho, 18px alto por celda)
                         let max_cols =
@@ -835,28 +936,17 @@ impl<'a> Performer<'a> {
                         // Se guarda al tamaño en que se dibuja (máx. 80x30 celdas = 640x540 px, ~1,4 MB):
                         // un RGBA de 4000x3000 son 48 MB y el historial no lo libera
                         let (tw, th) = ((cols * 8) as u32, (rows * 18) as u32);
-                        let rgba = if w > tw || h > th {
-                            dyn_img
-                                .resize_exact(tw, th, image::imageops::FilterType::Triangle)
-                                .to_rgba8()
-                        } else {
-                            dyn_img.to_rgba8()
-                        };
-                        let (w, h) = rgba.dimensions();
+                        let rgba = super::kitty::fit_image(src_img, tw, th);
 
                         let img_id = self.state.next_image_id;
                         self.state.next_image_id += 1;
 
-                        let img_entry = InlineImage {
-                            id: img_id,
-                            line_index: self.state.current_global_line(),
-                            col: self.state.cursor_x,
-                            width_cols: cols,
-                            height_rows: rows,
-                            width_px: w,
-                            height_px: h,
-                            rgba_data: rgba.into_raw(),
-                        };
+                        let img_entry = InlineImage::new(
+                            img_id,
+                            (self.state.cursor_x, self.state.current_global_line()),
+                            (cols, rows),
+                            rgba,
+                        );
 
                         self.state.push_image(img_entry);
 
@@ -963,7 +1053,7 @@ pub(crate) fn hex_decode(hex: &[u8]) -> Option<Vec<u8>> {
 /// Decodifica el listado de la carpeta remota (hex de `ls -1Ap`). Es entrada no confiable: se limita
 /// el tamaño y se descartan nombres vacíos, con caracteres de control o con separadores de ruta.
 fn parse_remote_listing(hex: &[u8]) -> Option<Vec<String>> {
-    const MAX_HEX: usize = 96 * 1024;
+    const MAX_HEX: usize = super::OSC_BUF_SIZE;
     if hex.len() > MAX_HEX {
         return None;
     }
@@ -972,7 +1062,8 @@ fn parse_remote_listing(hex: &[u8]) -> Option<Vec<String>> {
 
 /// Nombres válidos de un `ls -1Ap` remoto (las carpetas acaban en `/`)
 pub(crate) fn clean_listing(text: &str) -> Vec<String> {
-    const MAX_ENTRIES: usize = 300;
+    /// Como `ssh::LISTING_ENTRIES`: un tope más bajo perdería los ocultos (`.env`) que `ls` ordena al final
+    const MAX_ENTRIES: usize = 5000;
     text.lines()
         .filter(|n| {
             let bare = n.strip_suffix('/').unwrap_or(n);

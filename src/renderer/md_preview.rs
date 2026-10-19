@@ -120,6 +120,50 @@ fn find_from(chars: &[char], from: usize, target: char) -> Option<usize> {
         .map(|p| p + from)
 }
 
+/// Etiqueta HTML reconocida dentro de una línea de Markdown.
+struct HtmlTag {
+    name: String,
+    closing: bool,
+    /// Texto alternativo de `<img alt="...">`
+    alt: String,
+    /// Índice del `>` que la cierra
+    end: usize,
+}
+
+/// Solo etiquetas conocidas: un `<T>` suelto en el texto se dibuja tal cual.
+fn html_tag(chars: &[char], i: usize) -> Option<HtmlTag> {
+    const KNOWN: &[&str] = &[
+        "div", "p", "h1", "h2", "h3", "h4", "h5", "h6", "img", "em", "i", "strong", "b", "code",
+        "kbd", "s", "del", "a", "br", "hr", "sup", "sub", "span", "details", "summary", "picture",
+        "source", "center", "u",
+    ];
+    let end = find_from(chars, i + 1, '>')?;
+    let inner: String = chars[i + 1..end].iter().collect();
+    let (closing, body) = match inner.strip_prefix('/') {
+        Some(rest) => (true, rest),
+        None => (false, inner.as_str()),
+    };
+    let name: String = body
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if !KNOWN.contains(&name.as_str()) {
+        return None;
+    }
+    let alt = body
+        .split_once("alt=\"")
+        .and_then(|(_, r)| r.split_once('"'))
+        .map(|(a, _)| a.to_string())
+        .unwrap_or_default();
+    Some(HtmlTag {
+        name,
+        closing,
+        alt,
+        end,
+    })
+}
+
 impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_md_line(
@@ -208,7 +252,18 @@ impl TerminalRenderer {
 
         // Títulos: color por nivel, negrita y subrayado en h1/h2
         let level = trimmed.chars().take_while(|c| *c == '#').count();
-        if (1..=6).contains(&level) && trimmed[level..].starts_with(' ') {
+        let html_level = trimmed
+            .strip_prefix("<h")
+            .and_then(|r| r.chars().next())
+            .and_then(|c| c.to_digit(10))
+            .filter(|d| (1..=6).contains(d))
+            .map(|d| d as usize);
+        let heading = if (1..=6).contains(&level) && trimmed[level..].starts_with(' ') {
+            Some((level, trimmed[level..].trim()))
+        } else {
+            html_level.map(|l| (l, trimmed))
+        };
+        if let Some((level, title)) = heading {
             let color = match level {
                 1 => theme.accent_color(),
                 2 => theme.ansi[4],
@@ -218,16 +273,7 @@ impl TerminalRenderer {
                 _ => theme.ansi[3],
             };
             self.draw_md_inline(
-                buffer,
-                width,
-                clip,
-                trimmed[level..].trim(),
-                x,
-                baseline_y,
-                ctx,
-                theme,
-                color,
-                true,
+                buffer, width, clip, title, x, baseline_y, ctx, theme, color, true,
             );
             if level <= 2 && x < max_x_i32 {
                 let ux = x.max(clip.0 as i32) as usize;
@@ -505,6 +551,48 @@ impl TerminalRenderer {
         x
     }
 
+    /// Imagen: icono + texto alternativo (no se decodifica el archivo). Devuelve la X final.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_md_image(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        clip: Clip,
+        alt: &str,
+        x: i32,
+        baseline_y: usize,
+        ctx: (i32, i32),
+        theme: &Theme,
+    ) -> i32 {
+        let (_, cw) = ctx;
+        let height = buffer.len() / width.max(1);
+        let cx = x + cw / 2;
+        if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                LucideIcon::Image,
+                cx as usize,
+                baseline_y.saturating_sub(4),
+                12.0,
+                theme.ansi[5],
+            );
+        }
+        let alt = if alt.is_empty() { "imagen" } else { alt };
+        self.draw_md_span(
+            buffer,
+            width,
+            clip,
+            alt,
+            x + cw * 2,
+            baseline_y,
+            ctx,
+            theme.ansi[4],
+            true,
+        )
+    }
+
     /// Texto en línea: `código`, **negrita**, *cursiva*, ~~tachado~~, [enlaces](url), ![imágenes](url)
     /// y URLs sueltas. Devuelve la X final. `ctx` = (X máxima, ancho de carácter).
     #[allow(clippy::too_many_arguments)]
@@ -522,7 +610,6 @@ impl TerminalRenderer {
         base_bold: bool,
     ) -> i32 {
         let (max_x, cw) = ctx;
-        let height = buffer.len() / width.max(1);
         let chars: Vec<char> = text.chars().collect();
         let (mut i, mut code, mut bold, mut italic, mut strike) =
             (0, false, base_bold, false, false);
@@ -539,31 +626,37 @@ impl TerminalRenderer {
                     .filter(|c| chars.get(c + 1) == Some(&'('))
                     .and_then(|c| find_from(&chars, c + 2, ')').map(|e| (c, e)));
                 if let Some((close, end)) = link {
-                    let mut label: String = chars[open + 1..close].iter().collect();
+                    let label: String = chars[open + 1..close].iter().collect();
                     if is_img {
-                        let cx = x + cw / 2;
-                        if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
-                            let cy = baseline_y.saturating_sub(4);
-                            self.draw_lucide_icon(
-                                buffer,
-                                width,
-                                height,
-                                LucideIcon::Image,
-                                cx as usize,
-                                cy,
-                                12.0,
-                                theme.ansi[5],
+                        x = self
+                            .draw_md_image(buffer, width, clip, &label, x, baseline_y, ctx, theme);
+                    } else {
+                        x = self.draw_md_span(
+                            buffer, width, clip, &label, x, baseline_y, ctx, link_color, true,
+                        );
+                    }
+                    i = end + 1;
+                    continue;
+                }
+            }
+
+            // Etiquetas HTML habituales en los README (`<img>`, `<em>`, `<h1>`…)
+            if !code && ch == '<' {
+                if let Some(tag) = html_tag(&chars, i) {
+                    let on = !tag.closing;
+                    match tag.name.as_str() {
+                        "em" | "i" => italic = on,
+                        "strong" | "b" => bold = on || base_bold,
+                        "code" | "kbd" => code = on,
+                        "s" | "del" => strike = on,
+                        "img" => {
+                            x = self.draw_md_image(
+                                buffer, width, clip, &tag.alt, x, baseline_y, ctx, theme,
                             );
                         }
-                        x += cw * 2;
-                        if label.is_empty() {
-                            label = "imagen".into();
-                        }
+                        _ => {}
                     }
-                    x = self.draw_md_span(
-                        buffer, width, clip, &label, x, baseline_y, ctx, link_color, true,
-                    );
-                    i = end + 1;
+                    i = tag.end + 1;
                     continue;
                 }
             }
@@ -667,6 +760,21 @@ mod tests {
 
     fn lines(s: &str) -> Vec<String> {
         s.lines().map(String::from).collect()
+    }
+
+    #[test]
+    fn test_html_tags_are_recognized_only_when_known() {
+        let c: Vec<char> = r#"<img src="a.png" alt="Axon" />"#.chars().collect();
+        let t = html_tag(&c, 0).unwrap();
+        assert_eq!(
+            (t.name.as_str(), t.alt.as_str(), t.closing),
+            ("img", "Axon", false)
+        );
+        assert_eq!(t.end, c.len() - 1);
+        let c: Vec<char> = "</em>".chars().collect();
+        assert!(html_tag(&c, 0).unwrap().closing);
+        let c: Vec<char> = "Vec<T> genérico".chars().collect();
+        assert!(html_tag(&c, 3).is_none());
     }
 
     #[test]

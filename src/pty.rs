@@ -2,7 +2,7 @@ use crate::app::AxonEvent;
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use winit::event_loop::EventLoopProxy;
@@ -10,7 +10,7 @@ use winit::event_loop::EventLoopProxy;
 /// Destino SSH aceptado: `host` o `usuario@host` (letras, dígitos, `.`, `_`, `-`), sin empezar por `-`.
 ///
 /// El destino puede venir de secuencias de escape que emite cualquier programa (título OSC 0/2, OSC 1337,
-/// OSC 7), es decir, es entrada NO confiable. Se interpola en una orden de PowerShell y en `scp`, así que
+/// OSC 7), es decir, es entrada NO confiable. Se interpola en una orden de PowerShell y en `ssh.exe`, así que
 /// solo se admite este alfabeto: nada de espacios, `;`, `$`, comillas ni opciones (`-oProxyCommand=...`).
 pub fn is_safe_ssh_destination(dest: &str) -> bool {
     let ok_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
@@ -143,7 +143,9 @@ fn spawn_io_threads(
 ) -> Result<IoChannels, Box<dyn std::error::Error>> {
     let mut reader = master.try_clone_reader()?;
     let mut writer = master.take_writer()?;
-    let (from_pty_tx, from_pty_rx) = channel::<Vec<u8>>();
+    // Acotado (64 x 16 KB): si la interfaz va por detrás de un `cat` enorme el lector espera y ConPTY frena al
+    // proceso, en vez de acumular la salida entera en memoria
+    let (from_pty_tx, from_pty_rx) = sync_channel::<Vec<u8>>(64);
     let (to_pty_tx, to_pty_rx) = channel::<Vec<u8>>();
     let pending = Arc::new(AtomicBool::new(false));
     let pending_reader = pending.clone();
@@ -189,7 +191,7 @@ fn spawn_io_threads(
 
 fn build_shell_command(
     shell: &str,
-    ghostty_prompt: bool,
+    shell_integration: bool,
     cwd: Option<&std::path::Path>,
     token: &str,
     path_env: &str,
@@ -202,7 +204,7 @@ fn build_shell_command(
     cmd.env("COLORTERM", "truecolor");
     cmd.env("AXON_PANE_TOKEN", token);
     cmd.env("PATH", path_env);
-    if ghostty_prompt {
+    if shell_integration {
         let lower = shell.to_lowercase();
         if lower.contains("powershell") || lower.contains("pwsh") {
             cmd.arg("-NoLogo");
@@ -218,7 +220,7 @@ impl PtyManager {
     pub fn new(
         id: usize,
         shell: &str,
-        ghostty_prompt: bool,
+        shell_integration: bool,
         cols: u16,
         rows: u16,
         cwd: Option<&std::path::Path>,
@@ -235,7 +237,7 @@ impl PtyManager {
         let token = random_token();
         // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
-        let cmd = build_shell_command(shell, ghostty_prompt, cwd, &token, &path_env);
+        let cmd = build_shell_command(shell, shell_integration, cwd, &token, &path_env);
 
         let child = match pair.slave.spawn_command(cmd) {
             Ok(c) => c,
@@ -243,7 +245,7 @@ impl PtyManager {
                 if shell != "powershell.exe" {
                     let fallback = build_shell_command(
                         "powershell.exe",
-                        ghostty_prompt,
+                        shell_integration,
                         cwd,
                         &token,
                         &path_env,

@@ -11,3 +11,5 @@ publish = false
 skera = "0.8"
 write-fonts = "0.54"
 ttf-parser = "0.25"
+fontdue = "0.9"
+rustybuzz = "0.18"

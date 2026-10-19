@@ -92,8 +92,8 @@ impl TerminalRenderer {
             let is_hovered = hovered_tab == Some(idx);
 
             if tab.is_active {
-                // Pestaña activa: cápsula interna iluminada y elevada
-                let active_tab_bg = Color::from_rgba(255, 255, 255, 22);
+                // Pestaña activa: cápsula interna iluminada y elevada acorde al tema
+                let active_tab_bg = theme.surface_hover();
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
@@ -106,7 +106,8 @@ impl TerminalRenderer {
                     active_tab_bg,
                 );
             } else if is_hovered {
-                let hover_tab_bg = Color::from_rgba(255, 255, 255, 10);
+                let hover_c = theme.surface_hover();
+                let hover_tab_bg = Color::from_rgba(hover_c.r(), hover_c.g(), hover_c.b(), 140);
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
@@ -228,7 +229,7 @@ impl TerminalRenderer {
         // 4. Botón '+' para nueva pestaña dentro de la cápsula
         let plus_r = rects.plus_btn;
         if hovered_new_tab {
-            let plus_hover_bg = Color::from_rgba(255, 255, 255, 14);
+            let plus_hover_bg = theme.surface_hover();
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,

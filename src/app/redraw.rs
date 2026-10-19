@@ -2,6 +2,32 @@
 
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
+struct SceneParams<'a> {
+    is_horizontal: bool,
+    offset: usize,
+    right_offset: usize,
+    top_offset: usize,
+    status_bar_h: usize,
+    sidebar_visible: bool,
+    explorer_visible: bool,
+    cursor_visible: bool,
+    hovered_tab: Option<usize>,
+    hovered_close: Option<usize>,
+    hovered_new_tab: bool,
+    hovered_files_btn: bool,
+    hovered_settings_btn: bool,
+    hovered_toggle_btn: bool,
+    hovered_win_min: bool,
+    hovered_win_max: bool,
+    hovered_win_close: bool,
+    hovered_ai_badge: bool,
+    sidebar_scroll_offset: usize,
+    sidebar_scrollbar_hovered: bool,
+    active_idx: usize,
+    tab_items: &'a [SidebarTabItem],
+}
+
 impl AxonApp {
     /// Dibuja un fotograma completo (`WindowEvent::RedrawRequested`).
     pub(super) fn on_redraw(&mut self) {
@@ -40,7 +66,6 @@ impl AxonApp {
             .iter()
             .enumerate()
             .map(|(idx, t)| SidebarTabItem {
-                id: t.id,
                 title: t.display_title(),
                 is_active: idx == active_idx,
                 has_unread: t.has_unread,
@@ -51,286 +76,356 @@ impl AxonApp {
             })
             .collect();
 
-        let active_tab = &mut self.tabs[active_idx];
+        let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) else {
+            return;
+        };
 
-        if let (Some(surface), Some(renderer), Some(window)) =
-            (&mut self.surface, &mut self.renderer, &self.window)
-        {
-            let size = window.inner_size();
-            if size.width == 0 || size.height == 0 {
-                return;
-            }
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
 
-            renderer.scrollbars_awake =
-                self.last_scroll_time.elapsed() < std::time::Duration::from_millis(1250);
-            let is_maximized = window.is_maximized();
+        renderer.scrollbars_awake =
+            self.last_scroll_time.elapsed() < std::time::Duration::from_millis(1250);
+        let is_maximized = window.is_maximized();
+
+        let params = SceneParams {
+            is_horizontal,
+            offset,
+            right_offset,
+            top_offset,
+            status_bar_h,
+            sidebar_visible,
+            explorer_visible,
+            cursor_visible,
+            hovered_tab,
+            hovered_close,
+            hovered_new_tab,
+            hovered_files_btn,
+            hovered_settings_btn,
+            hovered_toggle_btn,
+            hovered_win_min: self.hovered_win_min,
+            hovered_win_max: self.hovered_win_max,
+            hovered_win_close: self.hovered_win_close,
+            hovered_ai_badge: self.hovered_ai_badge,
+            sidebar_scroll_offset: self.sidebar_scroll_offset,
+            sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
+            active_idx,
+            tab_items: &tab_items,
+        };
+
+        // 1. Si la aceleración por hardware GPU (Direct3D 11 DirectFlip) está activa, presentar vía VRAM
+        if let Some(d3d11) = &mut self.d3d11_presenter {
+            let _ = d3d11.resize(size.width, size.height); // no-op si ya coincide
+            let buffer = d3d11.buffer_mut();
+            draw_full_scene(
+                buffer,
+                renderer,
+                &mut self.tabs,
+                &self.theme,
+                &self.config,
+                &self.file_explorer,
+                &self.settings_page_state,
+                &self.ai_usage.snapshot,
+                &self.context_menu,
+                &params,
+                size.width as usize,
+                size.height as usize,
+                is_maximized,
+            );
+            let _ = d3d11.present();
+            return;
+        }
+
+        // 2. Si no, utilizar la superficie de software (`softbuffer`) como fallback
+        if let Some(surface) = &mut self.surface {
             if let Ok(mut buffer) = surface.buffer_mut() {
-                buffer.fill(self.theme.background.to_u32_xrgb());
-
-                if is_horizontal {
-                    renderer.render_top_tab_bar(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        &tab_items,
-                        hovered_tab,
-                        hovered_close,
-                        hovered_new_tab,
-                        hovered_files_btn,
-                        hovered_settings_btn,
-                        self.hovered_win_min,
-                        self.hovered_win_max,
-                        self.hovered_win_close,
-                        is_maximized,
-                        explorer_visible,
-                        &self.theme,
-                    );
-                } else {
-                    let active_title = active_tab.display_title();
-                    let git_branch = active_tab.get_git_branch();
-                    renderer.render_top_title_bar(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        &active_title,
-                        git_branch.as_deref(),
-                        hovered_files_btn,
-                        hovered_settings_btn,
-                        self.hovered_win_min,
-                        self.hovered_win_max,
-                        self.hovered_win_close,
-                        is_maximized,
-                        explorer_visible,
-                        &self.theme,
-                    );
-
-                    if sidebar_visible {
-                        renderer.render_sidebar(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            SIDEBAR_WIDTH,
-                            status_bar_h,
-                            &tab_items,
-                            self.sidebar_scroll_offset,
-                            hovered_tab,
-                            hovered_close,
-                            hovered_new_tab,
-                            hovered_settings_btn,
-                            hovered_toggle_btn,
-                            self.sidebar_scrollbar_hovered,
-                            &self.theme,
-                        );
-                    }
-                }
-
-                if active_tab.is_settings {
-                    renderer.render_settings_page(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        offset,
-                        top_offset,
-                        status_bar_h,
-                        &self.config,
-                        &self.settings_page_state,
-                        &self.theme,
-                    );
-                } else if let Some(ref mut viewer) = active_tab.file_viewer {
-                    let term_area_w = (size.width as usize).saturating_sub(offset + right_offset);
-                    let term_area_h =
-                        (size.height as usize).saturating_sub(top_offset + status_bar_h);
-                    viewer.word_wrap = self.config.terminal.word_wrap;
-                    viewer.visible_cols = crate::renderer::FileViewerLayout::compute(
-                        offset,
-                        top_offset,
-                        term_area_w,
-                        term_area_h,
-                        renderer.row_height,
-                        renderer.char_width,
-                        viewer.lines.len(),
-                    )
-                    .visible_cols;
-
-                    renderer.render_file_viewer(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        offset,
-                        top_offset,
-                        term_area_w + right_offset,
-                        term_area_h,
-                        right_offset,
-                        cursor_visible,
-                        viewer,
-                        &self.theme,
-                    );
-
-                    if self.file_explorer.visible {
-                        renderer.render_file_explorer(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            top_offset,
-                            status_bar_h,
-                            &self.file_explorer,
-                            &self.theme,
-                        );
-                    }
-                } else {
-                    let term_area_w = (size.width as usize).saturating_sub(offset + right_offset);
-                    let term_area_h =
-                        (size.height as usize).saturating_sub(top_offset + status_bar_h);
-                    let pane_rects =
-                        active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
-                    let dividers =
-                        active_tab.compute_dividers(offset, top_offset, term_area_w, term_area_h);
-                    let has_multiple = pane_rects.len() > 1;
-
-                    for rect in &pane_rects {
-                        if let Some(pane) = active_tab.find_pane(rect.pane_id) {
-                            let is_active = rect.pane_id == active_tab.active_pane_id;
-                            renderer.render_pane(
-                                &mut buffer,
-                                size.width as usize,
-                                size.height as usize,
-                                rect.x,
-                                rect.y,
-                                rect.width,
-                                rect.height,
-                                &pane.terminal,
-                                &self.theme,
-                                cursor_visible,
-                                is_active,
-                                has_multiple,
-                            );
-                        }
-                    }
-
-                    let divider_color = self.theme.border_color();
-                    for Divider {
-                        rect: (dx, dy, dw, dh),
-                        ..
-                    } in dividers
-                    {
-                        TerminalRenderer::render_pane_divider(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            dx,
-                            dy,
-                            dw,
-                            dh,
-                            divider_color,
-                        );
-                    }
-
-                    if self.file_explorer.visible {
-                        renderer.render_file_explorer(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            top_offset,
-                            status_bar_h,
-                            &self.file_explorer,
-                            &self.theme,
-                        );
-                    }
-                }
-
-                if !is_horizontal && !sidebar_visible && hovered_toggle_btn {
-                    renderer.render_floating_sidebar_toggle(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        status_bar_h,
-                        hovered_toggle_btn,
-                        &self.theme,
-                    );
-                }
-
-                if self.config.appearance.show_status_bar && !active_tab.is_settings {
-                    let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
-                        if let Some(ref viewer) = active_tab.file_viewer {
-                            let path_str = shell_context::shorten_home(&viewer.path);
-                            let branch = viewer.remote_branch.clone();
-                            let ssh = viewer.remote_destination.clone();
-                            let lines_count = viewer.lines.len();
-                            (
-                                Some(path_str),
-                                branch,
-                                ssh,
-                                0,
-                                lines_count,
-                                AiAgentStatus::None,
-                            )
-                        } else if let Some(pane) = active_tab.active_pane_mut() {
-                            let c_dir = pane
-                                .terminal
-                                .current_dir
-                                .as_deref()
-                                .map(shell_context::shorten_home);
-                            let g_branch = pane.get_git_branch();
-                            let s_host = pane
-                                .terminal
-                                .ssh_session
-                                .as_ref()
-                                .filter(|s| s.is_active)
-                                .map(|s| s.destination.clone());
-                            let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
-                            (
-                                c_dir,
-                                g_branch,
-                                s_host,
-                                pane.terminal.cols,
-                                pane.terminal.rows,
-                                ai,
-                            )
-                        } else {
-                            (None, None, None, 100, 30, AiAgentStatus::None)
-                        };
-
-                    let active_model = self.ai_usage.snapshot.active_model.as_deref();
-                    renderer.render_status_bar_with_ai(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        offset,
-                        cwd.as_deref(),
-                        git_branch.as_deref(),
-                        ssh_host.as_deref(),
-                        cols,
-                        rows,
-                        ai_status,
-                        active_model,
-                        self.hovered_ai_badge,
-                        explorer_visible,
-                        &self.theme,
-                    );
-
-                    if self.hovered_ai_badge && self.context_menu.is_none() {
-                        renderer.render_ai_usage_popup(
-                            &mut buffer,
-                            size.width as usize,
-                            size.height as usize,
-                            &self.ai_usage.snapshot,
-                            &self.theme,
-                        );
-                    }
-                }
-
-                if let Some(menu) = &self.context_menu {
-                    renderer.render_context_menu(
-                        &mut buffer,
-                        size.width as usize,
-                        size.height as usize,
-                        menu,
-                        &self.theme,
-                    );
-                }
-
+                draw_full_scene(
+                    &mut buffer,
+                    renderer,
+                    &mut self.tabs,
+                    &self.theme,
+                    &self.config,
+                    &self.file_explorer,
+                    &self.settings_page_state,
+                    &self.ai_usage.snapshot,
+                    &self.context_menu,
+                    &params,
+                    size.width as usize,
+                    size.height as usize,
+                    is_maximized,
+                );
                 buffer.present().ok();
             }
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_full_scene(
+    buffer: &mut [u32],
+    renderer: &mut TerminalRenderer,
+    tabs: &mut [TerminalTab],
+    theme: &Theme,
+    config: &AxonConfig,
+    file_explorer: &crate::explorer::FileExplorer,
+    settings_page_state: &SettingsPageState,
+    ai_snapshot: &ai_usage::AiUsageSnapshot,
+    context_menu: &Option<ContextMenu>,
+    p: &SceneParams,
+    width: usize,
+    height: usize,
+    is_maximized: bool,
+) {
+    buffer.fill(theme.background.to_u32_xrgb());
+
+    let active_tab = &mut tabs[p.active_idx];
+
+    if p.is_horizontal {
+        renderer.render_top_tab_bar(
+            buffer,
+            width,
+            height,
+            p.tab_items,
+            p.hovered_tab,
+            p.hovered_close,
+            p.hovered_new_tab,
+            p.hovered_files_btn,
+            p.hovered_settings_btn,
+            p.hovered_win_min,
+            p.hovered_win_max,
+            p.hovered_win_close,
+            is_maximized,
+            p.explorer_visible,
+            theme,
+        );
+    } else {
+        let active_title = active_tab.display_title();
+        let git_branch = active_tab.get_git_branch();
+        renderer.render_top_title_bar(
+            buffer,
+            width,
+            height,
+            &active_title,
+            git_branch.as_deref(),
+            p.hovered_files_btn,
+            p.hovered_settings_btn,
+            p.hovered_win_min,
+            p.hovered_win_max,
+            p.hovered_win_close,
+            is_maximized,
+            p.explorer_visible,
+            theme,
+        );
+
+        if p.sidebar_visible {
+            renderer.render_sidebar(
+                buffer,
+                width,
+                height,
+                SIDEBAR_WIDTH,
+                p.status_bar_h,
+                p.tab_items,
+                p.sidebar_scroll_offset,
+                p.hovered_tab,
+                p.hovered_close,
+                p.hovered_new_tab,
+                p.hovered_settings_btn,
+                p.hovered_toggle_btn,
+                p.sidebar_scrollbar_hovered,
+                theme,
+            );
+        }
+    }
+
+    if active_tab.is_settings {
+        renderer.render_settings_page(
+            buffer,
+            width,
+            height,
+            p.offset,
+            p.top_offset,
+            p.status_bar_h,
+            config,
+            settings_page_state,
+            theme,
+        );
+    } else if let Some(ref mut viewer) = active_tab.file_viewer {
+        let term_area_w = width.saturating_sub(p.offset + p.right_offset);
+        let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
+        viewer.word_wrap = config.terminal.word_wrap;
+        viewer.visible_cols = crate::renderer::FileViewerLayout::compute(
+            p.offset,
+            p.top_offset,
+            term_area_w,
+            term_area_h,
+            renderer.row_height,
+            renderer.char_width,
+            viewer.lines.len(),
+        )
+        .visible_cols;
+
+        renderer.render_file_viewer(
+            buffer,
+            width,
+            height,
+            p.offset,
+            p.top_offset,
+            term_area_w + p.right_offset,
+            term_area_h,
+            p.right_offset,
+            p.cursor_visible,
+            viewer,
+            theme,
+        );
+
+        if file_explorer.visible {
+            renderer.render_file_explorer(
+                buffer,
+                width,
+                height,
+                p.top_offset,
+                p.status_bar_h,
+                file_explorer,
+                theme,
+            );
+        }
+    } else {
+        let term_area_w = width.saturating_sub(p.offset + p.right_offset);
+        let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
+        let pane_rects =
+            active_tab.compute_pane_rects(p.offset, p.top_offset, term_area_w, term_area_h);
+        let dividers =
+            active_tab.compute_dividers(p.offset, p.top_offset, term_area_w, term_area_h);
+        let has_multiple = pane_rects.len() > 1;
+
+        for rect in &pane_rects {
+            if let Some(pane) = active_tab.find_pane(rect.pane_id) {
+                let is_active = rect.pane_id == active_tab.active_pane_id;
+                renderer.render_pane(
+                    buffer,
+                    width,
+                    height,
+                    rect.x,
+                    rect.y,
+                    rect.width,
+                    rect.height,
+                    &pane.terminal,
+                    theme,
+                    p.cursor_visible,
+                    is_active,
+                    has_multiple,
+                );
+            }
+        }
+
+        let divider_color = theme.border_color();
+        for Divider {
+            rect: (dx, dy, dw, dh),
+            ..
+        } in dividers
+        {
+            TerminalRenderer::render_pane_divider(
+                buffer,
+                width,
+                height,
+                dx,
+                dy,
+                dw,
+                dh,
+                divider_color,
+            );
+        }
+
+        if file_explorer.visible {
+            renderer.render_file_explorer(
+                buffer,
+                width,
+                height,
+                p.top_offset,
+                p.status_bar_h,
+                file_explorer,
+                theme,
+            );
+        }
+    }
+
+    if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
+        renderer.render_floating_sidebar_toggle(
+            buffer,
+            width,
+            height,
+            p.status_bar_h,
+            p.hovered_toggle_btn,
+            theme,
+        );
+    }
+
+    if config.appearance.show_status_bar && !active_tab.is_settings {
+        let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
+            if let Some(ref viewer) = active_tab.file_viewer {
+                let path_str = shell_context::shorten_home(&viewer.path);
+                let branch = viewer.remote_branch.clone();
+                let ssh = viewer.remote_destination.clone();
+                let lines_count = viewer.lines.len();
+                (
+                    Some(path_str),
+                    branch,
+                    ssh,
+                    0,
+                    lines_count,
+                    AiAgentStatus::None,
+                )
+            } else if let Some(pane) = active_tab.active_pane_mut() {
+                let c_dir = pane
+                    .terminal
+                    .current_dir
+                    .as_deref()
+                    .map(shell_context::shorten_home);
+                let g_branch = pane.get_git_branch();
+                let s_host = pane
+                    .terminal
+                    .ssh_session
+                    .as_ref()
+                    .filter(|s| s.is_active)
+                    .map(|s| s.destination.clone());
+                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                (
+                    c_dir,
+                    g_branch,
+                    s_host,
+                    pane.terminal.cols,
+                    pane.terminal.rows,
+                    ai,
+                )
+            } else {
+                (None, None, None, 100, 30, AiAgentStatus::None)
+            };
+
+        let active_model = ai_snapshot.model_for(ai_status);
+        renderer.render_status_bar_with_ai(
+            buffer,
+            width,
+            height,
+            p.offset,
+            cwd.as_deref(),
+            git_branch.as_deref(),
+            ssh_host.as_deref(),
+            cols,
+            rows,
+            ai_status,
+            active_model,
+            p.hovered_ai_badge,
+            p.explorer_visible,
+            theme,
+        );
+
+        if p.hovered_ai_badge && context_menu.is_none() {
+            renderer.render_ai_usage_popup(buffer, width, height, ai_snapshot, theme);
+        }
+    }
+
+    if let Some(menu) = context_menu {
+        renderer.render_context_menu(buffer, width, height, menu, theme);
     }
 }

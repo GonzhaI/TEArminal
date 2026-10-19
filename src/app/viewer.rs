@@ -35,12 +35,16 @@ pub struct RowsCache {
     max_cols: usize,
 }
 
+use unicode_segmentation::UnicodeSegmentation;
+
 #[inline]
 fn char_byte_idx(s: &str, col: usize) -> usize {
     if s.is_ascii() {
         col.min(s.len())
     } else {
-        s.char_indices().nth(col).map_or(s.len(), |(b, _)| b)
+        s.grapheme_indices(true)
+            .nth(col)
+            .map_or(s.len(), |(b, _)| b)
     }
 }
 
@@ -49,7 +53,7 @@ fn char_count(s: &str) -> usize {
     if s.is_ascii() {
         s.len()
     } else {
-        s.chars().count()
+        s.graphemes(true).count()
     }
 }
 
@@ -59,7 +63,10 @@ fn line_col_width(s: &str) -> usize {
         let tabs = s.bytes().filter(|&b| b == b'\t').count();
         s.len() + tabs * 3
     } else {
-        s.chars().map(|c| if c == '\t' { 4 } else { 1 }).sum()
+        use unicode_width::UnicodeWidthStr;
+        s.graphemes(true)
+            .map(|g| if g == "\t" { 4 } else { g.width().max(1) })
+            .sum()
     }
 }
 
@@ -89,8 +96,13 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
         return;
     }
     let (mut start, mut width, mut last_break) = (0usize, 0usize, None::<(usize, usize)>);
-    for (i, ch) in line.chars().enumerate() {
-        let adv = if ch == '\t' { 4 } else { 1 };
+    for (i, g) in line.graphemes(true).enumerate() {
+        let adv = if g == "\t" {
+            4
+        } else {
+            use unicode_width::UnicodeWidthStr;
+            g.width().max(1)
+        };
         if width + adv > cols && i > start {
             let (at, rem_width) = match last_break {
                 Some((b, w_at_b)) if b > start + cols / 2 => (b, width - w_at_b),
@@ -106,7 +118,7 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
             width = rem_width;
         }
         width += adv;
-        if ch.is_whitespace() {
+        if g.chars().all(char::is_whitespace) {
             last_break = Some((i + 1, width));
         }
     }
@@ -162,6 +174,9 @@ pub struct FileViewerState {
     pub word_wrap: bool,
     /// Líneas plegadas (primera línea de cada región oculta)
     pub folded: BTreeSet<usize>,
+    /// Fecha de modificación del archivo local al abrirlo o guardarlo (`None` si es remoto o aún no existe):
+    /// si en disco es otra, un agente u otro programa lo cambió y no se sobrescribe sin avisar
+    pub disk_mtime: Option<std::time::SystemTime>,
     pub needs_autosave: bool,
     pub last_edit_time: Instant,
     pub edit_gen: u64,
@@ -567,31 +582,37 @@ impl FileViewerState {
         self.cursor_col = last_col;
     }
 
+    #[inline]
+    pub fn line_len(&self, line: usize) -> usize {
+        self.lines.get(line).map_or(0, |l| char_count(l))
+    }
+
     pub fn select_word_at_cursor(&mut self) {
         if self.lines.is_empty() || self.cursor_line >= self.lines.len() {
             return;
         }
         let line = &self.lines[self.cursor_line];
-        let chars: Vec<char> = line.chars().collect();
-        if chars.is_empty() {
+        let graphemes: Vec<&str> = line.graphemes(true).collect();
+        if graphemes.is_empty() {
             return;
         }
-        let col = self.cursor_col.min(chars.len().saturating_sub(1));
-        let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
-        let target_type = is_word_char(chars[col]);
+        let col = self.cursor_col.min(graphemes.len().saturating_sub(1));
+        let is_word_grapheme = |g: &str| g.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let is_ws_grapheme = |g: &str| g.chars().all(char::is_whitespace);
+        let target_type = is_word_grapheme(graphemes[col]);
 
         let mut start_col = col;
         while start_col > 0
-            && is_word_char(chars[start_col - 1]) == target_type
-            && !chars[start_col - 1].is_whitespace()
+            && is_word_grapheme(graphemes[start_col - 1]) == target_type
+            && !is_ws_grapheme(graphemes[start_col - 1])
         {
             start_col -= 1;
         }
 
         let mut end_col = col;
-        while end_col < chars.len()
-            && is_word_char(chars[end_col]) == target_type
-            && !chars[end_col].is_whitespace()
+        while end_col < graphemes.len()
+            && is_word_grapheme(graphemes[end_col]) == target_type
+            && !is_ws_grapheme(graphemes[end_col])
         {
             end_col += 1;
         }
@@ -607,6 +628,90 @@ impl FileViewerState {
         let line_len = char_count(&self.lines[self.cursor_line]);
         self.selection = Some(((self.cursor_line, 0), (self.cursor_line, line_len)));
         self.cursor_col = line_len;
+    }
+
+    /// Extrae un enlace web externo (Markdown `[texto](url)` o URL cruda `http://`/`https://`)
+    /// bajo la línea y columna especificadas.
+    pub fn link_at(&self, line_idx: usize, col: usize) -> Option<String> {
+        let line = self.lines.get(line_idx)?;
+        let chars: Vec<char> = line.chars().collect();
+        let col = col.min(chars.len());
+
+        // 1. Detectar enlaces Markdown: [texto](url)
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '[' {
+                if let Some(close_bracket) = chars[i + 1..]
+                    .iter()
+                    .position(|&c| c == ']')
+                    .map(|p| i + 1 + p)
+                {
+                    if chars.get(close_bracket + 1) == Some(&'(') {
+                        if let Some(close_paren) = chars[close_bracket + 2..]
+                            .iter()
+                            .position(|&c| c == ')')
+                            .map(|p| close_bracket + 2 + p)
+                        {
+                            let span_end = if self.render_markdown {
+                                close_bracket
+                            } else {
+                                close_paren
+                            };
+                            if col >= i && col <= span_end {
+                                let url: String =
+                                    chars[close_bracket + 2..close_paren].iter().collect();
+                                let clean_url = url.trim();
+                                if clean_url.starts_with("http://")
+                                    || clean_url.starts_with("https://")
+                                {
+                                    return Some(clean_url.to_string());
+                                }
+                            }
+                            i = close_paren + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+
+        // 2. Detectar URLs sueltas http:// o https://
+        let text = line.as_str();
+        let mut search_from = 0;
+        while search_from < text.len() {
+            let rem = &text[search_from..];
+            let http_pos = rem.find("http://");
+            let https_pos = rem.find("https://");
+            let rel_pos = match (http_pos, https_pos) {
+                (Some(p1), Some(p2)) => Some(p1.min(p2)),
+                (Some(p), None) | (None, Some(p)) => Some(p),
+                (None, None) => None,
+            };
+            let Some(pos) = rel_pos else {
+                break;
+            };
+            let abs_start = search_from + pos;
+            let url_rem = &text[abs_start..];
+            let end_offset = url_rem
+                .find(|c: char| {
+                    c.is_whitespace()
+                        || matches!(c, '<' | '>' | '"' | '\'' | '`' | '{' | '}' | ')' | ']')
+                })
+                .unwrap_or(url_rem.len());
+            let mut raw_url = &url_rem[..end_offset];
+            while raw_url.ends_with(['.', ',', ';', ':', '!', '?']) {
+                raw_url = &raw_url[..raw_url.len() - 1];
+            }
+            let start_char_idx = text[..abs_start].chars().count();
+            let end_char_idx = start_char_idx + raw_url.chars().count();
+            if col >= start_char_idx && col <= end_char_idx {
+                return Some(raw_url.to_string());
+            }
+            search_from = abs_start + end_offset.max(1);
+        }
+
+        None
     }
     pub fn push_undo(&mut self) {
         if self.undo_stack.len() >= 100 {
@@ -830,8 +935,11 @@ impl FileViewerState {
         let start_byte = char_byte_idx(line, self.cursor_col);
 
         if start_byte < line.len() {
-            let ch_len = line[start_byte..].chars().next().map_or(0, char::len_utf8);
-            line.drain(start_byte..start_byte + ch_len);
+            let g_len = line[start_byte..]
+                .graphemes(true)
+                .next()
+                .map_or(0, str::len);
+            line.drain(start_byte..start_byte + g_len);
             self.is_dirty = true;
         } else if self.cursor_line + 1 < self.lines.len() {
             // Unir la línea siguiente a la actual
@@ -889,11 +997,14 @@ impl FileViewerState {
         if self.cursor_col == 0 || self.cursor_line >= self.lines.len() {
             return 0;
         }
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let mut idx = self.cursor_col.min(chars.len());
+        let graphemes: Vec<&str> = self.lines[self.cursor_line].graphemes(true).collect();
+        let mut idx = self.cursor_col.min(graphemes.len());
+
+        let is_ws = |g: &str| g.chars().all(char::is_whitespace);
+        let is_word = |g: &str| g.chars().all(|c| c.is_alphanumeric() || c == '_');
 
         // Saltar espacios a la izquierda
-        while idx > 0 && chars[idx - 1].is_whitespace() {
+        while idx > 0 && is_ws(graphemes[idx - 1]) {
             idx -= 1;
         }
         if idx == 0 {
@@ -901,14 +1012,14 @@ impl FileViewerState {
         }
 
         // Si es caracter alfanumérico o guion bajo, buscar el inicio de la palabra
-        let is_alphanumeric = chars[idx - 1].is_alphanumeric() || chars[idx - 1] == '_';
+        let is_alphanumeric = is_word(graphemes[idx - 1]);
         if is_alphanumeric {
-            while idx > 0 && (chars[idx - 1].is_alphanumeric() || chars[idx - 1] == '_') {
+            while idx > 0 && is_word(graphemes[idx - 1]) {
                 idx -= 1;
             }
         } else {
             // Símbolos puntuación
-            while idx > 0 && !chars[idx - 1].is_alphanumeric() && !chars[idx - 1].is_whitespace() {
+            while idx > 0 && !is_word(graphemes[idx - 1]) && !is_ws(graphemes[idx - 1]) {
                 idx -= 1;
             }
         }
@@ -919,25 +1030,28 @@ impl FileViewerState {
         if self.cursor_line >= self.lines.len() {
             return 0;
         }
-        let chars: Vec<char> = self.lines[self.cursor_line].chars().collect();
-        let len = chars.len();
+        let graphemes: Vec<&str> = self.lines[self.cursor_line].graphemes(true).collect();
+        let len = graphemes.len();
         if self.cursor_col >= len {
             return len;
         }
         let mut idx = self.cursor_col;
 
-        let is_alphanumeric = chars[idx].is_alphanumeric() || chars[idx] == '_';
+        let is_ws = |g: &str| g.chars().all(char::is_whitespace);
+        let is_word = |g: &str| g.chars().all(|c| c.is_alphanumeric() || c == '_');
+
+        let is_alphanumeric = is_word(graphemes[idx]);
         if is_alphanumeric {
-            while idx < len && (chars[idx].is_alphanumeric() || chars[idx] == '_') {
+            while idx < len && is_word(graphemes[idx]) {
                 idx += 1;
             }
-        } else if !chars[idx].is_whitespace() {
-            while idx < len && !chars[idx].is_alphanumeric() && !chars[idx].is_whitespace() {
+        } else if !is_ws(graphemes[idx]) {
+            while idx < len && !is_word(graphemes[idx]) && !is_ws(graphemes[idx]) {
                 idx += 1;
             }
         }
         // Saltar espacios posteriores
-        while idx < len && chars[idx].is_whitespace() {
+        while idx < len && is_ws(graphemes[idx]) {
             idx += 1;
         }
         idx
@@ -1056,14 +1170,35 @@ impl FileViewerState {
         }
     }
 
-    /// Contenido de un archivo remoto tal como se escribe al guardar (siempre con `\n` final)
+    /// Contenido de un archivo remoto tal como se escribe al guardar (con el fin de línea y el salto final
+    /// que tenía al abrirlo, igual que el guardado local)
     pub fn remote_content(&mut self) -> String {
         self.trim_trailing_blank_lines();
-        let mut content = self.lines.join("\n");
-        if !content.is_empty() && !content.ends_with('\n') {
-            content.push('\n');
+        self.text_for_disk()
+    }
+
+    /// Texto del visor con el fin de línea y el salto final originales del archivo
+    fn text_for_disk(&self) -> String {
+        let eol = if self.crlf { "\r\n" } else { "\n" };
+        let mut content = self.lines.join(eol);
+        if self.final_newline && !content.is_empty() && !content.ends_with(eol) {
+            content.push_str(eol);
         }
         content
+    }
+
+    /// Fecha de modificación actual en disco, si el archivo existe
+    fn disk_mtime_now(&self) -> Option<std::time::SystemTime> {
+        std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .ok()
+    }
+
+    /// Fecha en disco distinta de la que vio el visor al abrir o guardar: otro programa (un agente, git…) escribió
+    /// el archivo y guardar ahora pisaría esos cambios
+    fn disk_changed_externally(&self) -> Option<std::time::SystemTime> {
+        let now = self.disk_mtime_now()?;
+        (self.disk_mtime? != now).then_some(now)
     }
 
     /// El servidor confirmó la escritura: el texto actual pasa a ser el original
@@ -1076,12 +1211,14 @@ impl FileViewerState {
 
     /// Escribe en `<archivo>.axon-tmp` y renombra encima: un fallo (disco lleno…) deja el original intacto
     fn write_local(&self) -> Result<(), std::io::Error> {
-        let eol = if self.crlf { "\r\n" } else { "\n" };
-        let mut content = self.lines.join(eol);
-        if self.final_newline && !content.is_empty() && !content.ends_with(eol) {
-            content.push_str(eol);
-        }
-        let mut tmp = self.path.clone().into_os_string();
+        let content = self.text_for_disk();
+        // Un enlace simbólico se conserva: se reemplaza su destino, no el enlace
+        let target = if std::fs::symlink_metadata(&self.path).is_ok_and(|m| m.is_symlink()) {
+            std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone())
+        } else {
+            self.path.clone()
+        };
+        let mut tmp = target.clone().into_os_string();
         tmp.push(".axon-tmp");
         let tmp = std::path::PathBuf::from(tmp);
         // Un temporal viejo (o un enlace plantado) se borra y se crea de nuevo con `create_new`: nunca se escribe a través de él
@@ -1091,7 +1228,7 @@ impl FileViewerState {
             .create_new(true)
             .open(&tmp)
             .and_then(|mut f| std::io::Write::write_all(&mut f, content.as_bytes()))
-            .and_then(|()| std::fs::rename(&tmp, &self.path))
+            .and_then(|()| std::fs::rename(&tmp, &target))
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&tmp);
             })
@@ -1119,11 +1256,27 @@ impl FileViewerState {
             ));
         }
 
+        // Otro programa escribió el archivo desde que se abrió: el autoguardado se detiene y un guardado
+        // explícito avisa y exige repetirlo para sobrescribir
+        if let Some(now) = self.disk_changed_externally() {
+            if is_explicit_save {
+                self.disk_mtime = Some(now);
+            }
+            let msg = if is_explicit_save {
+                "El archivo cambió en disco: guarda de nuevo para sobrescribir"
+            } else {
+                "El archivo cambió en disco: autoguardado detenido (guarda con Ctrl+S para sobrescribir)"
+            };
+            let e = std::io::Error::other(msg);
+            self.save_error = Some(e.to_string());
+            return Err(e);
+        }
         if let Err(e) = self.write_local() {
             self.save_error = Some(e.to_string());
             return Err(e);
         }
         self.save_error = None;
+        self.disk_mtime = self.disk_mtime_now();
         self.file_size = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
         if is_explicit_save {
             self.is_dirty = false;

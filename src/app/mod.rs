@@ -14,7 +14,7 @@ mod host;
 mod keyboard;
 mod keys;
 mod layout;
-mod platform;
+pub(crate) mod platform;
 mod redraw;
 mod remote_files;
 mod settings;
@@ -24,10 +24,11 @@ mod tabs;
 mod viewer;
 mod wheel;
 
+pub use crate::renderer::D3D11Presenter;
 pub use ai_usage::*;
 pub use context_menu::*;
 pub use host::AxonHost;
-pub use keys::{key_code_to_char, key_is_char};
+pub use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub use layout::*;
 pub(crate) use shell_context::detect_ai_agent;
 pub use viewer::*;
@@ -63,9 +64,17 @@ pub enum AxonEvent {
     SshDone,
     /// Cambio detectado en el sistema de archivos del espacio de trabajo
     FsChanged,
+    /// Comprobación de actualizaciones en segundo plano completada
+    UpdateCheckDone,
 }
 
 pub const SIDEBAR_WIDTH: usize = 190;
+
+/// Acción de soltar una pestaña con el mouse (para transferir a otra ventana o nueva ventana)
+pub struct TabDropAction {
+    pub tab: TerminalTab,
+    pub screen_pos: (i32, i32),
+}
 
 pub struct AxonApp {
     pub config: AxonConfig,
@@ -89,9 +98,12 @@ pub struct AxonApp {
     window: Option<Arc<Window>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    pub(super) d3d11_presenter: Option<D3D11Presenter>,
     clipboard: Option<arboard::Clipboard>,
     modifiers: ModifiersState,
     drag_start: Option<(usize, usize)>,
+    /// Palabra (doble clic) o línea (triple clic) inicial: el arrastre la extiende por unidades.
+    drag_anchor: Option<SelectionRange>,
     mouse_pos: PhysicalPosition<f64>,
     mouse_down: bool,
     cursor_timer: Instant,
@@ -114,6 +126,8 @@ pub struct AxonApp {
     sidebar_scrollbar_drag_offset_y: f32,
     pub sidebar_scrollbar_hovered: bool,
     explorer_scrollbar_dragging: bool,
+    /// Arrastrando el borde izquierdo del explorador para cambiar su ancho
+    explorer_resizing: bool,
     explorer_scrollbar_drag_offset_y: f32,
     viewer_scrollbar_dragging: bool,
     viewer_scrollbar_drag_offset_y: f32,
@@ -130,13 +144,21 @@ pub struct AxonApp {
     last_tab_click_idx: Option<usize>,
     last_viewer_click_pos: Option<(usize, usize)>,
     viewer_click_count: usize,
+    last_terminal_click_time: Instant,
+    last_terminal_click_pos: Option<(usize, usize)>,
+    last_terminal_click_pane_id: Option<usize>,
+    terminal_click_count: usize,
     last_window_move: Instant,
     last_scroll_time: Instant,
+    /// Fracción de línea pendiente de la rueda (los touchpads envían deltas pequeños)
+    wheel_remainder: f32,
     hovered_win_min: bool,
     hovered_win_max: bool,
     hovered_win_close: bool,
     last_titlebar_click: Instant,
     last_system_theme_check: Instant,
+    /// Último tema de Windows visto (true = claro), para detectar el cambio en modo "system"
+    system_light: bool,
     /// Ventana minimizada/tapada: no se renderiza (el PTY se sigue procesando)
     occluded: bool,
     scroll_hide_armed: bool,
@@ -148,13 +170,23 @@ pub struct AxonApp {
     /// La ventana debe cerrarse: el anfitrión (`AxonHost`) la retira tras el evento
     closing: bool,
     /// Se pidió abrir otra ventana (la crea el anfitrión, que posee el bucle de eventos)
-    new_window_request: bool,
+    pub new_window_request: bool,
+    /// Pestaña desprendida que se transferirá a una nueva ventana
+    pub new_window_with_tab: Option<TerminalTab>,
+    /// Pestaña soltada con el mouse fuera de su barra de pestañas (para acoplar o nueva ventana)
+    pub tab_drop_action: Option<TabDropAction>,
+    /// Petición desde el menú para mover una pestaña a otra ventana existente
+    pub move_tab_to_other_window: Option<usize>,
+    /// Indica si hay múltiples ventanas activas en el anfitrión
+    pub has_other_windows: bool,
     /// Divisor entre paneles que se está arrastrando
     divider_drag: Option<Divider>,
     /// Pestaña (índice) que se arrastra para reordenarla
     tab_drag: Option<usize>,
     /// Hover sobre el indicador de agente/modelo IA en la barra de estado inferior
     hovered_ai_badge: bool,
+    /// Hover sobre el indicador de actualización disponible en la barra de estado inferior
+    pub hovered_update_badge: bool,
     /// Estado de consumo y cuotas de modelos de IA para el menú flotante
     pub ai_usage: AiUsageState,
     /// Observador de cambios del sistema de archivos local para refresco reactivo de Git y archivos
@@ -184,8 +216,8 @@ impl AxonApp {
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
         session: Option<WindowSession>,
     ) -> Self {
-        let theme =
-            Theme::from_mode_and_name(&config.appearance.theme_mode, &config.appearance.theme);
+        let system_light = crate::theme::is_windows_system_light_mode();
+        let theme = config.appearance.resolve_theme(system_light);
 
         let session = session.filter(|s| !s.tabs.is_empty());
         let explorer_visible = session
@@ -211,14 +243,65 @@ impl AxonApp {
                 vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)]
             }
         };
-        let next_tab_id = tabs.len();
         let active_tab_index = active_tab_index.min(tabs.len() - 1);
 
-        let current_dir = std::env::current_dir().ok();
-        let file_explorer = crate::explorer::FileExplorer::new(current_dir, explorer_visible);
+        let mut app = Self::build(
+            config,
+            proxy,
+            theme,
+            system_light,
+            tabs,
+            active_tab_index,
+            sidebar_visible,
+            explorer_visible,
+        );
+        if let Some(s) = &session {
+            // Sin tamaño de ventana aún: solo el mínimo; `set_width_from_edge` acota el máximo al arrastrar
+            app.file_explorer.width = s
+                .file_explorer_width
+                .max(crate::explorer::FILE_EXPLORER_MIN_WIDTH);
+        }
+        app
+    }
 
+    /// Ventana nueva inicializada con una pestaña existente transferida desde otra ventana
+    pub fn from_tab(
+        config: AxonConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        mut tab: TerminalTab,
+    ) -> Self {
+        tab.id = 0;
+        let system_light = crate::theme::is_windows_system_light_mode();
+        let theme = config.appearance.resolve_theme(system_light);
+        let explorer_visible = config.appearance.show_file_explorer;
+        Self::build(
+            config,
+            proxy,
+            theme,
+            system_light,
+            vec![tab],
+            0,
+            true,
+            explorer_visible,
+        )
+    }
+
+    /// Estado inicial común de toda ventana: solo cambian las pestañas y la visibilidad de paneles
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        config: AxonConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        theme: Theme,
+        system_light: bool,
+        tabs: Vec<TerminalTab>,
+        active_tab_index: usize,
+        sidebar_visible: bool,
+        explorer_visible: bool,
+    ) -> Self {
+        let next_tab_id = tabs.len();
+        let file_explorer =
+            crate::explorer::FileExplorer::new(std::env::current_dir().ok(), explorer_visible);
         let clipboard = arboard::Clipboard::new().ok();
-
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
         Self {
             config,
@@ -242,9 +325,11 @@ impl AxonApp {
             window: None,
             context: None,
             surface: None,
+            d3d11_presenter: None,
             clipboard,
             modifiers: ModifiersState::default(),
             drag_start: None,
+            drag_anchor: None,
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
             mouse_down: false,
             cursor_timer: Instant::now(),
@@ -263,6 +348,7 @@ impl AxonApp {
             sidebar_scrollbar_drag_offset_y: 0.0,
             sidebar_scrollbar_hovered: false,
             explorer_scrollbar_dragging: false,
+            explorer_resizing: false,
             explorer_scrollbar_drag_offset_y: 0.0,
             viewer_scrollbar_dragging: false,
             viewer_scrollbar_drag_offset_y: 0.0,
@@ -279,13 +365,19 @@ impl AxonApp {
             last_tab_click_idx: None,
             last_viewer_click_pos: None,
             viewer_click_count: 0,
+            last_terminal_click_time: Instant::now(),
+            last_terminal_click_pos: None,
+            last_terminal_click_pane_id: None,
+            terminal_click_count: 0,
             last_window_move: Instant::now(),
             last_scroll_time: Instant::now(),
+            wheel_remainder: 0.0,
             hovered_win_min: false,
             hovered_win_max: false,
             hovered_win_close: false,
             last_titlebar_click: Instant::now(),
             last_system_theme_check: Instant::now(),
+            system_light,
             occluded: false,
             scroll_hide_armed: false,
             last_window_title: Default::default(),
@@ -294,9 +386,14 @@ impl AxonApp {
             session_id: NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             closing: false,
             new_window_request: false,
+            new_window_with_tab: None,
+            tab_drop_action: None,
+            move_tab_to_other_window: None,
+            has_other_windows: false,
             divider_drag: None,
             tab_drag: None,
             hovered_ai_badge: false,
+            hovered_update_badge: false,
             ai_usage: AiUsageState::default(),
             fs_watcher: None,
         }
@@ -345,6 +442,7 @@ impl AxonApp {
             active_tab_index: active_pos.min(tabs.len().saturating_sub(1)),
             sidebar_visible: self.sidebar_visible,
             file_explorer_visible: self.file_explorer.visible,
+            file_explorer_width: self.file_explorer.width,
             tabs,
         }
     }
@@ -359,6 +457,7 @@ impl AxonApp {
             active_tab_index: 0,
             sidebar_visible: self.sidebar_visible,
             file_explorer_visible: self.file_explorer.visible,
+            file_explorer_width: self.file_explorer.width,
             tabs: vec![TabSession {
                 title: "Terminal 1".to_string(),
                 layout: PaneSession::Leaf {
@@ -433,7 +532,7 @@ impl AxonApp {
 
     pub fn file_explorer_offset(&self) -> usize {
         if self.file_explorer.visible {
-            crate::explorer::FILE_EXPLORER_WIDTH + 16
+            self.file_explorer.width + 16
         } else {
             0
         }
@@ -517,7 +616,7 @@ impl SpawnCtx<'_> {
         let pty = PtyManager::new(
             id,
             shell,
-            self.config.terminal.ghostty_prompt,
+            self.config.terminal.shell_integration,
             cols as u16,
             rows as u16,
             cwd,

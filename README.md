@@ -13,7 +13,7 @@
 | CPU en reposo | **< 1 %** |
 | Fotograma 1920×1080 con texto denso | **~1,3 ms** de CPU |
 
-> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). No usa GPU a propósito: el cuello de botella al volcar salida es ConPTY, no el dibujo, y una ruta GPU costaría decenas de MB de RAM sin ganar latencia.
+> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). El dibujo es por software a propósito: el cuello de botella al volcar salida es ConPTY, no el dibujo. La GPU (Direct3D 11) solo se usa para presentar el fotograma.
 
 ## Características
 
@@ -21,8 +21,10 @@
 * **SSH:** los paneles divididos reconectan al mismo host; con bash en el servidor, la rama git, la carpeta y los archivos aparecen solos en el explorador, también con contraseña (se desactiva en Ajustes); portapapeles remoto por OSC 52 (Neovim, tmux).
 * **Visor y editor de archivos** en pestaña: un clic abre una vista previa, doble clic la fija; resaltado de sintaxis, Markdown renderizado, plegado de bloques, ajuste de línea (`Alt+Z`), diff git en el margen y edición local o remota.
 * **Menú contextual** (clic derecho) según el elemento: visor, terminal, pestaña, explorador.
-* **Motor VT completo:** TrueColor, pantalla alterna, ratón SGR, *bracketed paste*, imágenes inline (iTerm2), doble ancho (CJK, emoji).
-* **Interfaz:** pestañas horizontales o laterales, paneles divididos, explorador de archivos flotante, temas (Catppuccin Frappé/Latte, Ghostty, One Dark, Tokyo Night, Monokai Pro, Nord, Solarized) con modo claro/oscuro sincronizable con Windows, restauración de sesión.
+* **Motor VT completo:** TrueColor, pantalla alterna, ratón SGR, *bracketed paste*, imágenes inline (Kitty Graphics Protocol e iTerm2), doble ancho (CJK, emoji) y *grapheme clustering* (UAX #29).
+* **Multi-ventana y desprendimiento de pestañas:** abre nuevas ventanas con `Ctrl+Shift+N` o mueve pestañas a una nueva ventana mediante clic derecho (*«Mover a nueva ventana»*) o arrastrándolas fuera de la barra (*tab tear-off*).
+* **Auto-actualización automática:** comprueba en segundo plano nuevas versiones desde GitHub Releases, avisa en la barra de estado e instala la actualización con 1 clic (solo si el SHA-256 del instalador coincide con el de `SHA256SUMS.txt` de la misma release; si no, abre la página de la versión).
+* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, 817 temas de iTerm2 (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, aceleración opcional por GPU Direct3D 11 (DirectFlip), ligaduras tipográficas y restauración de sesión.
 * **Teclado correcto en Windows:** `AltGr` sin Ctrl atascado, `Ctrl+Backspace` borra palabra y `Alt+Tab` sin tabuladores fantasma.
 
 ## Atajos
@@ -31,6 +33,7 @@
 | :--- | :--- |
 | `Ctrl+,` | Ajustes |
 | `Ctrl+T` / `Ctrl+W` | Nueva pestaña / cerrar |
+| `Ctrl+Shift+N` | Nueva ventana |
 | `Ctrl+Tab`, `Ctrl+1…9` | Siguiente pestaña / ir a la N |
 | `Ctrl+B` / `Ctrl+Shift+E` | Barra lateral / explorador |
 | `Ctrl+Alt+D` / `Ctrl+Alt+V` / `Ctrl+Alt+W` | Dividir horizontal / vertical / cerrar panel |
@@ -78,6 +81,10 @@ Pruebas: `cargo test` (incluye PowerShell 5.1 y 7 reales sobre ConPTY) y `cargo 
 ## Configuración
 
 `axon.toml` se busca junto al ejecutable o en `%APPDATA%\axon\axon\config` (se genera si falta). Solo en compilaciones de desarrollo (debug) se lee también el del directorio actual: en release se ignora para que un repo ajeno no pueda elegir qué programa se ejecuta. Se edita a mano o desde Ajustes (`Ctrl+,`) y se recarga con `Ctrl+Shift+,`. [`examples/axon.toml`](examples/axon.toml) documenta todas las claves.
+
+**Red y credenciales:** Axon hace dos llamadas por su cuenta. La comprobación de versiones consulta la API de GitHub Releases (se apaga con `terminal.auto_check_updates = false`). Las cuotas de Claude que muestra la barra de estado se piden a `api.anthropic.com/api/oauth/usage` con el token de sesión de Claude Code (`~/.claude/.credentials.json`, solo lectura: nunca se renueva, no se registra ni se muestra); `terminal.ai_limits = false` evita leer esa credencial y hacer la llamada.
+
+Con `terminal.shell_integration = true` (por defecto) Axon inyecta su script en PowerShell: marcas OSC 7/133, rama git, `ls` con iconos y resaltado de sintaxis, todo con colores de la paleta ANSI del tema elegido. Con `false` el shell arranca limpio, sin nada inyectado.
 
 ## Contribuir
 

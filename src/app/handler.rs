@@ -21,15 +21,38 @@ impl AxonApp {
                     }
                 }
             }
+            AxonEvent::UpdateCheckDone => {
+                if !self.occluded {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
             AxonEvent::PtyData(pane_id) => {
                 let osc52 = self.config.terminal.osc52;
                 let mut redraw = false;
+                let mut should_sync_root = false;
+                let mut should_update_title = false;
+                let active_tab_index = self.active_tab_index;
                 for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
                     if let Some(pane) = tab.find_pane_mut(pane_id) {
                         let mut got_bytes = false;
+                        let mut chunks = 0;
                         while let Some(bytes) = pane.pty.try_recv_output() {
                             got_bytes = true;
                             pane.terminal.process_bytes(&bytes);
+                            chunks += 1;
+                            if chunks >= 32 {
+                                break;
+                            }
+                        }
+                        if chunks >= 32 {
+                            if let Some(p) = &self.proxy {
+                                let _ = p.send_event(AxonEvent::PtyData(pane_id));
+                            }
+                        }
+                        for data in pane.terminal.pty_write_queue.drain(..) {
+                            pane.pty.write_input(&data);
                         }
                         for text in pane.terminal.clipboard_queue.drain(..) {
                             // OSC 52 solo con `terminal.osc52`: si no, se descarta (nada de portapapeles silencioso)
@@ -37,17 +60,26 @@ impl AxonApp {
                                 cb.set_text(text).ok();
                             }
                         }
+                        let in_sync = pane.terminal.is_in_sync_update();
                         if got_bytes {
-                            if tab_idx != self.active_tab_index {
+                            if tab_idx != active_tab_index {
                                 tab.has_unread = true;
                             } else {
-                                self.sync_file_explorer_root();
-                                self.update_window_title();
+                                should_sync_root = true;
+                                should_update_title = true;
                             }
-                            redraw = true;
+                            if !in_sync {
+                                redraw = true;
+                            }
                         }
                         break;
                     }
+                }
+                if should_sync_root {
+                    self.sync_file_explorer_root();
+                }
+                if should_update_title {
+                    self.update_window_title();
                 }
                 if redraw {
                     self.process_remote_results();
@@ -88,7 +120,7 @@ impl AxonApp {
             return;
         }
 
-        // Crear icono nativo de Axon (Ghostty Green '>' sin fondo)
+        // Crear icono nativo de Axon ('>' verde sin fondo)
         let icon = create_native_icon();
 
         let window_attributes = WindowAttributes::default()
@@ -110,6 +142,23 @@ impl AxonApp {
         update_windows_theme(&window, &self.theme);
         apply_window_opacity_native(&window, self.config.appearance.window_opacity);
 
+        let init_win_w = 1080;
+        let init_win_h = 680;
+
+        // Intentar inicializar aceleración por GPU nativa en Windows (Direct3D 11 DirectFlip)
+        let mut d3d11_presenter = None;
+        if self.config.terminal.gpu {
+            use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(handle) = window.window_handle() {
+                if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                    let hwnd = windows::Win32::Foundation::HWND(win32.hwnd.get() as _);
+                    if let Ok(presenter) = D3D11Presenter::new(hwnd, init_win_w, init_win_h) {
+                        d3d11_presenter = Some(presenter);
+                    }
+                }
+            }
+        }
+
         let context = softbuffer::Context::new(window.clone())
             .expect("Error al inicializar contexto de aceleración gráfica de pantalla");
         let mut surface = softbuffer::Surface::new(&context, window.clone())
@@ -118,12 +167,11 @@ impl AxonApp {
         let scale_factor = window.scale_factor();
         let renderer = TerminalRenderer::new(&self.config, scale_factor);
 
-        let init_win_w = 1080;
-        let init_win_h = 680;
-
         let _ = window.request_inner_size(PhysicalSize::new(init_win_w, init_win_h));
         let initial_size = window.inner_size();
-        if let (Some(w), Some(h)) = (
+        if let Some(d3d11) = &mut d3d11_presenter {
+            let _ = d3d11.resize(initial_size.width, initial_size.height);
+        } else if let (Some(w), Some(h)) = (
             NonZeroU32::new(initial_size.width),
             NonZeroU32::new(initial_size.height),
         ) {
@@ -152,6 +200,7 @@ impl AxonApp {
         self.window = Some(window);
         self.context = Some(context);
         self.surface = Some(surface);
+        self.d3d11_presenter = d3d11_presenter;
         self.renderer = Some(renderer);
 
         // Pre-renderizar el primer fotograma completo antes de hacer visible la ventana
@@ -191,7 +240,9 @@ impl AxonApp {
             WindowEvent::Resized(size) => {
                 crate::logger::log(&format!("RESIZED: {}x{}", size.width, size.height));
                 self.last_window_move = Instant::now();
-                if let Some(surface) = &mut self.surface {
+                if let Some(d3d11) = &mut self.d3d11_presenter {
+                    let _ = d3d11.resize(size.width, size.height);
+                } else if let Some(surface) = &mut self.surface {
                     if let (Some(w), Some(h)) =
                         (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
                     {
@@ -200,9 +251,9 @@ impl AxonApp {
                 }
                 self.clamp_sidebar_scroll();
                 self.schedule_pty_resize();
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                // Repintado síncrono: con `request_redraw` el WM_PAINT llega tarde (o se agrupa)
+                // dentro del bucle modal de Windows y el fotograma queda a la zaga del borde.
+                self.on_redraw();
             }
 
             WindowEvent::Occluded(occluded) => {
@@ -225,8 +276,9 @@ impl AxonApp {
                     KeyEvent {
                         logical_key,
                         text,
-                        state: ElementState::Pressed,
+                        state,
                         physical_key,
+                        repeat,
                         ..
                     },
                 is_synthetic,
@@ -235,9 +287,19 @@ impl AxonApp {
                 // winit re-emite como "pulsadas" las teclas que siguen abajo al recuperar el foco
                 // (p. ej. Enter o flechas al mover la ventana de monitor); no son pulsaciones reales.
                 if !is_synthetic {
-                    self.cursor_on = true;
-                    self.cursor_timer = Instant::now();
-                    self.on_key_pressed(logical_key, text, physical_key);
+                    let ev_type = match state {
+                        ElementState::Pressed => {
+                            self.cursor_on = true;
+                            self.cursor_timer = Instant::now();
+                            if repeat {
+                                KeyEventType::Repeat
+                            } else {
+                                KeyEventType::Press
+                            }
+                        }
+                        ElementState::Released => KeyEventType::Release,
+                    };
+                    self.on_key_event(logical_key, text, physical_key, ev_type);
                 }
             }
 
@@ -257,6 +319,7 @@ impl AxonApp {
                     self.modifiers = ModifiersState::empty();
                     self.mouse_down = false;
                     self.drag_start = None;
+                    self.drag_anchor = None;
                     self.divider_drag = None;
                     self.tab_drag = None;
                 } else {
@@ -299,15 +362,25 @@ impl AxonApp {
     pub(super) fn tick(&mut self) -> Option<Instant> {
         // 1. Drenar salida de ConPTY de todos los paneles antes de comprobar salidas
         let mut got_bytes = false;
+        let mut has_more_pty_data = false;
         let active_idx = self.active_tab_index;
         let osc52 = self.config.terminal.osc52;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             let mut tab_got_bytes = false;
             for pane in &mut tab.panes {
                 let mut pane_got_bytes = false;
+                let mut chunks = 0;
                 while let Some(bytes) = pane.pty.try_recv_output() {
                     pane_got_bytes = true;
                     pane.terminal.process_bytes(&bytes);
+                    chunks += 1;
+                    if chunks >= 32 {
+                        has_more_pty_data = true;
+                        break;
+                    }
+                }
+                for data in pane.terminal.pty_write_queue.drain(..) {
+                    pane.pty.write_input(&data);
                 }
                 for text in pane.terminal.clipboard_queue.drain(..) {
                     if let (true, Some(cb)) = (osc52, &mut self.clipboard) {
@@ -449,30 +522,37 @@ impl AxonApp {
             if self.last_system_theme_check.elapsed().as_secs() >= 2 {
                 self.last_system_theme_check = Instant::now();
                 let is_sys_light = crate::theme::is_windows_system_light_mode();
-                let currently_light = self.theme.is_light();
-                if is_sys_light != currently_light {
+                if is_sys_light != self.system_light {
                     crate::logger::log(&format!("-> Cambio de tema del sistema Windows detectado (light={}): actualizando interfaz", is_sys_light));
-                    let new_theme = if is_sys_light {
-                        Theme::catppuccin_latte()
-                    } else {
-                        Theme::from_name(&self.config.appearance.theme)
-                    };
-                    self.theme = new_theme.clone();
-                    for tab in &mut self.tabs {
-                        for pane in &mut tab.panes {
-                            pane.terminal.theme = new_theme.clone();
-                        }
-                    }
-                    if let Some(w) = &self.window {
-                        update_windows_theme(w, &self.theme);
-                        w.request_redraw();
-                    }
+                    self.apply_active_theme();
                 }
             }
             earliest(
                 &mut wake,
                 self.last_system_theme_check + std::time::Duration::from_secs(2),
             );
+        }
+
+        if has_more_pty_data {
+            earliest(&mut wake, now);
+        }
+
+        // Renderizado sincronizado (DEC 2026): timeout de seguridad para repintar si la app retuvo el fotograma más de 200 ms
+        for tab in &self.tabs {
+            for pane in &tab.panes {
+                if pane.terminal.sync_update_mode {
+                    if let Some(start) = pane.terminal.sync_update_start {
+                        let deadline = start + std::time::Duration::from_millis(200);
+                        if now >= deadline {
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        } else {
+                            earliest(&mut wake, deadline);
+                        }
+                    }
+                }
+            }
         }
 
         wake

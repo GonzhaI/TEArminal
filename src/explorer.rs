@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub const FILE_EXPLORER_WIDTH: usize = 240;
+pub const FILE_EXPLORER_MIN_WIDTH: usize = 160;
 
 #[inline]
 fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
@@ -30,11 +31,7 @@ fn git_repo_root(dir: &Path) -> Option<PathBuf> {
 fn git_command(repo: &Path) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(repo);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    crate::app::platform::hide_console(&mut cmd);
     cmd
 }
 
@@ -62,31 +59,43 @@ pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
     )
 }
 
-/// Ejecuta `git status --porcelain` sobre `repo_root` y devuelve el estado por ruta absoluta
+/// Ejecuta `git status --porcelain -z` sobre `repo_root` y devuelve el estado por ruta absoluta.
+/// `--no-optional-locks`: sin él `git status` toma `index.lock` para refrescar el índice y hace fallar un
+/// `git add`/`commit` que el usuario o un agente lance a la vez.
 pub fn collect_git_statuses(
     repo_root: &Path,
     changes_only: bool,
 ) -> HashMap<PathBuf, GitFileStatus> {
-    let mut map = HashMap::new();
     let untracked_mode = if changes_only { "-uall" } else { "-unormal" };
     let Ok(output) = git_command(repo_root)
-        .args(["status", "--porcelain", untracked_mode])
+        .args(["--no-optional-locks", "status", "--porcelain", "-z"])
+        .arg(untracked_mode)
         .output()
     else {
-        return map;
+        return HashMap::new();
     };
     if !output.status.success() {
-        return map;
+        return HashMap::new();
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    for line in stdout.lines() {
-        if line.len() < 4 {
+    parse_porcelain_z(repo_root, &output.stdout)
+}
+
+/// Salida de `git status --porcelain -z`: entradas `XY ruta` separadas por NUL, sin comillas ni escapes (los
+/// nombres con tildes o espacios llegan tal cual); tras un renombrado/copia va otra entrada con el origen
+fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> HashMap<PathBuf, GitFileStatus> {
+    let mut map = HashMap::new();
+    let text = String::from_utf8_lossy(stdout);
+    let mut entries = text.split('\0');
+    while let Some(entry) = entries.next() {
+        let (Some(status_code), Some(rel_path)) = (entry.get(..2), entry.get(3..)) else {
+            continue;
+        };
+        if rel_path.is_empty() {
             continue;
         }
-        let status_code = &line[0..2];
-        // Renombrados: «R  origen -> destino»
-        let rel_path = line[3..].rsplit(" -> ").next().unwrap_or("");
-        let rel_path = rel_path.trim().trim_matches('"');
+        if status_code.contains(['R', 'C']) {
+            entries.next();
+        }
         let file_path = repo_root.join(rel_path.replace('/', "\\"));
 
         let status = if status_code.contains('M') {
@@ -136,6 +145,8 @@ pub struct FileExplorer {
     pub selected_index: Option<usize>,
     pub selected_path: Option<PathBuf>,
     pub visible: bool,
+    /// Ancho del panel en píxeles; se ajusta arrastrando su borde izquierdo (`set_width`)
+    pub width: usize,
     pub hovered_scrollbar: bool,
     /// Sesión SSH con integración: el listado llega por el propio terminal (sin segunda conexión)
     pub inband_remote: bool,
@@ -151,6 +162,9 @@ pub struct FileExplorer {
     pub git_root: Option<PathBuf>,
     /// Vista «Cambios»: lista plana solo con los archivos modificados según git
     pub changes_only: bool,
+    /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
+    pub is_pinned: bool,
+    pub hovered_pin_btn: bool,
     pub remote_session: Option<RemoteSshSession>,
     pub error_message: Option<String>,
     /// Última sesión remota pedida con `set_remote_session` (la raíz canónica de `remote_session` puede diferir)
@@ -161,6 +175,9 @@ pub struct FileExplorer {
     ssh_requests: Vec<RemoteLsReq>,
     /// Consulta de `git status` pendiente de lanzar en segundo plano (`(repo_root, changes_only)`)
     git_status_req: Option<(PathBuf, bool)>,
+    /// Hay un `git status` en vuelo: no se lanza otro hasta que llegue su resultado (una ráfaga de cambios
+    /// deja solo una petición pendiente y las respuestas nunca se cruzan)
+    git_status_running: bool,
 }
 
 /// Listado remoto por SSH lento: la raíz (`expand = None`) o el contenido de una carpeta del árbol
@@ -187,9 +204,20 @@ impl FileExplorer {
         (panel_x + panel_w.saturating_sub(34), panel_y + 8, 22, 20)
     }
 
+    /// Botón «Fijar» (Pin) del encabezado (compartido por dibujo y clics): x, y, ancho, alto
+    #[inline]
+    pub fn pin_btn_rect(
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+    ) -> (usize, usize, usize, usize) {
+        (panel_x + panel_w.saturating_sub(58), panel_y + 8, 22, 20)
+    }
+
     /// Calcula la geometría exacta del panel flotante del explorador de archivos
     #[inline]
     pub fn panel_geometry(
+        &self,
         win_w: usize,
         win_h: usize,
         top_offset: usize,
@@ -197,11 +225,42 @@ impl FileExplorer {
     ) -> (usize, usize, usize, usize) {
         let margin_top = top_offset + 8;
         let margin_bottom = status_bar_h + 8;
-        let panel_x = win_w.saturating_sub(FILE_EXPLORER_WIDTH + 8);
+        let panel_x = win_w.saturating_sub(self.width + 8);
         let panel_y = margin_top;
-        let panel_w = FILE_EXPLORER_WIDTH;
         let panel_h = win_h.saturating_sub(margin_top + margin_bottom);
-        (panel_x, panel_y, panel_w, panel_h)
+        (panel_x, panel_y, self.width, panel_h)
+    }
+
+    /// Acota `width` entre el mínimo y la mitad de la ventana (siempre queda sitio para el terminal)
+    pub fn clamp_width(width: usize, win_w: usize) -> usize {
+        width.clamp(
+            FILE_EXPLORER_MIN_WIDTH,
+            (win_w / 2).max(FILE_EXPLORER_MIN_WIDTH),
+        )
+    }
+
+    /// Ancho que deja el borde izquierdo del panel bajo el ratón en `mx`
+    pub fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
+        self.width = Self::clamp_width(win_w.saturating_sub(mx + 8), win_w);
+    }
+
+    /// ¿Está `(mx, my)` sobre el borde izquierdo del panel (franja de agarre para redimensionar)?
+    pub fn on_resize_edge(
+        &self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+        top_offset: usize,
+        status_bar_h: usize,
+    ) -> bool {
+        let (panel_x, panel_y, _, panel_h) =
+            self.panel_geometry(win_w, win_h, top_offset, status_bar_h);
+        self.visible
+            && mx + 6 >= panel_x
+            && mx < panel_x + 3
+            && my >= panel_y
+            && my < panel_y + panel_h
     }
 
     pub fn new(initial_dir: Option<PathBuf>, visible: bool) -> Self {
@@ -220,6 +279,7 @@ impl FileExplorer {
             selected_index: None,
             selected_path: None,
             visible,
+            width: FILE_EXPLORER_WIDTH,
             hovered_scrollbar: false,
             inband_remote: false,
             remote_expand_all: false,
@@ -227,6 +287,7 @@ impl FileExplorer {
             remote_gen: 0,
             ssh_requests: Vec::new(),
             git_status_req: None,
+            git_status_running: false,
             is_focused: false,
             last_click_item: None,
             last_click_time: std::time::Instant::now(),
@@ -235,6 +296,8 @@ impl FileExplorer {
             git_statuses: HashMap::new(),
             git_root: None,
             changes_only: false,
+            is_pinned: false,
+            hovered_pin_btn: false,
             remote_session: None,
             error_message: None,
         };
@@ -243,6 +306,11 @@ impl FileExplorer {
             explorer.refresh();
         }
         explorer
+    }
+
+    /// Alterna el estado de fijado del explorador
+    pub fn toggle_pinned(&mut self) {
+        self.is_pinned = !self.is_pinned;
     }
 
     pub fn set_expanded(&mut self, path: &Path, expanded: bool) {
@@ -607,7 +675,17 @@ impl FileExplorer {
 
     /// Petición de `git status` pendiente de ejecutar en un hilo
     pub fn take_git_status_request(&mut self) -> Option<(PathBuf, bool)> {
-        self.git_status_req.take()
+        if self.git_status_running {
+            return None;
+        }
+        let req = self.git_status_req.take();
+        self.git_status_running = req.is_some();
+        req
+    }
+
+    /// El hilo de `git status` no pudo lanzarse: libera la guarda para el siguiente intento
+    pub fn cancel_git_status(&mut self) {
+        self.git_status_running = false;
     }
 
     /// Aplica el mapa de estados de `git status` obtenido en segundo plano
@@ -616,6 +694,7 @@ impl FileExplorer {
         repo_root: &Path,
         statuses: HashMap<PathBuf, GitFileStatus>,
     ) {
+        self.git_status_running = false;
         if self.remote_session.is_some() || self.git_root.as_deref() != Some(repo_root) {
             return;
         }
@@ -1056,6 +1135,35 @@ impl FileExplorer {
 mod tests {
     use super::*;
 
+    /// `-z` entrega los nombres sin comillas ni escapes y el origen de un renombrado va en otra entrada
+    #[test]
+    fn test_parse_porcelain_z_handles_unicode_spaces_and_renames() {
+        let root = Path::new("C:\\repo");
+        let out =
+            "?? niño.txt\0 M dir/mi archivo.rs\0R  nuevo.rs\0viejo.rs\0 D borrado.rs\0".as_bytes();
+        let map = parse_porcelain_z(root, out);
+        assert_eq!(map[&root.join("niño.txt")], GitFileStatus::Untracked);
+        assert_eq!(
+            map[&root.join("dir\\mi archivo.rs")],
+            GitFileStatus::Modified
+        );
+        assert_eq!(map[&root.join("nuevo.rs")], GitFileStatus::Renamed);
+        assert!(!map.contains_key(&root.join("viejo.rs")));
+        assert_eq!(map[&root.join("borrado.rs")], GitFileStatus::Deleted);
+    }
+
+    /// Una sola consulta de `git status` en vuelo: la ráfaga siguiente queda como una petición pendiente
+    #[test]
+    fn test_git_status_requests_do_not_overlap() {
+        let mut ex = FileExplorer::new(Some(std::env::temp_dir()), false);
+        ex.git_status_req = Some((PathBuf::from("a"), false));
+        assert!(ex.take_git_status_request().is_some());
+        ex.git_status_req = Some((PathBuf::from("a"), false));
+        assert!(ex.take_git_status_request().is_none());
+        ex.apply_git_statuses(Path::new("a"), HashMap::new());
+        assert!(ex.take_git_status_request().is_some());
+    }
+
     #[test]
     fn test_file_explorer_listing_and_navigation() {
         let current = std::env::current_dir().unwrap();
@@ -1180,5 +1288,21 @@ mod tests {
             assert!(path.is_some());
             assert!(path.unwrap().ends_with("Cargo.toml"));
         }
+    }
+
+    #[test]
+    fn test_file_explorer_pin_toggle() {
+        let mut explorer = FileExplorer::new(None, false);
+        assert!(!explorer.is_pinned);
+        explorer.toggle_pinned();
+        assert!(explorer.is_pinned);
+        explorer.toggle_pinned();
+        assert!(!explorer.is_pinned);
+
+        let (px, py, pw, ph) = FileExplorer::pin_btn_rect(100, 50, 260);
+        assert_eq!(pw, 22);
+        assert_eq!(ph, 20);
+        assert_eq!(py, 58);
+        assert_eq!(px, 100 + 260 - 58);
     }
 }

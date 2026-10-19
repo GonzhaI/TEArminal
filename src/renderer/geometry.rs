@@ -21,6 +21,22 @@ pub fn scroll_offset_for_thumb_y(
     Some(((ratio * max_offset as f32).round() as usize).min(max_offset))
 }
 
+/// Rectángulo del botón flotante "ir hasta abajo" en el panel de la terminal
+#[inline]
+pub fn pane_scroll_to_bottom_btn_rect(
+    rect_x: usize,
+    rect_y: usize,
+    rect_width: usize,
+    rect_height: usize,
+) -> Rect {
+    let size = 28;
+    let margin_right = 26;
+    let margin_bottom = 16;
+    let x = (rect_x + rect_width).saturating_sub(size + margin_right);
+    let y = (rect_y + rect_height).saturating_sub(size + margin_bottom);
+    (x, y, size, size)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TopTabBarRects {
     pub bar_h: usize,
@@ -163,7 +179,10 @@ pub struct SettingsPageRects {
     pub nav_shortcuts: (usize, usize, usize, usize),
     pub nav_about: (usize, usize, usize, usize),
 
-    pub theme_buttons: [(usize, usize, usize, usize); 8],
+    pub theme_slot_dark_btn: (usize, usize, usize, usize),
+    pub theme_slot_light_btn: (usize, usize, usize, usize),
+    pub theme_search_box: (usize, usize, usize, usize),
+    pub theme_list: (usize, usize, usize, usize),
     pub theme_mode_system_btn: (usize, usize, usize, usize),
     pub theme_mode_dark_btn: (usize, usize, usize, usize),
     pub theme_mode_light_btn: (usize, usize, usize, usize),
@@ -185,7 +204,7 @@ pub struct SettingsPageRects {
     pub opacity_value_box: (usize, usize, usize, usize),
 
     pub cursor_blink_btn: (usize, usize, usize, usize),
-    pub ghostty_prompt_btn: (usize, usize, usize, usize),
+    pub shell_integration_btn: (usize, usize, usize, usize),
     pub copy_on_select_btn: (usize, usize, usize, usize),
     pub status_bar_toggle_btn: (usize, usize, usize, usize),
     pub file_explorer_toggle_btn: (usize, usize, usize, usize),
@@ -193,6 +212,7 @@ pub struct SettingsPageRects {
     pub auto_save_btn: (usize, usize, usize, usize),
     pub word_wrap_btn: (usize, usize, usize, usize),
     pub ssh_integration_btn: (usize, usize, usize, usize),
+    pub ligatures_btn: (usize, usize, usize, usize),
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
     pub term_reset_btn: (usize, usize, usize, usize),
@@ -203,14 +223,18 @@ pub struct SettingsPageRects {
 impl SettingsPageRects {
     /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
     pub const CONTENT_TOP: usize = 128;
+    /// Filas visibles de la lista de temas, alto de cada una y alto de su tarjeta
+    pub const THEME_ROWS: usize = 6;
+    pub const THEME_ROW_H: usize = 26;
+    pub const THEME_CARD_H: usize = 306;
     /// Alto de la tarjeta «Comportamiento del terminal»
-    pub const TERMINAL_CARD_H: usize = 392;
+    pub const TERMINAL_CARD_H: usize = 430;
 
     /// Alto total del contenido desplazable de una sección (desde `CONTENT_TOP`).
     pub fn content_height(section: super::state::SettingsSection) -> usize {
         use super::state::SettingsSection::*;
         let cards = match section {
-            Appearance => 478,
+            Appearance => 478 + Self::THEME_CARD_H - 150,
             Terminal => Self::TERMINAL_CARD_H + 14 + 110,
             Shortcuts => 434,
             About => 280,
@@ -272,24 +296,20 @@ impl SettingsPageRects {
 
         let card_y = page_y + 128;
 
-        // Fila 1 y 2 temas (8 temas en 2 filas de 4 botones perfectamente alineados)
-        let th_y1 = card_y + 44;
-        let th_y2 = card_y + 80;
-        let th_w = (card_w.saturating_sub(40 + 24)) / 4;
-        let th_gap = 8;
-        let theme_buttons = [
-            (content_x + 20, th_y1, th_w, 28),
-            (content_x + 20 + (th_w + th_gap), th_y1, th_w, 28),
-            (content_x + 20 + (th_w + th_gap) * 2, th_y1, th_w, 28),
-            (content_x + 20 + (th_w + th_gap) * 3, th_y1, th_w, 28),
-            (content_x + 20, th_y2, th_w, 28),
-            (content_x + 20 + (th_w + th_gap), th_y2, th_w, 28),
-            (content_x + 20 + (th_w + th_gap) * 2, th_y2, th_w, 28),
-            (content_x + 20 + (th_w + th_gap) * 3, th_y2, th_w, 28),
-        ];
+        // Buscador y lista desplazable de temas
+        let slot_w = card_w.saturating_sub(48) / 2;
+        let theme_slot_dark_btn = (content_x + 20, card_y + 40, slot_w, 28);
+        let theme_slot_light_btn = (content_x + 28 + slot_w, card_y + 40, slot_w, 28);
+        let theme_search_box = (content_x + 20, card_y + 76, card_w.saturating_sub(40), 28);
+        let theme_list = (
+            content_x + 20,
+            card_y + 112,
+            card_w.saturating_sub(40),
+            Self::THEME_ROWS * Self::THEME_ROW_H,
+        );
 
         // Tarjeta 2: Modo y Disposición de Pestañas
-        let card2_y = card_y + 160;
+        let card2_y = card_y + Self::THEME_CARD_H + 10;
         let label_col_w = (card_w as f32 * 0.35).clamp(180.0, 260.0) as usize;
         let ctrl_x = content_x + 20 + label_col_w;
         let ctrl_w = card_w.saturating_sub(label_col_w + 40);
@@ -357,7 +377,7 @@ impl SettingsPageRects {
         // Terminal toggles (alineados a ctrl_x con ancho uniforme)
         let toggle_w = 170;
         let cursor_blink_btn = (ctrl_x, card_y + 42, toggle_w, 28);
-        let ghostty_prompt_btn = (ctrl_x, card_y + 80, toggle_w, 28);
+        let shell_integration_btn = (ctrl_x, card_y + 80, toggle_w, 28);
         let copy_on_select_btn = (ctrl_x, card_y + 118, toggle_w, 28);
         let status_bar_toggle_btn = (ctrl_x, card_y + 156, toggle_w, 28);
         let file_explorer_toggle_btn = (ctrl_x, card_y + 194, toggle_w, 28);
@@ -365,6 +385,7 @@ impl SettingsPageRects {
         let auto_save_btn = (ctrl_x, card_y + 270, toggle_w, 28);
         let word_wrap_btn = (ctrl_x, card_y + 308, toggle_w, 28);
         let ssh_integration_btn = (ctrl_x, card_y + 346, toggle_w, 28);
+        let ligatures_btn = (ctrl_x, card_y + 384, toggle_w, 28);
 
         let cfg_y = card_y + Self::TERMINAL_CARD_H + 14;
         let cfg_btn_w = (card_w.saturating_sub(50)) / 2;
@@ -376,7 +397,10 @@ impl SettingsPageRects {
             nav_terminal,
             nav_shortcuts,
             nav_about,
-            theme_buttons,
+            theme_slot_dark_btn,
+            theme_slot_light_btn,
+            theme_search_box,
+            theme_list,
             theme_mode_system_btn,
             theme_mode_dark_btn,
             theme_mode_light_btn,
@@ -395,7 +419,7 @@ impl SettingsPageRects {
             opacity_plus_btn,
             opacity_value_box,
             cursor_blink_btn,
-            ghostty_prompt_btn,
+            shell_integration_btn,
             copy_on_select_btn,
             status_bar_toggle_btn,
             file_explorer_toggle_btn,
@@ -403,6 +427,7 @@ impl SettingsPageRects {
             auto_save_btn,
             word_wrap_btn,
             ssh_integration_btn,
+            ligatures_btn,
             open_file_btn,
             reset_defaults_btn,
             term_reset_btn,
@@ -518,25 +543,27 @@ impl FileViewerLayout {
         }
     }
 
-    /// Columna (índice de carácter) de la línea bajo la coordenada X, con el scroll horizontal aplicado.
+    /// Columna (índice de grafema) de la línea bajo la coordenada X, con el scroll horizontal aplicado.
     pub fn col_at(&self, line: &str, mx: usize, scroll_x: usize) -> usize {
         if mx < self.text_x {
             return 0;
         }
         let rel_x = (mx - self.text_x) + scroll_x * self.char_w;
         let mut acc = 0;
-        for (ci, ch) in line.chars().enumerate() {
-            let adv = if ch == '\t' {
+        use unicode_segmentation::UnicodeSegmentation;
+        for (ci, g) in line.graphemes(true).enumerate() {
+            let adv = if g == "\t" {
                 self.char_w * 4
             } else {
-                self.char_w
+                use unicode_width::UnicodeWidthStr;
+                self.char_w * g.width().max(1)
             };
             if acc + adv / 2 >= rel_x {
                 return ci;
             }
             acc += adv;
         }
-        line.chars().count()
+        line.graphemes(true).count()
     }
 
     /// Pista y pulgar de la barra horizontal; `None` si todo el ancho cabe. `max_scroll` = `FileViewerState::max_scroll_x`.
@@ -606,24 +633,34 @@ impl SidebarRects {
     }
 }
 
-/// Geometría de la zona derecha de la barra de estado (modelo/agente de IA) y de su tarjeta flotante de consumo.
 #[derive(Debug, Clone, Copy)]
 pub struct StatusBarRects {
     pub ai_badge: Rect,
+    pub update_badge: Option<Rect>,
 }
 
 impl StatusBarRects {
     pub const BAR_H: usize = 26;
-    pub const POPUP_W: usize = 352;
+    pub const POPUP_W: usize = 392;
 
-    /// Rectángulo del badge derecho en la barra de estado para un ancho de etiqueta `label_w` (en px).
-    pub fn compute(width: usize, height: usize, label_w: usize) -> Self {
+    /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
+    /// incluyendo el indicador opcional de nueva versión disponible
+    pub fn compute(width: usize, height: usize, label_w: usize, update_w: Option<usize>) -> Self {
         let bar_y = height.saturating_sub(Self::BAR_H);
         let text_x = width.saturating_sub(label_w + 32);
         let badge_x = text_x.saturating_sub(6);
         let badge_w = (label_w + 30).min(width.saturating_sub(badge_x + 4));
+        let ai_badge = (badge_x, bar_y, badge_w, Self::BAR_H);
+
+        let update_badge = update_w.map(|uw| {
+            let ub_w = uw + 26;
+            let ub_x = badge_x.saturating_sub(ub_w + 8);
+            (ub_x, bar_y, ub_w, Self::BAR_H)
+        });
+
         Self {
-            ai_badge: (badge_x, bar_y, badge_w, Self::BAR_H),
+            ai_badge,
+            update_badge,
         }
     }
 
@@ -651,5 +688,18 @@ impl StatusBarRects {
     pub fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
         let bridge = (popup.0, popup.1, popup.2, popup.3 + 8);
         Self::inside(mx, my, badge) || Self::inside(mx, my, bridge)
+    }
+}
+
+impl SettingsPageRects {
+    /// Rectángulo de la fila `i` (0..THEME_ROWS) de la lista de temas
+    pub fn theme_row(&self, i: usize) -> (usize, usize, usize, usize) {
+        let l = self.theme_list;
+        (l.0, l.1 + i * Self::THEME_ROW_H, l.2, Self::THEME_ROW_H)
+    }
+
+    /// Fila de la lista de temas bajo el ratón, si hay alguna
+    pub fn theme_row_at(&self, mx: usize, my: usize) -> Option<usize> {
+        Self::inside(mx, my, self.theme_list).then(|| (my - self.theme_list.1) / Self::THEME_ROW_H)
     }
 }

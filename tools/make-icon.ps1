@@ -1,5 +1,5 @@
 # Genera el icono de Axon: assets/icon.ico (multi-resolución, PNG embebidos), assets/icon-256.png
-# (icono de ventana y logo del README) y assets/icon-64.png. Dibuja con GDI+ nativo a cada tamaño
+# (icono de ventana y logo del README). Dibuja con GDI+ nativo a cada tamaño
 # (vectorial, sin reescalar) para que 16/24/32 px queden nítidos.
 #
 # Uso, desde la raíz del repo:  pwsh tools/make-icon.ps1
@@ -60,7 +60,7 @@ foreach ($f in $frames) {
 foreach ($f in $frames) { $bw.Write([byte[]]$f[1]) }
 [IO.File]::WriteAllBytes("$root\assets\icon.ico", $ms.ToArray())
 foreach ($f in $frames) {
-    if ($f[0] -in 64, 256) { [IO.File]::WriteAllBytes("$root\assets\icon-$($f[0]).png", [byte[]]$f[1]) }
+    if ($f[0] -eq 256) { [IO.File]::WriteAllBytes("$root\assets\icon-256.png", [byte[]]$f[1]) }
 }
 Copy-Item "$root\assets\icon-256.png" "$root\assets\logo.png" -Force
 "icon.ico: {0} KB ({1} tamaños)" -f [int]((Get-Item "$root\assets\icon.ico").Length / 1KB), $frames.Count

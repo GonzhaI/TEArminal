@@ -1,4 +1,4 @@
-//! `ssh`/`scp` no interactivos (BatchMode) con salida acotada para las vías lentas del explorador y el visor
+//! `ssh` no interactivo (BatchMode) con salida acotada para las vías lentas del explorador y el visor
 //! remotos (sin integración en banda, o cuando esta falla). BLOQUEAN (conexión + transferencia): llámalas solo
 //! desde un hilo (`AxonApp::spawn_ssh`), nunca desde el bucle de eventos.
 
@@ -6,11 +6,11 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 /// Tope de un archivo remoto que se abre en el visor (se piden `MAX_FILE_BYTES + 1` para saber que lo supera)
-pub const MAX_FILE_BYTES: usize = 5 * 1024 * 1024;
+pub const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
 /// Entradas como máximo de un listado remoto
-pub const LISTING_ENTRIES: usize = 300;
-/// Tope de lo que se lee de una orden de listado (300 nombres de hasta 255 bytes, con margen)
-pub const MAX_LISTING_BYTES: usize = 128 * 1024;
+pub const LISTING_ENTRIES: usize = 5000;
+/// Tope de lo que se lee de una orden de listado (5000 nombres de hasta 255 bytes, con margen)
+pub const MAX_LISTING_BYTES: usize = 2 * 1024 * 1024;
 /// Tope de lo que se conserva de stderr
 const MAX_STDERR_BYTES: u64 = 16 * 1024;
 
@@ -31,8 +31,15 @@ pub fn read_file_cmd(path: &str) -> String {
     format!("head -c {} -- {}", MAX_FILE_BYTES + 1, quote(path))
 }
 
-pub fn write_file_cmd(path: &str) -> String {
-    format!("cat > {}", quote(path))
+/// Guarda lo que llega por stdin (`len` bytes) en `path` sin dejarlo a medias: se recibe entero en un temporal
+/// y solo se copia si tiene exactamente `len` bytes (una conexión cortada a mitad no trunca el original).
+/// Va en `sh -c` para no depender del shell de login del servidor (fish, csh…).
+pub fn write_file_cmd(path: &str, len: usize) -> String {
+    let script = format!(
+        r#"t=$(mktemp) && cat >"$t" && [ "$(wc -c <"$t")" -eq {len} ] && cat "$t" >{}; s=$?; rm -f "$t"; exit $s"#,
+        quote(path)
+    );
+    format!("sh -c {}", quote(&script))
 }
 
 /// Carpeta actual canónica, rama git y listado de la raíz del explorador remoto
@@ -84,11 +91,7 @@ pub(crate) fn run_command(
     stdin: Option<&[u8]>,
     max_out: usize,
 ) -> Result<Output, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
+    crate::app::platform::hide_console(&mut cmd);
     cmd.stdin(if stdin.is_some() {
         Stdio::piped()
     } else {
@@ -144,7 +147,16 @@ pub(crate) fn run_command(
     })
 }
 
-/// Sube una imagen local a `/tmp` del destino con `scp`; devuelve la ruta remota
+/// Orden remota que guarda stdin como `name` en una carpeta propia (`<TMPDIR|/tmp>/axon-<uid>`, modo 700) y
+/// escribe su ruta: una captura puede contener secretos y `/tmp` lo leen todos los usuarios del servidor
+fn upload_cmd(name: &str) -> String {
+    let script = format!(
+        r#"umask 077; d="${{TMPDIR:-/tmp}}/axon-$(id -u)"; mkdir -p "$d" && [ -O "$d" ] && cat >"$d/{name}" && printf %s "$d/{name}""#
+    );
+    format!("sh -c {}", quote(&script))
+}
+
+/// Sube una imagen local al destino por `ssh` (stdin) a una carpeta privada; devuelve la ruta remota
 pub fn upload_image(local_path: &str, destination: &str) -> Option<String> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -154,45 +166,33 @@ pub fn upload_image(local_path: &str, destination: &str) -> Option<String> {
         crate::logger::log("SSH Upload: destino no válido, se omite la transferencia");
         return None;
     }
+    let bytes = std::fs::read(local_path).ok()?;
     let remote_filename = format!("axon_img_{}.png", timestamp);
-    let remote_target = format!("{}:/tmp/{}", destination, remote_filename);
-
     crate::logger::log(&format!(
-        "SSH Upload: transfiriendo captura a {} -> /tmp/{}",
-        destination, remote_filename
+        "SSH Upload: transfiriendo captura a {destination} ({remote_filename})"
     ));
-
-    let mut cmd = Command::new("scp.exe");
-    cmd.args([
-        "-q",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=3",
-        "-o",
-        "ServerAliveInterval=5",
-        "-o",
-        "ServerAliveCountMax=2",
-        "--",
-    ])
-    .arg(local_path)
-    .arg(&remote_target);
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    match cmd.status() {
-        Ok(s) if s.success() => {
-            crate::logger::log(&format!("SSH Upload exitoso: /tmp/{}", remote_filename));
-            Some(format!("/tmp/{}", remote_filename))
+    match run(
+        destination,
+        &upload_cmd(&remote_filename),
+        3,
+        Some(&bytes),
+        4096,
+    ) {
+        Ok(out) if out.ok && !out.truncated => {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if crate::pty::safe_remote_dir(&path).is_none() {
+                crate::logger::log("SSH Upload: el servidor devolvió una ruta no válida");
+                return None;
+            }
+            crate::logger::log(&format!("SSH Upload exitoso: {path}"));
+            Some(path)
         }
-        Ok(s) => {
-            crate::logger::log(&format!("SSH Upload falló con código: {:?}", s.code()));
+        Ok(out) => {
+            crate::logger::log(&format!("SSH Upload falló: {}", out.stderr));
             None
         }
         Err(e) => {
-            crate::logger::log(&format!("Error al ejecutar scp.exe: {:?}", e));
+            crate::logger::log(&format!("Error al ejecutar ssh.exe: {e}"));
             None
         }
     }
@@ -206,14 +206,46 @@ mod tests {
     fn test_remote_commands_are_bounded_and_quoted() {
         assert_eq!(
             read_file_cmd("/var/log/a'b"),
-            r"head -c 5242881 -- '/var/log/a'\''b'"
+            r"head -c 10485761 -- '/var/log/a'\''b'"
         );
-        assert!(root_listing_cmd("/srv").ends_with("ls -1ap | head -300"));
+        assert!(root_listing_cmd("/srv").ends_with("ls -1ap | head -5000"));
         assert_eq!(
             dir_listing_cmd("/srv"),
-            "cd '/srv' 2>/dev/null && ls -1ap | head -300"
+            "cd '/srv' 2>/dev/null && ls -1ap | head -5000"
         );
-        assert_eq!(write_file_cmd("/tmp/x y"), "cat > '/tmp/x y'");
+        assert!(write_file_cmd("/tmp/x y", 7).starts_with("sh -c 't=$(mktemp)"));
+        assert!(upload_cmd("a.png").contains("umask 077"));
+    }
+
+    /// El guardado remoto escribe lo recibido solo si llegó entero: con menos bytes de los esperados no toca
+    /// el archivo
+    #[test]
+    fn test_write_file_cmd_is_all_or_nothing() {
+        if !Command::new("sh")
+            .arg("-c")
+            .arg("true")
+            .output()
+            .is_ok_and(|o| o.status.success())
+        {
+            return; // sin `sh` en esta máquina
+        }
+        let path = std::env::temp_dir()
+            .join(format!("axon_write_cmd_{}.txt", std::process::id()))
+            .to_string_lossy()
+            .replace('\\', "/");
+        std::fs::write(&path, "original").unwrap();
+        let run_with = |data: &[u8], len: usize| {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(write_file_cmd(&path, len));
+            run_command(cmd, Some(data), 4096).unwrap()
+        };
+        let cut = run_with(b"nuevo", 9);
+        assert!(!cut.ok);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        let full = run_with(b"nuevo", 5);
+        assert!(full.ok, "{}", full.stderr);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "nuevo");
+        let _ = std::fs::remove_file(&path);
     }
 
     /// `quote` produce `'\''` (barra literal): lo que el shell remoto recibe es exactamente la ruta original

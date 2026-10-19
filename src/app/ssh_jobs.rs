@@ -67,9 +67,13 @@ impl AxonApp {
     }
 
     /// Escanea en un hilo en segundo plano las transcripciones locales de IA sin bloquear el bucle de eventos
-    pub(super) fn spawn_ai_local_scan(&mut self, ai_status: AiAgentStatus) {
+    pub(super) fn spawn_ai_local_scan(&mut self, agents: Vec<AiAgentStatus>) {
+        let fetch_limits = self.config.terminal.ai_limits && self.ai_usage.limits_due(&agents);
         if !self.spawn_ssh(move || {
-            SshDone::AiLocal(super::ai_usage::scan_local_usage_blocking(ai_status))
+            SshDone::AiLocal(super::ai_usage::scan_local_usage_blocking(
+                &agents,
+                fetch_limits,
+            ))
         }) {
             self.ai_usage.local_scan_in_flight = false;
         }
@@ -118,7 +122,7 @@ impl AxonApp {
         let edit_gen = viewer.edit_gen;
         let (dest, path) = (dest.to_string(), path.to_path_buf());
         self.spawn_ssh(move || {
-            let cmd = ssh::write_file_cmd(&remote_path_string(&path));
+            let cmd = ssh::write_file_cmd(&remote_path_string(&path), content.len());
             let result = ssh::run(&dest, &cmd, 5, Some(content.as_bytes()), 4096).and_then(|o| {
                 if o.ok && !o.truncated {
                     Ok(())
@@ -142,7 +146,7 @@ impl AxonApp {
         });
     }
 
-    /// Sube una captura al remoto con `scp`; al terminar se pega su ruta (o la local si falló) en el panel
+    /// Sube una captura al remoto por `ssh`; al terminar se pega su ruta (o la local si falló) en el panel
     pub(super) fn ssh_upload_image(&self, pane_id: usize, local_path: String, dest: &str) {
         let dest = dest.to_string();
         self.spawn_ssh(move || {
@@ -168,13 +172,16 @@ impl AxonApp {
             });
         }
         if let Some((repo_root, changes_only)) = self.file_explorer.take_git_status_request() {
-            self.spawn_ssh(move || {
+            let spawned = self.spawn_ssh(move || {
                 let statuses = crate::explorer::collect_git_statuses(&repo_root, changes_only);
                 SshDone::GitStatus {
                     repo_root,
                     statuses,
                 }
             });
+            if !spawned {
+                self.file_explorer.cancel_git_status();
+            }
         }
     }
 
@@ -267,6 +274,8 @@ impl AxonApp {
                 } => {
                     self.file_explorer.apply_git_statuses(&repo_root, statuses);
                     self.sync_fs_watcher();
+                    // Si llegaron cambios durante la consulta, queda una petición pendiente
+                    self.pump_explorer_ssh();
                 }
                 SshDone::GitHead { path, lines } => {
                     for tab in &mut self.tabs {
