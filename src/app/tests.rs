@@ -1643,3 +1643,69 @@ fn test_close_other_tabs_flushes_pending_autosave() {
     let _ = std::fs::remove_file(&file_path);
     let _ = std::fs::remove_dir(&temp_dir);
 }
+
+#[test]
+fn test_fs_changed_event_refreshes_explorer_and_git_status() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("axon-test-fs-changed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    // Inicializar repo git con un commit inicial
+    let _ = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(&temp_dir)
+        .output();
+    let file_path = temp_dir.join("file.txt");
+    std::fs::write(&file_path, "v1").unwrap();
+    let _ = std::process::Command::new("git")
+        .args(["add", "file.txt"])
+        .current_dir(&temp_dir)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", "init", "--no-gpg-sign"])
+        .current_dir(&temp_dir)
+        .output();
+
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    app.file_explorer.visible = true;
+    app.file_explorer.set_root(temp_dir.clone());
+    app.file_explorer.refresh();
+
+    // En tests cfg!(test), refresh_git_status ejecuta síncronamente
+    assert!(app.file_explorer.git_statuses.is_empty());
+
+    // Modificar archivo simulando cambio externo o comando
+    std::fs::write(&file_path, "v2 modified").unwrap();
+
+    // Disparar FsChanged
+    app.on_user_event(AxonEvent::FsChanged);
+
+    // Debe haber detectado el archivo modificado
+    assert_eq!(
+        app.file_explorer.git_statuses.get(&file_path),
+        Some(&crate::explorer::GitFileStatus::Modified)
+    );
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_sync_fs_watcher_behavior() {
+    let temp_dir =
+        std::env::temp_dir().join(format!("axon-test-watcher-sync-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    app.file_explorer.visible = false;
+    app.sync_fs_watcher();
+    assert!(app.fs_watcher.is_none());
+
+    // Con explorador visible pero sin proxy de ventana (modo headless/test), se maneja limpiamente sin pánico
+    app.file_explorer.visible = true;
+    app.file_explorer.set_root(temp_dir.clone());
+    app.sync_fs_watcher();
+    assert!(app.fs_watcher.is_none());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+}

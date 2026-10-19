@@ -10,6 +10,17 @@ impl AxonApp {
             AxonEvent::SshDone => {
                 self.process_ssh_results();
             }
+            AxonEvent::FsChanged => {
+                if self.file_explorer.visible && self.file_explorer.remote_session.is_none() {
+                    self.file_explorer.refresh();
+                    self.pump_explorer_ssh();
+                    if !self.occluded {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+            }
             AxonEvent::PtyData(pane_id) => {
                 let osc52 = self.config.terminal.osc52;
                 let mut redraw = false;
@@ -253,6 +264,11 @@ impl AxonApp {
                     self.last_focus_gained = Instant::now();
                     self.cursor_on = true;
                     self.cursor_timer = Instant::now();
+                    if self.file_explorer.visible && self.file_explorer.remote_session.is_none() {
+                        self.file_explorer.refresh();
+                        self.pump_explorer_ssh();
+                        self.sync_fs_watcher();
+                    }
                 }
 
                 // En Windows ConPTY, las secuencias de foco VT (\x1b[I / \x1b[O) no son reconocidas
@@ -397,12 +413,14 @@ impl AxonApp {
         // Autoguardado diferido tras dejar de escribir (400 ms de inactividad)
         if self.config.terminal.auto_save {
             const AUTOSAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(400);
+            let mut autosaved_local = false;
             for tab in &mut self.tabs {
                 if let Some(viewer) = tab.file_viewer.as_mut() {
                     if viewer.needs_autosave && viewer.remote_destination.is_none() {
                         let deadline = viewer.last_edit_time + AUTOSAVE_DEBOUNCE;
                         if now >= deadline {
                             viewer.autosave_local();
+                            autosaved_local = true;
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
@@ -411,6 +429,13 @@ impl AxonApp {
                         }
                     }
                 }
+            }
+            if autosaved_local
+                && self.file_explorer.visible
+                && self.file_explorer.remote_session.is_none()
+            {
+                self.file_explorer.refresh_git_status();
+                self.pump_explorer_ssh();
             }
         }
 

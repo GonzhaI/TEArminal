@@ -254,6 +254,7 @@ impl AxonApp {
                     statuses,
                 } => {
                     self.file_explorer.apply_git_statuses(&repo_root, statuses);
+                    self.sync_fs_watcher();
                 }
                 SshDone::GitHead { path, lines } => {
                     for tab in &mut self.tabs {

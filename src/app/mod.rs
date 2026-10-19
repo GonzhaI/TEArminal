@@ -8,6 +8,7 @@ mod click;
 mod clipboard;
 mod context_menu;
 mod cursor;
+mod fs_watcher;
 mod handler;
 mod host;
 mod keyboard;
@@ -60,6 +61,8 @@ pub enum AxonEvent {
     PtyClosed(usize),
     /// Terminó un trabajo SSH en segundo plano (`AxonApp::process_ssh_results`)
     SshDone,
+    /// Cambio detectado en el sistema de archivos del espacio de trabajo
+    FsChanged,
 }
 
 pub const SIDEBAR_WIDTH: usize = 190;
@@ -154,6 +157,8 @@ pub struct AxonApp {
     hovered_ai_badge: bool,
     /// Estado de consumo y cuotas de modelos de IA para el menú flotante
     pub ai_usage: AiUsageState,
+    /// Observador de cambios del sistema de archivos local para refresco reactivo de Git y archivos
+    fs_watcher: Option<fs_watcher::FsWatcher>,
 }
 
 /// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña
@@ -293,6 +298,7 @@ impl AxonApp {
             tab_drag: None,
             hovered_ai_badge: false,
             ai_usage: AiUsageState::default(),
+            fs_watcher: None,
         }
     }
 

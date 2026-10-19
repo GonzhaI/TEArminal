@@ -631,6 +631,7 @@ impl AxonApp {
                 crate::logger::log(&format!("-> Archivo guardado: {}", viewer.file_name));
                 if self.file_explorer.visible {
                     self.file_explorer.refresh();
+                    self.pump_explorer_ssh();
                 }
             }
             Err(e) => crate::logger::log(&format!("-> Error al guardar archivo: {}", e)),
@@ -779,6 +780,8 @@ impl AxonApp {
             }
             MenuAction::ExplorerRefresh => {
                 self.file_explorer.refresh();
+                self.pump_explorer_ssh();
+                self.sync_fs_watcher();
             }
         }
         if let Some(w) = &self.window {

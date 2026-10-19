@@ -30,6 +30,7 @@ impl AxonApp {
     /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
     pub fn sync_file_explorer_root(&mut self) {
         if !self.file_explorer.visible {
+            self.sync_fs_watcher();
             return;
         }
         if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
@@ -47,6 +48,7 @@ impl AxonApp {
                             };
                             self.file_explorer.set_remote_listing(sess, names);
                         }
+                        self.sync_fs_watcher();
                         return;
                     }
                     if ssh.is_active {
@@ -57,6 +59,7 @@ impl AxonApp {
                             remote_dir: rdir,
                         };
                         self.file_explorer.set_remote_session(Some(remote_sess));
+                        self.sync_fs_watcher();
                         return;
                     }
                 }
@@ -66,6 +69,7 @@ impl AxonApp {
                 }
             }
         }
+        self.sync_fs_watcher();
     }
 
     /// Abre un archivo en una pestaña de visor. Sin `pin` es una vista previa que la siguiente vista previa
@@ -192,6 +196,7 @@ impl AxonApp {
             }
         } else {
             self.file_explorer.is_focused = false;
+            self.sync_fs_watcher();
         }
         self.recompute_grid_for_all_tabs();
         self.save_session();

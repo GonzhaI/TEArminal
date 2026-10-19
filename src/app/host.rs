@@ -70,7 +70,7 @@ impl AxonHost {
 impl ApplicationHandler<AxonEvent> for AxonHost {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
         match event {
-            AxonEvent::SshDone => {
+            AxonEvent::SshDone | AxonEvent::FsChanged => {
                 for w in &mut self.windows {
                     w.on_user_event(event);
                 }
