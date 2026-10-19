@@ -192,7 +192,9 @@ impl AxonConfig {
             fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, &path)?;
         Ok(())
     }
 }
@@ -276,7 +278,9 @@ impl SessionState {
             let _ = fs::create_dir_all(parent);
         }
         let content = toml::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        let tmp = path.with_extension("tmp");
+        fs::write(&tmp, content)?;
+        fs::rename(&tmp, &path)?;
         Ok(())
     }
 

@@ -49,6 +49,14 @@ impl AxonApp {
             }
             AxonEvent::PtyClosed(pane_id) => {
                 crate::logger::log(&format!("PtyClosed recibido para pane_id {}", pane_id));
+                // Drenar cualquier byte residual que haya quedado en el canal antes de cerrar
+                for tab in &mut self.tabs {
+                    if let Some(pane) = tab.find_pane_mut(pane_id) {
+                        while let Some(bytes) = pane.pty.try_recv_output() {
+                            pane.terminal.process_bytes(&bytes);
+                        }
+                    }
+                }
                 // El EOF del lector de un PTY ya sustituido (shell reabierto tras un agente) no debe cerrar
                 // el panel nuevo: solo cuenta si el hijo del PTY actual ha terminado de verdad.
                 let exited = self
@@ -273,26 +281,7 @@ impl AxonApp {
     /// Trabajo periódico de la ventana tras cada tanda de eventos. Devuelve el instante en que debe volver a
     /// despertar (`None` = dormir hasta el próximo evento).
     pub(super) fn tick(&mut self) -> Option<Instant> {
-        // 1. Revisar si algún panel tiene su proceso terminado
-        let mut closed_panes = Vec::new();
-        for tab in &mut self.tabs {
-            for pane in &mut tab.panes {
-                if pane.pty.is_child_exited() {
-                    closed_panes.push(pane.id);
-                }
-            }
-        }
-        for pane_id in closed_panes {
-            crate::logger::log(&format!("Proceso hijo de pane {} terminado", pane_id));
-            self.on_shell_exit(pane_id);
-        }
-        if self.tabs.is_empty() {
-            crate::logger::log("No quedan pestañas activas: cerrando la ventana");
-            self.request_close();
-            return None;
-        }
-
-        // 2. Drenar salida de ConPTY de todos los paneles por si quedó algún byte residual
+        // 1. Drenar salida de ConPTY de todos los paneles antes de comprobar salidas
         let mut got_bytes = false;
         let active_idx = self.active_tab_index;
         let osc52 = self.config.terminal.osc52;
@@ -324,6 +313,26 @@ impl AxonApp {
         if got_bytes {
             self.process_remote_results();
         }
+
+        // 2. Revisar si algún panel tiene su proceso terminado (tras haber consumido toda su salida)
+        let mut closed_panes = Vec::new();
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.pty.is_child_exited() {
+                    closed_panes.push(pane.id);
+                }
+            }
+        }
+        for pane_id in closed_panes {
+            crate::logger::log(&format!("Proceso hijo de pane {} terminado", pane_id));
+            self.on_shell_exit(pane_id);
+        }
+        if self.tabs.is_empty() {
+            crate::logger::log("No quedan pestañas activas: cerrando la ventana");
+            self.request_close();
+            return None;
+        }
+
         // Listados SSH que el explorador pidió desde cualquier clic: se ejecutan en hilos
         self.pump_explorer_ssh();
 

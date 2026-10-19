@@ -99,6 +99,25 @@ impl AxonApp {
                     }
                     if let Some(active_pane) = self.tabs[self.active_tab_index].active_pane() {
                         active_pane.pty.write_input(t.as_bytes());
+                        return;
+                    }
+                    let visible = self.viewer_visible_lines();
+                    if let Some(viewer) = self.tabs[self.active_tab_index].file_viewer.as_mut() {
+                        if !viewer.is_read_only {
+                            for ch in t.chars() {
+                                if !ch.is_control() {
+                                    viewer.insert_char(ch);
+                                }
+                            }
+                            if self.config.terminal.auto_save {
+                                viewer.schedule_autosave();
+                            }
+                            viewer.ensure_cursor_visible(visible);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                        return;
                     }
                     return;
                 }
@@ -321,13 +340,8 @@ impl AxonApp {
         // 4. Cambiar directamente a pestaña 1-9: Ctrl + 1..9
         if ctrl && !shift && !alt {
             let tab_num = match &logical_key {
-                Key::Character(s) if s.len() == 1 => {
-                    let ch = s.chars().next().unwrap();
-                    if ('1'..='9').contains(&ch) {
-                        Some((ch as usize) - ('1' as usize))
-                    } else {
-                        None
-                    }
+                Key::Character(s) if matches!(s.as_bytes(), [b'1'..=b'9']) => {
+                    Some((s.as_bytes()[0] - b'1') as usize)
                 }
                 _ => match physical_key {
                     PhysicalKey::Code(KeyCode::Digit1 | KeyCode::Numpad1) => Some(0),

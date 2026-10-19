@@ -36,12 +36,31 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
 }
 
 pub(super) fn shorten_home(path: &std::path::Path) -> String {
-    static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let s = path.to_string_lossy();
-    match HOME.get_or_init(|| std::env::var("USERPROFILE").ok()) {
-        Some(home) if s.starts_with(home.as_str()) => format!("~{}", &s[home.len()..]),
-        _ => s.into_owned(),
+    static HOME: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    let home = HOME.get_or_init(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));
+    if let Some(home) = home.as_deref() {
+        if let Ok(rel) = path.strip_prefix(home) {
+            let rel_str = rel.to_string_lossy();
+            return if rel_str.is_empty() {
+                "~".to_string()
+            } else {
+                format!("~\\{}", rel_str)
+            };
+        }
+        let s = path.to_string_lossy();
+        let h = home.to_string_lossy();
+        if s.len() >= h.len() && s[..h.len()].eq_ignore_ascii_case(&h) {
+            let rest = &s[h.len()..];
+            return if rest.is_empty() {
+                "~".to_string()
+            } else if rest.starts_with('\\') || rest.starts_with('/') {
+                format!("~{rest}")
+            } else {
+                format!("~\\{rest}")
+            };
+        }
     }
+    path.to_string_lossy().into_owned()
 }
 
 pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {

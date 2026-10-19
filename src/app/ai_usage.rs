@@ -1,11 +1,9 @@
 //! Estado y recolección de consumo de IA: cuotas en vivo por modelo, ventanas de 5 horas y tokens locales.
 //!
-//! Combina tres fuentes sin bloquear nunca el bucle de eventos:
+//! Combina dos fuentes sin bloquear nunca el bucle de eventos:
 //! 1. Archivos locales de sesión (`~/.gemini/antigravity-cli/brain/*/transcript.jsonl`, `settings.json`,
 //!    `~/.claude.json`, `~/.claude/projects/**/*.jsonl`) con caché de varios segundos.
-//! 2. Consulta en segundo plano de cuotas por modelo (`fetchAvailableModels`) usando la credencial nativa de
-//!    Windows (`CredReadW`) y `curl.exe -K -` por `stdin` (sin exponer tokens en línea de comandos).
-//! 3. Lectura de la rejilla de la terminal activa por si una TUI muestra métricas de contexto/coste en pantalla.
+//! 2. Lectura de la rejilla de la terminal activa por si una TUI muestra métricas de contexto/coste en pantalla.
 
 use super::*;
 use std::path::{Path, PathBuf};
@@ -267,11 +265,9 @@ pub(super) fn scan_local_usage_blocking(ai_status: AiAgentStatus) -> LocalUsageS
                     other => other.replace('_', " "),
                 });
             }
-            if let Some(label) = extract_json_str(&claude_cfg, "label") {
-                if let Some(val) = extract_json_str(&claude_cfg, "value") {
-                    claude_model = Some(format!("{label} ({val})"));
-                } else {
-                    claude_model = Some(label);
+            if let Some(m) = extract_json_str(&claude_cfg, "model") {
+                if !m.starts_with('<') {
+                    claude_model = Some(m);
                 }
             }
         }
@@ -472,11 +468,16 @@ fn scan_agy_transcript(
     for line in content.lines() {
         if let Some((_, after)) = line.split_once("Model Selection` from ") {
             if let Some((_, to_part)) = after.split_once(" to ") {
-                let model: String = to_part
-                    .chars()
-                    .take_while(|&c| c != '.' && c != '\\' && c != '"')
-                    .collect();
-                let trimmed = model.trim();
+                let candidate = if let Some((m, _)) = to_part.split_once(". No need") {
+                    m
+                } else {
+                    to_part
+                        .lines()
+                        .next()
+                        .unwrap_or(to_part)
+                        .trim_end_matches('.')
+                };
+                let trimmed = candidate.trim().trim_matches('"').trim_matches('\\');
                 if !trimmed.is_empty() {
                     scan.last_model = Some(trimmed.to_string());
                 }
@@ -772,5 +773,24 @@ mod tests {
             sb_rects.ai_badge,
             popup_rect
         ));
+    }
+
+    #[test]
+    fn test_scan_agy_transcript_extracts_decimal_model_names() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("axon-test-transcript-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let path = temp_dir.join("transcript.jsonl");
+        let content = "The user changed setting `Model Selection` from None to Gemini 3.8 Flash (Medium). No need to comment.\n\
+                       {\"created_at\": \"2026-10-18T15:54:26Z\", \"input_tokens\": 100, \"output_tokens\": 50}\n";
+        std::fs::write(&path, content).unwrap();
+        let mut oldest = None;
+        let scan = scan_agy_transcript(&path, 1_792_338_866, &mut oldest);
+        assert_eq!(
+            scan.last_model.as_deref(),
+            Some("Gemini 3.8 Flash (Medium)")
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&temp_dir);
     }
 }

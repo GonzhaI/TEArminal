@@ -703,8 +703,13 @@ fn test_osc_axon_ssh_signaling() {
     assert_eq!(sess.destination, "ubuntu@production-node-1");
     assert!(sess.is_active);
 
-    // Finalización de sesión SSH mediante OSC 1337 AxonSSH=end
+    // Sin token o con uno ajeno no se puede cerrar la sesión de otro panel
     term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
+    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=otro\x07");
+    assert!(term.ssh_session.is_some());
+
+    // Finalización de sesión SSH mediante OSC 1337 AxonSSH=end con el token del panel
+    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
     assert!(
         term.ssh_session.is_none(),
         "Debe limpiar la sesión SSH al desconectarse"
@@ -734,6 +739,10 @@ fn test_osc_7_remote_host_ssh() {
     let sess = term.ssh_session.as_ref().expect("sesión autenticada");
     assert_eq!(sess.destination, "bastion.corp.internal");
     assert_eq!(sess.remote_dir.as_deref(), Some("/home/admin/projects"));
+    assert_eq!(
+        term.current_dir.as_deref(),
+        Some(std::path::Path::new("/home/admin/projects"))
+    );
     assert!(sess.is_active);
 }
 
@@ -845,7 +854,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
     term.remote_listing = None;
     term.process_bytes(huge.as_bytes());
     assert_eq!(term.remote_listing, None);
-    term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
+    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
     assert!(!term.remote_integration && term.remote_listing.is_none());
 
     // Sin sesión SSH nadie puede inyectar listado ni rama
@@ -913,7 +922,7 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
     term.process_bytes(b"\x1b]1337;AxonFile=10;ok;0;9999;ab\x07");
     term.process_bytes(b"\x1b]1337;AxonFile=10;ok;5;2;ab\x07");
     assert!(term.remote_file_results.is_empty());
-    term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
+    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
     term.process_bytes(b"\x1b]1337;AxonFile=11;ok;0;1;6162\x07");
     assert!(term.remote_file_results.is_empty());
 }

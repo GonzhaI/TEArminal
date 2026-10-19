@@ -47,7 +47,7 @@ fn remote_path_string(path: &Path) -> String {
 }
 
 impl AxonApp {
-    fn spawn_ssh(&self, work: impl FnOnce() -> SshDone + Send + 'static) {
+    fn spawn_ssh(&self, work: impl FnOnce() -> SshDone + Send + 'static) -> bool {
         let (tx, proxy) = (self.ssh_tx.clone(), self.proxy.clone());
         let spawned = std::thread::Builder::new()
             .name("axon-ssh".into())
@@ -57,16 +57,22 @@ impl AxonApp {
                     let _ = p.send_event(AxonEvent::SshDone);
                 }
             });
-        if let Err(e) = spawned {
-            crate::logger::log(&format!("No se pudo lanzar el hilo SSH: {e}"));
+        match spawned {
+            Ok(_) => true,
+            Err(e) => {
+                crate::logger::log(&format!("No se pudo lanzar el hilo SSH: {e}"));
+                false
+            }
         }
     }
 
     /// Escanea en un hilo en segundo plano las transcripciones locales de IA sin bloquear el bucle de eventos
-    pub(super) fn spawn_ai_local_scan(&self, ai_status: AiAgentStatus) {
-        self.spawn_ssh(move || {
+    pub(super) fn spawn_ai_local_scan(&mut self, ai_status: AiAgentStatus) {
+        if !self.spawn_ssh(move || {
             SshDone::AiLocal(super::ai_usage::scan_local_usage_blocking(ai_status))
-        });
+        }) {
+            self.ai_usage.local_scan_in_flight = false;
+        }
     }
 
     /// Obtiene `git show HEAD:<path>` en un hilo en segundo plano para el visor de archivos local
@@ -114,12 +120,16 @@ impl AxonApp {
         self.spawn_ssh(move || {
             let cmd = ssh::write_file_cmd(&remote_path_string(&path));
             let result = ssh::run(&dest, &cmd, 5, Some(content.as_bytes()), 4096).and_then(|o| {
-                if o.ok {
+                if o.ok && !o.truncated {
                     Ok(())
                 } else {
                     Err(format!(
                         "Error al guardar archivo remoto vía SSH: {}",
-                        o.stderr
+                        if o.truncated {
+                            "la salida del comando remoto excedió el límite"
+                        } else {
+                            &o.stderr
+                        }
                     ))
                 }
             });

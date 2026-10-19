@@ -11,14 +11,23 @@ pub(super) fn get_clipboard_files() -> Option<Vec<String>> {
     use windows_sys::Win32::UI::Shell::DragQueryFileW;
     const CF_HDROP: u32 = 15;
 
+    struct ClipboardLock;
+    impl Drop for ClipboardLock {
+        fn drop(&mut self) {
+            unsafe {
+                CloseClipboard();
+            }
+        }
+    }
+
     unsafe {
         if OpenClipboard(0) == 0 {
             return None;
         }
+        let _lock = ClipboardLock;
 
         let handle = GetClipboardData(CF_HDROP);
         if handle == 0 {
-            CloseClipboard();
             return None;
         }
 
@@ -34,8 +43,6 @@ pub(super) fn get_clipboard_files() -> Option<Vec<String>> {
                 paths.push(path);
             }
         }
-
-        CloseClipboard();
 
         if paths.is_empty() {
             None
@@ -126,13 +133,12 @@ impl AxonApp {
             let active_pane_id = active_pane.map(|p| p.id);
             let is_ssh = ssh_session.as_ref().map(|s| s.is_active).unwrap_or(false);
 
-            // Agente lanzado desde este panel (OSC AxonAgent de init.ps1) o `claude` en el título (p. ej. por SSH)
+            // Solo Claude Code soporta pegado nativo de imágenes con Alt+V (\x1bv).
+            // Para otros agentes (gemini, agy, aider...) o la shell, se guarda el PNG y se pega su ruta.
             let is_claude = active_pane.is_some_and(|p| {
-                p.terminal.agent_running
-                    || p.terminal
-                        .window_title
-                        .as_ref()
-                        .is_some_and(|t| t.to_lowercase().contains("claude"))
+                p.terminal.window_title.as_deref().is_some_and(|t| {
+                    shell_context::detect_ai_agent(Some(t)) == AiAgentStatus::Claude
+                })
             });
 
             // Si Claude Code (local o remoto vía SSH) está activo, enviamos la secuencia
@@ -203,11 +209,13 @@ impl AxonApp {
             }
         }
 
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let file_path = clip_dir.join(format!("axon_clip_{}.png", timestamp));
+        let file_path = clip_dir.join(format!("axon_clip_{timestamp}_{seq}.png"));
 
         let width = img.width as u32;
         let height = img.height as u32;

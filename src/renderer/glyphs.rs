@@ -160,6 +160,10 @@ impl TerminalRenderer {
         }
 
         if !self.glyph_cache.contains_key(&(c, bold)) {
+            // Límite de glifos dinámicos (CJK, símbolos) para evitar crecimiento ilimitado de memoria
+            if self.glyph_cache.len() >= 4096 {
+                self.glyph_cache.clear();
+            }
             let glyph = self.rasterize_glyph(c, bold);
             self.glyph_cache.insert((c, bold), glyph);
         }

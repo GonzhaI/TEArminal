@@ -966,7 +966,7 @@ impl TerminalRenderer {
                 cur_x += char_w_i32;
                 i = next_i;
 
-                let mut prev_char = ch;
+                let mut escaped = false;
                 while i < len && cur_x < max_x_i32 {
                     let (c, ni) = decode_at(line, bytes, i);
                     let glyph = self.get_glyph(c, false);
@@ -975,10 +975,14 @@ impl TerminalRenderer {
                     blit_glyph(buffer, width, clip, glyph, gx, gy, str_fg);
                     cur_x += char_w_i32;
                     i = ni;
-                    if c == quote && prev_char != '\\' {
+                    if c == quote && !escaped {
                         break;
                     }
-                    prev_char = c;
+                    if c == '\\' {
+                        escaped = !escaped;
+                    } else {
+                        escaped = false;
+                    }
                 }
                 continue;
             }

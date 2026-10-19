@@ -528,6 +528,7 @@ fn test_file_explorer_remote_session_state() {
 fn ssh_output(stdout: &str) -> Result<crate::ssh::Output, String> {
     Ok(crate::ssh::Output {
         ok: true,
+        truncated: false,
         stdout: stdout.as_bytes().to_vec(),
         stderr: String::new(),
     })
@@ -637,6 +638,7 @@ fn test_explorer_remote_expand_is_async() {
         &req,
         Ok(crate::ssh::Output {
             ok: false,
+            truncated: false,
             stdout: Vec::new(),
             stderr: "permission denied".into(),
         }),
@@ -1608,4 +1610,36 @@ fn test_scroll_offset_for_thumb_y_helper() {
         crate::renderer::scroll_offset_for_thumb_y(track, thumb, 130.0, max_offset),
         Some(50)
     );
+}
+
+#[test]
+fn test_close_other_tabs_flushes_pending_autosave() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let temp_dir =
+        std::env::temp_dir().join(format!("axon-test-close-others-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let file_path = temp_dir.join("test.txt");
+    std::fs::write(&file_path, "initial").unwrap();
+
+    let tab_id = app.next_tab_id;
+    app.next_tab_id += 1;
+    let mut tab = TerminalTab::new_file_viewer(tab_id, file_path.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.is_read_only = false;
+    viewer.insert_text(" modified");
+    viewer.schedule_autosave();
+    assert!(viewer.is_dirty);
+    assert!(viewer.needs_autosave);
+    app.tabs.push(tab);
+
+    assert_eq!(app.tabs.len(), 2);
+    // Keep tab 0 (the terminal), closing tab 1 (the viewer with pending edits)
+    app.close_other_tabs(0);
+
+    assert_eq!(app.tabs.len(), 1);
+    let saved = std::fs::read_to_string(&file_path).unwrap();
+    assert_eq!(saved, " modifiedinitial");
+
+    let _ = std::fs::remove_file(&file_path);
+    let _ = std::fs::remove_dir(&temp_dir);
 }

@@ -489,12 +489,24 @@ impl<'a> Perform for Performer<'a> {
                         self.state.remote_listing = None;
                     }
                 } else if p1.starts_with(b"AxonSSH=end") {
-                    if let Some(sess) = &mut self.state.ssh_session {
-                        sess.is_active = false;
+                    let mut token = String::new();
+                    for param in &params[1..] {
+                        let text = String::from_utf8_lossy(param);
+                        for part in text.split(';') {
+                            if let Some(t) = part.strip_prefix("token=") {
+                                token = t.trim().to_string();
+                            }
+                        }
                     }
-                    self.state.ssh_session = None;
-                    self.state.remote_integration = false;
-                    self.state.remote_listing = None;
+                    if self.state.pane_token_matches(&token) {
+                        if let Some(sess) = &mut self.state.ssh_session {
+                            sess.is_active = false;
+                        }
+                        self.state.ssh_session = None;
+                        self.state.remote_integration = false;
+                        self.state.remote_listing = None;
+                        self.state.current_dir = None;
+                    }
                 } else if p1.starts_with(b"AxonAgent=start") {
                     self.state.agent_running = true;
                 } else if p1.starts_with(b"AxonAgent=end") {
@@ -573,7 +585,18 @@ impl<'a> Perform for Performer<'a> {
                             sess.remote_dir = remote_dir;
                         }
                     }
-                    let trimmed = decoded_path.strip_prefix('/').unwrap_or(&decoded_path);
+                    // En Windows `/C:/ruta` requiere quitar la barra inicial; en Unix `/home/x` la conserva
+                    let trimmed = if decoded_path.starts_with('/')
+                        && decoded_path
+                            .as_bytes()
+                            .get(1)
+                            .is_some_and(u8::is_ascii_alphabetic)
+                        && decoded_path.as_bytes().get(2) == Some(&b':')
+                    {
+                        &decoded_path[1..]
+                    } else {
+                        &decoded_path
+                    };
                     if let Some(dir) = accept_cwd(trimmed) {
                         self.state.current_dir = Some(dir);
                     }

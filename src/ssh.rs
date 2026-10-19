@@ -16,6 +16,7 @@ const MAX_STDERR_BYTES: u64 = 16 * 1024;
 
 pub struct Output {
     pub ok: bool,
+    pub truncated: bool,
     pub stdout: Vec<u8>,
     pub stderr: String,
 }
@@ -137,6 +138,7 @@ pub(crate) fn run_command(
         .unwrap_or_default();
     Ok(Output {
         ok: status.success() || truncated,
+        truncated,
         stdout,
         stderr,
     })
@@ -256,6 +258,7 @@ mod tests {
         ]);
         let out = run_command(cmd, None, 1000).unwrap();
         assert!(out.ok);
+        assert!(out.truncated);
         assert_eq!(out.stdout.len(), 1001);
 
         let mut cmd = Command::new("powershell.exe");
@@ -265,6 +268,7 @@ mod tests {
             "[Console]::Out.Write([Console]::In.ReadToEnd())",
         ]);
         let out = run_command(cmd, Some(b"hola ssh"), 1000).unwrap();
+        assert!(!out.truncated);
         assert_eq!(out.stdout, b"hola ssh");
     }
 }

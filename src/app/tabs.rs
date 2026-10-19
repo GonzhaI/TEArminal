@@ -295,6 +295,15 @@ impl AxonApp {
         let Some(id) = self.tabs.get(keep).map(|t| t.id) else {
             return;
         };
+        for tab in &mut self.tabs {
+            if tab.id != id {
+                if let Some(viewer) = tab.file_viewer.as_mut() {
+                    if viewer.needs_autosave {
+                        viewer.autosave_local();
+                    }
+                }
+            }
+        }
         self.tabs.retain(|t| t.id == id);
         self.prune_pending_remote();
         self.active_tab_index = 0;
