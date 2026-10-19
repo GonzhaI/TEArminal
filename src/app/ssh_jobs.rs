@@ -233,7 +233,19 @@ impl AxonApp {
                             ),
                         }
                     }
-                    Err(e) => crate::logger::log(&format!("-> Error al guardar: {e}")),
+                    Err(e) => {
+                        crate::logger::log(&format!("-> Error al guardar: {e}"));
+                        if let Some(v) = self
+                            .tabs
+                            .iter_mut()
+                            .filter_map(|t| t.file_viewer.as_mut())
+                            .find(|v| {
+                                v.path == path && v.remote_destination.as_deref() == Some(&dest)
+                            })
+                        {
+                            v.save_error = Some(e);
+                        }
+                    }
                 },
                 SshDone::Upload {
                     pane_id,

@@ -71,6 +71,7 @@ impl AxonApp {
         let new_size = (self.config.appearance.font_size + delta).clamp(8.0, 32.0);
         if (new_size - self.config.appearance.font_size).abs() > 0.01 {
             self.config.appearance.font_size = new_size;
+            let _ = self.config.save();
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();
                 renderer.update_scale(&self.config, scale_factor);

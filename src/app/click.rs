@@ -128,39 +128,15 @@ impl AxonApp {
             }
         }
 
-        // Redimensionamiento de ventana al arrastrar bordes (solo si no está maximizada ni en pantalla completa)
+        // Redimensionamiento de ventana al arrastrar bordes (solo si no está maximizada ni en pantalla completa).
+        // Toda la barra superior (título/pestañas) se reserva para mover la ventana (drag_window) y controles,
+        // evitando falsos positivos de redimensionamiento hacia el norte que agrandan la ventana sin parar.
         let can_resize = self
             .window
             .as_ref()
             .is_some_and(|w| !w.is_maximized() && w.fullscreen().is_none());
         if can_resize && button == MouseButton::Left && state == ElementState::Pressed {
-            let border_margin = 6;
-            let at_left = mx < border_margin;
-            let at_right = mx >= win_w.saturating_sub(border_margin);
-            let at_top = my < border_margin;
-            let at_bottom = my >= win_h.saturating_sub(border_margin);
-
-            let resize_direction = if at_top && at_left {
-                Some(winit::window::ResizeDirection::NorthWest)
-            } else if at_top && at_right {
-                Some(winit::window::ResizeDirection::NorthEast)
-            } else if at_bottom && at_left {
-                Some(winit::window::ResizeDirection::SouthWest)
-            } else if at_bottom && at_right {
-                Some(winit::window::ResizeDirection::SouthEast)
-            } else if at_left {
-                Some(winit::window::ResizeDirection::West)
-            } else if at_right {
-                Some(winit::window::ResizeDirection::East)
-            } else if at_top {
-                Some(winit::window::ResizeDirection::North)
-            } else if at_bottom {
-                Some(winit::window::ResizeDirection::South)
-            } else {
-                None
-            };
-
-            if let Some(dir) = resize_direction {
+            if let Some(dir) = self.compute_border_resize_direction(mx, my, win_w, win_h) {
                 if let Some(w) = &self.window {
                     let _ = w.drag_resize_window(dir);
                     return;
@@ -1286,6 +1262,42 @@ impl AxonApp {
                     }
                 }
             }
+        }
+    }
+
+    /// Determina la dirección de redimensionamiento de ventana al interactuar con los bordes.
+    /// La barra superior completa (pestañas/título) queda reservada para arrastrar la ventana
+    /// y controles nativos, eliminando cualquier redimensionamiento hacia el norte que pudiera
+    /// agrandar la ventana sin control al interactuar o mover de monitor.
+    pub(crate) fn compute_border_resize_direction(
+        &self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> Option<winit::window::ResizeDirection> {
+        let top_bar_h = if self.is_horizontal_tabs() {
+            TopTabBarRects::HEIGHT
+        } else {
+            TopTitleBarRects::HEIGHT
+        };
+        let border_margin = 6;
+        let at_left = mx < border_margin && my >= top_bar_h;
+        let at_right = mx >= win_w.saturating_sub(border_margin) && my >= top_bar_h;
+        let at_bottom = my >= win_h.saturating_sub(border_margin);
+
+        if at_bottom && at_left {
+            Some(winit::window::ResizeDirection::SouthWest)
+        } else if at_bottom && at_right {
+            Some(winit::window::ResizeDirection::SouthEast)
+        } else if at_left {
+            Some(winit::window::ResizeDirection::West)
+        } else if at_right {
+            Some(winit::window::ResizeDirection::East)
+        } else if at_bottom {
+            Some(winit::window::ResizeDirection::South)
+        } else {
+            None
         }
     }
 }

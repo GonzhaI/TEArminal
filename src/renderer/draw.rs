@@ -26,47 +26,6 @@ pub(super) fn fill_rect(
     }
 }
 
-/// Mezcla un rectángulo con color y alpha sobre el framebuffer existente
-#[allow(dead_code)]
-pub(super) fn blend_rect(
-    buffer: &mut [u32],
-    buf_w: usize,
-    clip: Clip,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    color: Color,
-) {
-    if color.a == 0 {
-        return;
-    }
-    if color.a == 255 {
-        fill_rect(buffer, buf_w, clip, x, y, w, h, color.to_u32_xrgb());
-        return;
-    }
-    let (x0, x1) = (x.max(clip.0), (x + w).min(clip.2));
-    let (y0, y1) = (y.max(clip.1), (y + h).min(clip.3));
-    if x0 >= x1 {
-        return;
-    }
-    let a = color.a as u32;
-    let inv_a = 255 - a;
-    let (cr, cg, cb) = (color.r as u32 * a, color.g as u32 * a, color.b as u32 * a);
-
-    for py in y0..y1 {
-        let row_start = py * buf_w + x0;
-        let row_end = py * buf_w + x1;
-        for px in &mut buffer[row_start..row_end] {
-            let orig = *px;
-            let r = (cr + ((orig >> 16) & 0xFF) * inv_a) / 255;
-            let g = (cg + ((orig >> 8) & 0xFF) * inv_a) / 255;
-            let b = (cb + (orig & 0xFF) * inv_a) / 255;
-            *px = (r << 16) | (g << 8) | b;
-        }
-    }
-}
-
 /// Mezcla un glifo (mapa de cobertura 8-bit) sobre el framebuffer recortado. Único punto de
 /// composición de texto: terminal, UI Inter e iconos Lucide pasan por aquí.
 pub(super) fn blit_glyph(

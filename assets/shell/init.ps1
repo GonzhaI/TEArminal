@@ -218,22 +218,28 @@ __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git r
         $rawArgs = @('-t') + $rawArgs + @($remoteCmd)
     }
     $esc = [char]27; $bel = [char]7
-    [Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + ';token=' + $env:AXON_PANE_TOKEN + $bel)
-    [Console]::Write($esc + ']0;ssh: ' + $dest + $bel)
+    if ($dest -ne 'remote') {
+        [Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + ';token=' + $env:AXON_PANE_TOKEN + $bel)
+        [Console]::Write($esc + ']0;ssh: ' + $dest + $bel)
+    }
     $prevTerm = $env:TERM; $prevColor = $env:COLORTERM
     $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'
     $sshCmd = Find-AxonApp 'ssh'
     if ($sshCmd) {
         try { & $sshCmd @rawArgs }
         finally {
-            [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
-            [Console]::Write($esc + ']0;powershell' + $bel)
+            if ($dest -ne 'remote') {
+                [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
+                [Console]::Write($esc + ']0;powershell' + $bel)
+            }
             if ($prevTerm) { $env:TERM = $prevTerm } else { Remove-Item env:TERM -ErrorAction SilentlyContinue }
             if ($prevColor) { $env:COLORTERM = $prevColor } else { Remove-Item env:COLORTERM -ErrorAction SilentlyContinue }
         }
     } else {
         Write-Error "El comando 'ssh' no se encuentra en PATH."
-        [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
+        if ($dest -ne 'remote') {
+            [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
+        }
     }
 }
 Write-Host ([char]27 + '[2J' + [char]27 + '[H') -NoNewline

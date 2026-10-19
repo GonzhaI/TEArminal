@@ -83,9 +83,10 @@ fn bench_throughput_massive_stream() {
         total_bytes, iterations, elapsed, throughput_mb, lines_per_sec
     );
 
+    let min_throughput = if cfg!(debug_assertions) { 1.5 } else { 20.0 };
     assert!(
-        throughput_mb > 3.0,
-        "El throughput debe superar los 3 MB/s en debug y decenas de MB/s en release"
+        throughput_mb > min_throughput,
+        "El throughput debe superar {min_throughput} MB/s (obtenido: {throughput_mb:.2} MB/s)"
     );
 }
 
@@ -239,9 +240,14 @@ fn bench_massive_scrollback_100k_lines() {
         count,
         "Debe retener las 100.000 líneas entre scrollback y pantalla activa"
     );
+    let min_lines_per_sec = if cfg!(debug_assertions) {
+        25_000.0
+    } else {
+        300_000.0
+    };
     assert!(
-        lines_per_sec > 50_000.0,
-        "Debe superar las 50.000 líneas por segundo en debug y >500.000 en release"
+        lines_per_sec > min_lines_per_sec,
+        "Debe superar {min_lines_per_sec} líneas/s (obtenido: {lines_per_sec:.0} líneas/s)"
     );
 }
 

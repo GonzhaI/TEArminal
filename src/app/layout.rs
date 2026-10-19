@@ -319,6 +319,7 @@ impl TerminalTab {
                     }
                 }
                 Err(e) => {
+                    is_binary = true;
                     lines.push(format!("Error al leer el archivo: {}", e));
                 }
             }
@@ -439,6 +440,7 @@ impl TerminalTab {
                 }
             }
             Err(err) if err.contains("Permission denied") => {
+                is_binary = true;
                 lines.push(
                     "El servidor pide contraseña: para abrir archivos remotos configura"
                         .to_string(),
@@ -447,7 +449,10 @@ impl TerminalTab {
                     "una clave SSH (ssh-keygen y ssh-copy-id) y vuelve a abrirlo.".to_string(),
                 );
             }
-            Err(err) => lines.push(format!("Error remoto: {}", err)),
+            Err(err) => {
+                is_binary = true;
+                lines.push(format!("Error remoto: {}", err));
+            }
         }
 
         let original_lines = lines.clone();

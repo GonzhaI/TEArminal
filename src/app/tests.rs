@@ -1709,3 +1709,65 @@ fn test_sync_fs_watcher_behavior() {
 
     let _ = std::fs::remove_dir_all(&temp_dir);
 }
+
+#[test]
+fn test_border_resize_direction_excludes_top_bar() {
+    let mut config = AxonConfig::default();
+    config.appearance.tab_layout = "horizontal".to_string();
+    let app = AxonApp::new(config.clone(), None);
+
+    let win_w = 1000;
+    let win_h = 700;
+
+    // 1. La barra superior (y < 38) NUNCA debe redimensionar la ventana hacia el norte ni en diagonales,
+    // garantizando que mover la ventana o cambiar de monitor no agrande su tamaño sin parar.
+    for y in 0..38 {
+        assert_eq!(
+            app.compute_border_resize_direction(0, y, win_w, win_h),
+            None,
+            "Borde superior izquierdo en y={y} no debe redimensionar"
+        );
+        assert_eq!(
+            app.compute_border_resize_direction(win_w / 2, y, win_w, win_h),
+            None,
+            "Borde superior centro en y={y} no debe redimensionar"
+        );
+        assert_eq!(
+            app.compute_border_resize_direction(win_w - 1, y, win_w, win_h),
+            None,
+            "Borde superior derecho en y={y} no debe redimensionar"
+        );
+    }
+
+    // 2. Bordes laterales debajo de la barra superior sí deben redimensionar
+    assert_eq!(
+        app.compute_border_resize_direction(0, 100, win_w, win_h),
+        Some(winit::window::ResizeDirection::West)
+    );
+    assert_eq!(
+        app.compute_border_resize_direction(win_w - 1, 100, win_w, win_h),
+        Some(winit::window::ResizeDirection::East)
+    );
+
+    // 3. Borde inferior y esquinas inferiores
+    assert_eq!(
+        app.compute_border_resize_direction(win_w / 2, win_h - 1, win_w, win_h),
+        Some(winit::window::ResizeDirection::South)
+    );
+    assert_eq!(
+        app.compute_border_resize_direction(0, win_h - 1, win_w, win_h),
+        Some(winit::window::ResizeDirection::SouthWest)
+    );
+    assert_eq!(
+        app.compute_border_resize_direction(win_w - 1, win_h - 1, win_w, win_h),
+        Some(winit::window::ResizeDirection::SouthEast)
+    );
+
+    // 4. Modo vertical también excluye la barra de título superior
+    config.appearance.tab_layout = "vertical".to_string();
+    let app_vert = AxonApp::new(config, None);
+    assert_eq!(
+        app_vert.compute_border_resize_direction(win_w / 2, 2, win_w, win_h),
+        None
+    );
+}

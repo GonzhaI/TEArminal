@@ -29,12 +29,6 @@ impl Cell {
         self.flags & Self::FLAG_DIM != 0
     }
 
-    #[allow(dead_code)]
-    #[inline(always)]
-    pub fn italic(&self) -> bool {
-        self.flags & Self::FLAG_ITALIC != 0
-    }
-
     #[inline(always)]
     pub fn underline(&self) -> bool {
         self.flags & Self::FLAG_UNDERLINE != 0
@@ -48,47 +42,6 @@ impl Cell {
     #[inline(always)]
     pub fn inverse(&self) -> bool {
         self.flags & Self::FLAG_INVERSE != 0
-    }
-
-    #[allow(dead_code, clippy::too_many_arguments)]
-    pub fn new(
-        c: char,
-        width: u8,
-        fg: Color,
-        bg: Color,
-        bold: bool,
-        dim: bool,
-        italic: bool,
-        underline: bool,
-        strikethrough: bool,
-        inverse: bool,
-    ) -> Self {
-        let mut flags = 0u8;
-        if bold {
-            flags |= Self::FLAG_BOLD;
-        }
-        if dim {
-            flags |= Self::FLAG_DIM;
-        }
-        if italic {
-            flags |= Self::FLAG_ITALIC;
-        }
-        if underline {
-            flags |= Self::FLAG_UNDERLINE;
-        }
-        if strikethrough {
-            flags |= Self::FLAG_STRIKETHROUGH;
-        }
-        if inverse {
-            flags |= Self::FLAG_INVERSE;
-        }
-        Self {
-            c,
-            width,
-            flags,
-            fg,
-            bg,
-        }
     }
 
     pub fn default_with_theme(theme: &Theme) -> Self {

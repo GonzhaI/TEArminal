@@ -1207,31 +1207,27 @@ impl AxonApp {
             needs_redraw = true;
         }
 
-        // Detección de bordes para cursor de redimensionamiento (solo en ventana flotante, no maximizada ni pantalla completa)
+        // Detección de bordes para cursor de redimensionamiento (solo en ventana flotante, no maximizada ni pantalla completa).
+        // Toda la barra superior se reserva para arrastrar la ventana y controles de pestañas.
         let can_resize = self
             .window
             .as_ref()
             .is_some_and(|w| !w.is_maximized() && w.fullscreen().is_none());
         let border_resize_cursor = if can_resize {
-            let border_margin = 6;
-            let at_left = mx < border_margin;
-            let at_right = mx >= win_w.saturating_sub(border_margin);
-            let at_top = my < border_margin;
-            let at_bottom = my >= win_h.saturating_sub(border_margin);
-
-            if at_top && at_left {
-                Some(winit::window::CursorIcon::NwseResize)
-            } else if (at_top && at_right) || (at_bottom && at_left) {
-                Some(winit::window::CursorIcon::NeswResize)
-            } else if at_bottom && at_right {
-                Some(winit::window::CursorIcon::NwseResize)
-            } else if at_left || at_right {
-                Some(winit::window::CursorIcon::EwResize)
-            } else if at_top || at_bottom {
-                Some(winit::window::CursorIcon::NsResize)
-            } else {
-                None
-            }
+            self.compute_border_resize_direction(mx, my, win_w, win_h)
+                .map(|dir| match dir {
+                    winit::window::ResizeDirection::SouthWest => {
+                        winit::window::CursorIcon::NeswResize
+                    }
+                    winit::window::ResizeDirection::SouthEast => {
+                        winit::window::CursorIcon::NwseResize
+                    }
+                    winit::window::ResizeDirection::West | winit::window::ResizeDirection::East => {
+                        winit::window::CursorIcon::EwResize
+                    }
+                    winit::window::ResizeDirection::South => winit::window::CursorIcon::NsResize,
+                    _ => winit::window::CursorIcon::Default,
+                })
         } else {
             None
         };
