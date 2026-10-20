@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const FILE_EXPLORER_WIDTH: usize = 240;
-pub const FILE_EXPLORER_MIN_WIDTH: usize = 160;
+pub const FILE_EXPLORER_WIDTH: usize = 256;
+pub const FILE_EXPLORER_MIN_WIDTH: usize = 168;
 
 #[inline]
 fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
@@ -22,7 +22,7 @@ pub enum GitFileStatus {
 }
 
 /// Raíz del repositorio git que contiene `dir` (busca `.git` hacia arriba)
-fn git_repo_root(dir: &Path) -> Option<PathBuf> {
+pub(crate) fn git_repo_root(dir: &Path) -> Option<PathBuf> {
     dir.ancestors()
         .find(|p| p.join(".git").exists())
         .map(Path::to_path_buf)
@@ -158,6 +158,8 @@ pub struct FileExplorer {
     pub history: Vec<PathBuf>,
     pub history_index: usize,
     pub git_statuses: HashMap<PathBuf, GitFileStatus>,
+    /// Rectángulo `(x, y, ancho, alto)` cuando vive dentro del panel lateral; con `None` se acopla al borde derecho
+    pub dock: Option<(usize, usize, usize, usize)>,
     /// Raíz del repositorio del directorio actual (None si no hay repo)
     pub git_root: Option<PathBuf>,
     /// Vista «Cambios»: lista plana solo con los archivos modificados según git
@@ -190,11 +192,11 @@ pub struct RemoteLsReq {
 }
 
 impl FileExplorer {
-    pub const HEADER_HEIGHT: usize = 36;
-    pub const SUBHEADER_HEIGHT: usize = 28;
-    pub const ITEM_HEIGHT: usize = 24;
+    pub const HEADER_HEIGHT: usize = 38;
+    pub const SUBHEADER_HEIGHT: usize = 30;
+    pub const ITEM_HEIGHT: usize = 26;
     /// Aire entre el sub-encabezado y la primera fila de la lista
-    pub const LIST_TOP_PAD: usize = 6;
+    pub const LIST_TOP_PAD: usize = 8;
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[inline]
@@ -203,7 +205,7 @@ impl FileExplorer {
         panel_y: usize,
         panel_w: usize,
     ) -> (usize, usize, usize, usize) {
-        (panel_x + panel_w.saturating_sub(34), panel_y + 8, 22, 20)
+        (panel_x + panel_w.saturating_sub(36), panel_y + 7, 24, 24)
     }
 
     /// Botón «Fijar» (Pin) del encabezado (compartido por dibujo y clics): x, y, ancho, alto
@@ -213,7 +215,7 @@ impl FileExplorer {
         panel_y: usize,
         panel_w: usize,
     ) -> (usize, usize, usize, usize) {
-        (panel_x + panel_w.saturating_sub(58), panel_y + 8, 22, 20)
+        (panel_x + panel_w.saturating_sub(66), panel_y + 7, 24, 24)
     }
 
     /// Calcula la geometría del panel acoplado del explorador de archivos.
@@ -225,6 +227,9 @@ impl FileExplorer {
         top_offset: usize,
         status_bar_h: usize,
     ) -> (usize, usize, usize, usize) {
+        if let Some(dock) = self.dock {
+            return dock;
+        }
         let panel_x = win_w.saturating_sub(self.width);
         let panel_y = top_offset;
         let panel_h = win_h.saturating_sub(top_offset + status_bar_h);
@@ -257,6 +262,7 @@ impl FileExplorer {
         let (panel_x, panel_y, _, panel_h) =
             self.panel_geometry(win_w, win_h, top_offset, status_bar_h);
         self.visible
+            && self.dock.is_none()
             && mx + 6 >= panel_x
             && mx < panel_x + 3
             && my >= panel_y
@@ -294,6 +300,7 @@ impl FileExplorer {
             history: vec![root_dir],
             history_index: 0,
             git_statuses: HashMap::new(),
+            dock: None,
             git_root: None,
             changes_only: false,
             is_pinned: false,
@@ -1303,9 +1310,9 @@ mod tests {
         assert!(!explorer.is_pinned);
 
         let (px, py, pw, ph) = FileExplorer::pin_btn_rect(100, 50, 260);
-        assert_eq!(pw, 22);
-        assert_eq!(ph, 20);
-        assert_eq!(py, 58);
-        assert_eq!(px, 100 + 260 - 58);
+        assert_eq!(pw, 24);
+        assert_eq!(ph, 24);
+        assert_eq!(py, 57);
+        assert_eq!(px, 100 + 260 - 66);
     }
 }

@@ -44,7 +44,7 @@ impl TerminalRenderer {
             buffer, width, height, panel_x, panel_y, 1, panel_h, edge_color,
         );
 
-        // 2. Encabezado del explorador (36 px)
+        // 2. Encabezado del explorador (38 px): micro-etiqueta y acciones de 24 px
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
         let header_center_y = panel_y + (header_h / 2);
         let header_base = header_center_y + 4;
@@ -58,9 +58,9 @@ impl TerminalRenderer {
             } else {
                 crate::ui::LucideIcon::FolderTree
             },
-            panel_x + 15,
+            panel_x + 16,
             header_center_y,
-            12.0,
+            13.0,
             if explorer.changes_only {
                 theme.accent_color()
             } else {
@@ -77,13 +77,13 @@ impl TerminalRenderer {
             } else {
                 "ARCHIVOS"
             },
-            panel_x + 28,
+            panel_x + 30,
             header_base,
-            panel_x + panel_w.saturating_sub(64),
+            panel_x + panel_w.saturating_sub(72),
             theme.foreground,
-            9.5,
+            tokens::MICRO,
             true,
-            1.1,
+            tokens::TRACKING,
         );
 
         // Botón que alterna árbol de archivos / solo cambios (no hay git en sesiones remotas)
@@ -99,7 +99,7 @@ impl TerminalRenderer {
                     by,
                     bw,
                     bh,
-                    3,
+                    4,
                     theme.accent_soft(32),
                 );
             }
@@ -110,7 +110,7 @@ impl TerminalRenderer {
                 crate::ui::LucideIcon::GitBranch,
                 bx + bw / 2,
                 by + bh / 2,
-                11.5,
+                12.0,
                 if explorer.changes_only {
                     theme.accent_color()
                 } else {
@@ -131,7 +131,7 @@ impl TerminalRenderer {
                 py,
                 pw,
                 ph,
-                3,
+                4,
                 if explorer.is_pinned {
                     theme.accent_soft(32)
                 } else {
@@ -146,7 +146,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::Lock,
             px + pw / 2,
             py + ph / 2,
-            11.0,
+            12.0,
             if explorer.is_pinned {
                 theme.accent_color()
             } else if explorer.hovered_pin_btn {
@@ -166,11 +166,12 @@ impl TerminalRenderer {
             theme.chrome_line(),
         );
 
-        // 3. Sub-encabezado: navegación plana y ruta actual (28 px)
+        // 3. Sub-encabezado: navegación plana y ruta actual (30 px)
         let sub_y = panel_y + header_h;
         let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
         let sub_center_y = sub_y + (sub_h / 2);
-        let up_base = sub_center_y + 4;
+        let nav_y = sub_y + (sub_h.saturating_sub(24)) / 2;
+        let nav_stride = 26;
 
         // Botón [<] Atrás
         let back_x = panel_x + 8;
@@ -181,10 +182,10 @@ impl TerminalRenderer {
                 width,
                 height,
                 back_x,
-                sub_y + 4,
-                22,
-                20,
-                3,
+                nav_y,
+                24,
+                24,
+                4,
                 theme.surface_hover(),
             );
         }
@@ -202,14 +203,14 @@ impl TerminalRenderer {
             width,
             height,
             crate::ui::LucideIcon::ChevronLeft,
-            back_x + 11,
-            sub_y + 14,
-            11.0,
+            back_x + 12,
+            sub_center_y,
+            12.0,
             back_fg,
         );
 
         // Botón [>] Adelante
-        let fwd_x = back_x + 24;
+        let fwd_x = back_x + nav_stride;
         let can_fwd = explorer.can_go_forward();
         if explorer.hovered_forward_btn && can_fwd {
             crate::ui::draw_rounded_rect(
@@ -217,10 +218,10 @@ impl TerminalRenderer {
                 width,
                 height,
                 fwd_x,
-                sub_y + 4,
-                22,
-                20,
-                3,
+                nav_y,
+                24,
+                24,
+                4,
                 theme.surface_hover(),
             );
         }
@@ -238,24 +239,24 @@ impl TerminalRenderer {
             width,
             height,
             crate::ui::LucideIcon::ChevronRight,
-            fwd_x + 11,
-            sub_y + 14,
-            11.0,
+            fwd_x + 12,
+            sub_center_y,
+            12.0,
             fwd_fg,
         );
 
         // Botón [^] Subir directorio
-        let up_x = fwd_x + 24;
+        let up_x = fwd_x + nav_stride;
         if explorer.hovered_up_btn {
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,
                 height,
                 up_x,
-                sub_y + 4,
-                22,
-                20,
-                3,
+                nav_y,
+                24,
+                24,
+                4,
                 theme.surface_hover(),
             );
         }
@@ -269,13 +270,13 @@ impl TerminalRenderer {
             width,
             height,
             crate::ui::LucideIcon::ArrowUp,
-            up_x + 11,
-            sub_y + 14,
-            11.0,
+            up_x + 12,
+            sub_center_y,
+            12.0,
             up_fg,
         );
 
-        // Nombre de la carpeta actual con Inter
+        // Nombre de la carpeta actual: dato de máquina en mono
         let dir_label = if explorer.changes_only {
             format!("{} con cambios", explorer.items.len())
         } else if let Some(ref sess) = explorer.remote_session {
@@ -297,16 +298,16 @@ impl TerminalRenderer {
                 .unwrap_or_else(|| explorer.root_dir.to_string_lossy().to_string());
             format!("{}/", dir_name.trim_end_matches('/'))
         };
-        self.draw_ui_text(
+        self.draw_mono_text(
             buffer,
             width,
             height,
             &dir_label,
-            up_x + 28,
-            up_base,
-            panel_x + panel_w - 8,
+            up_x + 32,
+            sub_center_y + 4,
+            panel_x + panel_w - 10,
             theme.text_muted(),
-            10.5,
+            tokens::DETAIL,
             false,
         );
         Self::draw_rect(
@@ -345,7 +346,7 @@ impl TerminalRenderer {
                 empty_base,
                 panel_x + panel_w - 16,
                 color,
-                10.5,
+                tokens::DETAIL,
                 false,
             );
             return;
@@ -490,7 +491,7 @@ impl TerminalRenderer {
                     item_base,
                     max_name_x,
                     dir_color,
-                    11.5,
+                    tokens::BODY,
                     is_hovered || is_selected,
                 );
             } else {
@@ -542,7 +543,7 @@ impl TerminalRenderer {
                     item_base,
                     max_name_x,
                     text_color,
-                    11.5,
+                    tokens::BODY,
                     is_selected,
                 );
             }
@@ -557,7 +558,7 @@ impl TerminalRenderer {
                     crate::explorer::GitFileStatus::Renamed => ("R", theme.ansi[6]),
                 };
                 let badge_x = panel_x + row_w.saturating_sub(14);
-                self.draw_ui_text(
+                self.draw_mono_text(
                     buffer,
                     width,
                     height,
@@ -566,7 +567,7 @@ impl TerminalRenderer {
                     item_base,
                     panel_x + panel_w,
                     badge_color,
-                    10.5,
+                    tokens::MICRO,
                     true,
                 );
             }

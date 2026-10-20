@@ -965,6 +965,7 @@ mod tests {
             30,
             AiAgentStatus::Agy,
             state.snapshot.model_for(AiAgentStatus::Agy),
+            &[],
             true,
             false,
             &theme,

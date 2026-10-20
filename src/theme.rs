@@ -83,70 +83,6 @@ pub struct Theme {
     pub ui_accent: Color,
 }
 
-/// Temas propios de Axon, derivados del logotipo (grafito azulado, azul de marca, verde y cian).
-/// No viven en `themes.txt`: ese archivo es la copia intacta de iterm2-color-schemes.
-const AXON_NIGHT: Theme = Theme {
-    background: Color::from_rgb(0x14, 0x18, 0x21),
-    foreground: Color::from_rgb(0xd6, 0xde, 0xeb),
-    cursor: Color::from_rgb(0x7c, 0xc4, 0xff),
-    selection: Color::from_rgb(0x24, 0x34, 0x4d),
-    selection_fg: Color::from_rgb(0xf2, 0xf6, 0xfc),
-    ui_accent: Color::from_rgb(0x5b, 0x9b, 0xff),
-    ansi: [
-        Color::from_rgb(0x1b, 0x22, 0x30),
-        Color::from_rgb(0xf0, 0x71, 0x78),
-        Color::from_rgb(0x5b, 0xd0, 0x8a),
-        Color::from_rgb(0xf2, 0xc6, 0x6d),
-        Color::from_rgb(0x6f, 0xa8, 0xff),
-        Color::from_rgb(0xc7, 0x92, 0xea),
-        Color::from_rgb(0x38, 0xbd, 0xf8),
-        Color::from_rgb(0xc3, 0xcb, 0xd8),
-        Color::from_rgb(0x5a, 0x65, 0x77),
-        Color::from_rgb(0xff, 0x8a, 0x93),
-        Color::from_rgb(0x7e, 0xe2, 0xa8),
-        Color::from_rgb(0xff, 0xd9, 0x8a),
-        Color::from_rgb(0x8d, 0xbb, 0xff),
-        Color::from_rgb(0xd7, 0xa8, 0xff),
-        Color::from_rgb(0x67, 0xd6, 0xff),
-        Color::from_rgb(0xf2, 0xf6, 0xfc),
-    ],
-};
-
-const AXON_DAY: Theme = Theme {
-    background: Color::from_rgb(0xf6, 0xf7, 0xf9),
-    foreground: Color::from_rgb(0x1a, 0x21, 0x30),
-    cursor: Color::from_rgb(0x25, 0x63, 0xeb),
-    selection: Color::from_rgb(0xd5, 0xe2, 0xfa),
-    selection_fg: Color::from_rgb(0x0f, 0x17, 0x2a),
-    ui_accent: Color::from_rgb(0x25, 0x63, 0xeb),
-    ansi: [
-        Color::from_rgb(0x3b, 0x43, 0x53),
-        Color::from_rgb(0xc0, 0x36, 0x2c),
-        Color::from_rgb(0x1f, 0x7a, 0x4d),
-        Color::from_rgb(0x8a, 0x5a, 0x00),
-        Color::from_rgb(0x1d, 0x4e, 0xd8),
-        Color::from_rgb(0x7a, 0x3d, 0xb8),
-        Color::from_rgb(0x0e, 0x74, 0x90),
-        Color::from_rgb(0x5a, 0x64, 0x76),
-        Color::from_rgb(0x8a, 0x93, 0xa3),
-        Color::from_rgb(0xa3, 0x2b, 0x22),
-        Color::from_rgb(0x18, 0x6b, 0x43),
-        Color::from_rgb(0x7a, 0x50, 0x00),
-        Color::from_rgb(0x1e, 0x40, 0xaf),
-        Color::from_rgb(0x6b, 0x2f, 0xa0),
-        Color::from_rgb(0x0b, 0x64, 0x78),
-        Color::from_rgb(0x1a, 0x21, 0x30),
-    ],
-};
-
-fn builtin_theme(name: &str) -> Option<(&'static str, Theme)> {
-    match name_key(name).as_str() {
-        "axonnight" | "axon" | "night" => Some(("Axon Night", AXON_NIGHT.clone())),
-        "axonday" | "day" => Some(("Axon Day", AXON_DAY.clone())),
-        _ => None,
-    }
-}
-
 impl Default for Theme {
     fn default() -> Self {
         Self::from_name(Self::DEFAULT_DARK)
@@ -191,7 +127,7 @@ pub fn contrast_ratio(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Acento de interfaz para temas ajenos: el primer color del tema que sea legible sobre su fondo.
+/// Acento de interfaz: el primer color del tema que sea legible sobre su fondo.
 /// La UI nunca inventa un color fuera de la paleta, pero tampoco hereda un azul ilegible.
 fn ui_accent_for(background: Color, foreground: Color, ansi: &[Color; 16]) -> Color {
     [ansi[4], ansi[6], ansi[2], ansi[5], foreground]
@@ -226,14 +162,12 @@ fn parse_line(line: &str) -> Option<(&str, Theme)> {
 }
 
 impl Theme {
-    pub const DEFAULT_DARK: &'static str = "Axon Night";
-    pub const DEFAULT_LIGHT: &'static str = "Axon Day";
+    pub const DEFAULT_DARK: &'static str = "Catppuccin Frappe";
+    pub const DEFAULT_LIGHT: &'static str = "Catppuccin Latte";
 
-    /// Nombres de todos los temas incorporados: los dos propios y los 817 de iTerm2.
+    /// Nombres de todos los temas incorporados (los de iTerm2).
     pub fn names() -> impl Iterator<Item = &'static str> {
-        ["Axon Night", "Axon Day"]
-            .into_iter()
-            .chain(THEMES.lines().map(first_field))
+        THEMES.lines().map(first_field)
     }
 
     /// Temas cuyo nombre contiene `filter` (sin distinguir mayúsculas ni separadores).
@@ -248,9 +182,6 @@ impl Theme {
     }
 
     fn find(name: &str) -> Option<(&'static str, Theme)> {
-        if let Some(builtin) = builtin_theme(name) {
-            return Some(builtin);
-        }
         // Camino rápido: el nombre exacto de la lista (la interfaz lo usa en cada fila dibujada)
         if let Some(line) = THEMES.lines().find(|l| first_field(l) == name) {
             return parse_line(line);
@@ -260,7 +191,8 @@ impl Theme {
             // Valores de versiones anteriores de `axon.toml`
             "frappe" => name_key("Catppuccin Frappe"),
             "latte" => name_key("Catppuccin Latte"),
-            "dark" | "default" => name_key(Self::DEFAULT_DARK),
+            "dark" | "default" | "axonnight" | "axon" | "night" => name_key(Self::DEFAULT_DARK),
+            "axonday" | "day" => name_key(Self::DEFAULT_LIGHT),
             "onedark" => name_key("Atom One Dark"),
             "solarizeddark" => name_key("iTerm2 Solarized Dark"),
             _ => key,
@@ -326,7 +258,7 @@ impl Theme {
         self.mix(self.background, self.foreground, 0.22)
     }
 
-    /// Texto secundario legible (≥ 4,5:1 sobre el fondo en los temas propios).
+    /// Texto secundario legible (mezcla de texto y fondo).
     pub fn text_secondary(&self) -> Color {
         self.mix(self.foreground, self.background, 0.28)
     }
@@ -434,27 +366,19 @@ mod tests {
     fn test_all_builtin_themes_parse() {
         let lines = THEMES.lines().count();
         assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
-        assert_eq!(Theme::names().count(), lines + 2);
+        assert_eq!(Theme::names().count(), lines);
         assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
     }
 
     #[test]
-    fn test_axon_builtin_themes() {
-        let night = Theme::from_name("Axon Night");
-        assert_eq!(night.background, Color::from_rgb(0x14, 0x18, 0x21));
-        assert!(!night.is_light());
-        assert!(contrast_ratio(night.foreground, night.background) >= 7.0);
-        assert!(contrast_ratio(night.ui_accent, night.background) >= 4.5);
-
-        let day = Theme::from_name("Axon Day");
-        assert!(day.is_light());
-        assert!(contrast_ratio(day.foreground, day.background) >= 7.0);
-        assert!(contrast_ratio(day.ui_accent, day.background) >= 4.5);
-
-        assert_eq!(Theme::canonical_name("axon night"), "Axon Night");
-        assert_eq!(Theme::canonical_name("AXON DAY"), "Axon Day");
-        assert_eq!(Theme::DEFAULT_DARK, "Axon Night");
-        assert_eq!(Theme::DEFAULT_LIGHT, "Axon Day");
+    fn test_default_themes_are_catppuccin() {
+        assert_eq!(Theme::DEFAULT_DARK, "Catppuccin Frappe");
+        assert_eq!(Theme::DEFAULT_LIGHT, "Catppuccin Latte");
+        assert!(Theme::from_name(Theme::DEFAULT_DARK).is_dark());
+        assert!(Theme::from_name(Theme::DEFAULT_LIGHT).is_light());
+        // Los temas propios retirados se resuelven a los de por defecto
+        assert_eq!(Theme::canonical_name("Axon Night"), Theme::DEFAULT_DARK);
+        assert_eq!(Theme::canonical_name("Axon Day"), Theme::DEFAULT_LIGHT);
     }
 
     #[test]
@@ -489,7 +413,7 @@ mod tests {
         assert_eq!(Theme::canonical_name("dark"), Theme::DEFAULT_DARK);
         assert_eq!(Theme::canonical_name("default"), Theme::DEFAULT_DARK);
         assert!(!Theme::search("solarized dark").is_empty());
-        assert_eq!(Theme::search("axon night"), vec!["Axon Night"]);
+        assert_eq!(Theme::search("frappe"), vec!["Catppuccin Frappe"]);
         assert!(Theme::search("zzzz").is_empty());
     }
 }

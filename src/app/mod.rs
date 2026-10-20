@@ -14,7 +14,9 @@ mod host;
 mod keyboard;
 mod keys;
 mod layout;
+mod panel;
 pub(crate) mod platform;
+mod projects;
 mod redraw;
 mod remote_files;
 mod settings;
@@ -42,7 +44,8 @@ use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, SettingsPageRects, SettingsPageState, SettingsSection,
-    SidebarTabItem, StatusBarRects, TerminalRenderer, TopTabBarRects, TopTitleBarRects,
+    SidebarHeader, SidebarProject, SidebarTabItem, StatusBarRects, StatusMeter, TerminalRenderer,
+    TopBarProject, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -68,7 +71,7 @@ pub enum AxonEvent {
     UpdateCheckDone,
 }
 
-pub const SIDEBAR_WIDTH: usize = 190;
+pub const SIDEBAR_WIDTH: usize = crate::renderer::SidebarRects::WIDTH;
 
 /// Acción de soltar una pestaña con el mouse (para transferir a otra ventana o nueva ventana)
 pub struct TabDropAction {
@@ -87,6 +90,10 @@ pub struct AxonApp {
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
+    /// Cuadrado del riel bajo el ratón (el último es «Agregar proyecto»).
+    hovered_project: Option<usize>,
+    /// Ratón sobre el selector de proyecto de la barra de pestañas superiores.
+    hovered_switcher: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
     pub settings_page_state: SettingsPageState,
@@ -298,6 +305,16 @@ impl AxonApp {
         sidebar_visible: bool,
         explorer_visible: bool,
     ) -> Self {
+        // Con pestañas superiores el explorador vive en el panel y se muestra con él
+        let explorer_visible = if config
+            .appearance
+            .tab_layout
+            .eq_ignore_ascii_case("horizontal")
+        {
+            sidebar_visible
+        } else {
+            explorer_visible
+        };
         let next_tab_id = tabs.len();
         let file_explorer =
             crate::explorer::FileExplorer::new(std::env::current_dir().ok(), explorer_visible);
@@ -314,6 +331,8 @@ impl AxonApp {
             hovered_tab: None,
             hovered_close: None,
             hovered_new_tab: false,
+            hovered_project: None,
+            hovered_switcher: false,
             hovered_settings_btn: false,
             hovered_toggle_btn: false,
             settings_page_state: SettingsPageState::default(),
@@ -499,10 +518,9 @@ impl AxonApp {
             .eq_ignore_ascii_case("horizontal")
     }
 
+    /// Espacio que el panel lateral quita al contenido por la izquierda.
     pub fn sidebar_offset(&self) -> usize {
-        if self.is_horizontal_tabs() {
-            0
-        } else if self.sidebar_visible {
+        if self.panel_shown() && !self.panel_on_right() {
             SIDEBAR_WIDTH
         } else {
             0
@@ -530,7 +548,16 @@ impl AxonApp {
         }
     }
 
+    /// Espacio que quitan al contenido por la derecha el explorador acoplado y el panel si va a ese lado.
+    /// Con el panel a la vista el explorador va dentro de él y no resta ancho.
     pub fn file_explorer_offset(&self) -> usize {
+        if self.panel_shown() {
+            return if self.panel_on_right() {
+                SIDEBAR_WIDTH
+            } else {
+                0
+            };
+        }
         if self.file_explorer.visible {
             self.file_explorer.width
         } else {

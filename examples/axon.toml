@@ -13,8 +13,15 @@ theme_light = "Catppuccin Latte"   # tema claro
 theme_mode = "dark"                # "dark" | "light" | "system" (sigue al tema de Windows y cambia entre los dos anteriores)
 line_spacing = 1.0
 tab_layout = "horizontal"   # "horizontal" | "vertical"
+panel_side = "left"         # lado del panel de navegación: "left" | "right"
 show_status_bar = true
 show_file_explorer = false
+
+# Proyectos del panel de navegación: carpetas (normalmente repositorios git) que agrupan sesiones.
+# Se agregan desde el panel con «+»; una sesión pertenece al proyecto que contiene su carpeta.
+# [[projects]]
+# name = "axon"
+# path = 'C:\Users\dev\axon'
 
 [terminal]
 default_shell = "powershell.exe"   # por defecto: pwsh.exe 7 (Program Files) si existe, si no powershell.exe
@@ -22,7 +29,7 @@ shell_integration = true              # inyecta el prompt de Axon (OSC 7/133, ra
 scrollback_lines = 10000           # la memoria crece con las líneas escritas, no con el máximo
 cursor_blink = true
 copy_on_select = false
-restore_session = false
+restore_session = true
 osc52 = false                    # permite que los programas de la terminal escriban en el portapapeles (OSC 52, máx. 100 KB)
 ligatures = true                 # activa ligaduras de programación tipográficas (->, !=, ==, =>...)
 gpu = true                       # aceleración de presentación por GPU nativa en Windows (Direct3D 11 DirectFlip)

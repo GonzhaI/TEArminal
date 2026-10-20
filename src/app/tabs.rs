@@ -188,7 +188,16 @@ impl AxonApp {
         }
     }
 
+    /// Con pestañas superiores el explorador vive en el panel y se muestra u oculta con él.
     pub fn toggle_file_explorer(&mut self) {
+        if self.is_horizontal_tabs() {
+            self.toggle_sidebar();
+        } else {
+            self.flip_file_explorer();
+        }
+    }
+
+    pub(super) fn flip_file_explorer(&mut self) {
         self.file_explorer.toggle();
         if self.file_explorer.visible {
             self.sync_file_explorer_root();
@@ -208,7 +217,14 @@ impl AxonApp {
         }
     }
 
+    /// Sesión nueva: abre en la raíz del proyecto a la vista, si hay uno.
     pub fn create_new_tab(&mut self) {
+        let cwd = self.new_tab_cwd();
+        self.create_tab_in(cwd);
+    }
+
+    /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).
+    pub(super) fn create_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
         let tab_id = self.next_tab_id;
         self.next_tab_id += 1;
         let pane_id = alloc_pane_id();
@@ -230,7 +246,7 @@ impl AxonApp {
             self.config.terminal.shell_integration,
             cols as u16,
             rows as u16,
-            None,
+            cwd.as_deref(),
             self.proxy.clone(),
         ) {
             Ok(p) => p,
@@ -241,13 +257,14 @@ impl AxonApp {
         };
 
         let title = format!("Terminal {}", self.tabs.len() + 1);
-        let terminal = TerminalState::new(
+        let mut terminal = TerminalState::new(
             cols,
             rows,
             self.config.terminal.scrollback_lines,
             self.theme.clone(),
         );
 
+        terminal.current_dir = cwd;
         let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
 
         self.tabs.push(TerminalTab::new(tab_id, title, pane));
@@ -683,15 +700,17 @@ impl AxonApp {
     pub(super) fn tab_slot_at(&self, mx: usize, my: usize) -> Option<usize> {
         let slot = if self.is_horizontal_tabs() {
             let width = self.window.as_ref()?.inner_size().width as usize;
-            let rects = TopTabBarRects::compute(width, self.tabs.len());
-            (0..self.tabs.len()).find(|&i| {
-                let r = rects.tab_rect(i);
+            let list = self.panel_tab_indices();
+            let rects = TopTabBarRects::compute(width, list.len());
+            let pos = (0..list.len()).find(|&pos| {
+                let r = rects.tab_rect(pos);
                 mx >= r.0 && mx < r.0 + r.2
-            })?
+            })?;
+            list[pos]
         } else {
-            const LIST_START_Y: usize = 42;
-            const ITEM_STRIDE: usize = 36 + 4;
-            (my.checked_sub(LIST_START_Y)? / ITEM_STRIDE) + self.sidebar_scroll_offset
+            let height = self.window.as_ref()?.inner_size().height as usize;
+            let usable_h = height.saturating_sub(self.status_bar_height());
+            self.panel_tab_at(my, usable_h)?.1
         };
         (slot < self.tabs.len()).then_some(slot)
     }
@@ -735,6 +754,9 @@ impl AxonApp {
 
     pub fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
+        if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
+            self.flip_file_explorer();
+        }
         self.recompute_grid_for_all_tabs();
         self.save_session();
         if let Some(w) = &self.window {
@@ -749,8 +771,8 @@ impl AxonApp {
             800
         };
         let usable_h = win_h.saturating_sub(self.status_bar_height());
-        let visible_items = crate::renderer::SidebarRects::visible_items(usable_h);
-        let max_offset = self.tabs.len().saturating_sub(visible_items);
+        let (total, visible) = self.panel_scroll_extent(usable_h);
+        let max_offset = total.saturating_sub(visible);
         self.sidebar_scroll_offset = self.sidebar_scroll_offset.min(max_offset);
     }
 

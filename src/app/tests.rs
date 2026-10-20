@@ -186,7 +186,7 @@ fn test_app_tab_switching_and_toggle() {
     // Forzar estado conocido para validar transición y cálculo de offset
     app.config.appearance.tab_layout = "vertical".to_string();
     app.sidebar_visible = true;
-    assert_eq!(app.sidebar_offset(), 190);
+    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
 
     // Conmutar visibilidad de la barra lateral (ocultar)
     app.toggle_sidebar();
@@ -196,7 +196,7 @@ fn test_app_tab_switching_and_toggle() {
     // Conmutar nuevamente (mostrar)
     app.toggle_sidebar();
     assert!(app.sidebar_visible);
-    assert_eq!(app.sidebar_offset(), 190);
+    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
 }
 
 #[test]
@@ -1816,7 +1816,17 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
         .current_dir(&temp_dir)
         .output();
     let _ = std::process::Command::new("git")
-        .args(["commit", "-m", "init", "--no-gpg-sign"])
+        // Sin identidad (runner de CI) el commit falla y el archivo queda como «Added».
+        .args([
+            "-c",
+            "user.name=axon-test",
+            "-c",
+            "user.email=axon-test@example.invalid",
+            "commit",
+            "-m",
+            "init",
+            "--no-gpg-sign",
+        ])
         .current_dir(&temp_dir)
         .output();
 
@@ -2125,4 +2135,140 @@ fn test_encode_kitty_key_various_combinations() {
         ),
         Some(b"\x1b[99;1:1u".to_vec())
     );
+}
+
+#[test]
+fn test_sessions_are_listed_under_the_project_that_contains_their_folder() {
+    use super::projects::Membership;
+
+    let base = std::env::temp_dir().join(format!("axon-proj-{}", std::process::id()));
+    let (a, b) = (base.join("a"), base.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+
+    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    app.config.projects.clear();
+    let loose_tab = app.active_tab_index;
+
+    // Agregar un proyecto sin sesiones abre una en su carpeta y lo deja a la vista
+    app.add_project(&a);
+    assert_eq!(app.selected_membership(), Membership::Project(0));
+    assert_eq!(app.panel_tab_indices().len(), 1);
+
+    app.add_project(&b);
+    assert_eq!(app.selected_membership(), Membership::Project(1));
+    assert_eq!(app.tabs.len(), 3);
+    assert_eq!(app.panel_tab_indices().len(), 1);
+
+    // Las sesiones de ningún proyecto quedan sueltas; agregar dos veces no duplica
+    assert_eq!(
+        app.panel_rail(),
+        vec![
+            Membership::Project(0),
+            Membership::Project(1),
+            Membership::Loose
+        ]
+    );
+    app.add_project(&a);
+    assert_eq!(app.config.projects.len(), 2);
+    assert_eq!(app.selected_membership(), Membership::Project(0));
+
+    // Un clic en el riel cambia a la sesión del proyecto
+    app.click_rail(2);
+    assert_eq!(app.selected_membership(), Membership::Loose);
+    assert_eq!(app.active_tab_index, loose_tab);
+
+    // Quitar un proyecto no cierra sus sesiones: pasan a las sueltas
+    app.remove_project(0);
+    assert_eq!(app.tabs.len(), 3);
+    assert_eq!(app.panel_tab_indices().len(), 2);
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_panel_side_reserves_space_and_hosts_the_explorer() {
+    use crate::renderer::SidebarRects;
+
+    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    app.config.appearance.tab_layout = "vertical".to_string();
+    app.sidebar_visible = true;
+    app.config.appearance.panel_side = "left".to_string();
+    assert_eq!(
+        (app.sidebar_offset(), app.file_explorer_offset()),
+        (SIDEBAR_WIDTH, 0)
+    );
+    assert_eq!(app.panel_local_x(10, 100, 1200), Some(10));
+    assert_eq!(app.panel_local_x(SIDEBAR_WIDTH, 100, 1200), None);
+
+    // A la derecha el espacio se reserva por ese lado y los clics se miden desde el borde del panel
+    app.config.appearance.panel_side = "right".to_string();
+    assert_eq!(
+        (app.sidebar_offset(), app.file_explorer_offset()),
+        (0, SIDEBAR_WIDTH)
+    );
+    assert_eq!(app.panel_local_x(10, 100, 1200), None);
+    assert_eq!(
+        app.panel_local_x(1200 - SIDEBAR_WIDTH + 5, 100, 1200),
+        Some(5)
+    );
+
+    // El explorador va alojado en la columna de sesiones del panel y no resta ancho al contenido
+    app.file_explorer.visible = true;
+    app.sync_explorer_dock(1200, 800);
+    let (x, _, w, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
+    assert_eq!(x, 1200 - SIDEBAR_WIDTH + SidebarRects::RAIL_W);
+    assert_eq!(w, SIDEBAR_WIDTH - SidebarRects::RAIL_W);
+    assert_eq!(app.file_explorer_offset(), SIDEBAR_WIDTH);
+
+    // Sin panel (oculto) vuelve a acoplarse al borde derecho
+    app.sidebar_visible = false;
+    app.sync_explorer_dock(1200, 800);
+    assert!(app.file_explorer.dock.is_none());
+    assert_eq!(app.file_explorer_offset(), app.file_explorer.width);
+
+    // Con pestañas superiores el panel también aloja el explorador y el ratón sobre él no es del panel
+    app.sidebar_visible = true;
+    app.config.appearance.tab_layout = "horizontal".to_string();
+    app.sync_explorer_dock(1200, 800);
+    let (x, y, _, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
+    assert_eq!(x, 1200 - SIDEBAR_WIDTH);
+    assert_eq!(app.panel_local_x(x + 5, 40, 1200), Some(5));
+    assert_eq!(app.panel_local_x(x + 5, y + 5, 1200), None);
+}
+
+#[test]
+fn test_top_tabs_show_only_the_sessions_of_the_project_in_view() {
+    use super::projects::Membership;
+
+    let base = std::env::temp_dir().join(format!("axon-top-{}", std::process::id()));
+    let (a, b) = (base.join("a"), base.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+
+    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    app.config.appearance.tab_layout = "horizontal".to_string();
+    app.config.projects.clear();
+    app.add_project(&a);
+    app.add_project(&b);
+    assert_eq!(app.tabs.len(), 3);
+
+    // Las pestañas superiores son las del proyecto a la vista; el selector pasa al siguiente
+    assert_eq!(app.panel_tab_indices().len(), 1);
+    assert_eq!(app.top_bar_project().title, "b");
+    app.cycle_project();
+    assert_eq!(app.selected_membership(), Membership::Loose);
+    app.cycle_project();
+    assert_eq!(app.selected_membership(), Membership::Project(0));
+    assert_eq!(app.top_bar_project().title, "a");
+
+    // El explorador vive en el panel y se muestra u oculta con él
+    app.sidebar_visible = true;
+    app.file_explorer.visible = true;
+    app.toggle_file_explorer();
+    assert!(!app.sidebar_visible && !app.file_explorer.visible);
+    app.toggle_sidebar();
+    assert!(app.sidebar_visible && app.file_explorer.visible);
+
+    let _ = std::fs::remove_dir_all(&base);
 }

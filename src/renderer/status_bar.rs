@@ -32,6 +32,7 @@ impl TerminalRenderer {
             rows,
             ai_status,
             None,
+            &[],
             false,
             explorer_visible,
             theme,
@@ -51,6 +52,7 @@ impl TerminalRenderer {
         rows: usize,
         ai_status: AiAgentStatus,
         active_model: Option<&str>,
+        meters: &[StatusMeter],
         hovered_ai_badge: bool,
         _explorer_visible: bool,
         theme: &Theme,
@@ -89,14 +91,14 @@ impl TerminalRenderer {
         // 2. Badge derecho: punto de estado + agente y modelo. Sin cápsula: solo el texto.
         let (_, badge_label, ai_fg) =
             Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
-        let ai_text_w = self.measure_ui_text(&badge_label, 11.0, true);
+        let ai_text_w = self.measure_ui_text(&badge_label, tokens::DETAIL, true);
         let update_info = crate::updater::get_available_update();
         let update_text = update_info
             .as_ref()
             .map(|u| format!("v{} disponible", u.latest_version));
         let update_w = update_text
             .as_ref()
-            .map(|t| self.measure_ui_text(t, 10.5, true));
+            .map(|t| self.measure_mono_text(t, tokens::MICRO + 0.5, false));
         let rects = StatusBarRects::compute(width, height, ai_text_w, update_w);
         let (bx, by, bw, bh) = rects.ai_badge;
         let right_limit = rects
@@ -104,12 +106,29 @@ impl TerminalRenderer {
             .map_or(bx, |(ux, _, _, _)| ux)
             .saturating_sub(10);
 
+        // Medidores de los límites reales del agente (solo Claude los tiene): etiqueta, barra y porcentaje.
+        let limit_before_meters = right_limit;
+        let right_limit = self.draw_status_meters(
+            buffer,
+            width,
+            height,
+            meters,
+            right_limit,
+            (bar_y, bar_h),
+            baseline,
+            theme,
+        );
+
         // Dimensiones de la rejilla como dato, en el extremo derecho del grupo de estado.
         let dims = format!("{cols} × {rows}");
-        let dims_w = self.measure_ui_text(&dims, 10.0, false);
+        let dims_w = self.measure_mono_text(&dims, tokens::MICRO, false);
         let dims_x = right_limit.saturating_sub(dims_w);
-        let dims_x = dims_x.max(width.saturating_sub(320));
-        self.draw_ui_text(
+        let dims_x = if right_limit < limit_before_meters {
+            dims_x
+        } else {
+            dims_x.max(width.saturating_sub(320))
+        };
+        self.draw_mono_text(
             buffer,
             width,
             height,
@@ -118,7 +137,7 @@ impl TerminalRenderer {
             baseline,
             right_limit,
             theme.text_muted(),
-            10.0,
+            tokens::MICRO,
             false,
         );
         let dims_sep_x = dims_x.saturating_sub(10);
@@ -139,7 +158,7 @@ impl TerminalRenderer {
                 theme.text_secondary(),
             );
             cur_x += 15;
-            let adv = self.draw_ui_text(
+            let adv = self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -148,7 +167,7 @@ impl TerminalRenderer {
                 baseline,
                 text_limit,
                 theme.text_secondary(),
-                11.0,
+                tokens::DETAIL,
                 true,
             );
             cur_x = adv + 12;
@@ -177,7 +196,7 @@ impl TerminalRenderer {
                 theme.text_muted(),
             );
             cur_x += 15;
-            let adv = self.draw_ui_text(
+            let adv = self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -186,7 +205,7 @@ impl TerminalRenderer {
                 baseline,
                 text_limit,
                 theme.text_secondary(),
-                10.5,
+                tokens::DETAIL,
                 false,
             );
             cur_x = adv + 12;
@@ -217,7 +236,7 @@ impl TerminalRenderer {
                 theme.accent_color(),
             );
             cur_x += 15;
-            self.draw_ui_text(
+            self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -226,7 +245,7 @@ impl TerminalRenderer {
                 baseline,
                 text_limit,
                 theme.accent_color(),
-                10.5,
+                tokens::DETAIL,
                 true,
             );
         }
@@ -255,7 +274,7 @@ impl TerminalRenderer {
                 10.5,
                 theme.accent_color(),
             );
-            self.draw_ui_text(
+            self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -264,8 +283,8 @@ impl TerminalRenderer {
                 baseline,
                 ub_x + ub_w,
                 theme.accent_color(),
-                10.5,
-                true,
+                tokens::MICRO + 0.5,
+                false,
             );
             Self::draw_rect(
                 buffer,
@@ -306,12 +325,12 @@ impl TerminalRenderer {
             baseline,
             bx + bw,
             ai_fg,
-            9.5,
+            tokens::MICRO,
             true,
             0.8,
         );
         if let Some(model) = model {
-            self.draw_ui_text(
+            self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -320,10 +339,99 @@ impl TerminalRenderer {
                 baseline,
                 bx + bw - 8,
                 theme.text_secondary(),
-                10.5,
+                tokens::MICRO + 0.5,
                 false,
             );
         }
+    }
+
+    /// Dibuja los medidores terminando en `right_limit` y devuelve el límite que queda a su izquierda.
+    /// El porcentaje va siempre como texto: el color de la barra solo refuerza.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_status_meters(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        meters: &[StatusMeter],
+        right_limit: usize,
+        (bar_y, bar_h): (usize, usize),
+        baseline: usize,
+        theme: &Theme,
+    ) -> usize {
+        const TRACK_W: usize = 56;
+        let mut x = right_limit;
+        for meter in meters.iter().rev() {
+            let pct = format!("{:.0}%", meter.percent.clamp(0.0, 100.0));
+            let pct_w = self.measure_mono_text(&pct, tokens::MICRO, false);
+            let label_w = self.measure_ui_text(&meter.label, tokens::DETAIL, false);
+            let total = label_w + 8 + TRACK_W + 6 + pct_w;
+            if x < total + 220 {
+                break;
+            }
+            let start = x - total;
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &meter.label,
+                start,
+                baseline,
+                start + label_w,
+                theme.text_muted(),
+                tokens::DETAIL,
+                false,
+            );
+            let track_x = start + label_w + 8;
+            let track_y = bar_y + bar_h / 2 - 2;
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                track_x,
+                track_y,
+                TRACK_W,
+                5,
+                2,
+                theme.chrome_line_strong(),
+            );
+            let fill =
+                ((meter.percent.clamp(0.0, 100.0) / 100.0) * TRACK_W as f32).round() as usize;
+            if fill > 0 {
+                let color = if meter.percent >= 90.0 {
+                    theme.ansi[1]
+                } else if meter.percent >= 70.0 {
+                    theme.ansi[3]
+                } else {
+                    theme.accent_color()
+                };
+                crate::ui::draw_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    track_x,
+                    track_y,
+                    fill.max(3),
+                    5,
+                    2,
+                    color,
+                );
+            }
+            self.draw_mono_text(
+                buffer,
+                width,
+                height,
+                &pct,
+                track_x + TRACK_W + 6,
+                baseline,
+                x,
+                theme.text_secondary(),
+                tokens::MICRO,
+                false,
+            );
+            x = start.saturating_sub(16);
+        }
+        x
     }
 
     pub fn status_bar_badge_info(

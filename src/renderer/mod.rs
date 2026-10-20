@@ -16,10 +16,12 @@ mod geometry;
 mod glyphs;
 mod md_preview;
 mod pane;
+mod projects_panel;
 mod settings_page;
 mod sidebar;
 mod state;
 mod status_bar;
+mod tokens;
 mod top_bar;
 
 use draw::{blit_glyph, fill_rect, Clip};
@@ -62,11 +64,16 @@ pub struct TerminalRenderer {
     ascii_cache: Box<[Option<CachedGlyph>; 512]>,
     ui_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
-    icon_glyph_cache: FastMap<(char, u32), CachedGlyph>,        // (c, size_bits) -> glyph
+    /// Valores de máquina (rutas, ramas, atajos): JetBrains Mono con su propia caché.
+    mono_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>,
+    mono_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>,
+    icon_glyph_cache: FastMap<(char, u32), CachedGlyph>, // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
+    /// Búfer del panel lateral cuando va a la derecha: se dibuja aparte y se copia a su sitio.
+    pub panel_buf: Vec<u32>,
     pub ligatures: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
@@ -117,10 +124,13 @@ impl TerminalRenderer {
             ascii_cache: Box::new(std::array::from_fn(|_| None)),
             ui_glyph_cache: FastMap::default(),
             ui_advance_cache: RefCell::default(),
+            mono_glyph_cache: FastMap::default(),
+            mono_advance_cache: RefCell::default(),
             icon_glyph_cache: FastMap::default(),
             margin_x: 0,
             margin_y: 0,
             scrollbars_awake: false,
+            panel_buf: Vec::new(),
             ligatures: config.terminal.ligatures,
             regular_face,
             bold_face_rb: OnceCell::new(),
@@ -163,6 +173,8 @@ impl TerminalRenderer {
         }
         self.ui_glyph_cache.clear();
         self.ui_advance_cache.borrow_mut().clear();
+        self.mono_glyph_cache.clear();
+        self.mono_advance_cache.borrow_mut().clear();
         self.icon_glyph_cache.clear();
         self.ligature_cache.clear();
     }

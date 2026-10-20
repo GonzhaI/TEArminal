@@ -6,6 +6,16 @@ use std::path::PathBuf;
 pub struct AxonConfig {
     pub appearance: AppearanceConfig,
     pub terminal: TerminalConfig,
+    /// Proyectos que el usuario agrega al panel de navegación (`[[projects]]`).
+    #[serde(default)]
+    pub projects: Vec<ProjectConfig>,
+}
+
+/// Carpeta (normalmente la raíz de un repositorio git) que agrupa sesiones en el panel de navegación.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct ProjectConfig {
+    pub name: String,
+    pub path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -32,6 +42,9 @@ pub struct AppearanceConfig {
     pub show_status_bar: bool,
     #[serde(default = "default_false")]
     pub show_file_explorer: bool,
+    /// Lado de la ventana donde va el panel de navegación: "left" | "right".
+    #[serde(default = "default_panel_side")]
+    pub panel_side: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -42,7 +55,7 @@ pub struct TerminalConfig {
     pub scrollback_lines: usize,
     pub cursor_blink: bool,
     pub copy_on_select: bool,
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub restore_session: bool,
     #[serde(default = "default_false")]
     pub auto_save: bool,
@@ -91,6 +104,10 @@ fn default_explorer_width() -> usize {
     crate::explorer::FILE_EXPLORER_WIDTH
 }
 
+fn default_panel_side() -> String {
+    "left".to_string()
+}
+
 fn default_tab_layout() -> String {
     "horizontal".to_string()
 }
@@ -100,6 +117,11 @@ fn default_theme_mode() -> String {
 }
 
 impl AppearanceConfig {
+    /// ¿El panel de navegación va a la derecha de la ventana?
+    pub fn panel_on_right(&self) -> bool {
+        self.panel_side.eq_ignore_ascii_case("right")
+    }
+
     /// ¿El modo configurado usa el tema claro? `system_light` es el modo claro de Windows.
     pub fn uses_light_theme(&self, system_light: bool) -> bool {
         match self.theme_mode.to_ascii_lowercase().as_str() {
@@ -151,6 +173,7 @@ impl Default for AxonConfig {
                 theme_mode: "dark".to_string(),
                 show_status_bar: true,
                 show_file_explorer: false,
+                panel_side: default_panel_side(),
             },
             terminal: TerminalConfig {
                 default_shell: shell,
@@ -158,7 +181,7 @@ impl Default for AxonConfig {
                 scrollback_lines: 10_000,
                 cursor_blink: true,
                 copy_on_select: false,
-                restore_session: false,
+                restore_session: true,
                 auto_save: false,
                 word_wrap: false,
                 ssh_integration: true,
@@ -168,6 +191,7 @@ impl Default for AxonConfig {
                 auto_check_updates: true,
                 ai_limits: true,
             },
+            projects: Vec::new(),
         }
     }
 }
@@ -490,13 +514,13 @@ mod tests {
         let a = load("Dracula");
         assert_eq!(
             (a.theme.as_str(), a.theme_light.as_str()),
-            ("Dracula", "Axon Day")
+            ("Dracula", "Catppuccin Latte")
         );
         // Un `theme` claro (modo claro antiguo) pasa a la ranura clara
         let a = load("latte");
         assert_eq!(
             (a.theme.as_str(), a.theme_light.as_str()),
-            ("Axon Night", "latte")
+            ("Catppuccin Frappe", "latte")
         );
         let _ = fs::remove_dir_all(&dir);
     }

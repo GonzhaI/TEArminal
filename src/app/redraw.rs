@@ -1,6 +1,7 @@
 //! Repintado de un fotograma completo.
 
 use super::*;
+use crate::renderer::SidebarRects;
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
@@ -26,6 +27,12 @@ struct SceneParams<'a> {
     sidebar_scrollbar_hovered: bool,
     active_idx: usize,
     tab_items: &'a [SidebarTabItem],
+    projects: &'a [SidebarProject],
+    header: &'a SidebarHeader,
+    hovered_project: Option<usize>,
+    panel_right: bool,
+    top_project: &'a TopBarProject,
+    hovered_switcher: bool,
 }
 
 impl AxonApp {
@@ -40,7 +47,7 @@ impl AxonApp {
         let explorer_visible = self.file_explorer.visible;
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
-        let sidebar_visible = self.sidebar_visible && !is_horizontal;
+        let sidebar_visible = self.sidebar_visible;
         let active_idx = self.active_tab_index;
         let hovered_tab = self.hovered_tab;
         let hovered_close = self.hovered_close;
@@ -49,6 +56,12 @@ impl AxonApp {
         let hovered_settings_btn = self.hovered_settings_btn;
         let hovered_toggle_btn = self.hovered_toggle_btn;
         let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
+        let panel_right = self.panel_on_right();
+        let top_project = if is_horizontal {
+            self.top_bar_project()
+        } else {
+            TopBarProject::default()
+        };
 
         // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
         for t in &mut self.tabs {
@@ -61,11 +74,27 @@ impl AxonApp {
             }
         }
 
+        // En vertical el panel solo lista las sesiones del proyecto a la vista
+        let panel_indices = self.panel_tab_indices();
+        let (win_w, win_h) = self.window.as_ref().map_or((0, 0), |w| {
+            let size = w.inner_size();
+            (size.width as usize, size.height as usize)
+        });
+        self.sync_explorer_dock(win_w, win_h);
+        let (projects, header) = if !sidebar_visible {
+            (Vec::new(), SidebarHeader::default())
+        } else {
+            let usable_h = win_h.saturating_sub(status_bar_h);
+            (self.sidebar_projects(), self.sidebar_header(usable_h))
+        };
         let tab_items: Vec<SidebarTabItem> = self
             .tabs
             .iter()
             .enumerate()
+            .filter(|(idx, _)| panel_indices.contains(idx))
             .map(|(idx, t)| SidebarTabItem {
+                index: idx,
+                status: super::projects::session_status(t),
                 title: t.display_title(),
                 detail: t.sidebar_detail(),
                 is_active: idx == active_idx,
@@ -113,6 +142,12 @@ impl AxonApp {
             sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
             active_idx,
             tab_items: &tab_items,
+            projects: &projects,
+            header: &header,
+            hovered_project: self.hovered_project,
+            panel_right,
+            top_project: &top_project,
+            hovered_switcher: self.hovered_switcher,
         };
 
         // 1. Si la aceleración por hardware GPU (Direct3D 11 DirectFlip) está activa, presentar vía VRAM
@@ -188,6 +223,8 @@ fn draw_full_scene(
             width,
             height,
             p.tab_items,
+            p.top_project,
+            p.hovered_switcher,
             p.hovered_tab,
             p.hovered_close,
             p.hovered_new_tab,
@@ -218,25 +255,10 @@ fn draw_full_scene(
             p.explorer_visible,
             theme,
         );
+    }
 
-        if p.sidebar_visible {
-            renderer.render_sidebar(
-                buffer,
-                width,
-                height,
-                SIDEBAR_WIDTH,
-                p.status_bar_h,
-                p.tab_items,
-                p.sidebar_scroll_offset,
-                p.hovered_tab,
-                p.hovered_close,
-                p.hovered_new_tab,
-                p.hovered_settings_btn,
-                p.hovered_toggle_btn,
-                p.sidebar_scrollbar_hovered,
-                theme,
-            );
-        }
+    if p.sidebar_visible {
+        draw_panel(buffer, renderer, theme, p, width, height);
     }
 
     if active_tab.is_settings {
@@ -245,6 +267,11 @@ fn draw_full_scene(
             width,
             height,
             p.offset,
+            if p.panel_right && p.sidebar_visible {
+                SIDEBAR_WIDTH
+            } else {
+                0
+            },
             p.top_offset,
             p.status_bar_h,
             config,
@@ -358,6 +385,7 @@ fn draw_full_scene(
             height,
             p.status_bar_h,
             p.hovered_toggle_btn,
+            p.panel_right,
             theme,
         );
     }
@@ -404,6 +432,15 @@ fn draw_full_scene(
             };
 
         let active_model = ai_snapshot.model_for(ai_status);
+        let meters: Vec<StatusMeter> = ai_snapshot
+            .limits_for(ai_status)
+            .iter()
+            .take(2)
+            .map(|l| StatusMeter {
+                label: short_limit_label(&l.label),
+                percent: l.percent,
+            })
+            .collect();
         renderer.render_status_bar_with_ai(
             buffer,
             width,
@@ -416,6 +453,7 @@ fn draw_full_scene(
             rows,
             ai_status,
             active_model,
+            &meters,
             p.hovered_ai_badge,
             p.explorer_visible,
             theme,
@@ -428,5 +466,82 @@ fn draw_full_scene(
 
     if let Some(menu) = context_menu {
         renderer.render_context_menu(buffer, width, height, menu, theme);
+    }
+}
+
+/// Dibuja el panel lateral. A la izquierda lo hace sobre el fotograma; a la derecha, en un búfer propio
+/// del ancho del panel que se copia a su sitio (la geometría del panel es local a él).
+fn draw_panel(
+    buffer: &mut [u32],
+    renderer: &mut TerminalRenderer,
+    theme: &Theme,
+    p: &SceneParams,
+    width: usize,
+    height: usize,
+) {
+    macro_rules! render {
+        ($buf:expr, $w:expr) => {
+            if p.is_horizontal {
+                renderer.render_projects_panel(
+                    $buf,
+                    $w,
+                    height,
+                    SIDEBAR_WIDTH,
+                    p.status_bar_h,
+                    p.projects,
+                    p.header,
+                    p.hovered_project,
+                    p.sidebar_scroll_offset,
+                    p.hovered_toggle_btn,
+                    theme,
+                )
+            } else {
+                renderer.render_sidebar(
+                    $buf,
+                    $w,
+                    height,
+                    SIDEBAR_WIDTH,
+                    p.status_bar_h,
+                    p.projects,
+                    p.header,
+                    p.hovered_project,
+                    p.tab_items,
+                    p.sidebar_scroll_offset,
+                    p.hovered_tab,
+                    p.hovered_close,
+                    p.hovered_new_tab,
+                    p.hovered_toggle_btn,
+                    p.sidebar_scrollbar_hovered,
+                    theme,
+                )
+            }
+        };
+    }
+    if !p.panel_right {
+        render!(buffer, width);
+        return;
+    }
+    let mut panel = std::mem::take(&mut renderer.panel_buf);
+    panel.clear();
+    panel.resize(SIDEBAR_WIDTH * height, theme.background.to_u32_xrgb());
+    render!(&mut panel, SIDEBAR_WIDTH);
+    let x0 = width.saturating_sub(SIDEBAR_WIDTH);
+    let usable = height.saturating_sub(p.status_bar_h);
+    for y in SidebarRects::TOP..usable {
+        let src = &panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH];
+        buffer[y * width + x0..y * width + x0 + SIDEBAR_WIDTH].copy_from_slice(src);
+    }
+    renderer.panel_buf = panel;
+}
+
+/// Etiqueta corta del medidor: «Sesión (5 h)» pasa a «5 h» y el límite semanal a «Semana».
+fn short_limit_label(label: &str) -> String {
+    let lower = label.to_lowercase();
+    if lower.contains("5 h") {
+        "5 h".to_string()
+    } else if lower.contains("sem") || lower.contains("7 d") {
+        "Semana".to_string()
+    } else {
+        label.chars().take(10).collect()
     }
 }

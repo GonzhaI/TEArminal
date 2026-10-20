@@ -37,6 +37,8 @@ pub enum MenuAction {
     CloseTab(usize),
     CloseOtherTabs(usize),
     NewTab,
+    AddProject,
+    RemoveProject(usize),
     NewWindow,
     OpenSettings,
     ToggleExplorer,
@@ -61,7 +63,7 @@ pub struct MenuItem {
 }
 
 impl MenuItem {
-    fn new(
+    pub(super) fn new(
         label: &'static str,
         icon: LucideIcon,
         shortcut: &'static str,
@@ -196,22 +198,27 @@ impl AxonApp {
         let right_offset = self.file_explorer_offset();
 
         let items = if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
-            let rects = TopTabBarRects::compute(win_w, self.tabs.len());
-            let hit = (0..self.tabs.len()).find(|&i| {
-                let r = rects.tab_rect(i);
-                mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
-            });
+            let list = self.panel_tab_indices();
+            let rects = TopTabBarRects::compute(win_w, list.len());
+            let hit = (0..list.len())
+                .find(|&pos| {
+                    let r = rects.tab_rect(pos);
+                    mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+                })
+                .map(|pos| list[pos]);
             self.tab_or_window_menu(hit)
-        } else if !self.is_horizontal_tabs() && self.sidebar_visible && mx < SIDEBAR_WIDTH {
+        } else if let Some(lx) = self.panel_local_x(mx, my, win_w) {
             // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
-            let usable_h = win_h.saturating_sub(status_bar_h);
-            let hit = crate::renderer::SidebarRects::tab_at_y(
-                my,
-                usable_h,
-                self.sidebar_scroll_offset,
-                self.tabs.len(),
-            );
-            self.tab_or_window_menu(hit)
+            if self.is_horizontal_tabs() {
+                let usable_h = win_h.saturating_sub(status_bar_h);
+                self.row_menu(my, usable_h)
+            } else if lx < crate::renderer::SidebarRects::RAIL_W {
+                self.rail_menu(lx, my)
+            } else {
+                let usable_h = win_h.saturating_sub(status_bar_h);
+                let hit = self.panel_tab_at(my, usable_h).map(|(_, tab)| tab);
+                self.tab_or_window_menu(hit)
+            }
         } else if self.tabs[self.active_tab_index].is_settings {
             return false;
         } else if self.file_explorer.visible && {
@@ -842,6 +849,8 @@ impl AxonApp {
             MenuAction::CloseTab(i) => self.close_tab(i),
             MenuAction::CloseOtherTabs(keep) => self.close_other_tabs(keep),
             MenuAction::NewTab => self.create_new_tab(),
+            MenuAction::AddProject => self.add_project_with_picker(),
+            MenuAction::RemoveProject(i) => self.remove_project(i),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),

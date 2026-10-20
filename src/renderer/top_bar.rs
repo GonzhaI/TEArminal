@@ -1,4 +1,4 @@
-//! Barra superior: pestañas contiguas, marca, acciones y controles de ventana.
+//! Barra superior: pestañas, marca, título de ventana, acciones y controles de ventana.
 
 use super::*;
 
@@ -30,9 +30,9 @@ impl TerminalRenderer {
             "AXON",
             30,
             cy + 4,
-            68,
+            TopTabBarRects::BRAND_W.saturating_sub(14),
             theme.foreground,
-            10.0,
+            tokens::MICRO,
             true,
             1.5,
         );
@@ -40,12 +40,123 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            68,
+            TopTabBarRects::BRAND_W.saturating_sub(10),
             10,
             1,
-            bar_h - 20,
+            bar_h.saturating_sub(20),
             theme.chrome_line(),
         );
+    }
+
+    /// Selector de proyecto de la barra de pestañas: monograma, nombre y, si otro proyecto tiene novedades,
+    /// un punto. Un clic pasa al siguiente proyecto.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_project_switcher(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        rect: Rect,
+        project: &TopBarProject,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = rect;
+        let bg = if hovered {
+            theme.surface_hover()
+        } else {
+            theme.surface_bg()
+        };
+        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 9, bg);
+        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 9, theme.chrome_line());
+
+        let sq = (x + 6, y + (h - 22) / 2, 22, 22);
+        if project.is_loose {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                sq.0,
+                sq.1,
+                sq.2,
+                sq.3,
+                7,
+                theme.chrome_line_strong(),
+            );
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::Terminal,
+                sq.0 + 11,
+                sq.1 + 11,
+                13.0,
+                theme.foreground,
+            );
+        } else {
+            let color = theme.ansi[project.color_slot.min(15)];
+            crate::ui::draw_rounded_rect(buffer, width, height, sq.0, sq.1, sq.2, sq.3, 7, color);
+            let label = project.initial.to_string();
+            let lw = self.measure_ui_text(&label, 12.0, true);
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &label,
+                sq.0 + sq.2.saturating_sub(lw) / 2,
+                sq.1 + 16,
+                sq.0 + sq.2,
+                theme.background,
+                12.0,
+                true,
+            );
+        }
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &project.title,
+            x + 36,
+            y + h / 2 + 4,
+            x + w - 24,
+            theme.foreground,
+            tokens::TITLE,
+            true,
+        );
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::ChevronDown,
+            x + w - 13,
+            y + h / 2,
+            12.0,
+            theme.text_muted(),
+        );
+        if project.has_news {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                x + w - 7,
+                y - 3,
+                11,
+                11,
+                5,
+                theme.chrome_bg(),
+            );
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                x + w - 5,
+                y - 1,
+                7,
+                7,
+                3,
+                theme.ansi[3],
+            );
+        }
     }
 
     /// Botón de icono del chrome: plano, 30×30, radio 4, sin borde salvo estado activo.
@@ -58,6 +169,7 @@ impl TerminalRenderer {
         icon: crate::ui::LucideIcon,
         active: bool,
         hovered: bool,
+        icon_size: f32,
         theme: &Theme,
     ) {
         let (x, y, w, h) = rect;
@@ -76,10 +188,53 @@ impl TerminalRenderer {
         } else {
             theme.text_secondary()
         };
-        self.draw_lucide_icon(buffer, width, height, icon, x + w / 2, y + h / 2, 14.0, fg);
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            icon,
+            x + w / 2,
+            y + h / 2,
+            icon_size,
+            fg,
+        );
     }
 
-    /// Renderiza la barra horizontal de pestañas: franja plana, pestañas contiguas y regla de acento.
+    /// Pestaña activa: superficie del lienzo con esquinas superiores redondeadas y regla de acento.
+    fn draw_active_tab_surface(
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        r: Rect,
+        theme: &Theme,
+    ) {
+        let y = 5;
+        let h = r.3.saturating_sub(y);
+        crate::ui::draw_rounded_rect(buffer, width, height, r.0, y, r.2, h, 5, theme.background);
+        // Base cuadrada: la pestaña se funde con el lienzo en el borde inferior.
+        Self::draw_rect(
+            buffer,
+            width,
+            height,
+            r.0,
+            y + 6,
+            r.2,
+            h.saturating_sub(6),
+            theme.background,
+        );
+        Self::draw_rect(
+            buffer,
+            width,
+            height,
+            r.0 + 8,
+            y,
+            r.2.saturating_sub(16),
+            2,
+            theme.accent_color(),
+        );
+    }
+
+    /// Renderiza la barra horizontal de pestañas: franja plana, pestañas y regla de acento.
     #[allow(clippy::too_many_arguments)]
     pub fn render_top_tab_bar(
         &mut self,
@@ -87,6 +242,8 @@ impl TerminalRenderer {
         width: usize,
         height: usize,
         tabs: &[SidebarTabItem],
+        project: &TopBarProject,
+        hovered_switcher: bool,
         hovered_tab: Option<usize>,
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
@@ -110,54 +267,69 @@ impl TerminalRenderer {
         // 1. Franja superior
         Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.chrome_bg());
 
-        // 2. Marca
-        self.draw_brand(buffer, width, height, bar_h, theme);
+        // 2. Selector de proyecto
+        self.draw_project_switcher(
+            buffer,
+            width,
+            height,
+            rects.switcher_btn,
+            project,
+            hovered_switcher,
+            theme,
+        );
 
-        // 3. Pestañas
-        for (idx, tab) in tabs.iter().enumerate() {
-            let r = rects.tab_rect(idx);
+        // 3. Pestañas del proyecto (`tab.index` es la posición real; la lista está filtrada)
+        for (pos, tab) in tabs.iter().enumerate() {
+            let idx = tab.index;
+            let r = rects.tab_rect(pos);
             if r.0 + r.2 > rects.plus_btn.0 {
                 break;
             }
             let is_hovered = hovered_tab == Some(idx);
 
             if tab.is_active {
-                // La pestaña activa se funde con el lienzo: sin borde inferior y con regla de acento.
-                Self::draw_rect(buffer, width, height, r.0, r.1, r.2, r.3, theme.background);
-                Self::draw_rect(buffer, width, height, r.0, 0, r.2, 2, theme.accent_color());
-            } else {
-                if is_hovered {
-                    Self::draw_rect(
-                        buffer,
-                        width,
-                        height,
-                        r.0,
-                        r.1,
-                        r.2,
-                        r.3,
-                        theme.surface_hover(),
-                    );
-                }
-                // Separador solo entre pestañas inactivas: una hairline, nunca una cápsula.
-                Self::draw_rect(buffer, width, height, r.0 + r.2, 10, 1, bar_h - 20, line);
-            }
-
-            let compact = rects.tab_w < 104;
-            let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 16 };
-            if tab.has_unread && !tab.is_active {
-                let dot = theme.ansi[6];
+                Self::draw_active_tab_surface(buffer, width, height, r, theme);
+            } else if is_hovered {
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
                     height,
-                    r.0 + 6,
+                    r.0,
+                    6,
+                    r.2,
+                    r.3.saturating_sub(6),
+                    5,
+                    theme.surface_hover(),
+                );
+            } else {
+                // Separador solo entre pestañas inactivas: una hairline, nunca una cápsula.
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    r.0 + r.2,
+                    12,
+                    1,
+                    bar_h.saturating_sub(24),
+                    line,
+                );
+            }
+
+            let compact = rects.tab_w < 110;
+            let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 18 };
+            if tab.has_unread && !tab.is_active {
+                crate::ui::draw_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    r.0 + 7,
                     r.1 + (r.3 / 2) - 2,
                     4,
                     4,
                     2,
-                    dot,
+                    theme.ansi[6],
                 );
-                icon_x += 4;
+                icon_x += 5;
             }
 
             let icon_color = if tab.is_active {
@@ -174,11 +346,11 @@ impl TerminalRenderer {
                 tab_icon(tab),
                 icon_x,
                 r.1 + (r.3 / 2),
-                13.0,
+                14.0,
                 icon_color,
             );
 
-            let show_close = rects.tab_w >= 72 && tabs.len() > 1 && (tab.is_active || is_hovered);
+            let show_close = rects.tab_w >= 76 && tabs.len() > 1 && (tab.is_active || is_hovered);
 
             if !compact {
                 let text_color = if tab.is_active {
@@ -188,8 +360,8 @@ impl TerminalRenderer {
                 } else {
                     theme.text_muted()
                 };
-                let title_x = r.0 + 30;
-                let title_max = r.0 + r.2 - if show_close { 30 } else { 12 };
+                let title_x = r.0 + 34;
+                let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
                 let title_end = self.draw_ui_text(
                     buffer,
                     width,
@@ -199,7 +371,7 @@ impl TerminalRenderer {
                     r.1 + (r.3 / 2) + 4,
                     title_max,
                     text_color,
-                    11.5,
+                    tokens::TITLE,
                     tab.is_active,
                 );
                 if tab.is_preview {
@@ -216,23 +388,23 @@ impl TerminalRenderer {
                 }
                 if tab.pane_count > 1 {
                     let badge = format!("×{}", tab.pane_count);
-                    self.draw_ui_text(
+                    self.draw_mono_text(
                         buffer,
                         width,
                         height,
                         &badge,
-                        title_end + 6,
+                        title_end + 7,
                         r.1 + (r.3 / 2) + 4,
                         title_max,
                         theme.text_muted(),
-                        9.5,
+                        tokens::MICRO,
                         false,
                     );
                 }
             }
 
             if show_close {
-                let close_r = rects.close_btn_rect(idx);
+                let close_r = rects.close_btn_rect(pos);
                 let is_close_hovered = hovered_close == Some(idx);
                 if is_close_hovered {
                     crate::ui::draw_rounded_rect(
@@ -273,6 +445,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::Plus,
             false,
             hovered_new_tab,
+            14.0,
             theme,
         );
 
@@ -285,6 +458,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::FolderTree,
             explorer_visible,
             hovered_files,
+            15.0,
             theme,
         );
         self.draw_chrome_action(
@@ -295,6 +469,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::Settings,
             false,
             hovered_settings,
+            15.0,
             theme,
         );
 
@@ -306,7 +481,7 @@ impl TerminalRenderer {
             rects.win_min_btn.0.saturating_sub(4),
             10,
             1,
-            bar_h - 20,
+            bar_h.saturating_sub(20),
             line,
         );
 
@@ -429,7 +604,7 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar)
+    /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar).
     #[allow(clippy::too_many_arguments)]
     pub fn render_top_title_bar(
         &mut self,
@@ -457,53 +632,51 @@ impl TerminalRenderer {
         Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.chrome_bg());
         self.draw_brand(buffer, width, height, bar_h, theme);
 
-        // Título centrado + rama como dato, no como glifo decorativo.
-        let title_w = self.measure_ui_text(title, 12.0, true);
+        // Título alineado a la izquierda tras la marca; la rama es contexto, no decoración.
+        let title_x = TopTabBarRects::BRAND_W;
+        let actions_left = rects.settings_btn.0.saturating_sub(20);
         let branch_w = git_branch
-            .map(|b| self.measure_ui_text(b, 10.5, false) + 18)
+            .map(|b| self.measure_mono_text(b, tokens::DETAIL, false) + 20)
             .unwrap_or(0);
-        let total_w = title_w + if branch_w > 0 { branch_w + 10 } else { 0 };
-        let center_x = if width > total_w + 360 {
-            (width - total_w) / 2
-        } else {
-            88
-        };
-        let mut cursor = self.draw_ui_text(
+        let title_max = actions_left.saturating_sub(branch_w + 16);
+        let title_end = self.draw_ui_text(
             buffer,
             width,
             height,
             title,
-            center_x,
+            title_x,
             bar_h / 2 + 4,
-            width.saturating_sub(200),
+            title_max,
             theme.foreground,
-            12.0,
+            tokens::SECTION,
             true,
         );
         if let Some(branch) = git_branch {
-            cursor += 10;
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                crate::ui::LucideIcon::GitBranch,
-                cursor + 6,
-                bar_h / 2,
-                11.0,
-                theme.accent_color(),
-            );
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                branch,
-                cursor + 16,
-                bar_h / 2 + 4,
-                width.saturating_sub(210),
-                theme.text_secondary(),
-                10.5,
-                false,
-            );
+            let bx = title_end + 12;
+            if bx + branch_w < actions_left {
+                self.draw_lucide_icon(
+                    buffer,
+                    width,
+                    height,
+                    crate::ui::LucideIcon::GitBranch,
+                    bx + 5,
+                    bar_h / 2,
+                    11.0,
+                    theme.accent_color(),
+                );
+                self.draw_mono_text(
+                    buffer,
+                    width,
+                    height,
+                    branch,
+                    bx + 15,
+                    bar_h / 2 + 4,
+                    actions_left,
+                    theme.text_secondary(),
+                    tokens::DETAIL,
+                    false,
+                );
+            }
         }
 
         self.draw_chrome_action(
@@ -514,6 +687,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::FolderTree,
             explorer_visible,
             hovered_files,
+            15.0,
             theme,
         );
         self.draw_chrome_action(
@@ -524,6 +698,7 @@ impl TerminalRenderer {
             crate::ui::LucideIcon::Settings,
             false,
             hovered_settings,
+            15.0,
             theme,
         );
         Self::draw_rect(
@@ -533,7 +708,7 @@ impl TerminalRenderer {
             rects.win_min_btn.0.saturating_sub(4),
             10,
             1,
-            bar_h - 20,
+            bar_h.saturating_sub(20),
             line,
         );
         self.draw_window_controls(

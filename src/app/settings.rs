@@ -25,7 +25,7 @@ impl AxonApp {
         SettingsPageRects::scrollbar(
             self.settings_page_state.section,
             self.top_offset(),
-            win_w,
+            win_w.saturating_sub(self.panel_right_inset()),
             self.settings_viewport_h(),
             self.settings_scroll(),
         )
@@ -235,6 +235,20 @@ impl AxonApp {
 
     pub fn set_tab_layout(&mut self, layout: &str) {
         self.config.appearance.tab_layout = layout.to_string();
+        // Con pestañas superiores el explorador va con el panel
+        if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
+            self.flip_file_explorer();
+        }
+        self.recompute_grid_for_all_tabs();
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Lado de la ventana donde va el panel de navegación: `"left"` o `"right"`.
+    pub fn set_panel_side(&mut self, side: &str) {
+        self.config.appearance.panel_side = side.to_string();
         self.recompute_grid_for_all_tabs();
         let _ = self.config.save();
         if let Some(w) = &self.window {

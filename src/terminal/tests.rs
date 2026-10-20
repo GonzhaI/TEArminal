@@ -6,8 +6,8 @@ use std::time::Instant;
 #[test]
 fn test_default_theme_palette() {
     let theme = Theme::default();
-    assert_eq!(theme.background, Color::from_rgb(0x14, 0x18, 0x21));
-    assert_eq!(theme.cursor, Color::from_rgb(0x7c, 0xc4, 0xff));
+    assert_eq!(theme.background, Color::from_rgb(0x30, 0x34, 0x46));
+    assert_eq!(theme.cursor, Color::from_rgb(0xf2, 0xd5, 0xcf));
     assert_eq!(theme.ansi.len(), 16);
 }
 

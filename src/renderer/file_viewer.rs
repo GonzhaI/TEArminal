@@ -42,7 +42,7 @@ impl TerminalRenderer {
         );
 
         // 2. Barra de encabezado superior (38 px), plana y con hairline inferior.
-        let header_h = 38;
+        let header_h = crate::renderer::geometry::FileViewerLayout::HEADER_H;
         let header_bg = theme.chrome_bg();
         fill_rect(
             buffer,
@@ -91,9 +91,9 @@ impl TerminalRenderer {
             width,
             height,
             file_icon,
-            x + 20,
+            x + 18,
             header_center_y,
-            12.5,
+            13.0,
             theme.text_muted(),
         );
 
@@ -249,7 +249,8 @@ impl TerminalRenderer {
         ));
 
         let name_start_x = x + 38;
-        let name_end_x = name_start_x + self.measure_ui_text(&viewer.file_name, 12.5, true);
+        let name_end_x =
+            name_start_x + self.measure_ui_text(&viewer.file_name, tokens::SECTION, true);
         let mut right_x = header_rects.mode_btn.0;
         for r in [header_rects.md_btn, header_rects.diff_btn]
             .into_iter()
@@ -257,14 +258,14 @@ impl TerminalRenderer {
         {
             right_x = right_x.min(r.0);
         }
-        right_x = right_x.saturating_sub(8);
+        right_x = right_x.saturating_sub(10);
         for (text, chip_fg, _bg) in &chips {
-            let chip_w = self.measure_ui_text(text, 10.0, false);
+            let chip_w = self.measure_mono_text(text, tokens::MICRO, false);
             let chip_x = right_x.saturating_sub(chip_w);
             if chip_x < name_end_x + 16 {
                 break;
             }
-            self.draw_ui_text(
+            self.draw_mono_text(
                 buffer,
                 width,
                 height,
@@ -273,7 +274,7 @@ impl TerminalRenderer {
                 header_base,
                 right_x,
                 *chip_fg,
-                10.0,
+                tokens::MICRO,
                 false,
             );
             right_x = chip_x.saturating_sub(9);
@@ -282,12 +283,46 @@ impl TerminalRenderer {
                 width,
                 height,
                 right_x,
-                y + 12,
+                y + 13,
                 1,
-                14,
+                12,
                 theme.chrome_line(),
             );
             right_x = right_x.saturating_sub(9);
+        }
+
+        // Carpeta contenedora: dato de máquina, en mono y en segundo plano tras el nombre.
+        let folder_label = viewer
+            .path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().replace('\\', "/"));
+        if let Some(folder) = folder_label.as_deref() {
+            let folder_x = name_end_x + 14;
+            if folder_x + 24 < right_x {
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    name_end_x + 7,
+                    y + 13,
+                    1,
+                    12,
+                    theme.chrome_line(),
+                );
+                self.draw_mono_text(
+                    buffer,
+                    width,
+                    height,
+                    folder,
+                    folder_x,
+                    header_base,
+                    right_x,
+                    theme.text_muted(),
+                    tokens::DETAIL,
+                    false,
+                );
+            }
         }
 
         // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
@@ -300,7 +335,7 @@ impl TerminalRenderer {
             header_base,
             right_x + 4,
             theme.foreground,
-            12.5,
+            tokens::SECTION,
             true,
         );
 
@@ -811,7 +846,7 @@ impl TerminalRenderer {
         bg: Color,
         baseline: usize,
     ) {
-        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 3, bg);
+        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 4, bg);
         self.draw_lucide_icon(
             buffer,
             width,
@@ -819,7 +854,7 @@ impl TerminalRenderer {
             icon,
             rect.0 + 13,
             rect.1 + rect.3 / 2,
-            11.0,
+            11.5,
             fg,
         );
         self.draw_ui_text(
@@ -831,7 +866,7 @@ impl TerminalRenderer {
             baseline - 1,
             rect.0 + rect.2,
             fg,
-            10.0,
+            tokens::DETAIL,
             true,
         );
     }
@@ -845,7 +880,7 @@ impl TerminalRenderer {
         viewer: &FileViewerState,
         row_height: usize,
     ) -> Option<(Rect, Rect)> {
-        let header_h = 38;
+        let header_h = crate::renderer::geometry::FileViewerLayout::HEADER_H;
         let content_y = y + header_h;
         let content_h = h.saturating_sub(header_h);
         let row_h = row_height.max(16);

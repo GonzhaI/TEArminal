@@ -68,7 +68,8 @@ impl AxonApp {
                 let torn_off = if self.is_horizontal_tabs() {
                     my >= TopTabBarRects::HEIGHT + 15 || my >= win_h || mx >= win_w
                 } else {
-                    mx >= SIDEBAR_WIDTH + 15 || my >= win_h || mx >= win_w
+                    let x0 = self.panel_x(win_w);
+                    mx + 15 < x0 || mx >= x0 + SIDEBAR_WIDTH + 15 || my >= win_h || mx >= win_w
                 };
                 if torn_off && drag_idx < self.tabs.len() && !self.tabs[drag_idx].is_settings {
                     // Si hay más de una pestaña, o hay otras ventanas abiertas a donde acoplar
@@ -201,7 +202,14 @@ impl AxonApp {
             if state == ElementState::Pressed
                 && (button == MouseButton::Left || button == MouseButton::Middle)
             {
-                let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
+                let list = self.panel_tab_indices();
+                let top_rects = TopTabBarRects::compute(win_w, list.len());
+
+                // Clic en el selector de proyecto: pasa al siguiente
+                if TopTabBarRects::inside(mx, my, top_rects.switcher_btn) {
+                    self.cycle_project();
+                    return;
+                }
 
                 // Clic en [-] Minimizar
                 if TopTabBarRects::inside(mx, my, top_rects.win_min_btn) {
@@ -247,8 +255,8 @@ impl AxonApp {
                 }
 
                 // Clic en pestañas o en botón cerrar 'x'
-                for idx in 0..self.tabs.len() {
-                    let tr = top_rects.tab_rect(idx);
+                for (pos, &idx) in list.iter().enumerate() {
+                    let tr = top_rects.tab_rect(pos);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         if button == MouseButton::Middle {
                             crate::logger::log(&format!(
@@ -259,8 +267,8 @@ impl AxonApp {
                             return;
                         }
                         if button == MouseButton::Left {
-                            if self.tabs.len() > 1 {
-                                let cr = top_rects.close_btn_rect(idx);
+                            if list.len() > 1 {
+                                let cr = top_rects.close_btn_rect(pos);
                                 if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3
                                 {
                                     crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
@@ -342,55 +350,85 @@ impl AxonApp {
             return;
         }
 
+        // Modalidad horizontal: panel de proyectos (el explorador alojado dentro atiende su propio ratón)
+        if self.is_horizontal_tabs() {
+            if let Some(lx) = self.panel_local_x(mx, my, win_w) {
+                if state == ElementState::Pressed && button == MouseButton::Left {
+                    let usable_h = win_h.saturating_sub(self.status_bar_height());
+                    let toggle = crate::renderer::ProjectsPanelRects::toggle_btn_rect(usable_h);
+                    if TopTabBarRects::inside(lx, my, toggle) {
+                        self.toggle_sidebar();
+                    } else {
+                        let entries = self.panel_rail().len() + 1;
+                        if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
+                            my,
+                            usable_h,
+                            entries,
+                            self.sidebar_scroll_offset,
+                        ) {
+                            self.click_rail(i);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
         // Modalidad vertical: comprobación de botones de alternar barra lateral y clics en el sidebar
         if !self.is_horizontal_tabs() {
             let status_bar_h = self.status_bar_height();
-            let toggle_btn_w = if self.sidebar_visible {
-                SIDEBAR_WIDTH.saturating_sub(16)
+            let usable_h = win_h.saturating_sub(status_bar_h);
+            let local = self.panel_local_x(mx, my, win_w);
+            let list_end = self.panel_list_end(usable_h);
+            let toggle_hit = if self.sidebar_visible {
+                local.is_some_and(|lx| {
+                    TopTabBarRects::inside(
+                        lx,
+                        my,
+                        crate::renderer::SidebarRects::toggle_btn_rect(usable_h),
+                    )
+                })
             } else {
-                32
+                TopTabBarRects::inside(mx, my, self.floating_toggle_rect(win_w, usable_h))
             };
-            let toggle_btn_h = 30;
-            let toggle_btn_x = 8;
-            let toggle_btn_y = win_h.saturating_sub(toggle_btn_h + 8 + status_bar_h);
 
-            let is_click_toggle = mx >= toggle_btn_x
-                && mx < toggle_btn_x + toggle_btn_w
-                && my >= toggle_btn_y
-                && my < toggle_btn_y + toggle_btn_h;
-
-            if is_click_toggle && state == ElementState::Pressed && button == MouseButton::Left {
+            if toggle_hit && state == ElementState::Pressed && button == MouseButton::Left {
                 crate::logger::log("-> Clic en botón inferior de alternar barra lateral");
                 self.toggle_sidebar();
                 return;
             }
 
             // Clics en la barra lateral abierta
-            if self.sidebar_visible && mx < SIDEBAR_WIDTH {
+            if let (true, Some(lx)) = (self.sidebar_visible, local) {
+                // Dentro del panel todas las coordenadas son locales a él
+                let mx = lx;
                 if state == ElementState::Pressed
                     && (button == MouseButton::Left || button == MouseButton::Middle)
                 {
+                    // Riel de proyectos: abrir uno o agregar el último cuadrado
+                    if mx < crate::renderer::SidebarRects::RAIL_W {
+                        let count = self.panel_rail().len() + 1;
+                        if let Some(i) = crate::renderer::SidebarRects::rail_at(mx, my, count) {
+                            if button == MouseButton::Left {
+                                self.click_rail(i);
+                            }
+                        }
+                        return;
+                    }
+
                     // Clic en botón "+"
-                    let plus_btn_x = SIDEBAR_WIDTH.saturating_sub(34);
-                    let plus_btn_y = 8;
-                    let plus_btn_w = 24;
-                    let plus_btn_h = 24;
-                    if mx >= plus_btn_x
-                        && mx < plus_btn_x + plus_btn_w
-                        && my >= plus_btn_y
-                        && my < plus_btn_y + plus_btn_h
-                    {
+                    let plus = crate::renderer::SidebarRects::plus_btn();
+                    if TopTabBarRects::inside(mx, my, plus) {
                         crate::logger::log("-> Clic en [+] sidebar: nueva terminal");
                         self.create_new_tab();
                         return;
                     }
 
                     // Clic en la barra de desplazamiento de la barra lateral vertical
-                    let usable_sidebar_h = win_h.saturating_sub(status_bar_h);
                     if let Some((track, thumb)) = TerminalRenderer::sidebar_scrollbar_geometry(
                         SIDEBAR_WIDTH,
-                        usable_sidebar_h,
-                        self.tabs.len(),
+                        list_end,
+                        self.panel_tab_indices().len(),
                         self.sidebar_scroll_offset,
                     ) {
                         let hit_x = track.0.saturating_sub(4);
@@ -405,8 +443,9 @@ impl AxonApp {
                                 self.last_scroll_time = Instant::now();
                             } else {
                                 let visible_items =
-                                    crate::renderer::SidebarRects::visible_items(usable_sidebar_h);
-                                let max_offset = self.tabs.len().saturating_sub(visible_items);
+                                    crate::renderer::SidebarRects::visible_items(list_end);
+                                let max_offset =
+                                    self.panel_tab_indices().len().saturating_sub(visible_items);
                                 if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
                                     track,
                                     thumb,
@@ -424,28 +463,13 @@ impl AxonApp {
                         }
                     }
 
-                    // Clic en pestañas o botón cerrar "x"
-                    let tab_item_h = crate::renderer::SidebarRects::TAB_ITEM_H;
-                    let tab_spacing = crate::renderer::SidebarRects::TAB_SPACING;
-                    let list_start_y = crate::renderer::SidebarRects::LIST_START_Y;
-                    let tab_x = 8;
-                    let tab_w = SIDEBAR_WIDTH.saturating_sub(16);
-                    let list_max_y = crate::renderer::SidebarRects::list_max_y(usable_sidebar_h);
-
-                    if my >= list_start_y && my < list_max_y {
-                        let rel_y = my - list_start_y;
-                        let item_total = tab_item_h + tab_spacing;
-                        let vis_idx = rel_y / item_total;
-                        let tab_idx = vis_idx + self.sidebar_scroll_offset;
-                        let in_item = (rel_y % item_total) < tab_item_h;
-
-                        if in_item && tab_idx < self.tabs.len() && mx >= tab_x && mx < tab_x + tab_w
-                        {
-                            let tab_y = list_start_y + vis_idx * item_total;
-                            let close_x = tab_x + tab_w.saturating_sub(22);
-                            let close_y = tab_y + 6;
-                            let close_size = 20;
-
+                    // Clic en pestañas o botón cerrar "x" (misma retícula que el dibujo y el hover)
+                    if let Some((pos, tab_idx)) = self.panel_tab_at(my, usable_h) {
+                        let row = crate::renderer::SidebarRects::tab_rect(
+                            pos,
+                            self.sidebar_scroll_offset,
+                        );
+                        if crate::renderer::SidebarRects::inside(mx, my, row) {
                             if button == MouseButton::Middle {
                                 crate::logger::log(&format!(
                                     "-> Clic botón central (rueda) en pestaña sidebar {}",
@@ -455,11 +479,9 @@ impl AxonApp {
                                 return;
                             }
                             if button == MouseButton::Left {
+                                let close = crate::renderer::SidebarRects::close_btn_rect(row);
                                 if self.tabs.len() > 1
-                                    && mx >= close_x
-                                    && mx < close_x + close_size
-                                    && my >= close_y
-                                    && my < close_y + close_size
+                                    && crate::renderer::SidebarRects::inside(mx, my, close)
                                 {
                                     crate::logger::log(&format!(
                                         "-> Clic en [x] pestaña {}",
@@ -488,7 +510,7 @@ impl AxonApp {
                 && state == ElementState::Pressed
                 && button == MouseButton::Left
             {
-                let page_w = win_w.saturating_sub(offset);
+                let page_w = win_w.saturating_sub(offset + self.panel_right_inset());
                 let page_h = win_h.saturating_sub(top_offset);
                 let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
                 // Barra de scroll de Ajustes: arrastrar el pulgar o saltar al punto pulsado
@@ -613,6 +635,14 @@ impl AxonApp {
                         {
                             crate::logger::log("-> Clic en disposición: Horizontal");
                             self.set_tab_layout("horizontal");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.panel_side_left_btn) {
+                            crate::logger::log("-> Clic en lado del panel: Izquierda");
+                            self.set_panel_side("left");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.panel_side_right_btn) {
+                            crate::logger::log("-> Clic en lado del panel: Derecha");
+                            self.set_panel_side("right");
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.font_value_box) {
                             crate::logger::log("-> Clic en caja de valor: tamaño de fuente");
@@ -754,11 +784,11 @@ impl AxonApp {
                         }
                     }
                     SettingsSection::About => {
-                        if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
+                        if SettingsPageRects::inside(mx, my, rects.about_open_file_btn) {
                             crate::logger::log("-> Clic en abrir archivo axon.toml (About)");
                             self.open_config_file();
                             return;
-                        } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
+                        } else if SettingsPageRects::inside(mx, my, rects.about_reset_btn) {
                             crate::logger::log(
                                 "-> Clic en restablecer valores por defecto (About)",
                             );
@@ -812,7 +842,8 @@ impl AxonApp {
                                 let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
                                 let list_start_y = panel_y
                                     + crate::explorer::FileExplorer::HEADER_HEIGHT
-                                    + crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
+                                    + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+                                    + crate::explorer::FileExplorer::LIST_TOP_PAD;
                                 let list_h = (panel_y + panel_h).saturating_sub(list_start_y);
                                 let visible_count = list_h.checked_div(item_h).unwrap_or(1);
                                 let max_offset =
@@ -860,8 +891,9 @@ impl AxonApp {
                     }
 
                     let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
+                    let nav_y = sub_y + (crate::explorer::FileExplorer::SUBHEADER_HEIGHT - 24) / 2;
                     let back_x = panel_x + 8;
-                    if mx >= back_x && mx < back_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                    if mx >= back_x && mx < back_x + 24 && my >= nav_y && my < nav_y + 24 {
                         if self.file_explorer.can_go_back() {
                             crate::logger::log("-> Clic en [<] atrás en explorador");
                             self.file_explorer.go_back();
@@ -872,8 +904,8 @@ impl AxonApp {
                         return;
                     }
 
-                    let fwd_x = back_x + 24;
-                    if mx >= fwd_x && mx < fwd_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                    let fwd_x = back_x + 26;
+                    if mx >= fwd_x && mx < fwd_x + 24 && my >= nav_y && my < nav_y + 24 {
                         if self.file_explorer.can_go_forward() {
                             crate::logger::log("-> Clic en [>] adelante en explorador");
                             self.file_explorer.go_forward();
@@ -884,8 +916,8 @@ impl AxonApp {
                         return;
                     }
 
-                    let up_x = fwd_x + 24;
-                    if mx >= up_x && mx < up_x + 22 && my >= sub_y + 4 && my < sub_y + 24 {
+                    let up_x = fwd_x + 26;
+                    if mx >= up_x && mx < up_x + 24 && my >= nav_y && my < nav_y + 24 {
                         crate::logger::log("-> Clic en [^] subir nivel en explorador");
                         match self.file_explorer.remote_parent() {
                             Some(parent) if self.file_explorer.inband_remote => {

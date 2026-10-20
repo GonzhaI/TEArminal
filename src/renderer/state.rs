@@ -1,7 +1,85 @@
 //! Tipos de estado de la interfaz que `app` construye y el renderer dibuja.
 
+/// Estado de una sesión según OSC 133: lo único que Axon sabe de forma fiable de un comando.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStatus {
+    /// Prompt libre y sin comandos terminados.
+    Idle,
+    /// Hay un comando en ejecución (un agente de CLI cuenta como tal mientras viva su proceso).
+    Running,
+    /// El último comando terminó con código 0.
+    Done,
+    /// El último comando terminó con un código distinto de 0.
+    Failed,
+}
+
+impl SessionStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "En espera",
+            Self::Running => "En curso",
+            Self::Done => "Terminó",
+            Self::Failed => "Falló",
+        }
+    }
+}
+
+/// Proyecto del riel de la barra lateral.
+#[derive(Debug, Clone)]
+pub struct SidebarProject {
+    pub name: String,
+    /// Rama git de la carpeta del proyecto, si es un repositorio.
+    pub branch: Option<String>,
+    /// Estado agregado de sus sesiones (el más urgente); `None` si no tiene sesiones abiertas.
+    pub status: Option<SessionStatus>,
+    pub initial: char,
+    /// Índice ANSI del color del proyecto.
+    pub color_slot: usize,
+    pub is_active: bool,
+    /// Hay novedades (salida nueva) en una sesión de un proyecto que no está a la vista.
+    pub has_news: bool,
+    /// Sesiones sueltas: las que no pertenecen a ningún proyecto agregado.
+    pub is_loose: bool,
+}
+
+/// Límite real de la cuenta mostrado como medidor en la barra de estado.
+#[derive(Debug, Clone)]
+pub struct StatusMeter {
+    pub label: String,
+    /// Consumido, `0.0..=100.0`.
+    pub percent: f32,
+}
+
+/// Proyecto a la vista en la barra de pestañas superiores.
+#[derive(Debug, Clone, Default)]
+pub struct TopBarProject {
+    pub title: String,
+    pub initial: char,
+    pub color_slot: usize,
+    pub is_loose: bool,
+    /// Otro proyecto tiene novedades.
+    pub has_news: bool,
+}
+
+/// Cabecera de la columna de sesiones: el proyecto seleccionado.
+#[derive(Debug, Clone, Default)]
+pub struct SidebarHeader {
+    pub title: String,
+    pub branch: Option<String>,
+    pub path: Option<String>,
+    /// El panel está a la derecha: el borde que lo separa del contenido es el izquierdo.
+    pub on_right: bool,
+    /// Fin (y) de la lista de sesiones; bajo ella queda el explorador si está visible.
+    pub list_end: usize,
+    pub explorer_visible: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct SidebarTabItem {
+    /// Posición real de la pestaña en `AxonApp::tabs` (la lista del panel está filtrada por proyecto).
+    pub index: usize,
+    /// `None` en Ajustes y visores de archivo.
+    pub status: Option<SessionStatus>,
     pub title: String,
     /// Segunda línea de la pestaña lateral: contexto real (carpeta, SSH, paneles), no decoración.
     pub detail: Option<String>,

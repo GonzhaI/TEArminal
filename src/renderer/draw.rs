@@ -236,6 +236,140 @@ impl TerminalRenderer {
         cur_x.round() as usize
     }
 
+    /// Fuente monoespaciada para un carácter: JetBrains Mono (regular/negrita) y, si falta el glifo,
+    /// el fallback del sistema. Nunca Inter: los valores de máquina se miden en mono.
+    fn mono_font_for(&self, c: char, bold: bool) -> &fontdue::Font {
+        if bold && self.bold_font().has_glyph(c) {
+            self.bold_font()
+        } else if self.regular_font.has_glyph(c) {
+            &self.regular_font
+        } else if let Some(fb) = self.fallback_font().filter(|f| f.has_glyph(c)) {
+            fb
+        } else if bold {
+            self.bold_font()
+        } else {
+            &self.regular_font
+        }
+    }
+
+    /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
+    pub fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let size_bits = effective_size.to_bits();
+        let mut cache = self.mono_advance_cache.borrow_mut();
+        let width: f32 = text
+            .chars()
+            .map(|c| {
+                *cache.entry((c, size_bits, bold)).or_insert_with(|| {
+                    self.mono_font_for(c, bold)
+                        .metrics(c, effective_size)
+                        .advance_width
+                })
+            })
+            .sum();
+        width.round() as usize
+    }
+
+    /// Dibuja un valor de máquina (ruta, rama, dimensión, atajo o versión) en JetBrains Mono.
+    /// Es la segunda voz tipográfica del chrome: Inter habla, Mono mide.
+    pub fn draw_mono_text(
+        &mut self,
+        buffer: &mut [u32],
+        buf_width: usize,
+        buf_height: usize,
+        text: &str,
+        start_x: usize,
+        baseline_y: usize,
+        max_x: usize,
+        color: Color,
+        size_px: f32,
+        bold: bool,
+    ) -> usize {
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let size_bits = effective_size.to_bits();
+        let mut cur_x = start_x as f32;
+        // `std::mem::take` evita el préstamo mutable de la caché mientras `mono_font_for` lee `self`.
+        let mut cache = std::mem::take(&mut self.mono_glyph_cache);
+
+        for c in text.chars() {
+            if cur_x as usize >= max_x {
+                break;
+            }
+            let font = self.mono_font_for(c, bold);
+            let (glyph, advance) = cache.entry((c, size_bits, bold)).or_insert_with(|| {
+                let (metrics, bitmap) = font.rasterize(c, effective_size);
+                (
+                    CachedGlyph {
+                        width: metrics.width,
+                        height: metrics.height,
+                        x_offset: metrics.xmin,
+                        y_offset: metrics.ymin,
+                        bitmap,
+                    },
+                    metrics.advance_width,
+                )
+            });
+
+            let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
+            let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+            blit_glyph(
+                buffer,
+                buf_width,
+                (0, 0, max_x.min(buf_width), buf_height),
+                glyph,
+                glyph_x,
+                glyph_y,
+                color,
+            );
+            cur_x += *advance;
+        }
+
+        self.mono_glyph_cache = cache;
+        cur_x.round() as usize
+    }
+
+    /// Tecla individual del chrome: caja de 18 px, borde hairline y glifo mono centrado.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_keycap(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        x: usize,
+        y: usize,
+        label: &str,
+        theme: &Theme,
+    ) -> usize {
+        let h = tokens::KEYCAP_H;
+        let text_w = self.measure_mono_text(label, tokens::MICRO, false);
+        let w = (text_w + 12).max(20);
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            3,
+            theme.mix(theme.background, theme.foreground, 0.07),
+        );
+        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 3, theme.chrome_line());
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            label,
+            x + 6,
+            y + h / 2 + 3,
+            x + w,
+            theme.text_secondary(),
+            tokens::MICRO,
+            false,
+        );
+        w
+    }
+
     /// Dibuja un icono Lucide vectorial perfectamente centrado en una caja
     pub fn draw_lucide_icon(
         &mut self,

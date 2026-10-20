@@ -43,6 +43,7 @@ pub struct TopTabBarRects {
     pub tabs_start_x: usize,
     pub tab_w: usize,
     pub tab_gap: usize,
+    pub switcher_btn: (usize, usize, usize, usize),
     pub plus_btn: (usize, usize, usize, usize),
     pub files_btn: (usize, usize, usize, usize),
     pub settings_btn: (usize, usize, usize, usize),
@@ -53,6 +54,13 @@ pub struct TopTabBarRects {
 
 impl TopTabBarRects {
     pub const HEIGHT: usize = 38;
+    /// La marca ocupa el extremo izquierdo; las pestañas empiezan después.
+    pub const BRAND_W: usize = 88;
+    /// Selector de proyecto de la barra de pestañas; las pestañas empiezan después.
+    pub const SWITCHER_W: usize = 156;
+    pub const TAB_GAP: usize = 2;
+    pub const CLOSE_W: usize = 24;
+    pub const PLUS_W: usize = 28;
 
     pub fn compute(width: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
@@ -66,27 +74,30 @@ impl TopTabBarRects {
         let files_btn = (actions_right.saturating_sub(30), 4, 30, 30);
         let settings_btn = (actions_right.saturating_sub(64), 4, 30, 30);
 
-        let left_reserved = 76;
+        let left_reserved = Self::SWITCHER_W;
         let right_reserved = ctrl_w * 3 + 76;
         let available_space = width.saturating_sub(left_reserved + right_reserved);
 
-        let plus_w = 32;
-        let gap = 0;
-        let usable = available_space.saturating_sub(plus_w + 8);
+        let plus_w = Self::PLUS_W;
+        let gap = Self::TAB_GAP;
+        let usable = available_space
+            .saturating_sub(plus_w + 8)
+            .saturating_sub(tabs_count.saturating_mul(gap));
         let tab_w = usable
             .checked_div(tabs_count)
             .map_or(190, |w| w.clamp(20, 190));
 
         let tabs_start_x = left_reserved;
-        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap) + 4)
+        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap) + 6)
             .min(left_reserved + available_space.saturating_sub(plus_w));
-        let plus_btn = (plus_x, 3, plus_w, 32);
+        let plus_btn = (plus_x, 5, plus_w, plus_w);
 
         Self {
             bar_h,
             tabs_start_x,
             tab_w,
             tab_gap: gap,
+            switcher_btn: (8, 5, Self::SWITCHER_W - 16, 28),
             plus_btn,
             files_btn,
             settings_btn,
@@ -109,8 +120,13 @@ impl TopTabBarRects {
     #[inline]
     pub fn close_btn_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
         let tab = self.tab_rect(idx);
-        if self.tab_w >= 72 {
-            (tab.0 + tab.2.saturating_sub(26), 10, 18, 18)
+        if self.tab_w >= 76 {
+            (
+                tab.0 + tab.2.saturating_sub(Self::CLOSE_W + 6),
+                (Self::HEIGHT - Self::CLOSE_W) / 2,
+                Self::CLOSE_W,
+                Self::CLOSE_W,
+            )
         } else {
             (0, 0, 0, 0)
         }
@@ -177,6 +193,8 @@ pub struct SettingsPageRects {
 
     pub tab_layout_vertical_btn: (usize, usize, usize, usize),
     pub tab_layout_horizontal_btn: (usize, usize, usize, usize),
+    pub panel_side_left_btn: (usize, usize, usize, usize),
+    pub panel_side_right_btn: (usize, usize, usize, usize),
 
     pub font_minus_btn: (usize, usize, usize, usize),
     pub font_plus_btn: (usize, usize, usize, usize),
@@ -204,30 +222,38 @@ pub struct SettingsPageRects {
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
     pub term_reset_btn: (usize, usize, usize, usize),
+    /// Acciones editoriales de «Acerca de» (no comparten rectángulo con Terminal)
+    pub about_open_file_btn: (usize, usize, usize, usize),
+    pub about_reset_btn: (usize, usize, usize, usize),
     pub card_w: usize,
     pub content_x: usize,
 }
 
 impl SettingsPageRects {
     /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
-    pub const CONTENT_TOP: usize = 128;
+    pub const CONTENT_TOP: usize = 144;
     /// Filas visibles de la lista de temas, alto de cada una y alto de su tarjeta
-    pub const THEME_ROWS: usize = 6;
-    pub const THEME_ROW_H: usize = 26;
-    pub const THEME_CARD_H: usize = 306;
+    pub const THEME_ROWS: usize = 7;
+    pub const THEME_ROW_H: usize = 30;
+    pub const THEME_CARD_H: usize = 428;
+    pub const INTERFACE_CARD_H: usize = 270;
+    pub const TYPOGRAPHY_CARD_H: usize = 236;
     /// Alto de la tarjeta «Comportamiento del terminal»
-    pub const TERMINAL_CARD_H: usize = 430;
+    pub const TERMINAL_CARD_H: usize = 464;
+    pub const TERMINAL_ROW_H: usize = 28;
+    pub const DISK_CARD_H: usize = 118;
+    pub const SHORTCUTS_CARD_H: usize = 392;
+    pub const ABOUT_CARD_H: usize = 328;
 
     /// Alto total del contenido desplazable de una sección (desde `CONTENT_TOP`).
     pub fn content_height(section: super::state::SettingsSection) -> usize {
         use super::state::SettingsSection::*;
-        let cards = match section {
-            Appearance => 478 + Self::THEME_CARD_H - 150,
-            Terminal => Self::TERMINAL_CARD_H + 14 + 110,
-            Shortcuts => 434,
-            About => 280,
-        };
-        cards + 24
+        match section {
+            Appearance => 970,
+            Terminal => 620,
+            Shortcuts => 424,
+            About => 360,
+        }
     }
 
     /// Máximo desplazamiento vertical para un viewport de `viewport_h` píxeles.
@@ -271,10 +297,10 @@ impl SettingsPageRects {
             side_padding
         };
         let content_x = page_x + margin_x;
-        let reset_defaults_btn = (content_x + card_w.saturating_sub(210), page_y + 36, 210, 28);
+        let reset_defaults_btn = (content_x + card_w.saturating_sub(180), page_y + 26, 180, 30);
 
-        let nav_y = page_y + 80;
-        let nav_h = 32;
+        let nav_y = page_y + 92;
+        let nav_h = 34;
 
         let nav_w = card_w / 4;
         let nav_appearance = (content_x, nav_y, nav_w, nav_h);
@@ -282,52 +308,57 @@ impl SettingsPageRects {
         let nav_shortcuts = (content_x + nav_w * 2, nav_y, nav_w, nav_h);
         let nav_about = (content_x + nav_w * 3, nav_y, nav_w, nav_h);
 
-        let card_y = page_y + 128;
+        let card_y = page_y + Self::CONTENT_TOP;
 
         // Buscador y lista desplazable de temas
-        let slot_w = card_w.saturating_sub(48) / 2;
-        let theme_slot_dark_btn = (content_x + 20, card_y + 40, slot_w, 28);
-        let theme_slot_light_btn = (content_x + 28 + slot_w, card_y + 40, slot_w, 28);
-        let theme_search_box = (content_x + 20, card_y + 76, card_w.saturating_sub(40), 28);
+        let slot_w = card_w.saturating_sub(52) / 2;
+        let theme_slot_dark_btn = (content_x + 20, card_y + 50, slot_w, 30);
+        let theme_slot_light_btn = (content_x + 32 + slot_w, card_y + 50, slot_w, 30);
+        let theme_search_box = (content_x + 20, card_y + 92, card_w.saturating_sub(40), 32);
         let theme_list = (
             content_x + 20,
-            card_y + 112,
+            card_y + 138,
             card_w.saturating_sub(40),
             Self::THEME_ROWS * Self::THEME_ROW_H,
         );
 
         // Tarjeta 2: Modo y Disposición de Pestañas
-        let card2_y = card_y + Self::THEME_CARD_H + 10;
-        let label_col_w = (card_w as f32 * 0.35).clamp(180.0, 260.0) as usize;
+        let card2_y = card_y + Self::THEME_CARD_H + 14;
+        let label_col_w = (card_w as f32 * 0.34).clamp(170.0, 240.0) as usize;
         let ctrl_x = content_x + 20 + label_col_w;
         let ctrl_w = card_w.saturating_sub(label_col_w + 40);
 
         // 3 botones para Modo de color (Sistema, Oscuro, Claro)
         let btn3_w = (ctrl_w.saturating_sub(16)) / 3;
-        let theme_mode_system_btn = (ctrl_x, card2_y + 40, btn3_w, 28);
-        let theme_mode_dark_btn = (ctrl_x + btn3_w + 8, card2_y + 40, btn3_w, 28);
-        let theme_mode_light_btn = (ctrl_x + (btn3_w + 8) * 2, card2_y + 40, btn3_w, 28);
+        let theme_mode_system_btn = (ctrl_x, card2_y + 48, btn3_w, 30);
+        let theme_mode_dark_btn = (ctrl_x + btn3_w + 8, card2_y + 48, btn3_w, 30);
+        let theme_mode_light_btn = (ctrl_x + (btn3_w + 8) * 2, card2_y + 48, btn3_w, 30);
 
         // 2 botones para Disposición de pestañas (Vertical, Superior)
         let btn2_w = (ctrl_w.saturating_sub(8)) / 2;
-        let tab_layout_vertical_btn = (ctrl_x, card2_y + 78, btn2_w, 28);
-        let tab_layout_horizontal_btn = (ctrl_x + btn2_w + 8, card2_y + 78, btn2_w, 28);
+        let tab_layout_vertical_btn = (ctrl_x, card2_y + 98, btn2_w, 30);
+        let tab_layout_horizontal_btn = (ctrl_x + btn2_w + 8, card2_y + 98, btn2_w, 30);
+
+        // 2 botones para el lado del panel de navegación (Izquierda, Derecha)
+        let panel_side_left_btn = (ctrl_x, card2_y + 148, btn2_w, 30);
+        let panel_side_right_btn = (ctrl_x + btn2_w + 8, card2_y + 148, btn2_w, 30);
 
         // Tarjeta 3: Tipografía y ventana (Terminal Font, UI Font, Spacing, Opacity)
-        let card3_y = card2_y + 124;
-        let step_btn_w = 32;
-        let step_span = 140;
-        let font_minus_btn = (ctrl_x, card3_y + 40, step_btn_w, 26);
-        let font_plus_btn = (ctrl_x + step_span, card3_y + 40, step_btn_w, 26);
+        let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
+        let step_btn_w = 30;
+        let step_span = 150;
+        let font_minus_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
+        let font_plus_btn = (ctrl_x + step_span, card3_y + 50, step_btn_w, 30);
 
-        let ui_font_minus_btn = (ctrl_x, card3_y + 76, step_btn_w, 26);
-        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 76, step_btn_w, 26);
+        let ui_font_minus_btn = (ctrl_x, card3_y + 86, step_btn_w, 30);
+        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 86, step_btn_w, 30);
 
-        let spacing_minus_btn = (ctrl_x, card3_y + 112, step_btn_w, 26);
-        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 112, step_btn_w, 26);
+        let spacing_minus_btn = (ctrl_x, card3_y + 122, step_btn_w, 30);
+        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 122, step_btn_w, 30);
 
-        let opacity_minus_btn = (ctrl_x, card3_y + 148, step_btn_w, 26);
-        let opacity_plus_btn = (ctrl_x + step_span, card3_y + 148, step_btn_w, 26);
+        // La opacidad pertenece a «Interfaz», no a tipografía.
+        let opacity_minus_btn = (ctrl_x, card2_y + 198, step_btn_w, 30);
+        let opacity_plus_btn = (ctrl_x + step_span, card2_y + 198, step_btn_w, 30);
 
         let font_value_box = (
             font_minus_btn.0 + font_minus_btn.2 + 4,
@@ -362,23 +393,29 @@ impl SettingsPageRects {
             opacity_minus_btn.3,
         );
 
-        // Terminal toggles (alineados a ctrl_x con ancho uniforme)
-        let toggle_w = 170;
-        let cursor_blink_btn = (ctrl_x, card_y + 42, toggle_w, 28);
-        let shell_integration_btn = (ctrl_x, card_y + 80, toggle_w, 28);
-        let copy_on_select_btn = (ctrl_x, card_y + 118, toggle_w, 28);
-        let status_bar_toggle_btn = (ctrl_x, card_y + 156, toggle_w, 28);
-        let file_explorer_toggle_btn = (ctrl_x, card_y + 194, toggle_w, 28);
-        let restore_session_btn = (ctrl_x, card_y + 232, toggle_w, 28);
-        let auto_save_btn = (ctrl_x, card_y + 270, toggle_w, 28);
-        let word_wrap_btn = (ctrl_x, card_y + 308, toggle_w, 28);
-        let ssh_integration_btn = (ctrl_x, card_y + 346, toggle_w, 28);
-        let ligatures_btn = (ctrl_x, card_y + 384, toggle_w, 28);
+        // Terminal: tres grupos (Entrada · Shell · Interfaz) con filas de 28 px
+        let toggle_w = 180;
+        let row_h = Self::TERMINAL_ROW_H;
+        let cursor_blink_btn = (ctrl_x, card_y + 72, toggle_w, row_h);
+        let copy_on_select_btn = (ctrl_x, card_y + 106, toggle_w, row_h);
+        let word_wrap_btn = (ctrl_x, card_y + 140, toggle_w, row_h);
+        let shell_integration_btn = (ctrl_x, card_y + 196, toggle_w, row_h);
+        let ssh_integration_btn = (ctrl_x, card_y + 230, toggle_w, row_h);
+        let ligatures_btn = (ctrl_x, card_y + 264, toggle_w, row_h);
+        let status_bar_toggle_btn = (ctrl_x, card_y + 320, toggle_w, row_h);
+        let file_explorer_toggle_btn = (ctrl_x, card_y + 354, toggle_w, row_h);
+        let restore_session_btn = (ctrl_x, card_y + 388, toggle_w, row_h);
+        let auto_save_btn = (ctrl_x, card_y + 422, toggle_w, row_h);
 
         let cfg_y = card_y + Self::TERMINAL_CARD_H + 14;
         let cfg_btn_w = (card_w.saturating_sub(50)) / 2;
-        let open_file_btn = (content_x + 20, cfg_y + 44, cfg_btn_w, 32);
-        let term_reset_btn = (content_x + 30 + cfg_btn_w, cfg_y + 44, cfg_btn_w, 32);
+        let open_file_btn = (content_x + 20, cfg_y + 46, cfg_btn_w, 32);
+        let term_reset_btn = (content_x + 30 + cfg_btn_w, cfg_y + 46, cfg_btn_w, 32);
+
+        // About: acciones propias, al pie de la tarjeta editorial
+        let about_y = card_y + Self::ABOUT_CARD_H.saturating_sub(60);
+        let about_open_file_btn = (content_x + 20, about_y, 190, 32);
+        let about_reset_btn = (content_x + 220, about_y, 190, 32);
 
         Self {
             nav_appearance,
@@ -394,6 +431,8 @@ impl SettingsPageRects {
             theme_mode_light_btn,
             tab_layout_vertical_btn,
             tab_layout_horizontal_btn,
+            panel_side_left_btn,
+            panel_side_right_btn,
             font_minus_btn,
             font_plus_btn,
             font_value_box,
@@ -419,6 +458,8 @@ impl SettingsPageRects {
             open_file_btn,
             reset_defaults_btn,
             term_reset_btn,
+            about_open_file_btn,
+            about_reset_btn,
             card_w,
             content_x,
         }
@@ -451,23 +492,23 @@ impl FileViewerHeaderRects {
 
         // 1. Botón Vista previa / Código si es .md (icono + texto)
         let md_btn = if is_markdown {
-            let md_w = 118;
+            let md_w = 112;
             let md_x = right_x.saturating_sub(md_w);
             right_x = md_x.saturating_sub(8);
-            Some((md_x, y + 8, md_w, 22))
+            Some((md_x, y + 7, md_w, 24))
         } else {
             None
         };
 
         // 2. Botón Lectura / Edición (icono + texto; el atajo Ctrl+E va en la ayuda del menú)
-        let mode_w = 98;
+        let mode_w = 96;
         let mode_x = right_x.saturating_sub(mode_w);
-        let mode_btn = (mode_x, y + 8, mode_w, 22);
+        let mode_btn = (mode_x, y + 7, mode_w, 24);
 
         // 3. Botón Cambios (diff antes vs ahora), a la izquierda del de modo
         let diff_btn = has_diff.then(|| {
-            let diff_w = 92;
-            (mode_x.saturating_sub(8 + diff_w), y + 8, diff_w, 22)
+            let diff_w = 88;
+            (mode_x.saturating_sub(8 + diff_w), y + 7, diff_w, 24)
         });
 
         Self {
@@ -574,41 +615,136 @@ impl FileViewerLayout {
     }
 }
 
-/// Geometría de la lista vertical de pestañas en la barra lateral (una sola fuente de verdad).
+/// Geometría de la barra lateral: riel de proyectos y columna de sesiones (una sola fuente para dibujo,
+/// clic, hover y arrastre).
+///
+/// La barra empieza en `TOP` (bajo la barra de título) para no tapar la marca. Las coordenadas de sus
+/// métodos son locales a la barra, que se dibuja en su propio búfer y se coloca a izquierda o derecha:
+/// clic y dibujo no repiten la retícula.
 pub struct SidebarRects;
 
 impl SidebarRects {
-    pub const TAB_ITEM_H: usize = 42;
+    pub const WIDTH: usize = 328;
+    /// Ancho del riel de proyectos; la columna de sesiones ocupa el resto.
+    pub const RAIL_W: usize = 60;
+    pub const RAIL_ITEM: usize = 40;
+    pub const RAIL_STEP: usize = 50;
+    pub const TOP: usize = 38;
+    /// Nombre del proyecto, rama y carpeta.
+    pub const HEADER_H: usize = 66;
+    /// Y de la primera fila.
+    pub const LIST_START_Y: usize = Self::TOP + Self::HEADER_H + 8;
+    pub const TAB_ITEM_H: usize = 48;
     pub const TAB_SPACING: usize = 2;
-    pub const LIST_START_Y: usize = 66;
+    /// X de las filas de sesión (junto al riel).
+    pub const PAD_X: usize = Self::RAIL_W + 8;
+    pub const CLOSE_SIZE: usize = 24;
+    pub const PLUS_SIZE: usize = 28;
     pub const TOGGLE_H: usize = 30;
 
+    /// Cuadrado `i` del riel: los proyectos, las sesiones sueltas si las hay y, al final, «Agregar proyecto».
     #[inline]
-    pub fn list_max_y(usable_h: usize) -> usize {
-        usable_h
-            .saturating_sub(Self::TOGGLE_H + 8)
-            .saturating_sub(8)
+    pub fn rail_item_rect(i: usize) -> Rect {
+        (
+            (Self::RAIL_W - Self::RAIL_ITEM) / 2,
+            Self::TOP + 10 + i * Self::RAIL_STEP,
+            Self::RAIL_ITEM,
+            Self::RAIL_ITEM,
+        )
+    }
+
+    /// Cuadrado del riel bajo el cursor, entre `count` cuadrados.
+    #[inline]
+    pub fn rail_at(mx: usize, my: usize, count: usize) -> Option<usize> {
+        (0..count).find(|&i| Self::inside(mx, my, Self::rail_item_rect(i)))
     }
 
     #[inline]
-    pub fn visible_items(usable_h: usize) -> usize {
-        let max_y = Self::list_max_y(usable_h);
-        if max_y > Self::LIST_START_Y {
-            (max_y - Self::LIST_START_Y) / (Self::TAB_ITEM_H + Self::TAB_SPACING)
+    pub fn plus_btn() -> Rect {
+        (
+            Self::WIDTH - Self::PLUS_SIZE - 10,
+            Self::TOP + 8,
+            Self::PLUS_SIZE,
+            Self::PLUS_SIZE,
+        )
+    }
+
+    #[inline]
+    pub fn list_max_y(usable_h: usize) -> usize {
+        Self::toggle_btn_rect(usable_h)
+            .1
+            .saturating_sub(8)
+            .max(Self::LIST_START_Y)
+    }
+
+    /// Fin (y) de la lista de sesiones. Sin explorador llega hasta el pie; con él la lista cede espacio:
+    /// como mucho el 40 % libre, en filas enteras y con al menos una.
+    pub fn list_end(usable_h: usize, rows: usize, explorer_visible: bool) -> usize {
+        let max = Self::list_max_y(usable_h);
+        if !explorer_visible {
+            return max;
+        }
+        let stride = Self::TAB_ITEM_H + Self::TAB_SPACING;
+        let cap_rows = ((max - Self::LIST_START_Y) * 2 / 5 / stride).max(1);
+        Self::LIST_START_Y + rows.clamp(1, cap_rows) * stride
+    }
+
+    /// Rectángulo del explorador alojado bajo la lista y sobre el pie (local al panel).
+    pub fn explorer_rect(usable_h: usize, list_end: usize) -> Rect {
+        let top = list_end + 8;
+        let bottom = Self::toggle_btn_rect(usable_h).1.saturating_sub(8);
+        (
+            Self::RAIL_W,
+            top,
+            Self::WIDTH - Self::RAIL_W,
+            bottom.saturating_sub(top),
+        )
+    }
+
+    #[inline]
+    pub fn visible_items(list_end: usize) -> usize {
+        if list_end > Self::LIST_START_Y {
+            (list_end - Self::LIST_START_Y) / (Self::TAB_ITEM_H + Self::TAB_SPACING)
         } else {
             1
         }
     }
 
+    /// Y absoluta de la fila `vis_idx` (índice dentro de la ventana visible).
+    #[inline]
+    pub fn row_y(vis_idx: usize) -> usize {
+        Self::LIST_START_Y + vis_idx * (Self::TAB_ITEM_H + Self::TAB_SPACING)
+    }
+
+    /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
+    #[inline]
+    pub fn tab_rect(idx: usize, scroll_offset: usize) -> Rect {
+        (
+            Self::PAD_X,
+            Self::row_y(idx.saturating_sub(scroll_offset)),
+            Self::WIDTH - Self::PAD_X - 8,
+            Self::TAB_ITEM_H,
+        )
+    }
+
+    #[inline]
+    pub fn close_btn_rect(tab: Rect) -> Rect {
+        (
+            tab.0 + tab.2.saturating_sub(Self::CLOSE_SIZE + 6),
+            tab.1 + (tab.3.saturating_sub(Self::CLOSE_SIZE)) / 2,
+            Self::CLOSE_SIZE,
+            Self::CLOSE_SIZE,
+        )
+    }
+
     #[inline]
     pub fn tab_at_y(
         my: usize,
-        usable_h: usize,
+        list_end: usize,
         scroll_offset: usize,
         total_tabs: usize,
     ) -> Option<usize> {
-        let max_y = Self::list_max_y(usable_h);
-        if my < Self::LIST_START_Y || my >= max_y {
+        if my < Self::LIST_START_Y || my >= list_end {
             return None;
         }
         let rel = my - Self::LIST_START_Y;
@@ -618,6 +754,88 @@ impl SidebarRects {
         }
         let idx = rel / stride + scroll_offset;
         (idx < total_tabs).then_some(idx)
+    }
+
+    /// Botón «Ocultar» del pie, compartido por dibujo y clic (también cuando la barra está oculta).
+    #[inline]
+    pub fn toggle_btn_rect(usable_h: usize) -> Rect {
+        (
+            Self::PAD_X,
+            usable_h.saturating_sub(Self::TOGGLE_H + 8),
+            Self::WIDTH - Self::PAD_X - 8,
+            Self::TOGGLE_H,
+        )
+    }
+
+    #[inline]
+    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+        rect.2 > 0
+            && rect.3 > 0
+            && mx >= rect.0
+            && mx < rect.0 + rect.2
+            && my >= rect.1
+            && my < rect.1 + rect.3
+    }
+}
+
+/// Geometría del panel de proyectos del modo de pestañas superiores. Es local al panel, que mide
+/// `SidebarRects::WIDTH`, y la comparten dibujo, clic, hover y rueda.
+pub struct ProjectsPanelRects;
+
+impl ProjectsPanelRects {
+    pub const HEADER_H: usize = 40;
+    pub const ROW_H: usize = 46;
+    pub const ROW_STEP: usize = 48;
+    pub const ROWS_TOP: usize = SidebarRects::TOP + Self::HEADER_H + 4;
+
+    /// Botón «Ocultar panel» del pie.
+    #[inline]
+    pub fn toggle_btn_rect(usable_h: usize) -> Rect {
+        (
+            8,
+            usable_h.saturating_sub(SidebarRects::TOGGLE_H + 8),
+            SidebarRects::WIDTH - 16,
+            SidebarRects::TOGGLE_H,
+        )
+    }
+
+    /// Filas que caben (proyectos y «Agregar proyecto»): como mucho el 40 % del alto libre.
+    pub fn visible_rows(usable_h: usize) -> usize {
+        let free = Self::toggle_btn_rect(usable_h)
+            .1
+            .saturating_sub(8 + Self::ROWS_TOP);
+        (free * 2 / 5 / Self::ROW_STEP).max(2)
+    }
+
+    /// Fin (y) de la lista con `entries` filas.
+    pub fn rows_end(usable_h: usize, entries: usize) -> usize {
+        Self::ROWS_TOP + entries.min(Self::visible_rows(usable_h)) * Self::ROW_STEP
+    }
+
+    /// Rectángulo de la fila visible `slot`.
+    #[inline]
+    pub fn row_rect(slot: usize) -> Rect {
+        (
+            8,
+            Self::ROWS_TOP + slot * Self::ROW_STEP,
+            SidebarRects::WIDTH - 16,
+            Self::ROW_H,
+        )
+    }
+
+    /// Fila bajo `my`, como índice absoluto en las `entries` filas (con el desplazamiento `scroll`).
+    pub fn row_at(my: usize, usable_h: usize, entries: usize, scroll: usize) -> Option<usize> {
+        let rel = my.checked_sub(Self::ROWS_TOP)?;
+        let slot = rel / Self::ROW_STEP;
+        let shown = Self::visible_rows(usable_h).min(entries.saturating_sub(scroll));
+        (rel % Self::ROW_STEP < Self::ROW_H && slot < shown).then_some(scroll + slot)
+    }
+
+    /// Rectángulo del explorador alojado bajo la lista y sobre el pie.
+    pub fn explorer_rect(usable_h: usize, rows_end: usize) -> Rect {
+        let top = rows_end + 8;
+        let bottom = Self::toggle_btn_rect(usable_h).1.saturating_sub(8);
+        (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
     }
 }
 

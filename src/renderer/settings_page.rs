@@ -8,7 +8,7 @@ impl TerminalRenderer {
         buffer: &mut [u32],
         buf_width: usize,
         buf_height: usize,
-        rect: (usize, usize, usize, usize),
+        rect: Rect,
         text: &str,
         hovered: bool,
         active_accent: bool,
@@ -20,17 +20,17 @@ impl TerminalRenderer {
         } else if hovered {
             theme.surface_hover()
         } else {
-            theme.mix(theme.background, theme.foreground, 0.06)
+            theme.mix(theme.background, theme.foreground, 0.05)
         };
         crate::ui::draw_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, bg);
-        let b_border = if active_accent {
+        let border = if active_accent {
             theme.accent_color()
         } else if hovered {
             theme.chrome_line_strong()
         } else {
             theme.chrome_line()
         };
-        crate::ui::stroke_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, b_border);
+        crate::ui::stroke_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, border);
 
         let fg = if active_accent {
             theme.accent_color()
@@ -39,7 +39,7 @@ impl TerminalRenderer {
         } else {
             theme.text_secondary()
         };
-        let text_w = self.measure_ui_text(text, 11.0, active_accent);
+        let text_w = self.measure_ui_text(text, tokens::BODY, active_accent);
         let tx = bx + (bw.saturating_sub(text_w) / 2);
         let baseline = by + (bh / 2) + 4;
         self.draw_ui_text(
@@ -51,7 +51,65 @@ impl TerminalRenderer {
             baseline,
             bx + bw,
             fg,
-            11.0,
+            tokens::BODY,
+            active_accent,
+        );
+    }
+
+    /// Botón de opción con icono Lucide y etiqueta (disposición de pestañas).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_icon_button(
+        &mut self,
+        buffer: &mut [u32],
+        buf_width: usize,
+        buf_height: usize,
+        rect: Rect,
+        icon: crate::ui::LucideIcon,
+        text: &str,
+        hovered: bool,
+        active_accent: bool,
+        theme: &Theme,
+    ) {
+        let (bx, by, bw, bh) = rect;
+        let bg = if active_accent {
+            theme.accent_soft(32)
+        } else if hovered {
+            theme.surface_hover()
+        } else {
+            theme.mix(theme.background, theme.foreground, 0.05)
+        };
+        crate::ui::draw_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, bg);
+        let border = if active_accent {
+            theme.accent_color()
+        } else if hovered {
+            theme.chrome_line_strong()
+        } else {
+            theme.chrome_line()
+        };
+        crate::ui::stroke_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, border);
+
+        let fg = if active_accent {
+            theme.accent_color()
+        } else if hovered {
+            theme.foreground
+        } else {
+            theme.text_secondary()
+        };
+        let text_w = self.measure_ui_text(text, tokens::BODY, active_accent);
+        let content_w = 14 + 6 + text_w;
+        let start = bx + (bw.saturating_sub(content_w) / 2);
+        let cy = by + bh / 2;
+        self.draw_lucide_icon(buffer, buf_width, buf_height, icon, start + 7, cy, 13.0, fg);
+        self.draw_ui_text(
+            buffer,
+            buf_width,
+            buf_height,
+            text,
+            start + 20,
+            cy + 4,
+            bx + bw,
+            fg,
+            tokens::BODY,
             active_accent,
         );
     }
@@ -61,8 +119,8 @@ impl TerminalRenderer {
         buffer: &mut [u32],
         width: usize,
         height: usize,
-        minus_rect: (usize, usize, usize, usize),
-        plus_rect: (usize, usize, usize, usize),
+        minus_rect: Rect,
+        plus_rect: Rect,
         text: &str,
         is_editing: bool,
         is_hovered: bool,
@@ -77,7 +135,7 @@ impl TerminalRenderer {
         let bg = if is_editing || is_hovered {
             theme.surface_hover()
         } else {
-            theme.mix(theme.background, theme.foreground, 0.06)
+            theme.mix(theme.background, theme.foreground, 0.05)
         };
         crate::ui::draw_rounded_rect(
             buffer, width, height, span_start, box_y, span_w, box_h, 4, bg,
@@ -100,7 +158,7 @@ impl TerminalRenderer {
             text.to_string()
         };
 
-        let text_w = self.measure_ui_text(&disp_text, 11.5, true);
+        let text_w = self.measure_mono_text(&disp_text, tokens::BODY, true);
         let tx = span_start + (span_w.saturating_sub(text_w) / 2);
         let baseline = box_y + (box_h / 2) + 4;
         let fg = if is_editing {
@@ -108,7 +166,7 @@ impl TerminalRenderer {
         } else {
             theme.accent_color()
         };
-        self.draw_ui_text(
+        self.draw_mono_text(
             buffer,
             width,
             height,
@@ -117,7 +175,7 @@ impl TerminalRenderer {
             baseline,
             span_end.saturating_sub(2),
             fg,
-            11.5,
+            tokens::BODY,
             true,
         );
     }
@@ -133,18 +191,44 @@ impl TerminalRenderer {
         label: &str,
         theme: &Theme,
     ) {
-        let baseline = y + 18;
         self.draw_ui_text(
             buffer,
             buf_width,
             buf_height,
             label,
             x,
-            baseline,
+            y + 18,
             max_x,
             theme.foreground,
-            11.5,
+            tokens::BODY,
             false,
+        );
+    }
+
+    /// Etiqueta de grupo: micro-mayúsculas con tracking, sin iconos.
+    pub(super) fn draw_group_label(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        x: usize,
+        baseline: usize,
+        max_x: usize,
+        label: &str,
+        theme: &Theme,
+    ) {
+        self.draw_ui_text_tracked(
+            buffer,
+            width,
+            height,
+            label,
+            x,
+            baseline,
+            max_x,
+            theme.text_muted(),
+            tokens::MICRO,
+            true,
+            tokens::TRACKING,
         );
     }
 
@@ -163,21 +247,102 @@ impl TerminalRenderer {
         crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 6, theme.surface_bg());
         crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 6, theme.chrome_line());
 
-        // Barra superior de encabezado de la tarjeta
-        Self::draw_rect(buffer, width, height, x, y + 30, w, 1, theme.chrome_line());
-        let baseline = y + 20;
+        // Cabecera editorial de la tarjeta: 40 px, micro-etiqueta con tracking.
+        Self::draw_rect(buffer, width, height, x, y + 40, w, 1, theme.chrome_line());
         self.draw_ui_text_tracked(
             buffer,
             width,
             height,
             title,
-            x + 16,
-            baseline,
+            x + 20,
+            y + 26,
             x + w,
             theme.text_muted(),
-            9.5,
+            tokens::MICRO,
             true,
-            1.1,
+            tokens::TRACKING,
+        );
+    }
+
+    /// Fila de opción booleana: etiqueta a la izquierda y checkbox de 18 px a la derecha.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_toggle_row(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        label_x: usize,
+        label_max: usize,
+        rect: Rect,
+        label: &str,
+        on: bool,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let cy = rect.1 + rect.3 / 2;
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            label,
+            label_x,
+            cy + 4,
+            label_max,
+            if hovered {
+                theme.foreground
+            } else {
+                theme.text_secondary()
+            },
+            tokens::BODY,
+            false,
+        );
+
+        let size = tokens::CHECKBOX;
+        let bx = rect.0;
+        let by = cy.saturating_sub(size / 2);
+        let bg = if on {
+            theme.accent_soft(if hovered { 44 } else { 32 })
+        } else if hovered {
+            theme.surface_hover()
+        } else {
+            theme.mix(theme.background, theme.foreground, 0.05)
+        };
+        crate::ui::draw_rounded_rect(buffer, width, height, bx, by, size, size, 4, bg);
+        let border = if on {
+            theme.accent_color()
+        } else if hovered {
+            theme.chrome_line_strong()
+        } else {
+            theme.chrome_line()
+        };
+        crate::ui::stroke_rounded_rect(buffer, width, height, bx, by, size, size, 4, border);
+        if on {
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::Check,
+                bx + size / 2,
+                by + size / 2,
+                12.0,
+                theme.accent_color(),
+            );
+        }
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            if on { "Activado" } else { "Desactivado" },
+            bx + size + 8,
+            cy + 4,
+            rect.0 + rect.2,
+            if on {
+                theme.text_secondary()
+            } else {
+                theme.text_muted()
+            },
+            tokens::DETAIL,
+            false,
         );
     }
 
@@ -188,21 +353,22 @@ impl TerminalRenderer {
         width: usize,
         height: usize,
         page_x: usize,
+        right_inset: usize,
         page_y: usize,
         status_bar_h: usize,
         config: &AxonConfig,
         state: &SettingsPageState,
         theme: &Theme,
     ) {
-        if width <= page_x || height <= page_y {
+        if width <= page_x + right_inset || height <= page_y {
             return;
         }
 
-        let page_w = width - page_x;
+        let page_w = width - page_x - right_inset;
         let page_h = height - page_y;
         let rects = SettingsPageRects::compute(page_x, page_y, page_w, page_h);
 
-        // 1. Fondo de la página de ajustes a partir de page_y (para no sobreescribir barra superior)
+        // 1. Fondo de la página
         Self::draw_rect(
             buffer,
             width,
@@ -214,37 +380,34 @@ impl TerminalRenderer {
             theme.background,
         );
 
-        // 2. Encabezado: título y una línea de contexto. Sin iconos decorativos.
+        // 2. Encabezado editorial: título de 20 px, contexto y restablecer.
         let content_x = rects.content_x;
         let card_w = rects.card_w;
-
         self.draw_ui_text(
             buffer,
             width,
             height,
             "Ajustes",
             content_x,
-            page_y + 42,
-            content_x + card_w.saturating_sub(215),
+            page_y + 48,
+            content_x + card_w.saturating_sub(190),
             theme.foreground,
-            15.0,
+            tokens::DISPLAY,
             true,
         );
-
         self.draw_ui_text(
             buffer,
             width,
             height,
             "Apariencia, terminal y atajos de teclado",
             content_x,
-            page_y + 61,
-            content_x + card_w.saturating_sub(215),
+            page_y + 70,
+            content_x + card_w.saturating_sub(190),
             theme.text_muted(),
-            10.5,
+            tokens::DETAIL,
             false,
         );
 
-        // Botón Restablecer valores por defecto en el encabezado
         let r_btn = rects.reset_defaults_btn;
         if state.hovered_reset_defaults {
             crate::ui::draw_rounded_rect(
@@ -255,7 +418,7 @@ impl TerminalRenderer {
                 r_btn.1,
                 r_btn.2,
                 r_btn.3,
-                3,
+                4,
                 theme.surface_hover(),
             );
         }
@@ -266,16 +429,16 @@ impl TerminalRenderer {
         };
         let r_cy = r_btn.1 + (r_btn.3 / 2);
         let r_label = "Restablecer";
-        let r_label_w = self.measure_ui_text(r_label, 10.5, false);
+        let r_label_w = self.measure_ui_text(r_label, tokens::BODY, false);
         let r_text_x = r_btn.0 + r_btn.2.saturating_sub(r_label_w + 8);
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::RefreshCw,
-            r_text_x.saturating_sub(12),
+            r_text_x.saturating_sub(13),
             r_cy,
-            10.5,
+            11.0,
             r_fg,
         );
         self.draw_ui_text(
@@ -287,17 +450,16 @@ impl TerminalRenderer {
             r_cy + 4,
             r_btn.0 + r_btn.2,
             r_fg,
-            10.5,
+            tokens::BODY,
             false,
         );
 
-        // Línea divisoria superior
         Self::draw_rect(
             buffer,
             width,
             height,
             content_x,
-            page_y + 72,
+            page_y + 84,
             card_w,
             1,
             theme.chrome_line(),
@@ -320,7 +482,7 @@ impl TerminalRenderer {
             (
                 SettingsSection::Shortcuts,
                 crate::ui::LucideIcon::Keyboard,
-                "Atajos de teclado",
+                "Atajos",
                 rects.nav_shortcuts,
             ),
             (
@@ -349,7 +511,7 @@ impl TerminalRenderer {
                 icon,
                 r.0 + 14,
                 cy,
-                11.5,
+                12.0,
                 if is_active { theme.accent_color() } else { fg },
             );
             self.draw_ui_text(
@@ -357,11 +519,11 @@ impl TerminalRenderer {
                 width,
                 height,
                 title,
-                r.0 + 26,
+                r.0 + 28,
                 cy + 4,
                 r.0 + r.2,
                 fg,
-                11.0,
+                tokens::BODY,
                 is_active,
             );
             if is_active {
@@ -377,8 +539,6 @@ impl TerminalRenderer {
                 );
             }
         }
-
-        // Línea divisoria bajo navegación
         Self::draw_rect(
             buffer,
             width,
@@ -390,8 +550,7 @@ impl TerminalRenderer {
             theme.chrome_line(),
         );
 
-        // 4. Contenido de la sección activa: se dibuja completo fuera de pantalla (coordenadas de
-        //    página, page_y = 0) y se copia solo la ventana visible según el scroll.
+        // 4. Contenido: se dibuja fuera de pantalla y se copia la ventana visible.
         let top = SettingsPageRects::CONTENT_TOP;
         let content_h = SettingsPageRects::content_height(state.section);
         let viewport_h = page_h.saturating_sub(top + status_bar_h);
@@ -429,9 +588,13 @@ impl TerminalRenderer {
         }
         self.settings_scratch = tmp;
 
-        if let Some((track, thumb)) =
-            SettingsPageRects::scrollbar(state.section, page_y, width, viewport_h, scroll)
-        {
+        if let Some((track, thumb)) = SettingsPageRects::scrollbar(
+            state.section,
+            page_y,
+            width.saturating_sub(right_inset),
+            viewport_h,
+            scroll,
+        ) {
             Self::draw_scrollbar_rects(
                 buffer,
                 width,
@@ -445,7 +608,7 @@ impl TerminalRenderer {
         }
     }
 
-    /// Sección «Appearance» de la página de ajustes.
+    /// Sección «Apariencia»: temas, interfaz y tipografía.
     fn draw_settings_appearance(
         &mut self,
         buffer: &mut [u32],
@@ -460,7 +623,6 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         // Tarjeta 1: Temas
-        let th_card_h = SettingsPageRects::THEME_CARD_H;
         self.draw_card(
             buffer,
             width,
@@ -468,12 +630,11 @@ impl TerminalRenderer {
             content_x,
             card_y,
             card_w,
-            th_card_h,
-            "TEMA VISUAL DE COLOR",
+            SettingsPageRects::THEME_CARD_H,
+            "TEMA VISUAL",
             theme,
         );
 
-        // Ranuras: el tema oscuro y el claro se eligen por separado (el modo decide cuál se usa)
         let slot_names = [
             Theme::canonical_name(&config.appearance.theme),
             Theme::canonical_name(&config.appearance.theme_light),
@@ -490,7 +651,7 @@ impl TerminalRenderer {
                 width,
                 height,
                 rect,
-                &format!("{label}: {}", slot_names[i]),
+                &format!("{label} · {}", slot_names[i]),
                 state.hovered_theme_slot == Some(i),
                 state.theme_slot_light == (i == 1),
                 theme,
@@ -510,13 +671,8 @@ impl TerminalRenderer {
             sb.2,
             sb.3,
             4,
-            theme.mix(theme.background, theme.foreground, 0.06),
+            theme.mix(theme.background, theme.foreground, 0.05),
         );
-        let search_border = if searching {
-            theme.accent_color()
-        } else {
-            theme.chrome_line()
-        };
         crate::ui::stroke_rounded_rect(
             buffer,
             width,
@@ -526,12 +682,30 @@ impl TerminalRenderer {
             sb.2,
             sb.3,
             4,
-            search_border,
+            if searching {
+                theme.accent_color()
+            } else {
+                theme.chrome_line()
+            },
+        );
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::Search,
+            sb.0 + 14,
+            sb.1 + sb.3 / 2,
+            12.0,
+            if searching {
+                theme.accent_color()
+            } else {
+                theme.text_muted()
+            },
         );
         let count = format!("{}/{}", matches.len(), Theme::names().count());
-        let count_w = self.measure_ui_text(&count, 11.0, false);
+        let count_w = self.measure_mono_text(&count, tokens::MICRO, false);
         let text_y = sb.1 + sb.3 / 2 + 4;
-        self.draw_ui_text(
+        self.draw_mono_text(
             buffer,
             width,
             height,
@@ -540,11 +714,11 @@ impl TerminalRenderer {
             text_y,
             sb.0 + sb.2,
             theme.text_muted(),
-            11.0,
+            tokens::MICRO,
             false,
         );
         let (query, query_color) = if state.theme_filter.is_empty() && !searching {
-            ("Buscar tema...".to_string(), theme.text_muted())
+            ("Buscar tema…".to_string(), theme.text_muted())
         } else {
             (
                 format!("{}{}", state.theme_filter, if searching { "|" } else { "" }),
@@ -556,15 +730,15 @@ impl TerminalRenderer {
             width,
             height,
             &query,
-            sb.0 + 12,
+            sb.0 + 30,
             text_y,
             sb.0 + sb.2 - count_w - 20,
             query_color,
-            11.0,
+            tokens::BODY,
             false,
         );
 
-        // Lista desplazable: el tema activo se resalta y cada fila muestra una vista previa de su paleta
+        // Lista desplazable de temas
         let current = slot_names[state.theme_slot_light as usize];
         let first = state
             .theme_scroll
@@ -577,10 +751,10 @@ impl TerminalRenderer {
                 height,
                 "Sin resultados",
                 l.0 + 12,
-                l.1 + 18,
+                l.1 + 20,
                 l.0 + l.2,
                 theme.text_muted(),
-                11.0,
+                tokens::BODY,
                 false,
             );
         }
@@ -592,12 +766,21 @@ impl TerminalRenderer {
             let is_current = name == current;
             let is_hover = state.hovered_theme == Some(i);
             if is_current || is_hover {
-                let bg = if is_current {
-                    theme.accent_soft(26)
-                } else {
-                    theme.surface_hover()
-                };
-                crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3 - 2, 3, bg);
+                crate::ui::draw_rounded_rect(
+                    buffer,
+                    width,
+                    height,
+                    r.0,
+                    r.1,
+                    r.2,
+                    r.3 - 2,
+                    4,
+                    if is_current {
+                        theme.accent_soft(26)
+                    } else {
+                        theme.surface_hover()
+                    },
+                );
             }
             let fg = if is_current {
                 theme.accent_color()
@@ -607,24 +790,37 @@ impl TerminalRenderer {
                 theme.text_secondary()
             };
             let preview = Theme::from_name(name);
+            let chip_right = r.0 + r.2 - if is_current { 26 } else { 12 };
             let chips = [preview.background, preview.foreground]
                 .into_iter()
                 .chain(preview.ansi[1..=6].iter().copied());
             let chip_w = 10;
-            let chips_x = r.0 + r.2 - 14 - 8 * (chip_w + 3);
+            let chips_x = chip_right - 8 * (chip_w + 3);
             for (k, c) in chips.enumerate() {
                 let cx = chips_x + k * (chip_w + 3);
-                crate::ui::draw_rounded_rect(buffer, width, height, cx, r.1 + 6, chip_w, 12, 2, c);
+                crate::ui::draw_rounded_rect(buffer, width, height, cx, r.1 + 8, chip_w, 14, 2, c);
                 crate::ui::stroke_rounded_rect(
                     buffer,
                     width,
                     height,
                     cx,
-                    r.1 + 6,
+                    r.1 + 8,
                     chip_w,
-                    12,
+                    14,
                     2,
                     theme.chrome_line(),
+                );
+            }
+            if is_current {
+                self.draw_lucide_icon(
+                    buffer,
+                    width,
+                    height,
+                    crate::ui::LucideIcon::Check,
+                    r.0 + r.2 - 14,
+                    r.1 + r.3 / 2,
+                    12.0,
+                    theme.accent_color(),
                 );
             }
             self.draw_ui_text(
@@ -633,10 +829,10 @@ impl TerminalRenderer {
                 height,
                 name,
                 r.0 + 12,
-                r.1 + r.3 / 2 + 3,
+                r.1 + r.3 / 2 + 4,
                 chips_x - 8,
                 fg,
-                11.0,
+                tokens::BODY,
                 is_current,
             );
         }
@@ -649,7 +845,7 @@ impl TerminalRenderer {
                 buffer,
                 width,
                 height,
-                l.0 + l.2 - 5,
+                l.0 + l.2 - 4,
                 thumb_y,
                 3,
                 thumb_h,
@@ -658,15 +854,26 @@ impl TerminalRenderer {
             );
         }
 
-        // Paleta de chips de color del tema activo (ocupa todo el ancho de la tarjeta)
-        let swatch_y = card_y + SettingsPageRects::THEME_CARD_H - 28;
-        let swatch_h = 18;
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            "Vista previa en vivo en toda la interfaz",
+            content_x + 20,
+            card_y + 370,
+            content_x + card_w - 20,
+            theme.text_muted(),
+            tokens::DETAIL,
+            false,
+        );
+
+        // Paleta completa del tema activo
+        let swatch_y = card_y + SettingsPageRects::THEME_CARD_H - 34;
         let pad_x = 20;
         let avail_w = card_w.saturating_sub(pad_x * 2);
         let gap = 4;
-        let total_gaps = 15 * gap;
-        let swatch_w = (avail_w.saturating_sub(total_gaps)) / 16;
-        let extra = (avail_w.saturating_sub(total_gaps)) % 16;
+        let swatch_w = (avail_w.saturating_sub(15 * gap)) / 16;
+        let extra = (avail_w.saturating_sub(15 * gap)) % 16;
         let start_x = content_x + pad_x + extra / 2;
         for i in 0..16 {
             let sx = start_x + i * (swatch_w + gap);
@@ -677,15 +884,14 @@ impl TerminalRenderer {
                 sx,
                 swatch_y,
                 swatch_w,
-                swatch_h,
+                16,
                 2,
                 theme.ansi[i],
             );
         }
 
-        // Tarjeta 2: Modo de Tema y Disposición de Pestañas
-        let card2_y = card_y + SettingsPageRects::THEME_CARD_H + 10;
-        let card2_h = 114;
+        // Tarjeta 2: Interfaz (modo, disposición y opacidad)
+        let card2_y = card_y + SettingsPageRects::THEME_CARD_H + 14;
         self.draw_card(
             buffer,
             width,
@@ -693,32 +899,30 @@ impl TerminalRenderer {
             content_x,
             card2_y,
             card_w,
-            card2_h,
-            "MODO Y DISPOSICIÓN DE PESTAÑAS",
+            SettingsPageRects::INTERFACE_CARD_H,
+            "INTERFAZ",
             theme,
         );
 
-        // Modo de tema (system, dark, light)
         self.draw_label(
             buffer,
             width,
             height,
             content_x + 20,
             rects.theme_mode_system_btn.1,
-            content_x + 175,
-            "Modo de color:",
+            content_x + 200,
+            "Modo de color",
             theme,
         );
         let is_sys = config.appearance.theme_mode.eq_ignore_ascii_case("system");
         let is_dark = config.appearance.theme_mode.eq_ignore_ascii_case("dark");
         let is_light = config.appearance.theme_mode.eq_ignore_ascii_case("light");
-
         self.draw_button(
             buffer,
             width,
             height,
             rects.theme_mode_system_btn,
-            "Sistema (Auto)",
+            "Sistema",
             state.hovered_theme_mode == Some(0),
             is_sys,
             theme,
@@ -744,218 +948,86 @@ impl TerminalRenderer {
             theme,
         );
 
-        // Disposición de pestañas (vertical, horizontal)
         self.draw_label(
             buffer,
             width,
             height,
             content_x + 20,
             rects.tab_layout_vertical_btn.1,
-            content_x + 175,
-            "Pestañas:",
+            content_x + 200,
+            "Disposición de pestañas",
             theme,
         );
         let is_vert = !config
             .appearance
             .tab_layout
             .eq_ignore_ascii_case("horizontal");
-        let is_horiz = config
-            .appearance
-            .tab_layout
-            .eq_ignore_ascii_case("horizontal");
-
-        self.draw_button(
+        let is_horiz = !is_vert;
+        self.draw_icon_button(
             buffer,
             width,
             height,
             rects.tab_layout_vertical_btn,
-            "Vertical (Sidebar)",
+            crate::ui::LucideIcon::PanelLeft,
+            "Vertical",
             state.hovered_tab_layout == Some(0),
             is_vert,
             theme,
         );
-        self.draw_button(
+        self.draw_icon_button(
             buffer,
             width,
             height,
             rects.tab_layout_horizontal_btn,
-            "Superior (Tabs)",
+            crate::ui::LucideIcon::Rows2,
+            "Superior",
             state.hovered_tab_layout == Some(1),
             is_horiz,
             theme,
         );
 
-        // Tarjeta 3: Tipografía y Ventana
-        let typo_y = card2_y + card2_h + 14;
-        let typo_h = 190;
-        self.draw_card(
-            buffer,
-            width,
-            height,
-            content_x,
-            typo_y,
-            card_w,
-            typo_h,
-            "TIPOGRAFÍA Y VENTANA",
-            theme,
-        );
-
-        // Tamaño de fuente de terminal
         self.draw_label(
             buffer,
             width,
             height,
             content_x + 20,
-            rects.font_minus_btn.1,
-            content_x + 230,
-            "Fuente de terminal:",
+            rects.panel_side_left_btn.1,
+            content_x + 200,
+            "Lado del panel",
             theme,
         );
-        self.draw_button(
+        let on_right = config.appearance.panel_on_right();
+        self.draw_icon_button(
             buffer,
             width,
             height,
-            rects.font_minus_btn,
-            "-",
-            state.hovered_font_minus,
-            false,
+            rects.panel_side_left_btn,
+            crate::ui::LucideIcon::PanelLeft,
+            "Izquierda",
+            state.hovered_tab_layout == Some(2),
+            !on_right,
             theme,
         );
-        let is_editing_font = state.editing_setting == Some(EditingSettingField::FontSize);
-        let font_str = if is_editing_font {
-            state.setting_input_buffer.clone()
-        } else {
-            format!("{:.1} pt", config.appearance.font_size)
-        };
-        self.draw_stepper_value(
+        self.draw_icon_button(
             buffer,
             width,
             height,
-            rects.font_minus_btn,
-            rects.font_plus_btn,
-            &font_str,
-            is_editing_font,
-            state.hovered_font_box,
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.font_plus_btn,
-            "+",
-            state.hovered_font_plus,
-            false,
+            rects.panel_side_right_btn,
+            crate::ui::LucideIcon::PanelRight,
+            "Derecha",
+            state.hovered_tab_layout == Some(3),
+            on_right,
             theme,
         );
 
-        // Tamaño de fuente de interfaz (UI)
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.ui_font_minus_btn.1,
-            content_x + 230,
-            "Fuente de interfaz (UI):",
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.ui_font_minus_btn,
-            "-",
-            state.hovered_ui_font_minus,
-            false,
-            theme,
-        );
-        let is_editing_ui_font = state.editing_setting == Some(EditingSettingField::UiFontSize);
-        let ui_font_str = if is_editing_ui_font {
-            state.setting_input_buffer.clone()
-        } else {
-            format!("{:.1} pt", config.appearance.ui_font_size)
-        };
-        self.draw_stepper_value(
-            buffer,
-            width,
-            height,
-            rects.ui_font_minus_btn,
-            rects.ui_font_plus_btn,
-            &ui_font_str,
-            is_editing_ui_font,
-            state.hovered_ui_font_box,
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.ui_font_plus_btn,
-            "+",
-            state.hovered_ui_font_plus,
-            false,
-            theme,
-        );
-
-        // Interlineado
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.spacing_minus_btn.1,
-            content_x + 230,
-            "Interlineado (Spacing):",
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.spacing_minus_btn,
-            "-",
-            state.hovered_spacing_minus,
-            false,
-            theme,
-        );
-        let is_editing_spacing = state.editing_setting == Some(EditingSettingField::LineSpacing);
-        let sp_str = if is_editing_spacing {
-            state.setting_input_buffer.clone()
-        } else {
-            format!("{:.1}", config.appearance.line_spacing)
-        };
-        self.draw_stepper_value(
-            buffer,
-            width,
-            height,
-            rects.spacing_minus_btn,
-            rects.spacing_plus_btn,
-            &sp_str,
-            is_editing_spacing,
-            state.hovered_spacing_box,
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.spacing_plus_btn,
-            "+",
-            state.hovered_spacing_plus,
-            false,
-            theme,
-        );
-
-        // Opacidad
         self.draw_label(
             buffer,
             width,
             height,
             content_x + 20,
             rects.opacity_minus_btn.1,
-            content_x + 230,
-            "Opacidad de ventana:",
+            content_x + 200,
+            "Opacidad de ventana",
             theme,
         );
         self.draw_button(
@@ -963,7 +1035,7 @@ impl TerminalRenderer {
             width,
             height,
             rects.opacity_minus_btn,
-            "-",
+            "−",
             state.hovered_opacity_minus,
             false,
             theme,
@@ -995,9 +1067,141 @@ impl TerminalRenderer {
             false,
             theme,
         );
+
+        // Tarjeta 3: Tipografía con muestra en vivo
+        let card3_y = card2_y + SettingsPageRects::INTERFACE_CARD_H + 14;
+        self.draw_card(
+            buffer,
+            width,
+            height,
+            content_x,
+            card3_y,
+            card_w,
+            SettingsPageRects::TYPOGRAPHY_CARD_H,
+            "TIPOGRAFÍA",
+            theme,
+        );
+
+        let typography = [
+            (
+                rects.font_minus_btn,
+                rects.font_plus_btn,
+                "Fuente del terminal",
+                state.editing_setting == Some(EditingSettingField::FontSize),
+                state.hovered_font_minus,
+                state.hovered_font_plus,
+                state.hovered_font_box,
+                format!("{:.1} pt", config.appearance.font_size),
+            ),
+            (
+                rects.ui_font_minus_btn,
+                rects.ui_font_plus_btn,
+                "Fuente de la interfaz",
+                state.editing_setting == Some(EditingSettingField::UiFontSize),
+                state.hovered_ui_font_minus,
+                state.hovered_ui_font_plus,
+                state.hovered_ui_font_box,
+                format!("{:.1} pt", config.appearance.ui_font_size),
+            ),
+            (
+                rects.spacing_minus_btn,
+                rects.spacing_plus_btn,
+                "Interlineado",
+                state.editing_setting == Some(EditingSettingField::LineSpacing),
+                state.hovered_spacing_minus,
+                state.hovered_spacing_plus,
+                state.hovered_spacing_box,
+                format!("{:.1}", config.appearance.line_spacing),
+            ),
+        ];
+        for (minus, plus, label, editing, h_minus, h_plus, h_box, value) in typography {
+            self.draw_label(
+                buffer,
+                width,
+                height,
+                content_x + 20,
+                minus.1,
+                content_x + 230,
+                label,
+                theme,
+            );
+            self.draw_button(buffer, width, height, minus, "−", h_minus, false, theme);
+            let text = if editing {
+                state.setting_input_buffer.clone()
+            } else {
+                value
+            };
+            self.draw_stepper_value(
+                buffer, width, height, minus, plus, &text, editing, h_box, theme,
+            );
+            self.draw_button(buffer, width, height, plus, "+", h_plus, false, theme);
+        }
+
+        // Muestra: valores de máquina en mono, no una promesa de fuente concreta.
+        let preview = (
+            content_x + 20,
+            card3_y + SettingsPageRects::TYPOGRAPHY_CARD_H - 62,
+            card_w.saturating_sub(40),
+            46,
+        );
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            preview.0,
+            preview.1,
+            preview.2,
+            preview.3,
+            4,
+            theme.mix(theme.background, theme.foreground, 0.04),
+        );
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            "Aa",
+            preview.0 + 14,
+            preview.1 + 28,
+            preview.0 + 54,
+            theme.accent_color(),
+            18.0,
+            false,
+        );
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            "fn main() -> Result<(), Error>",
+            preview.0 + 52,
+            preview.1 + 22,
+            preview.0 + preview.2 - 12,
+            theme.foreground,
+            tokens::BODY,
+            false,
+        );
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            &format!(
+                "{} · {:.1} pt",
+                if config.appearance.font_path.is_some() {
+                    "Fuente personalizada"
+                } else {
+                    "JetBrains Mono"
+                },
+                config.appearance.font_size
+            ),
+            preview.0 + 52,
+            preview.1 + 37,
+            preview.0 + preview.2 - 12,
+            theme.text_muted(),
+            tokens::MICRO,
+            false,
+        );
     }
 
-    /// Sección «Terminal» de la página de ajustes.
+    /// Sección «Terminal»: comportamiento agrupado y configuración en disco.
     fn draw_settings_terminal(
         &mut self,
         buffer: &mut [u32],
@@ -1011,8 +1215,6 @@ impl TerminalRenderer {
         rects: &SettingsPageRects,
         theme: &Theme,
     ) {
-        // Tarjeta 1: Comportamiento
-        let term_card_h = SettingsPageRects::TERMINAL_CARD_H;
         self.draw_card(
             buffer,
             width,
@@ -1020,258 +1222,172 @@ impl TerminalRenderer {
             content_x,
             card_y,
             card_w,
-            term_card_h,
+            SettingsPageRects::TERMINAL_CARD_H,
             "COMPORTAMIENTO DEL TERMINAL",
             theme,
         );
 
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.cursor_blink_btn.1,
-            content_x + 250,
-            "Cursor parpadeante:",
-            theme,
-        );
-        let blink_str = if config.terminal.cursor_blink {
-            "Activado"
-        } else {
-            "Desactivado"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.cursor_blink_btn,
-            blink_str,
-            state.hovered_cursor_blink,
-            config.terminal.cursor_blink,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.shell_integration_btn.1,
-            content_x + 250,
-            "Integración de shell (OSC 133):",
-            theme,
-        );
-        let prompt_str = if config.terminal.shell_integration {
-            "Activado"
-        } else {
-            "Desactivado"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.shell_integration_btn,
-            prompt_str,
-            state.hovered_shell_integration,
-            config.terminal.shell_integration,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.copy_on_select_btn.1,
-            content_x + 250,
-            "Copiar texto al seleccionar:",
-            theme,
-        );
-        let copy_str = if config.terminal.copy_on_select {
-            "Activado"
-        } else {
-            "Desactivado"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.copy_on_select_btn,
-            copy_str,
-            state.hovered_copy_on_select,
-            config.terminal.copy_on_select,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.status_bar_toggle_btn.1,
-            content_x + 250,
-            "Barra inferior (Status Bar):",
-            theme,
-        );
-        let status_str = if config.appearance.show_status_bar {
-            "Visible"
-        } else {
-            "Oculta"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.status_bar_toggle_btn,
-            status_str,
-            state.hovered_status_bar,
-            config.appearance.show_status_bar,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.file_explorer_toggle_btn.1,
-            content_x + 250,
-            "Explorador de archivos lateral:",
-            theme,
-        );
-        let explorer_str = if config.appearance.show_file_explorer {
-            "Visible"
-        } else {
-            "Oculto"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.file_explorer_toggle_btn,
-            explorer_str,
-            state.hovered_file_explorer,
-            config.appearance.show_file_explorer,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.restore_session_btn.1,
-            content_x + 250,
-            "Restaurar pestañas al iniciar:",
-            theme,
-        );
-        let restore_str = if config.terminal.restore_session {
-            "Activado"
-        } else {
-            "Desactivado"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.restore_session_btn,
-            restore_str,
-            state.hovered_restore_session,
-            config.terminal.restore_session,
-            theme,
-        );
-
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.auto_save_btn.1,
-            content_x + 250,
-            "Auto-guardar archivos editados:",
-            theme,
-        );
-        let auto_save_str = if config.terminal.auto_save {
-            "Activado"
-        } else {
-            "Desactivado"
-        };
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.auto_save_btn,
-            auto_save_str,
-            state.hovered_auto_save,
-            config.terminal.auto_save,
-            theme,
-        );
-
+        let label_x = content_x + 20;
+        let label_max = content_x + card_w / 2 + 40;
         let on_off = |on: bool| if on { "Activado" } else { "Desactivado" };
-        self.draw_label(
+
+        self.draw_group_label(
             buffer,
             width,
             height,
-            content_x + 20,
-            rects.word_wrap_btn.1,
-            content_x + 250,
-            "Ajuste de línea en el visor:",
+            label_x,
+            card_y + 62,
+            label_max,
+            "ENTRADA",
             theme,
         );
-        self.draw_button(
+        self.draw_toggle_row(
             buffer,
             width,
             height,
+            label_x,
+            label_max,
+            rects.cursor_blink_btn,
+            "Cursor parpadeante",
+            config.terminal.cursor_blink,
+            state.hovered_cursor_blink,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.copy_on_select_btn,
+            "Copiar al seleccionar",
+            config.terminal.copy_on_select,
+            state.hovered_copy_on_select,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
             rects.word_wrap_btn,
-            on_off(config.terminal.word_wrap),
-            state.hovered_word_wrap,
+            "Ajuste de línea en el visor",
             config.terminal.word_wrap,
-            theme,
-        );
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.ssh_integration_btn.1,
-            content_x + 250,
-            "Integración SSH (rama y carpeta):",
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.ssh_integration_btn,
-            on_off(config.terminal.ssh_integration),
-            state.hovered_ssh_integration,
-            config.terminal.ssh_integration,
-            theme,
-        );
-        self.draw_label(
-            buffer,
-            width,
-            height,
-            content_x + 20,
-            rects.ligatures_btn.1,
-            content_x + 250,
-            "Ligaduras de código (->, !=, ==):",
-            theme,
-        );
-        self.draw_button(
-            buffer,
-            width,
-            height,
-            rects.ligatures_btn,
-            on_off(config.terminal.ligatures),
-            state.hovered_ligatures,
-            config.terminal.ligatures,
+            state.hovered_word_wrap,
             theme,
         );
 
-        // Tarjeta 2: Configuración en disco
-        let cfg_y = card_y + term_card_h + 14;
-        let cfg_h = 110;
+        self.draw_group_label(
+            buffer,
+            width,
+            height,
+            label_x,
+            card_y + 186,
+            label_max,
+            "SHELL",
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.shell_integration_btn,
+            "Integración de shell (OSC 133)",
+            config.terminal.shell_integration,
+            state.hovered_shell_integration,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.ssh_integration_btn,
+            "Integración SSH (rama y carpeta)",
+            config.terminal.ssh_integration,
+            state.hovered_ssh_integration,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.ligatures_btn,
+            "Ligaduras de código (->, !=, ==)",
+            config.terminal.ligatures,
+            state.hovered_ligatures,
+            theme,
+        );
+
+        self.draw_group_label(
+            buffer,
+            width,
+            height,
+            label_x,
+            card_y + 310,
+            label_max,
+            "INTERFAZ",
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.status_bar_toggle_btn,
+            "Barra inferior (Status Bar)",
+            config.appearance.show_status_bar,
+            state.hovered_status_bar,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.file_explorer_toggle_btn,
+            "Explorador de archivos lateral",
+            config.appearance.show_file_explorer,
+            state.hovered_file_explorer,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.restore_session_btn,
+            "Restaurar pestañas al iniciar",
+            config.terminal.restore_session,
+            state.hovered_restore_session,
+            theme,
+        );
+        self.draw_toggle_row(
+            buffer,
+            width,
+            height,
+            label_x,
+            label_max,
+            rects.auto_save_btn,
+            "Auto-guardar archivos editados",
+            config.terminal.auto_save,
+            state.hovered_auto_save,
+            theme,
+        );
+
+        let _ = on_off;
+
+        // Tarjeta 2: configuración en disco
+        let cfg_y = card_y + SettingsPageRects::TERMINAL_CARD_H + 14;
         self.draw_card(
             buffer,
             width,
@@ -1279,19 +1395,18 @@ impl TerminalRenderer {
             content_x,
             cfg_y,
             card_w,
-            cfg_h,
+            SettingsPageRects::DISK_CARD_H,
             "CONFIGURACIÓN EN DISCO",
             theme,
         );
-
         self.draw_button(
             buffer,
             width,
             height,
             rects.open_file_btn,
-            "Abrir axon.toml en editor",
+            "Abrir axon.toml",
             state.hovered_open_file,
-            state.hovered_open_file,
+            false,
             theme,
         );
         self.draw_button(
@@ -1304,22 +1419,22 @@ impl TerminalRenderer {
             false,
             theme,
         );
-        let hint_base = rects.open_file_btn.1 + rects.open_file_btn.3 + 18;
-        self.draw_ui_text(
+        let path = AxonConfig::config_path();
+        self.draw_mono_text(
             buffer,
             width,
             height,
-            "Ruta: %LOCALAPPDATA%\\axon\\axon.toml (se recarga automáticamente)",
+            &path.to_string_lossy(),
             content_x + 20,
-            hint_base,
-            content_x + card_w,
+            cfg_y + 100,
+            content_x + card_w - 20,
             theme.text_muted(),
-            11.0,
+            tokens::MICRO,
             false,
         );
     }
 
-    /// Sección «Shortcuts» de la página de ajustes.
+    /// Sección «Atajos»: dos columnas con keycaps individuales.
     fn draw_settings_shortcuts(
         &mut self,
         buffer: &mut [u32],
@@ -1330,7 +1445,6 @@ impl TerminalRenderer {
         card_y: usize,
         theme: &Theme,
     ) {
-        let sh_h = 434;
         self.draw_card(
             buffer,
             width,
@@ -1338,109 +1452,79 @@ impl TerminalRenderer {
             content_x,
             card_y,
             card_w,
-            sh_h,
-            "ATAJOS DE TECLADO CANÓNICOS (Unificados)",
+            SettingsPageRects::SHORTCUTS_CARD_H,
+            "ATAJOS DE TECLADO",
             theme,
         );
 
         let shortcuts = [
-            ("Ctrl + T", "Nueva terminal / pestaña"),
-            ("Ctrl + W", "Cerrar pestaña o terminal activa"),
-            (
-                "Ctrl + Tab",
-                "Conmutar a la siguiente pestaña (Shift: anterior)",
-            ),
-            ("Ctrl + 1..9", "Cambiar directamente a pestaña 1-9"),
-            (
-                "Alt + Shift + D",
-                "Dividir terminal horizontalmente (debajo)",
-            ),
-            (
-                "Alt + Shift + V",
-                "Dividir terminal verticalmente (al lado)",
-            ),
-            ("Alt + Shift + W", "Cerrar panel dividido activo"),
-            (
-                "Alt + Shift + Flechas",
-                "Navegar foco entre paneles divididos",
-            ),
-            ("Ctrl + B", "Mostrar / Ocultar barra lateral"),
-            (
-                "Ctrl + Shift + E",
-                "Mostrar / Ocultar explorador de archivos lateral",
-            ),
-            ("Ctrl + ,", "Abrir o cerrar pestaña de Ajustes"),
-            (
-                "Ctrl + V",
-                "Pegar portapapeles (texto plano o imágenes IA / SSH)",
-            ),
-            (
-                "Ctrl + Shift + C",
-                "Copiar texto seleccionado al portapapeles",
-            ),
-            ("Ctrl + Shift + K", "Limpiar pantalla y scrollback buffer"),
-            (
-                "Ctrl + Shift + O",
-                "Copiar salida del último comando del agente",
-            ),
-            ("Ctrl + Backspace", "Borrar palabra atrás (0x17 / werase)"),
+            ("Ctrl + T", "Nueva terminal o pestaña"),
+            ("Ctrl + W", "Cerrar pestaña o panel activo"),
+            ("Ctrl + Tab", "Siguiente pestaña (Shift: anterior)"),
+            ("Ctrl + 1..9", "Ir a la pestaña 1–9"),
+            ("Ctrl + B", "Mostrar u ocultar la barra lateral"),
+            ("Ctrl + ,", "Abrir o cerrar Ajustes"),
+            ("Ctrl + Shift + E", "Mostrar u ocultar el explorador"),
+            ("Ctrl + Shift + C", "Copiar la selección"),
+            ("Alt + Shift + D", "Dividir debajo"),
+            ("Alt + Shift + V", "Dividir al lado"),
+            ("Alt + Shift + W", "Cerrar panel dividido"),
+            ("Alt + Shift + Flechas", "Mover el foco entre paneles"),
+            ("Ctrl + V", "Pegar texto o imágenes"),
+            ("Ctrl + Shift + K", "Limpiar pantalla y scrollback"),
+            ("Ctrl + Shift + O", "Copiar salida del último comando"),
+            ("Ctrl + Backspace", "Borrar palabra atrás"),
         ];
 
-        let start_y = card_y + 40;
+        let col_gap = 28;
+        let col_w = (card_w.saturating_sub(40 + col_gap)) / 2;
+        let start_y = card_y + 56;
+        let row_h = 40;
         for (idx, (chord, desc)) in shortcuts.iter().enumerate() {
-            let y = start_y + idx * 24;
-            let chord_w = 170;
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                content_x + 20,
-                y,
-                chord_w,
-                20,
-                4,
-                theme.sidebar_bg(),
-            );
-            crate::ui::stroke_rounded_rect(
-                buffer,
-                width,
-                height,
-                content_x + 20,
-                y,
-                chord_w,
-                20,
-                4,
-                theme.border_color(),
-            );
-            let baseline = y + 14;
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                chord,
-                content_x + 28,
-                baseline,
-                content_x + 20 + chord_w,
-                theme.accent_color(),
-                11.0,
-                true,
-            );
+            let col = idx / 8;
+            let row = idx % 8;
+            let x = content_x + 20 + col * (col_w + col_gap);
+            let y = start_y + row * row_h;
+            let mut kx = x;
+            let key_max = x + col_w;
+            for (ki, key) in chord.split(" + ").enumerate() {
+                if ki > 0 {
+                    self.draw_mono_text(
+                        buffer,
+                        width,
+                        height,
+                        "+",
+                        kx + 3,
+                        y + 15,
+                        key_max,
+                        theme.text_muted(),
+                        tokens::MICRO,
+                        false,
+                    );
+                    kx += 12;
+                }
+                if kx >= key_max {
+                    break;
+                }
+                let kw = self.draw_keycap(buffer, width, height, kx, y, key, theme);
+                kx += kw + 4;
+            }
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 desc,
-                content_x + 204,
-                baseline,
-                content_x + card_w.saturating_sub(10),
-                theme.foreground,
-                11.5,
+                x,
+                y + 32,
+                x + col_w,
+                theme.text_secondary(),
+                tokens::BODY,
                 false,
             );
         }
     }
 
-    /// Sección «About» de la página de ajustes.
+    /// Sección «Acerca de»: ficha editorial con datos reales.
     fn draw_settings_about(
         &mut self,
         buffer: &mut [u32],
@@ -1453,7 +1537,6 @@ impl TerminalRenderer {
         rects: &SettingsPageRects,
         theme: &Theme,
     ) {
-        let ab_h = 280;
         self.draw_card(
             buffer,
             width,
@@ -1461,81 +1544,105 @@ impl TerminalRenderer {
             content_x,
             card_y,
             card_w,
-            ab_h,
-            "ACERCA DE AXON TERMINAL",
+            SettingsPageRects::ABOUT_CARD_H,
+            "ACERCA DE",
             theme,
         );
 
-        let start_y = card_y + 42;
-        let version_title = format!("Axon Terminal  v{}", env!("CARGO_PKG_VERSION"));
+        let left = content_x + 20;
+        let right = content_x + card_w - 20;
         self.draw_ui_text(
             buffer,
             width,
             height,
-            &version_title,
-            content_x + 20,
-            start_y + 16,
-            content_x + card_w,
+            "Axon Terminal",
+            left,
+            card_y + 76,
+            right,
             theme.foreground,
-            14.0,
+            tokens::DISPLAY,
             true,
         );
-
-        if let Some(info) = crate::updater::get_available_update() {
-            let note = format!(
-                "• ¡Nueva versión v{} disponible! Haz clic en la barra o menú para actualizar",
-                info.latest_version
-            );
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                &note,
-                content_x + 200,
-                start_y + 16,
-                content_x + card_w,
-                theme.accent_color(),
-                11.0,
-                true,
-            );
-        }
-
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let version_w = self.measure_mono_text(&version, tokens::DETAIL, false);
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            &version,
+            right.saturating_sub(version_w),
+            card_y + 74,
+            right,
+            theme.accent_color(),
+            tokens::DETAIL,
+            false,
+        );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Emulador de terminal nativo de alto rendimiento para Windows en Rust.",
-            content_x + 20,
-            start_y + 36,
-            content_x + card_w,
-            theme.text_muted(),
-            11.5,
+            "Terminal nativo para Windows escrito en Rust. Render por software y ConPTY.",
+            left,
+            card_y + 98,
+            right,
+            theme.text_secondary(),
+            tokens::BODY,
             false,
         );
 
-        let features = [
-            "• Zero-runtime web: Renderizado softbuffer + rasterizador fontdue de alta fidelidad.",
-            "• Windows ConPTY asíncrono con multihilo y anclaje de prompt para agentes CLI.",
-            "• Protocolo iTerm2 / OSC 1337 para renderizado inline de imágenes PNG/JPG.",
-            "• Integración completa para sesiones remotas SSH (clonación de splits y SCP).",
-            "• Portapapeles remoto bidireccional mediante OSC 52 en base64.",
-            "• 819 temas de iterm2-color-schemes, con sincronización de tema del sistema.",
-            "• Barra de estado inferior informativa con rama Git y detección de agentes de IA.",
-        ];
+        Self::draw_rect(
+            buffer,
+            width,
+            height,
+            left,
+            card_y + 114,
+            card_w.saturating_sub(40),
+            1,
+            theme.chrome_line(),
+        );
 
-        for (idx, feat) in features.iter().enumerate() {
-            let fy = start_y + 54 + idx * 22;
-            let f_base = fy + 14;
-            self.draw_ui_text(
+        let config_path = AxonConfig::config_path();
+        let themes = Theme::names().count().to_string();
+        let data = [
+            ("VERSIÓN", version.clone()),
+            ("TEMAS", themes),
+            ("MOTOR", "Rust · ConPTY".to_string()),
+            ("PLATAFORMA", "Windows 10 / 11".to_string()),
+            ("RENDER", "CPU + Direct3D 11".to_string()),
+            ("CONFIGURACIÓN", config_path.to_string_lossy().to_string()),
+        ];
+        let col_w = (card_w.saturating_sub(56)) / 2;
+        for (i, (label, value)) in data.iter().enumerate() {
+            let col = i % 2;
+            let row = i / 2;
+            let x = left + col * (col_w + 16);
+            let y = card_y + 136 + row * 42;
+            self.draw_group_label(buffer, width, height, x, y, x + col_w, label, theme);
+            self.draw_mono_text(
                 buffer,
                 width,
                 height,
-                feat,
-                content_x + 20,
-                f_base,
-                content_x + card_w,
-                theme.text_secondary(),
-                11.0,
+                value,
+                x,
+                y + 20,
+                x + col_w,
+                theme.foreground,
+                tokens::DETAIL,
+                false,
+            );
+        }
+
+        if let Some(info) = crate::updater::get_available_update() {
+            self.draw_mono_text(
+                buffer,
+                width,
+                height,
+                &format!("v{} disponible", info.latest_version),
+                right.saturating_sub(120),
+                card_y + 52,
+                right,
+                theme.accent_color(),
+                tokens::MICRO,
                 false,
             );
         }
@@ -1544,18 +1651,18 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            rects.open_file_btn,
-            "Abrir axon.toml en editor",
+            rects.about_open_file_btn,
+            "Abrir axon.toml",
             state.hovered_open_file,
-            state.hovered_open_file,
+            false,
             theme,
         );
         self.draw_button(
             buffer,
             width,
             height,
-            rects.term_reset_btn,
-            "Restablecer por defecto",
+            rects.about_reset_btn,
+            "Restablecer",
             state.hovered_reset_defaults,
             false,
             theme,

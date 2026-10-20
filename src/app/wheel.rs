@@ -46,7 +46,7 @@ impl AxonApp {
                 let rects = SettingsPageRects::compute(
                     offset,
                     top_offset,
-                    win_w.saturating_sub(offset),
+                    win_w.saturating_sub(offset + self.panel_right_inset()),
                     win_h.saturating_sub(top_offset),
                 );
                 let page_y = if my >= top_offset + SettingsPageRects::CONTENT_TOP {
@@ -81,14 +81,14 @@ impl AxonApp {
         }
 
         // Scroll en la lista de pestañas verticales de la barra lateral
-        if !self.is_horizontal_tabs() && self.sidebar_visible && mx < SIDEBAR_WIDTH {
+        if self.panel_local_x(mx, my, win_w).is_some() {
             let scroll_steps = match delta {
                 MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
                 MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as isize,
             };
             let usable_h = win_h.saturating_sub(status_bar_h);
-            let visible_items = crate::renderer::SidebarRects::visible_items(usable_h);
-            let max_offset = self.tabs.len().saturating_sub(visible_items);
+            let (total, visible) = self.panel_scroll_extent(usable_h);
+            let max_offset = total.saturating_sub(visible);
 
             if scroll_steps > 0 {
                 self.sidebar_scroll_offset = self
