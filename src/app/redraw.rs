@@ -19,6 +19,7 @@ struct SceneParams<'a> {
     hovered_files_btn: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
+    hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
     hovered_win_min: bool,
     hovered_win_max: bool,
     hovered_win_close: bool,
@@ -134,6 +135,7 @@ impl AxonApp {
             hovered_files_btn,
             hovered_settings_btn,
             hovered_toggle_btn,
+            hovered_pane_btn: self.hovered_pane_btn,
             hovered_win_min: self.hovered_win_min,
             hovered_win_max: self.hovered_win_max,
             hovered_win_close: self.hovered_win_close,
@@ -330,6 +332,38 @@ fn draw_full_scene(
         for rect in &pane_rects {
             if let Some(pane) = active_tab.find_pane(rect.pane_id) {
                 let is_active = rect.pane_id == active_tab.active_pane_id;
+                if rect.has_header {
+                    let ssh_pane = pane
+                        .terminal
+                        .ssh_session
+                        .as_ref()
+                        .is_some_and(|s| s.is_active);
+                    let (icon, icon_color) = if pane.is_agent_pane() {
+                        (crate::ui::LucideIcon::Sparkles, theme.accent_color())
+                    } else if ssh_pane {
+                        (crate::ui::LucideIcon::Server, theme.text_secondary())
+                    } else {
+                        (crate::ui::LucideIcon::Terminal, theme.text_secondary())
+                    };
+                    let hovered = p
+                        .hovered_pane_btn
+                        .filter(|(pane_id, _)| *pane_id == rect.pane_id)
+                        .map(|(_, button)| button);
+                    renderer.render_pane_header(
+                        buffer,
+                        width,
+                        height,
+                        (rect.x, rect.slot_y, rect.width),
+                        &pane.header_title(&active_tab.title),
+                        pane.header_subtitle().as_deref(),
+                        icon,
+                        icon_color,
+                        is_active,
+                        active_tab.zoomed_pane == Some(rect.pane_id),
+                        hovered,
+                        theme,
+                    );
+                }
                 renderer.render_pane(
                     buffer,
                     width,

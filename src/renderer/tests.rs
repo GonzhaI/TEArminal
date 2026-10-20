@@ -1869,6 +1869,225 @@ fn preview_ui_scenes() {
         &theme,
     );
     write_ppm(&buf, "wp1-superior.ppm");
+    // 7. Paneles divididos con cabecera (WP3): agente a la izquierda, shell y SSH a la derecha
+    {
+        use crate::ui::LucideIcon;
+        let content_h = h - top_h - status_h;
+        let left_w = 673;
+        let right_x = SIDEBAR_WIDTH + left_w + 2;
+        let right_w = w - right_x;
+        let top_pane_h = 472;
+        let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
+
+        let mut agent = crate::terminal::TerminalState::new(62, 30, 2000, theme.clone());
+        agent.process_bytes(
+            concat!(
+                "\x1b[38;5;114m●\x1b[0m Reviso cómo se dibuja la lista de sesiones antes de cambiarla.\r\n",
+                "  \x1b[38;5;245mRead(src/renderer/sidebar.rs)\x1b[0m\r\n",
+                "  \x1b[38;5;245m474 líneas\x1b[0m\r\n",
+                "\r\n",
+                "\x1b[38;5;114m●\x1b[0m Cada fila mostrará el estado del agente que corre en ella.\r\n",
+                "  \x1b[38;5;245mUpdate(src/renderer/sidebar.rs)\x1b[0m\r\n",
+                "  \x1b[38;5;114m+38\x1b[0m \x1b[38;5;203m−12\x1b[0m  fila de sesión con indicador de estado\r\n",
+                "\r\n",
+                "\x1b[38;5;114m●\x1b[0m Compilo y pruebo antes de seguir.\r\n",
+                "  \x1b[38;5;245mBash(cargo test --release sidebar)\x1b[0m\r\n",
+                "  test result: ok. 12 passed; 0 failed\r\n",
+                "\r\n",
+                "\x1b[38;5;176m✳\x1b[0m Ajustando el selector de proyectos… \x1b[38;5;245m(2m 14s, esc para interrumpir)\x1b[0m"
+            )
+            .as_bytes(),
+        );
+
+        let mut shell = crate::terminal::TerminalState::new(40, 18, 2000, theme.clone());
+        shell.process_bytes(
+            concat!(
+                "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+                "\x1b[38;5;114m    Finished\x1b[0m `release` profile in 1m 06s\r\n",
+                "\x1b[38;5;114m     Running\x1b[0m unittests src\\main.rs\r\n",
+                "\r\n",
+                "running 206 tests\r\n",
+                "test theme::tests::test_default_themes_are_captured ok\r\n",
+                "test config::tests::test_theme_migration ok\r\n",
+                "test terminal::tests::test_default_theme_palette ok\r\n",
+                "\r\n",
+                "\x1b[1mtest result: \x1b[38;5;114mok\x1b[0m\x1b[1m. 205 passed; 0 failed\x1b[0m"
+            )
+            .as_bytes(),
+        );
+
+        let mut ssh = crate::terminal::TerminalState::new(40, 12, 2000, theme.clone());
+        ssh.process_bytes(
+            concat!(
+                "\x1b]133;A\x07\x1b[38;5;114mdev@staging-01\x1b[0m:\x1b[38;5;39m~/api\x1b[0m$ systemctl status api\r\n",
+                "\x1b[38;5;114m●\x1b[0m api.service - API\r\n",
+                "     Active: active (running) since 09:12\r\n"
+            )
+            .as_bytes(),
+        );
+
+        let mut buf = vec![0u32; w * h];
+        buf.fill(theme.background.to_u32_xrgb());
+        r.render_top_title_bar(
+            &mut buf,
+            w,
+            h,
+            "axon",
+            Some("main"),
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &theme,
+        );
+        r.render_sidebar(
+            &mut buf,
+            w,
+            h,
+            SIDEBAR_WIDTH,
+            status_h,
+            &projects,
+            &header,
+            None,
+            &tabs,
+            0,
+            None,
+            None,
+            false,
+            false,
+            false,
+            &theme,
+        );
+        type PaneSpec<'a> = (
+            usize,
+            usize,
+            usize,
+            usize,
+            &'a crate::terminal::TerminalState,
+            &'a str,
+            &'a str,
+            LucideIcon,
+            bool,
+            bool,
+        );
+        let panes: [PaneSpec; 3] = [
+            (
+                SIDEBAR_WIDTH,
+                top_h,
+                left_w,
+                content_h,
+                &agent,
+                "Rediseño de UI",
+                "axon",
+                LucideIcon::Sparkles,
+                true,
+                true,
+            ),
+            (
+                right_x,
+                top_h,
+                right_w,
+                top_pane_h,
+                &shell,
+                "Pruebas",
+                "cargo test",
+                LucideIcon::Terminal,
+                false,
+                false,
+            ),
+            (
+                right_x,
+                top_h + top_pane_h,
+                right_w,
+                content_h - top_pane_h,
+                &ssh,
+                "Servidor de pruebas",
+                "dev@staging-01",
+                LucideIcon::Server,
+                false,
+                false,
+            ),
+        ];
+        for (x, y, pw, ph, term, title, subtitle, icon, focused, agent_pane) in panes {
+            let icon_color = if agent_pane {
+                theme.accent_color()
+            } else {
+                theme.text_secondary()
+            };
+            r.render_pane_header(
+                &mut buf,
+                w,
+                h,
+                (x, y, pw),
+                title,
+                Some(subtitle),
+                icon,
+                icon_color,
+                focused,
+                false,
+                None,
+                &theme,
+            );
+            r.render_pane(
+                &mut buf,
+                w,
+                h,
+                x,
+                y + header_offset,
+                pw,
+                ph - header_offset,
+                term,
+                &theme,
+                true,
+                focused,
+                true,
+            );
+        }
+        // Divisores: 2 px entre columnas y entre las dos filas de la derecha
+        let divider_color = theme.border_color();
+        for (dx, dy, dw, dh) in [
+            (right_x - 2, top_h, 2, content_h),
+            (right_x, top_h + top_pane_h - 2, right_w, 2),
+        ] {
+            TerminalRenderer::render_pane_divider(&mut buf, w, h, dx, dy, dw, dh, divider_color);
+        }
+
+        r.render_status_bar_with_ai(
+            &mut buf,
+            w,
+            h,
+            0,
+            Some("C:\\Users\\dev\\axon"),
+            Some("main"),
+            None,
+            110,
+            34,
+            AiAgentStatus::Claude,
+            Some("Sonnet 5.5"),
+            &[],
+            false,
+            false,
+            &theme,
+        );
+        write_ppm(&buf, "panes.ppm");
+        let rgb: Vec<u8> = buf
+            .iter()
+            .flat_map(|px| {
+                [
+                    ((px >> 16) & 0xFF) as u8,
+                    ((px >> 8) & 0xFF) as u8,
+                    (px & 0xFF) as u8,
+                ]
+            })
+            .collect();
+        image::RgbImage::from_raw(w as u32, h as u32, rgb)
+            .unwrap()
+            .save(out.join("panes.png"))
+            .unwrap();
+    }
 
     println!("previews in {}", out.display());
 }

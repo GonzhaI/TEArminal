@@ -982,6 +982,97 @@ impl StatusBarRects {
     }
 }
 
+/// Botón de la cabecera de un panel dividido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneHeaderButton {
+    /// Dividir el panel en dos columnas
+    Split,
+    /// Maximizar el panel (ocultar el resto) o restaurar el reparto
+    Zoom,
+    /// Cerrar el panel
+    Close,
+}
+
+/// Geometría de la cabecera de un panel dividido (38 px): icono, título, subtítulo y los tres
+/// botones de la derecha. Es local al hueco del panel y la comparten dibujo, clic y hover.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneHeaderRects {
+    pub header: Rect,
+    pub split_btn: Rect,
+    pub zoom_btn: Rect,
+    pub close_btn: Rect,
+}
+
+impl PaneHeaderRects {
+    pub const HEIGHT: usize = 38;
+    /// Línea inferior que separa la cabecera del terminal
+    pub const BORDER: usize = 1;
+    /// Lo que hay que descontar del hueco del panel para obtener el área del terminal
+    pub const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
+    pub const BTN: usize = 26;
+    pub const BTN_GAP: usize = 10;
+    pub const PAD_RIGHT: usize = 16;
+    /// Centro del icono y comienzo del título, relativos al borde izquierdo del panel
+    pub const ICON_X: usize = 24;
+    pub const TEXT_X: usize = 41;
+
+    pub fn compute(x: usize, y: usize, w: usize) -> Self {
+        let right = x + w;
+        let by = y + (Self::HEIGHT.saturating_sub(Self::BTN)) / 2;
+        let close_btn = (
+            right.saturating_sub(Self::PAD_RIGHT + Self::BTN),
+            by,
+            Self::BTN,
+            Self::BTN,
+        );
+        let zoom_btn = (
+            close_btn.0.saturating_sub(Self::BTN + Self::BTN_GAP),
+            by,
+            Self::BTN,
+            Self::BTN,
+        );
+        let split_btn = (
+            zoom_btn.0.saturating_sub(Self::BTN + Self::BTN_GAP),
+            by,
+            Self::BTN,
+            Self::BTN,
+        );
+        Self {
+            header: (x, y, w, Self::HEIGHT),
+            split_btn,
+            zoom_btn,
+            close_btn,
+        }
+    }
+
+    /// Botón bajo el ratón. Dividir y maximizar solo existen en el panel enfocado; cerrar, en todos.
+    pub fn button_at(&self, mx: usize, my: usize, focused: bool) -> Option<PaneHeaderButton> {
+        if !Self::inside(mx, my, self.header) {
+            return None;
+        }
+        if Self::inside(mx, my, self.close_btn) {
+            return Some(PaneHeaderButton::Close);
+        }
+        if focused && Self::inside(mx, my, self.zoom_btn) {
+            return Some(PaneHeaderButton::Zoom);
+        }
+        if focused && Self::inside(mx, my, self.split_btn) {
+            return Some(PaneHeaderButton::Split);
+        }
+        None
+    }
+
+    #[inline]
+    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+        rect.2 > 0
+            && rect.3 > 0
+            && mx >= rect.0
+            && mx < rect.0 + rect.2
+            && my >= rect.1
+            && my < rect.1 + rect.3
+    }
+}
+
 impl SettingsPageRects {
     /// Rectángulo de la fila `i` (0..THEME_ROWS) de la lista de temas
     pub fn theme_row(&self, i: usize) -> (usize, usize, usize, usize) {

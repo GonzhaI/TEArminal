@@ -21,6 +21,8 @@ impl AxonApp {
         let mut needs_redraw = false;
         let mut is_pointer = false;
         let mut is_text = false;
+        let previous_pane_btn = self.hovered_pane_btn;
+        self.hovered_pane_btn = None;
 
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
@@ -871,6 +873,20 @@ impl AxonApp {
             let pane_rects =
                 active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
+            // Botones de la cabecera de cada panel dividido (dividir · maximizar · cerrar)
+            let pane_btn = pane_rects.iter().find_map(|rect| {
+                if !rect.has_header {
+                    return None;
+                }
+                let header = PaneHeaderRects::compute(rect.x, rect.slot_y, rect.width);
+                header
+                    .button_at(mx, my, rect.pane_id == active_pane_id)
+                    .map(|button| (rect.pane_id, button))
+            });
+            if pane_btn.is_some() {
+                is_pointer = true;
+            }
+
             let hovered_pane_rect = pane_rects
                 .iter()
                 .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height)
@@ -1078,6 +1094,7 @@ impl AxonApp {
                     }
                 }
             }
+            self.hovered_pane_btn = pane_btn;
         }
 
         // Si la pestaña activa es un visor de archivos, gestionar arrastre de selección y cursor de texto (I-Beam)
@@ -1375,6 +1392,9 @@ impl AxonApp {
         }
         if self.hovered_win_close != new_hovered_close_win {
             self.hovered_win_close = new_hovered_close_win;
+            needs_redraw = true;
+        }
+        if self.hovered_pane_btn != previous_pane_btn {
             needs_redraw = true;
         }
 
