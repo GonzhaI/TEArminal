@@ -365,19 +365,18 @@ impl AxonApp {
             if let Some(lx) = self.panel_local_x(mx, my, win_w) {
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     let usable_h = win_h.saturating_sub(self.status_bar_height());
-                    let toggle = crate::renderer::ProjectsPanelRects::toggle_btn_rect(usable_h);
-                    if TopTabBarRects::inside(lx, my, toggle) {
-                        self.toggle_sidebar();
-                    } else {
-                        let entries = self.panel_rail().len() + 1;
-                        if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
-                            my,
-                            usable_h,
-                            entries,
-                            self.sidebar_scroll_offset,
-                        ) {
-                            self.click_rail(i);
-                        }
+                    if let Some(path) = self.panel_change_at(lx, my, usable_h) {
+                        self.open_file_in_viewer(&path, false);
+                        return;
+                    }
+                    let entries = self.panel_rail().len() + 1;
+                    if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
+                        my,
+                        usable_h,
+                        entries,
+                        self.sidebar_scroll_offset,
+                    ) {
+                        self.click_rail(i);
                     }
                 }
                 return;
@@ -395,7 +394,7 @@ impl AxonApp {
                     TopTabBarRects::inside(
                         lx,
                         my,
-                        crate::renderer::SidebarRects::toggle_btn_rect(usable_h),
+                        crate::renderer::SidebarRects::settings_btn_rect(usable_h),
                     )
                 })
             } else {
@@ -403,8 +402,12 @@ impl AxonApp {
             };
 
             if toggle_hit && state == ElementState::Pressed && button == MouseButton::Left {
-                crate::logger::log("-> Clic en botón inferior de alternar barra lateral");
-                self.toggle_sidebar();
+                crate::logger::log("-> Clic en ajustes del riel / alternar barra lateral");
+                if self.sidebar_visible {
+                    self.open_or_switch_settings_tab();
+                } else {
+                    self.toggle_sidebar();
+                }
                 return;
             }
 
@@ -415,6 +418,13 @@ impl AxonApp {
                 if state == ElementState::Pressed
                     && (button == MouseButton::Left || button == MouseButton::Middle)
                 {
+                    // Fila de la sección «Cambios»: abre el archivo en el visor
+                    if button == MouseButton::Left {
+                        if let Some(path) = self.panel_change_at(mx, my, usable_h) {
+                            self.open_file_in_viewer(&path, false);
+                            return;
+                        }
+                    }
                     // Riel de proyectos: abrir uno o agregar el último cuadrado
                     if mx < crate::renderer::SidebarRects::RAIL_W {
                         let count = self.panel_rail().len() + 1;
@@ -873,72 +883,6 @@ impl AxonApp {
                             }
                             return;
                         }
-                    }
-
-                    let (px, py, pw, ph) =
-                        crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
-                    if mx >= px && mx < px + pw && my >= py && my < py + ph {
-                        self.file_explorer.toggle_pinned();
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
-                    }
-
-                    let (bx, by, bw, bh) =
-                        crate::explorer::FileExplorer::changes_btn_rect(panel_x, panel_y, panel_w);
-                    if self.file_explorer.remote_session.is_none()
-                        && mx >= bx
-                        && mx < bx + bw
-                        && my >= by
-                        && my < by + bh
-                    {
-                        self.file_explorer.toggle_changes_only();
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
-                    }
-
-                    let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
-                    let nav_y = sub_y + (crate::explorer::FileExplorer::SUBHEADER_HEIGHT - 24) / 2;
-                    let back_x = panel_x + 8;
-                    if mx >= back_x && mx < back_x + 24 && my >= nav_y && my < nav_y + 24 {
-                        if self.file_explorer.can_go_back() {
-                            crate::logger::log("-> Clic en [<] atrás en explorador");
-                            self.file_explorer.go_back();
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
-                        }
-                        return;
-                    }
-
-                    let fwd_x = back_x + 26;
-                    if mx >= fwd_x && mx < fwd_x + 24 && my >= nav_y && my < nav_y + 24 {
-                        if self.file_explorer.can_go_forward() {
-                            crate::logger::log("-> Clic en [>] adelante en explorador");
-                            self.file_explorer.go_forward();
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
-                        }
-                        return;
-                    }
-
-                    let up_x = fwd_x + 26;
-                    if mx >= up_x && mx < up_x + 24 && my >= nav_y && my < nav_y + 24 {
-                        crate::logger::log("-> Clic en [^] subir nivel en explorador");
-                        match self.file_explorer.remote_parent() {
-                            Some(parent) if self.file_explorer.inband_remote => {
-                                self.remote_cd(&parent);
-                            }
-                            _ => self.file_explorer.navigate_up(),
-                        }
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
                     }
 
                     // Al interactuar con el explorador gana el foco de teclado

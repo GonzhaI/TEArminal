@@ -44,10 +44,9 @@ impl TerminalRenderer {
             buffer, width, height, panel_x, panel_y, 1, panel_h, edge_color,
         );
 
-        // 2. Encabezado del explorador (38 px): micro-etiqueta y acciones de 24 px
+        // 2. Cabecera de sección: icono Lucide y título en caja normal (sin barra de herramientas).
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
         let header_center_y = panel_y + (header_h / 2);
-        let header_base = header_center_y + 4;
 
         self.draw_lucide_icon(
             buffer,
@@ -56,11 +55,11 @@ impl TerminalRenderer {
             if explorer.changes_only {
                 crate::ui::LucideIcon::GitBranch
             } else {
-                crate::ui::LucideIcon::FolderTree
+                crate::ui::LucideIcon::Folder
             },
             panel_x + 16,
             header_center_y,
-            13.0,
+            14.0,
             if explorer.changes_only {
                 theme.accent_color()
             } else {
@@ -68,261 +67,28 @@ impl TerminalRenderer {
             },
         );
 
-        self.draw_ui_text_tracked(
+        self.draw_ui_text(
             buffer,
             width,
             height,
             if explorer.changes_only {
-                "CAMBIOS"
+                "Cambios"
             } else {
-                "ARCHIVOS"
+                "Archivos"
             },
             panel_x + 30,
-            header_base,
-            panel_x + panel_w.saturating_sub(72),
+            header_center_y + 4,
+            panel_x + panel_w.saturating_sub(12),
             theme.foreground,
-            tokens::MICRO,
+            tokens::SECTION,
             true,
-            tokens::TRACKING,
         );
 
-        // Botón que alterna árbol de archivos / solo cambios (no hay git en sesiones remotas)
-        if explorer.remote_session.is_none() {
-            let (bx, by, bw, bh) =
-                crate::explorer::FileExplorer::changes_btn_rect(panel_x, panel_y, panel_w);
-            if explorer.changes_only {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    bx,
-                    by,
-                    bw,
-                    bh,
-                    4,
-                    theme.accent_soft(32),
-                );
-            }
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                crate::ui::LucideIcon::GitBranch,
-                bx + bw / 2,
-                by + bh / 2,
-                12.0,
-                if explorer.changes_only {
-                    theme.accent_color()
-                } else {
-                    theme.text_muted()
-                },
-            );
-        }
-
-        // Botón para fijar el explorador (evita que se mueva al cambiar de directorio o pestaña)
-        let (px, py, pw, ph) =
-            crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
-        if explorer.is_pinned || explorer.hovered_pin_btn {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                px,
-                py,
-                pw,
-                ph,
-                4,
-                if explorer.is_pinned {
-                    theme.accent_soft(32)
-                } else {
-                    theme.surface_hover()
-                },
-            );
-        }
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::Lock,
-            px + pw / 2,
-            py + ph / 2,
-            12.0,
-            if explorer.is_pinned {
-                theme.accent_color()
-            } else if explorer.hovered_pin_btn {
-                theme.foreground
-            } else {
-                theme.text_muted()
-            },
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            panel_x,
-            panel_y + header_h - 1,
-            panel_w,
-            1,
-            theme.chrome_line(),
-        );
-
-        // 3. Sub-encabezado: navegación plana y ruta actual (30 px)
-        let sub_y = panel_y + header_h;
-        let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
-        let sub_center_y = sub_y + (sub_h / 2);
-        let nav_y = sub_y + (sub_h.saturating_sub(24)) / 2;
-        let nav_stride = 26;
-
-        // Botón [<] Atrás
-        let back_x = panel_x + 8;
-        let can_back = explorer.can_go_back();
-        if explorer.hovered_back_btn && can_back {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                back_x,
-                nav_y,
-                24,
-                24,
-                4,
-                theme.surface_hover(),
-            );
-        }
-        let back_fg = if can_back {
-            if explorer.hovered_back_btn {
-                theme.foreground
-            } else {
-                theme.text_secondary()
-            }
-        } else {
-            theme.mix(theme.background, theme.foreground, 0.22)
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::ChevronLeft,
-            back_x + 12,
-            sub_center_y,
-            12.0,
-            back_fg,
-        );
-
-        // Botón [>] Adelante
-        let fwd_x = back_x + nav_stride;
-        let can_fwd = explorer.can_go_forward();
-        if explorer.hovered_forward_btn && can_fwd {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                fwd_x,
-                nav_y,
-                24,
-                24,
-                4,
-                theme.surface_hover(),
-            );
-        }
-        let fwd_fg = if can_fwd {
-            if explorer.hovered_forward_btn {
-                theme.foreground
-            } else {
-                theme.text_secondary()
-            }
-        } else {
-            theme.mix(theme.background, theme.foreground, 0.22)
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::ChevronRight,
-            fwd_x + 12,
-            sub_center_y,
-            12.0,
-            fwd_fg,
-        );
-
-        // Botón [^] Subir directorio
-        let up_x = fwd_x + nav_stride;
-        if explorer.hovered_up_btn {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                up_x,
-                nav_y,
-                24,
-                24,
-                4,
-                theme.surface_hover(),
-            );
-        }
-        let up_fg = if explorer.hovered_up_btn {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::ArrowUp,
-            up_x + 12,
-            sub_center_y,
-            12.0,
-            up_fg,
-        );
-
-        // Nombre de la carpeta actual: dato de máquina en mono
-        let dir_label = if explorer.changes_only {
-            format!("{} con cambios", explorer.items.len())
-        } else if let Some(ref sess) = explorer.remote_session {
-            let name = sess
-                .remote_dir
-                .rsplit('/')
-                .find(|s| !s.is_empty())
-                .unwrap_or("/");
-            if name == "/" {
-                "/".to_string()
-            } else {
-                format!("{}/", name)
-            }
-        } else {
-            let dir_name = explorer
-                .root_dir
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| explorer.root_dir.to_string_lossy().to_string());
-            format!("{}/", dir_name.trim_end_matches('/'))
-        };
-        self.draw_mono_text(
-            buffer,
-            width,
-            height,
-            &dir_label,
-            up_x + 32,
-            sub_center_y + 4,
-            panel_x + panel_w - 10,
-            theme.text_muted(),
-            tokens::DETAIL,
-            false,
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            panel_x,
-            sub_y + sub_h - 1,
-            panel_w,
-            1,
-            theme.chrome_line(),
-        );
-
-        // 4. Lista de elementos (archivos y carpetas)
-        let list_y = sub_y + sub_h + crate::explorer::FileExplorer::LIST_TOP_PAD;
+        // 3. Lista de elementos (archivos y carpetas), justo bajo la cabecera.
+        let list_y = panel_y
+            + header_h
+            + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+            + crate::explorer::FileExplorer::LIST_TOP_PAD;
         let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
         let list_max_y = panel_y + panel_h.saturating_sub(8);
 
@@ -481,7 +247,7 @@ impl TerminalRenderer {
                 } else {
                     theme.text_secondary()
                 };
-                let label = format!("{}/", item.name);
+                let label = item.name.clone();
                 self.draw_ui_text(
                     buffer,
                     width,

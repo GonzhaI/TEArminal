@@ -1066,7 +1066,7 @@ fn preview_ui_scenes() {
             index: 0,
             status: Some(crate::renderer::SessionStatus::Running),
             title: "Rediseño de UI".into(),
-            detail: Some("claude".into()),
+            detail: Some("claude, Sonnet 5.5, 4 min".into()),
             is_active: true,
             has_unread: false,
             pane_count: 2,
@@ -1132,6 +1132,15 @@ fn preview_ui_scenes() {
             is_loose: false,
         },
     ];
+    let changes: Vec<crate::renderer::SidebarChange> =
+        ["theme.rs", "config.rs", "tokens.rs", "README.md"]
+            .iter()
+            .map(|name| crate::renderer::SidebarChange {
+                name: (*name).to_string(),
+                path: std::path::PathBuf::from("src/renderer").join(name),
+                status: crate::explorer::GitFileStatus::Modified,
+            })
+            .collect();
     let header = crate::renderer::SidebarHeader {
         title: "axon".into(),
         branch: Some("main".into()),
@@ -1139,10 +1148,12 @@ fn preview_ui_scenes() {
         on_right: false,
         list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, false),
         explorer_visible: false,
+        changes: Vec::new(),
     };
     let header_exp = crate::renderer::SidebarHeader {
         list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, true),
         explorer_visible: true,
+        changes: changes.clone(),
         ..header.clone()
     };
 
@@ -1251,6 +1262,7 @@ fn preview_ui_scenes() {
         on_right: true,
         list_end: rows_end,
         explorer_visible: true,
+        changes: changes.clone(),
         ..Default::default()
     };
     let mut buf = vec![0u32; w * h];
@@ -1296,7 +1308,13 @@ fn preview_ui_scenes() {
     }
     let mut h_explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
-    let er = crate::renderer::ProjectsPanelRects::explorer_rect(usable_h, rows_end);
+    let h_change_rows = crate::renderer::PanelChangesRects::shown_rows(
+        crate::renderer::SidebarRects::content_bottom(usable_h),
+        crate::renderer::PanelChangesRects::top(rows_end),
+        h_header.changes.len(),
+    );
+    let er =
+        crate::renderer::ProjectsPanelRects::explorer_rect_after(usable_h, rows_end, h_change_rows);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
     r.render_pane(
         &mut buf,
@@ -1353,9 +1371,15 @@ fn preview_ui_scenes() {
     let mut explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
     explorer.is_focused = true;
-    explorer.dock = Some(crate::renderer::SidebarRects::explorer_rect(
+    let change_rows = crate::renderer::PanelChangesRects::shown_rows(
+        crate::renderer::SidebarRects::content_bottom(h - status_h),
+        crate::renderer::PanelChangesRects::top(header_exp.list_end),
+        header_exp.changes.len(),
+    );
+    explorer.dock = Some(crate::renderer::SidebarRects::explorer_rect_after(
         h - status_h,
         header_exp.list_end,
+        change_rows,
     ));
     let explorer_w = 0;
     let mut buf = vec![0u32; w * h];
@@ -1607,9 +1631,19 @@ fn preview_ui_scenes() {
     }
     explorer.dock = Some((
         x0 + crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect(h - status_h, header_exp.list_end).1,
+        crate::renderer::SidebarRects::explorer_rect_after(
+            h - status_h,
+            header_exp.list_end,
+            change_rows,
+        )
+        .1,
         SIDEBAR_WIDTH - crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect(h - status_h, header_exp.list_end).3,
+        crate::renderer::SidebarRects::explorer_rect_after(
+            h - status_h,
+            header_exp.list_end,
+            change_rows,
+        )
+        .3,
     ));
     r.render_pane(
         &mut buf,

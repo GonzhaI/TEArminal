@@ -231,6 +231,8 @@ pub struct TerminalTab {
     pub file_viewer: Option<FileViewerState>,
     /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
     pub is_preview: bool,
+    /// Cuándo se abrió la pestaña (subtítulo «N min» de la lista de sesiones).
+    pub started_at: Instant,
 }
 
 impl TerminalTab {
@@ -247,6 +249,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
+            started_at: Instant::now(),
         }
     }
 
@@ -268,6 +271,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
+            started_at: Instant::now(),
         }
     }
 
@@ -282,6 +286,7 @@ impl TerminalTab {
             is_settings: true,
             file_viewer: None,
             is_preview: false,
+            started_at: Instant::now(),
         }
     }
 
@@ -400,6 +405,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
+            started_at: Instant::now(),
         }
     }
 
@@ -521,6 +527,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
+            started_at: Instant::now(),
         }
     }
 

@@ -96,7 +96,7 @@ impl AxonApp {
                 index: idx,
                 status: super::projects::session_status(t),
                 title: t.display_title(),
-                detail: t.sidebar_detail(),
+                detail: self.session_detail(t),
                 is_active: idx == active_idx,
                 has_unread: t.has_unread,
                 pane_count: t.panes.len(),

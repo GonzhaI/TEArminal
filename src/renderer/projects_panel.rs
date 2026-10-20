@@ -17,7 +17,7 @@ impl TerminalRenderer {
         header: &SidebarHeader,
         hovered_row: Option<usize>,
         scroll_offset: usize,
-        hovered_toggle_btn: bool,
+        _hovered_toggle_btn: bool,
         theme: &Theme,
     ) {
         if panel_w == 0 || width == 0 || height == 0 {
@@ -42,30 +42,55 @@ impl TerminalRenderer {
         let edge_x = if header.on_right { 0 } else { panel_w - 1 };
         Self::draw_rect(buffer, width, height, edge_x, top, 1, body_h, line);
 
-        // 2. Cabecera: título y número de proyectos.
-        let title_end = self.draw_ui_text(
+        // 2. Cabecera: icono, título y contador de proyectos en una píldora.
+        let header_cy = top + ProjectsPanelRects::HEADER_H / 2;
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::Folder,
+            24,
+            header_cy,
+            14.0,
+            theme.text_secondary(),
+        );
+        self.draw_ui_text(
             buffer,
             width,
             height,
             "Proyectos",
-            16,
-            top + 25,
-            panel_w.saturating_sub(40),
+            38,
+            header_cy + 4,
+            panel_w.saturating_sub(70),
             theme.foreground,
             tokens::SECTION,
             true,
         );
         let count = entries.iter().filter(|p| !p.is_loose).count().to_string();
+        let count_w = self.measure_mono_text(&count, tokens::MICRO, false) + 14;
+        let badge_x = panel_w.saturating_sub(count_w + 12);
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            badge_x,
+            header_cy.saturating_sub(9),
+            count_w,
+            18,
+            9,
+            theme.surface_bg(),
+        );
+        let cw = self.measure_mono_text(&count, tokens::MICRO, false);
         self.draw_mono_text(
             buffer,
             width,
             height,
             &count,
-            title_end + 8,
-            top + 25,
-            panel_w.saturating_sub(24),
-            theme.text_muted(),
-            tokens::MICRO + 0.5,
+            badge_x + (count_w.saturating_sub(cw)) / 2,
+            header_cy + 4,
+            badge_x + count_w,
+            theme.text_secondary(),
+            tokens::MICRO,
             false,
         );
 
@@ -174,32 +199,57 @@ impl TerminalRenderer {
                 );
             }
 
-            // Estado a la derecha; nombre y rama a la izquierda.
+            // Estado a la derecha (anillo en curso, punto si terminó/falló/en espera); nombre y rama a la izquierda.
             let right_edge = rx + rw - 12;
             let mut name_max = right_edge;
             if let Some(status) = project.status {
                 let label = status.label();
-                let w = self.measure_ui_text(label, tokens::DETAIL, false);
-                let x = right_edge.saturating_sub(w);
                 let color = match status {
                     SessionStatus::Running => theme.accent_color(),
                     SessionStatus::Done => theme.ansi[2],
                     SessionStatus::Failed => theme.ansi[1],
                     SessionStatus::Idle => theme.text_muted(),
                 };
+                let text_w = self.measure_ui_text(label, tokens::DETAIL, false);
+                let group_x = right_edge.saturating_sub(text_w + 14);
+                if status == SessionStatus::Running {
+                    crate::ui::stroke_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        group_x,
+                        ry + 12,
+                        10,
+                        10,
+                        5,
+                        color,
+                    );
+                } else {
+                    crate::ui::draw_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        group_x + 1,
+                        ry + 13,
+                        8,
+                        8,
+                        4,
+                        color,
+                    );
+                }
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
                     label,
-                    x,
+                    group_x + 14,
                     ry + 20,
                     right_edge,
                     color,
                     tokens::DETAIL,
                     false,
                 );
-                name_max = x.saturating_sub(10);
+                name_max = group_x.saturating_sub(10);
             }
             let text_x = sq.0 + sq.2 + 12;
             self.draw_ui_text(
@@ -234,99 +284,26 @@ impl TerminalRenderer {
             }
         }
 
-        // 4. El explorador va alojado bajo la lista: una hairline lo separa de los proyectos.
-        if header.explorer_visible {
-            Self::draw_rect(
+        // 4. Sección «Cambios» entre los proyectos y el explorador (que dibuja «Archivos»).
+        let changes_top = crate::renderer::PanelChangesRects::top(header.list_end);
+        let change_rows = crate::renderer::PanelChangesRects::shown_rows(
+            SidebarRects::content_bottom(usable_h),
+            changes_top,
+            header.changes.len(),
+        );
+        if header.explorer_visible && change_rows > 0 {
+            self.draw_changes_section(
                 buffer,
                 width,
                 height,
                 8,
-                header.list_end + 3,
-                panel_w.saturating_sub(17),
-                1,
-                line,
+                changes_top,
+                panel_w.saturating_sub(16),
+                &header.changes[..change_rows],
+                header.changes.len(),
+                theme,
             );
         }
-
-        // 5. Pie: ocultar el panel, con atajo como dato.
-        let btn = ProjectsPanelRects::toggle_btn_rect(usable_h);
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            0,
-            btn.1.saturating_sub(8),
-            panel_w.saturating_sub(1),
-            1,
-            line,
-        );
-        if hovered_toggle_btn {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                btn.0,
-                btn.1,
-                btn.2,
-                btn.3,
-                6,
-                theme.surface_hover(),
-            );
-        }
-        let fg = if hovered_toggle_btn {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        let cy = btn.1 + btn.3 / 2;
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            if header.on_right {
-                crate::ui::LucideIcon::PanelRight
-            } else {
-                crate::ui::LucideIcon::PanelLeft
-            },
-            btn.0 + 12,
-            cy,
-            13.0,
-            fg,
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            "Ocultar panel",
-            btn.0 + 24,
-            cy + 4,
-            btn.0 + btn.2.saturating_sub(76),
-            fg,
-            tokens::BODY,
-            false,
-        );
-        let b_w = self.measure_mono_text("B", tokens::MICRO, false) + 12;
-        let ctrl_w = self.measure_mono_text("Ctrl", tokens::MICRO, false) + 12;
-        let bx = btn.0 + btn.2 - b_w - 8;
-        let cx = bx - ctrl_w - 4;
-        self.draw_keycap(
-            buffer,
-            width,
-            height,
-            cx,
-            cy - tokens::KEYCAP_H / 2,
-            "Ctrl",
-            theme,
-        );
-        self.draw_keycap(
-            buffer,
-            width,
-            height,
-            bx,
-            cy - tokens::KEYCAP_H / 2,
-            "B",
-            theme,
-        );
     }
 
     /// Última fila de la lista: cuadrado discontinuo con «+» y el texto «Agregar proyecto».

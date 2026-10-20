@@ -551,7 +551,17 @@ impl AxonApp {
                     return;
                 }
                 Key::Named(NamedKey::Backspace) => {
-                    self.file_explorer.navigate_up();
+                    let remote_parent = if self.file_explorer.inband_remote {
+                        self.file_explorer.remote_parent()
+                    } else {
+                        None
+                    };
+                    match remote_parent {
+                        Some(parent) => {
+                            self.remote_cd(&parent);
+                        }
+                        None => self.file_explorer.navigate_up(),
+                    }
                     self.file_explorer.selected_index = if self.file_explorer.items.is_empty() {
                         None
                     } else {
