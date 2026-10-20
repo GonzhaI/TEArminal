@@ -2324,3 +2324,16 @@ fn test_top_tabs_show_only_the_sessions_of_the_project_in_view() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_clean_block_command_drops_control_and_format_chars() {
+    use super::clipboard::clean_block_command;
+    // ESC, CR/LF, bidi override (U+202E), ancho cero (U+200B) y BOM: nada de eso llega al prompt.
+    let out = clean_block_command("ls\x1b[201~\r\nrm\u{202E}fr\u{200B}\u{FEFF} /tmp");
+    assert_eq!(out, "ls[201~rmfr /tmp");
+    assert_eq!(
+        clean_block_command("cargo test --release"),
+        "cargo test --release"
+    );
+    assert_eq!(clean_block_command("echo ñ ✓"), "echo ñ ✓");
+}

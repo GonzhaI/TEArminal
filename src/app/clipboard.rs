@@ -211,3 +211,26 @@ pub(super) fn sanitize_paste(text: &str) -> String {
         .filter(|&c| c == '\r' || c == '\t' || !(c.is_control()))
         .collect()
 }
+
+/// Limpia el comando de una tarjeta de bloque antes de copiarlo o escribirlo en el prompt.
+///
+/// El texto sale de la región OSC 133 de la pantalla, que controla el programa en ejecución: se descartan
+/// los caracteres de control y los de formato Unicode (bidi, ancho cero, marca de orden de bytes), que
+/// permitirían ocultar o reordenar lo que el usuario cree que va a escribir.
+pub(super) fn clean_block_command(text: &str) -> String {
+    text.chars()
+        .filter(|&c| {
+            !c.is_control()
+                && !matches!(
+                    c,
+                    '\u{00AD}'
+                        | '\u{061C}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{202A}'..='\u{202E}'
+                        | '\u{2060}'..='\u{2064}'
+                        | '\u{2066}'..='\u{206F}'
+                        | '\u{FEFF}'
+                )
+        })
+        .collect()
+}

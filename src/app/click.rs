@@ -1397,11 +1397,12 @@ impl AxonApp {
                         } else {
                             terminal.active_block.as_mut()
                         };
-                        // El comando lo tecleó el usuario, pero la salida es no confiable: una sola línea, sin control.
+                        // El texto del comando sale de la pantalla (OSC 133), que controla el programa en ejecución:
+                        // no es confiable. Una sola línea, sin caracteres de control ni de formato.
                         let command = block
                             .as_ref()
                             .and_then(|b| b.command.as_deref())
-                            .map(|c| c.chars().filter(|c| !c.is_control()).collect::<String>());
+                            .map(super::clipboard::clean_block_command);
                         let exit_code = block.as_ref().and_then(|b| b.exit_code);
                         match action {
                             crate::renderer::BlockCardButton::Copy => {
@@ -1410,13 +1411,14 @@ impl AxonApp {
                                 }
                             }
                             crate::renderer::BlockCardButton::Repeat => {
-                                // Solo con el panel en el prompt: si corre otro comando, el texto iría a su entrada.
+                                // Solo con el panel en el prompt (si corre otro comando, el texto iría a su entrada) y
+                                // sin `\r`: el comando queda escrito en el prompt y lo ejecuta el usuario con Enter.
                                 let running = terminal
                                     .active_block
                                     .as_ref()
                                     .is_some_and(|b| b.output_start.is_some());
                                 if let (Some(command), false) = (command, running) {
-                                    pane.pty.write_input(format!("{command}\r").as_bytes());
+                                    pane.pty.write_input(command.as_bytes());
                                 }
                             }
                             // Sin agente integrado, «Explicar» deja en el portapapeles la petición lista para pegar.
