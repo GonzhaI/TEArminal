@@ -47,8 +47,8 @@ impl TerminalRenderer {
         cwd: Option<&str>,
         git_branch: Option<&str>,
         ssh_host: Option<&str>,
-        _cols: usize,
-        _rows: usize,
+        cols: usize,
+        rows: usize,
         ai_status: AiAgentStatus,
         active_model: Option<&str>,
         hovered_ai_badge: bool,
@@ -61,47 +61,108 @@ impl TerminalRenderer {
 
         let bar_h = StatusBarRects::BAR_H;
         let bar_y = height - bar_h;
-        let bar_bg = theme.sidebar_bg();
-        let border_c = theme.border_color();
-
-        let bar_x = 0;
-        let bar_w = width;
-
-        // 1. Fondo y borde superior 1px abarcando todo el ancho inferior
-        Self::draw_rect(buffer, width, height, bar_x, bar_y, bar_w, bar_h, bar_bg);
-        Self::draw_rect(buffer, width, height, bar_x, bar_y, bar_w, 1, border_c);
-
         let center_y = bar_y + (bar_h / 2);
         let baseline = center_y + 4;
-        let mut cur_x = 12;
 
-        // 2. Izquierda: SSH Host y CWD con iconos Lucide
+        // 1. Fondo y hairline superior: la barra pertenece al chrome, no al lienzo.
+        Self::draw_rect(
+            buffer,
+            width,
+            height,
+            0,
+            bar_y,
+            width,
+            bar_h,
+            theme.chrome_bg(),
+        );
+        Self::draw_rect(
+            buffer,
+            width,
+            height,
+            0,
+            bar_y,
+            width,
+            1,
+            theme.chrome_line(),
+        );
+
+        // 2. Badge derecho: punto de estado + agente y modelo. Sin cápsula: solo el texto.
+        let (_, badge_label, ai_fg) =
+            Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
+        let ai_text_w = self.measure_ui_text(&badge_label, 11.0, true);
+        let update_info = crate::updater::get_available_update();
+        let update_text = update_info
+            .as_ref()
+            .map(|u| format!("v{} disponible", u.latest_version));
+        let update_w = update_text
+            .as_ref()
+            .map(|t| self.measure_ui_text(t, 10.5, true));
+        let rects = StatusBarRects::compute(width, height, ai_text_w, update_w);
+        let (bx, by, bw, bh) = rects.ai_badge;
+        let right_limit = rects
+            .update_badge
+            .map_or(bx, |(ux, _, _, _)| ux)
+            .saturating_sub(10);
+
+        // Dimensiones de la rejilla como dato, en el extremo derecho del grupo de estado.
+        let dims = format!("{cols} × {rows}");
+        let dims_w = self.measure_ui_text(&dims, 10.0, false);
+        let dims_x = right_limit.saturating_sub(dims_w);
+        let dims_x = dims_x.max(width.saturating_sub(320));
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &dims,
+            dims_x,
+            baseline,
+            right_limit,
+            theme.text_muted(),
+            10.0,
+            false,
+        );
+        let dims_sep_x = dims_x.saturating_sub(10);
+
+        // 3. Izquierda: SSH, carpeta y rama. Segmentos con separador hairline, sin iconos de relleno.
+        let mut cur_x = 12;
+        let text_limit = dims_sep_x.saturating_sub(18);
+
         if let Some(ssh) = ssh_host {
             self.draw_lucide_icon(
                 buffer,
                 width,
                 height,
                 crate::ui::LucideIcon::Server,
-                cur_x + 6,
+                cur_x + 5,
                 center_y,
-                12.0,
-                theme.ansi[2],
+                11.0,
+                theme.text_secondary(),
             );
-            cur_x += 16;
-            let label = format!("ssh: {}", ssh);
+            cur_x += 15;
             let adv = self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                &label,
+                ssh,
                 cur_x,
                 baseline,
-                width.saturating_sub(260),
-                theme.ansi[2],
+                text_limit,
+                theme.text_secondary(),
                 11.0,
                 true,
             );
-            cur_x = adv + 16;
+            cur_x = adv + 12;
+            Self::draw_rect(
+                buffer,
+                width,
+                height,
+                cur_x,
+                bar_y + 7,
+                1,
+                bar_h.saturating_sub(14),
+                theme.chrome_line(),
+            );
+            cur_x += 11;
         }
 
         if let Some(dir) = cwd {
@@ -110,12 +171,12 @@ impl TerminalRenderer {
                 width,
                 height,
                 crate::ui::LucideIcon::Folder,
-                cur_x + 6,
+                cur_x + 5,
                 center_y,
-                12.0,
-                theme.ansi[8],
+                11.0,
+                theme.text_muted(),
             );
-            cur_x += 16;
+            cur_x += 15;
             let adv = self.draw_ui_text(
                 buffer,
                 width,
@@ -123,123 +184,67 @@ impl TerminalRenderer {
                 dir,
                 cur_x,
                 baseline,
-                (cur_x + 320).min(width.saturating_sub(180)),
-                theme.ansi[7],
-                11.0,
+                text_limit,
+                theme.text_secondary(),
+                10.5,
                 false,
             );
-            cur_x = adv + 16;
+            cur_x = adv + 12;
+            if git_branch.is_some() {
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    cur_x,
+                    bar_y + 7,
+                    1,
+                    bar_h.saturating_sub(14),
+                    theme.chrome_line(),
+                );
+                cur_x += 11;
+            }
         }
 
-        // Git branch con icono Lucide GitBranch
         if let Some(branch) = git_branch {
             self.draw_lucide_icon(
                 buffer,
                 width,
                 height,
                 crate::ui::LucideIcon::GitBranch,
-                cur_x + 6,
+                cur_x + 5,
                 center_y,
-                11.0,
+                10.5,
                 theme.accent_color(),
             );
-            cur_x += 16;
-            let adv = self.draw_ui_text(
+            cur_x += 15;
+            self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 branch,
                 cur_x,
                 baseline,
-                width.saturating_sub(150),
+                text_limit,
                 theme.accent_color(),
-                11.0,
+                10.5,
                 true,
             );
-            let _ = adv;
         }
 
-        // 3. Derecha: Badge de Actualización si hay una disponible
-        let update_info = crate::updater::get_available_update();
-        let update_text = update_info
-            .as_ref()
-            .map(|u| format!("v{} disponible", u.latest_version));
-        let update_w = update_text
-            .as_ref()
-            .map(|t| self.measure_ui_text(t, 11.0, true));
-
-        // Derecha: Badge de Agente/Modelo IA o estado de conexión (REMOTO / LOCAL)
-        let (ai_icon, badge_label, ai_fg) =
-            Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
-
-        let ai_text_w = self.measure_ui_text(&badge_label, 11.0, true);
-        let rects = StatusBarRects::compute(width, height, ai_text_w, update_w);
-        let (bx, by, bw, bh) = rects.ai_badge;
-
-        if hovered_ai_badge {
-            let accent = theme.accent_color();
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                bx,
-                by + 3,
-                bw,
-                bh.saturating_sub(5),
-                5,
-                Color::from_rgba(accent.r(), accent.g(), accent.b(), 34),
-            );
-        }
-
-        let badge_x = width.saturating_sub(ai_text_w + 32);
-        self.draw_lucide_icon(
+        // 4. Separador antes de las dimensiones.
+        Self::draw_rect(
             buffer,
             width,
             height,
-            ai_icon,
-            badge_x + 6,
-            center_y,
-            11.0,
-            ai_fg,
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &badge_label,
-            badge_x + 16,
-            baseline,
-            width,
-            ai_fg,
-            11.0,
-            true,
+            dims_sep_x,
+            bar_y + 7,
+            1,
+            bar_h.saturating_sub(14),
+            theme.chrome_line(),
         );
 
-        // Badge de actualización disponible
-        if let (Some((ub_x, ub_y, ub_w, ub_h)), Some(utext)) = (rects.update_badge, update_text) {
-            let accent = theme.accent_color();
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                ub_x,
-                ub_y + 3,
-                ub_w,
-                ub_h.saturating_sub(5),
-                5,
-                Color::from_rgba(accent.r(), accent.g(), accent.b(), 38),
-            );
-            crate::ui::stroke_rounded_rect(
-                buffer,
-                width,
-                height,
-                ub_x,
-                ub_y + 3,
-                ub_w,
-                ub_h.saturating_sub(5),
-                5,
-                Color::from_rgba(accent.r(), accent.g(), accent.b(), 90),
-            );
+        // 5. Actualización disponible: icono + texto de acento, sin relleno.
+        if let (Some((ub_x, _ub_y, ub_w, _ub_h)), Some(utext)) = (rects.update_badge, update_text) {
             self.draw_lucide_icon(
                 buffer,
                 width,
@@ -247,20 +252,76 @@ impl TerminalRenderer {
                 crate::ui::LucideIcon::ArrowUp,
                 ub_x + 6,
                 center_y,
-                11.0,
-                accent,
+                10.5,
+                theme.accent_color(),
             );
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 &utext,
-                ub_x + 18,
+                ub_x + 15,
                 baseline,
                 ub_x + ub_w,
-                accent,
-                11.0,
+                theme.accent_color(),
+                10.5,
                 true,
+            );
+            Self::draw_rect(
+                buffer,
+                width,
+                height,
+                ub_x + ub_w + 3,
+                bar_y + 7,
+                1,
+                bar_h.saturating_sub(14),
+                theme.chrome_line(),
+            );
+        }
+
+        // 6. Badge de agente: punto de color y etiqueta; el modelo va en tinta secundaria.
+        if hovered_ai_badge {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                bx,
+                by + 3,
+                bw,
+                bh.saturating_sub(6),
+                3,
+                theme.accent_soft(26),
+            );
+        }
+        crate::ui::draw_rounded_rect(buffer, width, height, bx + 8, center_y - 2, 4, 4, 2, ai_fg);
+        let (name, model) = badge_label
+            .split_once(" · ")
+            .map_or((badge_label.as_str(), None), |(n, m)| (n, Some(m)));
+        let name_end = self.draw_ui_text_tracked(
+            buffer,
+            width,
+            height,
+            name,
+            bx + 18,
+            baseline,
+            bx + bw,
+            ai_fg,
+            9.5,
+            true,
+            0.8,
+        );
+        if let Some(model) = model {
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                model,
+                name_end + 6,
+                baseline,
+                bx + bw - 8,
+                theme.text_secondary(),
+                10.5,
+                false,
             );
         }
     }
@@ -289,7 +350,7 @@ impl TerminalRenderer {
                 return (
                     crate::ui::LucideIcon::Dot,
                     "LOCAL".to_string(),
-                    theme.ansi[8],
+                    theme.text_muted(),
                 );
             }
         };
@@ -375,20 +436,40 @@ impl TerminalRenderer {
         }
         let (x, y, w, h) = StatusBarRects::popup_rect(width, height, popup_h);
 
-        // Sombra suave, fondo y borde redondeado
+        // Sombra corta, superficie elevada y hairline
         crate::ui::draw_rounded_rect(
             buffer,
             width,
             height,
-            x + 2,
-            y + 4,
+            x + 1,
+            y + 3,
             w,
             h,
-            10,
-            Color::from_rgba(0, 0, 0, 85),
+            6,
+            Color::from_rgba(0, 0, 0, 80),
         );
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.surface_bg());
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.border_color());
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            6,
+            theme.chrome_bg_elevated(),
+        );
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            6,
+            theme.chrome_line_strong(),
+        );
 
         let pad_x = x + 16;
         let max_x = x + w - 16;
@@ -416,7 +497,7 @@ impl TerminalRenderer {
             cur_y + 10,
             max_x,
             theme.foreground,
-            12.0,
+            11.5,
             true,
         );
         cur_y += 20;
@@ -443,7 +524,7 @@ impl TerminalRenderer {
                 pad_x,
                 cur_y + 10,
                 max_x,
-                theme.ansi[7],
+                theme.text_secondary(),
                 11.0,
                 false,
             );
@@ -454,8 +535,8 @@ impl TerminalRenderer {
             let (_, name, brand) = Self::status_bar_badge_info(u.kind, None, None, theme);
 
             // Cabecera: barra de color + agente + modelo + plan/modo a la derecha
-            crate::ui::draw_rounded_rect(buffer, width, height, pad_x, cur_y + 3, 3, 14, 1, brand);
-            let name_end = self.draw_ui_text(
+            crate::ui::draw_rounded_rect(buffer, width, height, pad_x, cur_y + 3, 2, 14, 1, brand);
+            let name_end = self.draw_ui_text_tracked(
                 buffer,
                 width,
                 height,
@@ -464,8 +545,9 @@ impl TerminalRenderer {
                 cur_y + 10,
                 max_x,
                 brand,
-                11.0,
+                9.5,
                 true,
+                0.8,
             );
             let plan_w = u
                 .plan
@@ -484,30 +566,18 @@ impl TerminalRenderer {
                 true,
             );
             if let Some(plan) = u.plan.as_deref() {
-                let pill_w = plan_w - 8;
-                let pill_x = max_x.saturating_sub(pill_w);
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    pill_x,
-                    cur_y + 3,
-                    pill_w,
-                    14,
-                    3,
-                    Color::from_rgba(brand.r, brand.g, brand.b, 40),
-                );
+                let plan_w = self.measure_ui_text(plan, 10.0, false);
                 self.draw_ui_text(
                     buffer,
                     width,
                     height,
                     plan,
-                    pill_x + 6,
-                    cur_y + 13,
+                    max_x.saturating_sub(plan_w),
+                    cur_y + 10,
                     max_x,
-                    brand,
+                    theme.text_muted(),
                     10.0,
-                    true,
+                    false,
                 );
             }
             cur_y += 20;
@@ -521,7 +591,7 @@ impl TerminalRenderer {
                     pad_x + 10,
                     cur_y + 10,
                     max_x,
-                    theme.ansi[7],
+                    theme.text_secondary(),
                     10.5,
                     false,
                 );
@@ -573,15 +643,15 @@ impl TerminalRenderer {
                     bar_x,
                     bar_y,
                     bar_w,
-                    5,
-                    2,
-                    theme.border_color(),
+                    3,
+                    1,
+                    theme.chrome_line(),
                 );
                 let fill_w = ((bar_w as f32 * lim.percent / 100.0).round() as usize)
                     .clamp(usize::from(lim.percent > 0.2) * 4, bar_w);
                 if fill_w > 0 {
                     crate::ui::draw_rounded_rect(
-                        buffer, width, height, bar_x, bar_y, fill_w, 5, 2, bar_fg,
+                        buffer, width, height, bar_x, bar_y, fill_w, 3, 1, bar_fg,
                     );
                 }
                 let reset = lim.resets_in_secs().map_or_else(
@@ -596,7 +666,7 @@ impl TerminalRenderer {
                     bar_x,
                     cur_y + 28,
                     max_x,
-                    theme.ansi[7],
+                    theme.text_secondary(),
                     10.0,
                     false,
                 );
@@ -612,7 +682,7 @@ impl TerminalRenderer {
                     pad_x + 10,
                     cur_y + 10,
                     max_x,
-                    theme.ansi[7],
+                    theme.text_secondary(),
                     10.5,
                     false,
                 );
@@ -691,7 +761,7 @@ impl TerminalRenderer {
                     pad_x + 10,
                     cur_y + 10,
                     max_x,
-                    theme.ansi[7],
+                    theme.text_secondary(),
                     10.0,
                     false,
                 );
@@ -721,7 +791,7 @@ impl TerminalRenderer {
             pad_x,
             cur_y + 10,
             max_x,
-            theme.ansi[7],
+            theme.text_secondary(),
             11.0,
             false,
         );
@@ -768,7 +838,7 @@ impl TerminalRenderer {
                 pad_x,
                 cur_y + 10,
                 max_x,
-                theme.ansi[7],
+                theme.text_secondary(),
                 10.0,
                 true,
             );
@@ -779,7 +849,7 @@ impl TerminalRenderer {
                     "AGY" => theme.ansi[6],
                     "CLAUDE" => theme.ansi[5],
                     "GEMINI" => theme.ansi[4],
-                    _ => theme.ansi[7],
+                    _ => theme.text_secondary(),
                 };
                 let tag = format!("{}: ", ag.agent);
                 let next_x = self.draw_ui_text(
@@ -816,7 +886,7 @@ impl TerminalRenderer {
                     max_x.saturating_sub(dw),
                     cur_y + 10,
                     max_x,
-                    theme.ansi[7],
+                    theme.text_secondary(),
                     10.0,
                     false,
                 );

@@ -7,3 +7,6 @@
 # Local de cada desarrollador (la configuración de ejemplo está en examples/axon.toml)
 /axon.toml
 *.log
+
+# Contexto local de diseño (Impeccable)
+/.impeccable

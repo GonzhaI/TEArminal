@@ -41,9 +41,9 @@ impl TerminalRenderer {
             theme.background.to_u32_xrgb(),
         );
 
-        // 2. Barra de encabezado superior (38px)
+        // 2. Barra de encabezado superior (38 px), plana y con hairline inferior.
         let header_h = 38;
-        let header_bg = theme.surface_bg();
+        let header_bg = theme.chrome_bg();
         fill_rect(
             buffer,
             width,
@@ -64,7 +64,7 @@ impl TerminalRenderer {
             y + header_h - 1,
             full_w,
             1,
-            theme.border_color().to_u32_xrgb(),
+            theme.chrome_line().to_u32_xrgb(),
         );
 
         // Icono representativo del tipo de archivo
@@ -91,10 +91,10 @@ impl TerminalRenderer {
             width,
             height,
             file_icon,
-            x + 22,
+            x + 20,
             header_center_y,
-            13.0,
-            theme.accent_color(),
+            12.5,
+            theme.text_muted(),
         );
 
         // Botones (modo y vista previa), chips informativos y, con el espacio sobrante, el nombre del archivo
@@ -108,7 +108,7 @@ impl TerminalRenderer {
             viewer.git_base.is_some(),
         );
         let accent = theme.accent_color();
-        let chip_bg = theme.surface_bg();
+        let chip_bg = theme.chrome_bg();
         let tint = |c: Color, a: u8| Color::from_rgba(c.r(), c.g(), c.b(), a);
 
         if let Some(rect) = header_rects.md_btn {
@@ -258,26 +258,36 @@ impl TerminalRenderer {
             right_x = right_x.min(r.0);
         }
         right_x = right_x.saturating_sub(8);
-        for (text, chip_fg, bg) in &chips {
-            let chip_w = self.measure_ui_text(text, 10.5, false) + 14;
+        for (text, chip_fg, _bg) in &chips {
+            let chip_w = self.measure_ui_text(text, 10.0, false);
             let chip_x = right_x.saturating_sub(chip_w);
             if chip_x < name_end_x + 16 {
                 break;
             }
-            crate::ui::draw_rounded_rect(buffer, width, height, chip_x, y + 8, chip_w, 22, 4, *bg);
             self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 text,
-                chip_x + 7,
-                header_base - 1,
+                chip_x,
+                header_base,
                 right_x,
                 *chip_fg,
-                10.5,
+                10.0,
                 false,
             );
-            right_x = chip_x.saturating_sub(8);
+            right_x = chip_x.saturating_sub(9);
+            Self::draw_rect(
+                buffer,
+                width,
+                height,
+                right_x,
+                y + 12,
+                1,
+                14,
+                theme.chrome_line(),
+            );
+            right_x = right_x.saturating_sub(9);
         }
 
         // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
@@ -321,8 +331,8 @@ impl TerminalRenderer {
                 card_y,
                 card_w,
                 card_h,
-                10,
-                theme.surface_bg(),
+                6,
+                theme.chrome_bg_elevated(),
             );
             crate::ui::stroke_rounded_rect(
                 buffer,
@@ -332,8 +342,8 @@ impl TerminalRenderer {
                 card_y,
                 card_w,
                 card_h,
-                10,
-                theme.border_color(),
+                6,
+                theme.chrome_line(),
             );
 
             self.draw_lucide_icon(
@@ -399,7 +409,9 @@ impl TerminalRenderer {
             content_y,
             gutter_w,
             content_h,
-            theme.surface_bg().to_u32_xrgb(),
+            theme
+                .mix(theme.background, theme.foreground, 0.03)
+                .to_u32_xrgb(),
         );
 
         // Línea vertical separadora del gutter
@@ -411,7 +423,7 @@ impl TerminalRenderer {
             content_y,
             1,
             content_h,
-            theme.border_color().to_u32_xrgb(),
+            theme.chrome_line().to_u32_xrgb(),
         );
 
         let baseline_offset = ((row_h as f32 * 0.76) as usize).max(char_w);
@@ -441,7 +453,7 @@ impl TerminalRenderer {
         let selection = viewer.selection_ordered().filter(|(a, b)| a != b);
         let accent = theme.accent_color();
         let sel_bg = Color::from_rgba(accent.r(), accent.g(), accent.b(), 70);
-        let mark_color = theme.ansi[8].to_u32_xrgb();
+        let mark_color = theme.text_muted().to_u32_xrgb();
         let tab_adv = (char_w * 4) as i32;
 
         for (row_idx, row) in rows
@@ -461,6 +473,22 @@ impl TerminalRenderer {
             let baseline_y = row_y + baseline_offset;
             let seg = viewer.row_text(row);
             let cur_x = (sep_x + 14) as i32 - (scroll_x * char_w) as i32;
+
+            // Línea actual: banda de 3 % de tinta, apenas perceptible sobre el lienzo.
+            if is_cursor_line {
+                fill_rect(
+                    buffer,
+                    width,
+                    clip,
+                    x,
+                    row_y,
+                    text_max_x.saturating_sub(x),
+                    row_h,
+                    theme
+                        .mix(theme.background, theme.foreground, 0.035)
+                        .to_u32_xrgb(),
+                );
+            }
 
             // Indicador de Git en el gutter si la línea fue modificada, añadida o eliminada
             if let Some(git_status) = viewer.get_line_git_diff_status(line_idx) {
@@ -510,7 +538,7 @@ impl TerminalRenderer {
                 let num_fg = if is_cursor_line {
                     theme.foreground
                 } else {
-                    theme.ansi[8]
+                    theme.text_muted()
                 };
                 for (ci, &b) in digits.iter().enumerate() {
                     let glyph = self.get_glyph(b as char, false);
@@ -528,7 +556,7 @@ impl TerminalRenderer {
                     } else {
                         crate::ui::LucideIcon::ChevronDown
                     };
-                    let color = if folded { accent } else { theme.ansi[8] };
+                    let color = if folded { accent } else { theme.text_muted() };
                     self.draw_lucide_icon(
                         buffer,
                         width,
@@ -551,16 +579,15 @@ impl TerminalRenderer {
                     _ => None,
                 };
                 if let Some(c) = tone {
-                    crate::ui::draw_rounded_rect(
+                    fill_rect(
                         buffer,
                         width,
-                        height,
+                        clip,
                         sep_x + 1,
                         row_y,
                         text_max_x.saturating_sub(sep_x + 1),
                         row_h,
-                        0,
-                        Color::from_rgba(c.r(), c.g(), c.b(), 36),
+                        Color::from_rgba(c.r(), c.g(), c.b(), 36).to_u32_xrgb(),
                     );
                 }
             }
@@ -684,7 +711,7 @@ impl TerminalRenderer {
                             chip_w,
                             row_h.saturating_sub(4),
                             4,
-                            Color::from_rgba(accent.r(), accent.g(), accent.b(), 28),
+                            theme.accent_soft(28),
                         );
                         self.draw_ui_text(
                             buffer,
@@ -784,13 +811,13 @@ impl TerminalRenderer {
         bg: Color,
         baseline: usize,
     ) {
-        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 4, bg);
+        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 3, bg);
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             icon,
-            rect.0 + 14,
+            rect.0 + 13,
             rect.1 + rect.3 / 2,
             11.0,
             fg,
@@ -800,11 +827,11 @@ impl TerminalRenderer {
             width,
             height,
             label,
-            rect.0 + 26,
+            rect.0 + 24,
             baseline - 1,
             rect.0 + rect.2,
             fg,
-            10.5,
+            10.0,
             true,
         );
     }
@@ -829,8 +856,8 @@ impl TerminalRenderer {
             return None;
         }
 
-        let track_w = 6;
-        let track_margin = 3;
+        let track_w = 4;
+        let track_margin = 4;
         let track_x = (x + w).saturating_sub(track_w + track_margin);
         let track_y = content_y + 4;
         let track_h = content_h.saturating_sub(8);

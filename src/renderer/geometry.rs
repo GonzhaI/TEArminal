@@ -29,8 +29,8 @@ pub fn pane_scroll_to_bottom_btn_rect(
     rect_width: usize,
     rect_height: usize,
 ) -> Rect {
-    let size = 28;
-    let margin_right = 26;
+    let size = 26;
+    let margin_right = 20;
     let margin_bottom = 16;
     let x = (rect_x + rect_width).saturating_sub(size + margin_right);
     let y = (rect_y + rect_height).saturating_sub(size + margin_bottom);
@@ -56,44 +56,31 @@ impl TopTabBarRects {
 
     pub fn compute(width: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
-        let ctrl_w = 42;
+        let ctrl_w = 46;
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
 
-        let files_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
-        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
+        // Acciones a la izquierda de los controles de ventana, separadas por una hairline.
+        let actions_right = width.saturating_sub(ctrl_w * 3 + 10);
+        let files_btn = (actions_right.saturating_sub(30), 4, 30, 30);
+        let settings_btn = (actions_right.saturating_sub(64), 4, 30, 30);
 
-        let right_reserved = ctrl_w * 3 + 76;
         let left_reserved = 76;
+        let right_reserved = ctrl_w * 3 + 76;
         let available_space = width.saturating_sub(left_reserved + right_reserved);
 
-        let plus_w = 28;
-        let plus_margin = 4;
-        let overhead = plus_w + plus_margin * 2;
-        let gap = if tabs_count > 16 { 2 } else { 4 };
+        let plus_w = 32;
+        let gap = 0;
+        let usable = available_space.saturating_sub(plus_w + 8);
+        let tab_w = usable
+            .checked_div(tabs_count)
+            .map_or(190, |w| w.clamp(20, 190));
 
-        let tab_w = if tabs_count > 0 {
-            let usable =
-                available_space.saturating_sub(overhead + tabs_count.saturating_sub(1) * gap);
-            (usable / tabs_count).clamp(18, 160)
-        } else {
-            160
-        };
-
-        let raw_tabs_w = tabs_count * (tab_w + gap);
-        let max_tabs_w = available_space.saturating_sub(overhead);
-        let effective_tabs_w = raw_tabs_w.min(max_tabs_w);
-
-        let total_capsule_w = (effective_tabs_w + overhead).min(available_space);
-        let tabs_start_x = if available_space > total_capsule_w {
-            left_reserved + (available_space - total_capsule_w) / 2
-        } else {
-            left_reserved
-        };
-        let plus_x = (tabs_start_x + effective_tabs_w + plus_margin)
+        let tabs_start_x = left_reserved;
+        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap) + 4)
             .min(left_reserved + available_space.saturating_sub(plus_w));
-        let plus_btn = (plus_x, 5, plus_w, 28);
+        let plus_btn = (plus_x, 3, plus_w, 32);
 
         Self {
             bar_h,
@@ -113,17 +100,17 @@ impl TopTabBarRects {
     pub fn tab_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
         (
             self.tabs_start_x + idx * (self.tab_w + self.tab_gap),
-            4,
+            0,
             self.tab_w,
-            30,
+            Self::HEIGHT,
         )
     }
 
     #[inline]
     pub fn close_btn_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
         let tab = self.tab_rect(idx);
-        if self.tab_w >= 48 {
-            (tab.0 + tab.2.saturating_sub(20), tab.1 + 6, 16, 16)
+        if self.tab_w >= 72 {
+            (tab.0 + tab.2.saturating_sub(26), 10, 18, 18)
         } else {
             (0, 0, 0, 0)
         }
@@ -155,12 +142,13 @@ impl TopTitleBarRects {
 
     pub fn compute(width: usize) -> Self {
         let bar_h = Self::HEIGHT;
-        let ctrl_w = 42;
+        let ctrl_w = 46;
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
-        let files_btn = (width.saturating_sub(ctrl_w * 3 + 34), 5, 28, 28);
-        let settings_btn = (width.saturating_sub(ctrl_w * 3 + 68), 5, 28, 28);
+        let actions_right = width.saturating_sub(ctrl_w * 3 + 10);
+        let files_btn = (actions_right.saturating_sub(30), 4, 30, 30);
+        let settings_btn = (actions_right.saturating_sub(64), 4, 30, 30);
         Self {
             bar_h,
             files_btn,
@@ -260,9 +248,9 @@ impl SettingsPageRects {
             return None;
         }
         let track = (
-            win_w.saturating_sub(9),
+            win_w.saturating_sub(7),
             page_y + Self::CONTENT_TOP,
-            6,
+            4,
             viewport_h,
         );
         let thumb_h = (viewport_h * viewport_h / content_h).clamp(18.min(viewport_h), viewport_h);
@@ -288,11 +276,11 @@ impl SettingsPageRects {
         let nav_y = page_y + 80;
         let nav_h = 32;
 
-        let nav_w = (card_w.saturating_sub(24)) / 4;
+        let nav_w = card_w / 4;
         let nav_appearance = (content_x, nav_y, nav_w, nav_h);
-        let nav_terminal = (content_x + nav_w + 8, nav_y, nav_w, nav_h);
-        let nav_shortcuts = (content_x + (nav_w + 8) * 2, nav_y, nav_w, nav_h);
-        let nav_about = (content_x + (nav_w + 8) * 3, nav_y, nav_w, nav_h);
+        let nav_terminal = (content_x + nav_w, nav_y, nav_w, nav_h);
+        let nav_shortcuts = (content_x + nav_w * 2, nav_y, nav_w, nav_h);
+        let nav_about = (content_x + nav_w * 3, nav_y, nav_w, nav_h);
 
         let card_y = page_y + 128;
 
@@ -590,9 +578,9 @@ impl FileViewerLayout {
 pub struct SidebarRects;
 
 impl SidebarRects {
-    pub const TAB_ITEM_H: usize = 36;
-    pub const TAB_SPACING: usize = 4;
-    pub const LIST_START_Y: usize = 42;
+    pub const TAB_ITEM_H: usize = 42;
+    pub const TAB_SPACING: usize = 2;
+    pub const LIST_START_Y: usize = 66;
     pub const TOGGLE_H: usize = 30;
 
     #[inline]

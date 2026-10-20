@@ -111,6 +111,8 @@ impl<'a> Perform for Performer<'a> {
                     'h' => match mode {
                         // Alternate Screen Buffer (usado por tmux, btop, nvtop, vim, less, herdr)
                         1049 | 47 => self.state.enter_alt_screen(),
+                        // Modo 1: DECCKM - Cursor Keys Application Mode (agentes CLI, menús de autocompletado)
+                        1 => self.state.cursor_key_mode = true,
                         // Mostrar cursor
                         25 => self.state.cursor_visible = true,
                         // Mouse tracking para TUIs (Herdr, Ratatui, Lazygit)
@@ -139,6 +141,8 @@ impl<'a> Perform for Performer<'a> {
                     'l' => match mode {
                         // Salir de Alternate Screen Buffer y restaurar sesión original
                         1049 | 47 => self.state.exit_alt_screen(),
+                        // Modo 1: DECCKM - Cursor Keys Normal Mode
+                        1 => self.state.cursor_key_mode = false,
                         // Ocultar cursor (usado por TUIs para evitar parpadeos)
                         25 => self.state.cursor_visible = false,
                         // Desactivar Mouse tracking
@@ -603,6 +607,7 @@ impl<'a> Perform for Performer<'a> {
                     self.state.mouse_reporting_any_event = false;
                     self.state.mouse_reporting_sgr = false;
                     self.state.bracketed_paste_mode = false;
+                    self.state.cursor_key_mode = false;
                     self.state.sync_update_mode = false;
                 } else if p1.starts_with(b"AxonGit=") || p1.starts_with(b"git_branch=") {
                     let text = String::from_utf8_lossy(p1);

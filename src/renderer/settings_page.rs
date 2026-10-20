@@ -15,29 +15,31 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let (bx, by, bw, bh) = rect;
-        let bg = if active_accent || hovered {
+        let bg = if active_accent {
+            theme.accent_soft(32)
+        } else if hovered {
             theme.surface_hover()
         } else {
-            theme.surface_bg()
+            theme.mix(theme.background, theme.foreground, 0.06)
         };
-        crate::ui::draw_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 7, bg);
+        crate::ui::draw_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, bg);
         let b_border = if active_accent {
             theme.accent_color()
         } else if hovered {
-            theme.ansi[8]
+            theme.chrome_line_strong()
         } else {
-            theme.border_color()
+            theme.chrome_line()
         };
-        crate::ui::stroke_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 7, b_border);
+        crate::ui::stroke_rounded_rect(buffer, buf_width, buf_height, bx, by, bw, bh, 4, b_border);
 
         let fg = if active_accent {
             theme.accent_color()
         } else if hovered {
             theme.foreground
         } else {
-            theme.ansi[7]
+            theme.text_secondary()
         };
-        let text_w = self.measure_ui_text(text, 11.5, active_accent);
+        let text_w = self.measure_ui_text(text, 11.0, active_accent);
         let tx = bx + (bw.saturating_sub(text_w) / 2);
         let baseline = by + (bh / 2) + 4;
         self.draw_ui_text(
@@ -49,7 +51,7 @@ impl TerminalRenderer {
             baseline,
             bx + bw,
             fg,
-            11.5,
+            11.0,
             active_accent,
         );
     }
@@ -75,21 +77,21 @@ impl TerminalRenderer {
         let bg = if is_editing || is_hovered {
             theme.surface_hover()
         } else {
-            theme.surface_bg()
+            theme.mix(theme.background, theme.foreground, 0.06)
         };
         crate::ui::draw_rounded_rect(
-            buffer, width, height, span_start, box_y, span_w, box_h, 6, bg,
+            buffer, width, height, span_start, box_y, span_w, box_h, 4, bg,
         );
 
         let border_c = if is_editing {
             theme.accent_color()
         } else if is_hovered {
-            theme.ansi[8]
+            theme.chrome_line_strong()
         } else {
-            theme.border_color()
+            theme.chrome_line()
         };
         crate::ui::stroke_rounded_rect(
-            buffer, width, height, span_start, box_y, span_w, box_h, 6, border_c,
+            buffer, width, height, span_start, box_y, span_w, box_h, 4, border_c,
         );
 
         let disp_text = if is_editing {
@@ -158,23 +160,24 @@ impl TerminalRenderer {
         title: &str,
         theme: &Theme,
     ) {
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.surface_bg());
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.border_color());
+        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 6, theme.surface_bg());
+        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 6, theme.chrome_line());
 
         // Barra superior de encabezado de la tarjeta
-        Self::draw_rect(buffer, width, height, x, y + 30, w, 1, theme.border_color());
+        Self::draw_rect(buffer, width, height, x, y + 30, w, 1, theme.chrome_line());
         let baseline = y + 20;
-        self.draw_ui_text(
+        self.draw_ui_text_tracked(
             buffer,
             width,
             height,
             title,
-            x + 14,
+            x + 16,
             baseline,
             x + w,
-            theme.ansi[8],
-            11.0,
+            theme.text_muted(),
+            9.5,
             true,
+            1.1,
         );
     }
 
@@ -211,30 +214,20 @@ impl TerminalRenderer {
             theme.background,
         );
 
-        // 2. Encabezado principal con icono Lucide Sliders y tipografía Inter
+        // 2. Encabezado: título y una línea de contexto. Sin iconos decorativos.
         let content_x = rects.content_x;
         let card_w = rects.card_w;
 
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::Sliders,
-            content_x + 8,
-            page_y + 38,
-            14.5,
-            theme.accent_color(),
-        );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Ajustes de Axon",
-            content_x + 24,
-            page_y + 43,
+            "Ajustes",
+            content_x,
+            page_y + 42,
             content_x + card_w.saturating_sub(215),
             theme.foreground,
-            14.5,
+            15.0,
             true,
         );
 
@@ -242,62 +235,59 @@ impl TerminalRenderer {
             buffer,
             width,
             height,
-            "Personaliza apariencia, comportamiento del terminal y atajos de teclado",
+            "Apariencia, terminal y atajos de teclado",
             content_x,
-            page_y + 62,
+            page_y + 61,
             content_x + card_w.saturating_sub(215),
-            theme.ansi[8],
-            11.5,
+            theme.text_muted(),
+            10.5,
             false,
         );
 
         // Botón Restablecer valores por defecto en el encabezado
         let r_btn = rects.reset_defaults_btn;
-        let r_bg = if state.hovered_reset_defaults {
-            theme.surface_hover()
-        } else {
-            theme.surface_bg()
-        };
-        crate::ui::draw_rounded_rect(
-            buffer, width, height, r_btn.0, r_btn.1, r_btn.2, r_btn.3, 6, r_bg,
-        );
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            r_btn.0,
-            r_btn.1,
-            r_btn.2,
-            r_btn.3,
-            6,
-            theme.border_color(),
-        );
+        if state.hovered_reset_defaults {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                r_btn.0,
+                r_btn.1,
+                r_btn.2,
+                r_btn.3,
+                3,
+                theme.surface_hover(),
+            );
+        }
         let r_fg = if state.hovered_reset_defaults {
-            theme.accent_color()
+            theme.foreground
         } else {
-            theme.ansi[7]
+            theme.text_secondary()
         };
         let r_cy = r_btn.1 + (r_btn.3 / 2);
+        let r_label = "Restablecer";
+        let r_label_w = self.measure_ui_text(r_label, 10.5, false);
+        let r_text_x = r_btn.0 + r_btn.2.saturating_sub(r_label_w + 8);
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::RefreshCw,
-            r_btn.0 + 16,
+            r_text_x.saturating_sub(12),
             r_cy,
-            11.5,
+            10.5,
             r_fg,
         );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Restablecer por defecto",
-            r_btn.0 + 28,
+            r_label,
+            r_text_x,
             r_cy + 4,
             r_btn.0 + r_btn.2,
             r_fg,
-            11.5,
+            10.5,
             false,
         );
 
@@ -310,10 +300,10 @@ impl TerminalRenderer {
             page_y + 72,
             card_w,
             1,
-            theme.border_color(),
+            theme.chrome_line(),
         );
 
-        // 3. Barra de navegación de secciones (Pills redondeadas con iconos Lucide e Inter)
+        // 3. Navegación de secciones: pestañas planas con subrayado de acento.
         let sections = [
             (
                 SettingsSection::Appearance,
@@ -330,7 +320,7 @@ impl TerminalRenderer {
             (
                 SettingsSection::Shortcuts,
                 crate::ui::LucideIcon::Keyboard,
-                "Atajos de Teclado",
+                "Atajos de teclado",
                 rects.nav_shortcuts,
             ),
             (
@@ -344,36 +334,20 @@ impl TerminalRenderer {
         for (sec, icon, title, r) in sections {
             let is_active = state.section == sec;
             let is_hovered = state.hovered_section == Some(sec);
-            let bg = if is_active {
-                theme.surface_bg()
-            } else if is_hovered {
-                theme.surface_hover()
-            } else {
-                theme.sidebar_bg()
-            };
-            crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3, 8, bg);
-
-            let border_c = if is_active {
-                theme.accent_color()
-            } else {
-                theme.border_color()
-            };
-            crate::ui::stroke_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3, 8, border_c);
-
             let fg = if is_active {
                 theme.foreground
             } else if is_hovered {
-                theme.ansi[7]
+                theme.text_secondary()
             } else {
-                theme.ansi[8]
+                theme.text_muted()
             };
-            let cy = r.1 + (r.3 / 2);
+            let cy = r.1 + (r.3 / 2) - 1;
             self.draw_lucide_icon(
                 buffer,
                 width,
                 height,
                 icon,
-                r.0 + 16,
+                r.0 + 14,
                 cy,
                 11.5,
                 if is_active { theme.accent_color() } else { fg },
@@ -383,13 +357,25 @@ impl TerminalRenderer {
                 width,
                 height,
                 title,
-                r.0 + 28,
+                r.0 + 26,
                 cy + 4,
                 r.0 + r.2,
                 fg,
-                11.5,
+                11.0,
                 is_active,
             );
+            if is_active {
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    r.0,
+                    r.1 + r.3 - 2,
+                    r.2,
+                    2,
+                    theme.accent_color(),
+                );
+            }
         }
 
         // Línea divisoria bajo navegación
@@ -398,10 +384,10 @@ impl TerminalRenderer {
             width,
             height,
             content_x,
-            page_y + 116,
+            rects.nav_appearance.1 + rects.nav_appearance.3,
             card_w,
             1,
-            theme.border_color(),
+            theme.chrome_line(),
         );
 
         // 4. Contenido de la sección activa: se dibuja completo fuera de pantalla (coordenadas de
@@ -523,13 +509,13 @@ impl TerminalRenderer {
             sb.1,
             sb.2,
             sb.3,
-            7,
-            theme.surface_bg(),
+            4,
+            theme.mix(theme.background, theme.foreground, 0.06),
         );
         let search_border = if searching {
             theme.accent_color()
         } else {
-            theme.border_color()
+            theme.chrome_line()
         };
         crate::ui::stroke_rounded_rect(
             buffer,
@@ -539,7 +525,7 @@ impl TerminalRenderer {
             sb.1,
             sb.2,
             sb.3,
-            7,
+            4,
             search_border,
         );
         let count = format!("{}/{}", matches.len(), Theme::names().count());
@@ -553,12 +539,12 @@ impl TerminalRenderer {
             sb.0 + sb.2 - count_w - 12,
             text_y,
             sb.0 + sb.2,
-            theme.ansi[8],
+            theme.text_muted(),
             11.0,
             false,
         );
         let (query, query_color) = if state.theme_filter.is_empty() && !searching {
-            ("Buscar tema...".to_string(), theme.ansi[8])
+            ("Buscar tema...".to_string(), theme.text_muted())
         } else {
             (
                 format!("{}{}", state.theme_filter, if searching { "|" } else { "" }),
@@ -593,7 +579,7 @@ impl TerminalRenderer {
                 l.0 + 12,
                 l.1 + 18,
                 l.0 + l.2,
-                theme.ansi[8],
+                theme.text_muted(),
                 11.0,
                 false,
             );
@@ -607,18 +593,18 @@ impl TerminalRenderer {
             let is_hover = state.hovered_theme == Some(i);
             if is_current || is_hover {
                 let bg = if is_current {
-                    theme.surface_hover()
+                    theme.accent_soft(26)
                 } else {
-                    theme.surface_bg()
+                    theme.surface_hover()
                 };
-                crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3 - 2, 6, bg);
+                crate::ui::draw_rounded_rect(buffer, width, height, r.0, r.1, r.2, r.3 - 2, 3, bg);
             }
             let fg = if is_current {
                 theme.accent_color()
             } else if is_hover {
                 theme.foreground
             } else {
-                theme.ansi[7]
+                theme.text_secondary()
             };
             let preview = Theme::from_name(name);
             let chips = [preview.background, preview.foreground]
@@ -628,7 +614,7 @@ impl TerminalRenderer {
             let chips_x = r.0 + r.2 - 14 - 8 * (chip_w + 3);
             for (k, c) in chips.enumerate() {
                 let cx = chips_x + k * (chip_w + 3);
-                crate::ui::draw_rounded_rect(buffer, width, height, cx, r.1 + 6, chip_w, 12, 3, c);
+                crate::ui::draw_rounded_rect(buffer, width, height, cx, r.1 + 6, chip_w, 12, 2, c);
                 crate::ui::stroke_rounded_rect(
                     buffer,
                     width,
@@ -637,8 +623,8 @@ impl TerminalRenderer {
                     r.1 + 6,
                     chip_w,
                     12,
-                    3,
-                    theme.border_color(),
+                    2,
+                    theme.chrome_line(),
                 );
             }
             self.draw_ui_text(
@@ -692,7 +678,7 @@ impl TerminalRenderer {
                 swatch_y,
                 swatch_w,
                 swatch_h,
-                4,
+                2,
                 theme.ansi[i],
             );
         }
@@ -1327,7 +1313,7 @@ impl TerminalRenderer {
             content_x + 20,
             hint_base,
             content_x + card_w,
-            theme.ansi[8],
+            theme.text_muted(),
             11.0,
             false,
         );
@@ -1522,7 +1508,7 @@ impl TerminalRenderer {
             content_x + 20,
             start_y + 36,
             content_x + card_w,
-            theme.ansi[8],
+            theme.text_muted(),
             11.5,
             false,
         );
@@ -1548,7 +1534,7 @@ impl TerminalRenderer {
                 content_x + 20,
                 f_base,
                 content_x + card_w,
-                theme.ansi[7],
+                theme.text_secondary(),
                 11.0,
                 false,
             );

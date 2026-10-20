@@ -1,9 +1,10 @@
-//! Barra lateral vertical de pestañas y botón flotante para mostrarla.
+//! Barra lateral vertical de sesiones y botón flotante para mostrarla.
 
 use super::*;
 
 impl TerminalRenderer {
-    /// Renderiza la barra lateral vertical con la lista de instancias / pestañas
+    /// Renderiza la barra lateral vertical: cabecera de marca, índice de sesiones y pie.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_sidebar(
         &mut self,
         buffer: &mut [u32],
@@ -26,9 +27,9 @@ impl TerminalRenderer {
         }
 
         let usable_h = height.saturating_sub(status_bar_h);
+        let line = theme.chrome_line();
 
-        // 1. Fondo de la barra lateral dinámico acorde al tema (por encima de la barra inferior)
-        let sidebar_bg = theme.sidebar_bg();
+        // 1. Fondo y borde derecho
         Self::draw_rect(
             buffer,
             width,
@@ -37,11 +38,8 @@ impl TerminalRenderer {
             0,
             sidebar_width,
             usable_h,
-            sidebar_bg,
+            theme.chrome_bg(),
         );
-
-        // 2. Línea divisoria vertical sutil
-        let divider_color = theme.border_color();
         Self::draw_rect(
             buffer,
             width,
@@ -50,112 +48,115 @@ impl TerminalRenderer {
             0,
             1,
             usable_h,
-            divider_color,
+            line,
         );
 
-        // 3. Encabezado de la barra lateral (Header: Axon + Botón Settings + Botón New Tab)
-        let header_cy = 20;
-        let header_base = header_cy + 4;
-        let logo_color = theme.accent_color();
-
+        // 2. Cabecera: marca y nueva sesión
+        let header_cy = 22;
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::SquareTerminal,
-            20,
+            18,
             header_cy,
-            14.5,
-            logo_color,
+            15.0,
+            theme.accent_color(),
         );
-        self.draw_ui_text(
+        self.draw_ui_text_tracked(
             buffer,
             width,
             height,
-            "Axon",
-            32,
-            header_base,
-            sidebar_width.saturating_sub(42),
+            "AXON",
+            30,
+            header_cy + 4,
+            sidebar_width.saturating_sub(44),
             theme.foreground,
-            12.5,
+            10.0,
             true,
+            1.5,
         );
 
-        // Botón "+" para crear nueva terminal
-        let plus_btn_x = sidebar_width.saturating_sub(34);
-        let plus_btn_y = 8;
-        let plus_btn_w = 24;
-        let plus_btn_h = 24;
-        let plus_bg = if hovered_new_tab {
-            theme.surface_hover()
-        } else {
-            theme.surface_bg()
-        };
-        crate::ui::draw_rounded_rect(
-            buffer, width, height, plus_btn_x, plus_btn_y, plus_btn_w, plus_btn_h, 6, plus_bg,
-        );
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            plus_btn_x,
-            plus_btn_y,
-            plus_btn_w,
-            plus_btn_h,
-            6,
-            theme.border_color(),
-        );
-
-        let plus_fg = if hovered_new_tab {
-            theme.accent_color()
-        } else {
-            theme.ansi[7]
-        };
+        let plus_x = sidebar_width.saturating_sub(38);
+        let plus_y = 8;
+        let plus = (plus_x, plus_y, 28, 28);
+        if hovered_new_tab {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                plus.0,
+                plus.1,
+                plus.2,
+                plus.3,
+                4,
+                theme.surface_hover(),
+            );
+        }
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::Plus,
-            plus_btn_x + (plus_btn_w / 2),
-            plus_btn_y + (plus_btn_h / 2),
-            12.0,
-            plus_fg,
+            plus.0 + 14,
+            plus.1 + 14,
+            14.0,
+            if hovered_new_tab {
+                theme.foreground
+            } else {
+                theme.text_secondary()
+            },
+        );
+        Self::draw_rect(buffer, width, height, 0, 43, sidebar_width - 1, 1, line);
+
+        // 3. Encabezado de la lista
+        self.draw_ui_text_tracked(
+            buffer,
+            width,
+            height,
+            "SESIONES",
+            12,
+            58,
+            sidebar_width.saturating_sub(28),
+            theme.text_muted(),
+            9.5,
+            true,
+            1.2,
+        );
+        let count = format!("{}", tabs.len());
+        let count_w = self.measure_ui_text(&count, 9.5, true);
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &count,
+            sidebar_width.saturating_sub(12 + count_w),
+            58,
+            sidebar_width,
+            theme.text_muted(),
+            9.5,
+            true,
         );
 
-        // 4. Lista de pestañas verticales
+        // 4. Lista de sesiones
         let tab_item_h = SidebarRects::TAB_ITEM_H;
         let tab_spacing = SidebarRects::TAB_SPACING;
         let list_start_y = SidebarRects::LIST_START_Y;
         let toggle_h = SidebarRects::TOGGLE_H;
         let toggle_y = usable_h.saturating_sub(toggle_h + 8);
         let list_max_y = SidebarRects::list_max_y(usable_h);
+        let tab_x = 8;
+        let tab_w = sidebar_width.saturating_sub(16);
 
         for (vis_idx, (idx, tab)) in tabs.iter().enumerate().skip(scroll_offset).enumerate() {
             let tab_y = list_start_y + vis_idx * (tab_item_h + tab_spacing);
             if tab_y + tab_item_h > list_max_y {
                 break;
             }
-
             let is_hovered = hovered_tab == Some(idx);
-            let tab_w = sidebar_width.saturating_sub(16);
-            let tab_x = 8;
 
-            // Fondo del ítem de pestaña con elevación sutil de tarjeta y esquinas redondeadas
-            let item_bg = if tab.is_active {
-                theme.surface_bg()
-            } else if is_hovered {
-                theme.surface_hover()
-            } else {
-                sidebar_bg
-            };
-
-            crate::ui::draw_rounded_rect(
-                buffer, width, height, tab_x, tab_y, tab_w, tab_item_h, 8, item_bg,
-            );
-
-            // Borde sutil si está activo o en hover
             if tab.is_active {
-                crate::ui::stroke_rounded_rect(
+                crate::ui::draw_rounded_rect(
                     buffer,
                     width,
                     height,
@@ -163,70 +164,74 @@ impl TerminalRenderer {
                     tab_y,
                     tab_w,
                     tab_item_h,
-                    8,
-                    theme.border_color(),
+                    3,
+                    theme.surface_bg(),
                 );
-            }
-
-            // Indicador vertical de acento en la pestaña activa
-            if tab.is_active {
-                let accent_color = theme.accent_color();
+                // Indicador de 1 px: el foco se ve sin convertir la fila en una tarjeta.
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    tab_x,
+                    tab_y + 8,
+                    1,
+                    tab_item_h.saturating_sub(16),
+                    theme.accent_color(),
+                );
+            } else if is_hovered {
                 crate::ui::draw_rounded_rect(
                     buffer,
                     width,
                     height,
-                    tab_x + 2,
-                    tab_y + 8,
+                    tab_x,
+                    tab_y,
+                    tab_w,
+                    tab_item_h,
                     3,
-                    tab_item_h.saturating_sub(16),
-                    2,
-                    accent_color,
+                    theme.surface_hover(),
                 );
             }
 
-            // Icono representativo de la pestaña
-            let icon = tab_icon(tab);
-
             let item_cy = tab_y + (tab_item_h / 2);
-            let icon_cx = tab_x + 18;
             let icon_color = if tab.is_active {
                 theme.accent_color()
             } else if is_hovered {
-                theme.ansi[7]
+                theme.text_secondary()
             } else {
-                theme.ansi[8]
+                theme.text_muted()
             };
             self.draw_lucide_icon(
-                buffer, width, height, icon, icon_cx, item_cy, 11.5, icon_color,
+                buffer,
+                width,
+                height,
+                tab_icon(tab),
+                tab_x + 18,
+                item_cy,
+                13.0,
+                icon_color,
             );
 
-            // Título de la pestaña en Inter
-            let text_color = if tab.is_active {
+            let show_close = tabs.len() > 1 && (tab.is_active || is_hovered);
+            let title_x = tab_x + 32;
+            let title_max = tab_x + tab_w - if show_close { 30 } else { 12 };
+            let title_color = if tab.is_active {
                 theme.foreground
             } else if is_hovered {
-                theme.ansi[7]
+                theme.text_secondary()
             } else {
-                theme.ansi[8]
+                theme.text_muted()
             };
-
-            let display_title = if tab.pane_count > 1 {
-                format!("{} [{}]", tab.title, tab.pane_count)
-            } else {
-                tab.title.clone()
-            };
-
-            let title_x = icon_cx + 12;
-            let title_base = item_cy + 4;
-            let title_max_x = tab_x + tab_w.saturating_sub(26);
+            let has_detail = tab.detail.is_some();
+            let title_base = if has_detail { tab_y + 18 } else { item_cy + 4 };
             let title_end = self.draw_ui_text(
                 buffer,
                 width,
                 height,
-                &display_title,
+                &tab.title,
                 title_x,
                 title_base,
-                title_max_x,
-                text_color,
+                title_max,
+                title_color,
                 11.5,
                 tab.is_active,
             );
@@ -236,52 +241,77 @@ impl TerminalRenderer {
                     width,
                     height,
                     title_x,
-                    title_base + 3,
+                    title_base + 2,
                     title_end.saturating_sub(title_x),
                     1,
-                    text_color,
+                    title_color,
+                );
+            }
+            if let Some(detail) = &tab.detail {
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    detail,
+                    title_x,
+                    tab_y + 32,
+                    title_max,
+                    theme.text_muted(),
+                    10.0,
+                    false,
                 );
             }
 
-            // Indicador de actividad / no leído si la pestaña tiene salida pendiente en segundo plano
-            if tab.has_unread && !tab.is_active {
-                let dot_x = tab_x + tab_w.saturating_sub(32);
-                let dot_y = tab_y + (tab_item_h / 2).saturating_sub(3);
-                let dot_color = theme.ansi[4];
+            if tab.has_unread && !tab.is_active && !show_close {
+                let dot = theme.ansi[6];
                 crate::ui::draw_rounded_rect(
-                    buffer, width, height, dot_x, dot_y, 6, 6, 3, dot_color,
+                    buffer,
+                    width,
+                    height,
+                    tab_x + tab_w - 16,
+                    item_cy - 2,
+                    4,
+                    4,
+                    2,
+                    dot,
                 );
             }
 
-            // Botón cerrar "x" con Lucide X
-            if tabs.len() > 1 && (tab.is_active || is_hovered) {
-                let close_x = tab_x + tab_w.saturating_sub(22);
-                let close_y = tab_y + 8;
-                let close_size = 20;
-
+            if show_close {
+                let close_x = tab_x + tab_w - 26;
+                let close_y = tab_y + 11;
                 let is_close_hovered = hovered_close == Some(idx);
-                let close_fg = if is_close_hovered {
-                    theme.ansi[1]
-                } else {
-                    theme.ansi[8]
-                };
-
-                let close_cx = close_x + (close_size / 2);
-                let close_cy = close_y + (close_size / 2) - 1;
+                if is_close_hovered {
+                    crate::ui::draw_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        close_x,
+                        close_y,
+                        20,
+                        20,
+                        3,
+                        theme.surface_hover(),
+                    );
+                }
                 self.draw_lucide_icon(
                     buffer,
                     width,
                     height,
                     crate::ui::LucideIcon::X,
-                    close_cx,
-                    close_cy,
+                    close_x + 10,
+                    close_y + 10,
                     11.0,
-                    close_fg,
+                    if is_close_hovered {
+                        theme.ansi[1]
+                    } else {
+                        theme.text_muted()
+                    },
                 );
             }
         }
 
-        // Barra de desplazamiento de pestañas si la lista excede el espacio visible
+        // 5. Barra de desplazamiento de la lista
         if let Some((track, thumb)) =
             Self::sidebar_scrollbar_geometry(sidebar_width, usable_h, tabs.len(), scroll_offset)
         {
@@ -297,96 +327,76 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Botón inferior para alternar/ocultar la barra lateral ("< Ocultar")
-        let sidebar_btn_x = 8;
-        let sidebar_btn_w = sidebar_width.saturating_sub(16);
-
-        // Separador superior sutil
+        // 6. Pie: ocultar barra lateral
         Self::draw_rect(
             buffer,
             width,
             height,
             0,
-            toggle_y.saturating_sub(6),
-            sidebar_width,
+            toggle_y.saturating_sub(8),
+            sidebar_width - 1,
             1,
-            divider_color,
+            line,
         );
-
-        let toggle_bg = if hovered_toggle_btn {
-            theme.surface_hover()
+        let btn = (8, toggle_y, sidebar_width.saturating_sub(16), toggle_h);
+        if hovered_toggle_btn {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                btn.0,
+                btn.1,
+                btn.2,
+                btn.3,
+                3,
+                theme.surface_hover(),
+            );
+        }
+        let fg = if hovered_toggle_btn {
+            theme.foreground
         } else {
-            theme.surface_bg()
+            theme.text_secondary()
         };
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            sidebar_btn_x,
-            toggle_y,
-            sidebar_btn_w,
-            toggle_h,
-            6,
-            toggle_bg,
-        );
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            sidebar_btn_x,
-            toggle_y,
-            sidebar_btn_w,
-            toggle_h,
-            6,
-            divider_color,
-        );
-
-        let toggle_fg = if hovered_toggle_btn {
-            theme.accent_color()
-        } else {
-            theme.ansi[7]
-        };
-        let toggle_cy = toggle_y + (toggle_h / 2);
-        let toggle_base = toggle_cy + 4;
+        let cy = toggle_y + (toggle_h / 2);
         self.draw_lucide_icon(
             buffer,
             width,
             height,
             crate::ui::LucideIcon::PanelLeft,
-            sidebar_btn_x + 14,
-            toggle_cy,
-            12.0,
-            toggle_fg,
+            btn.0 + 10,
+            cy,
+            13.0,
+            fg,
         );
         self.draw_ui_text(
             buffer,
             width,
             height,
             "Ocultar",
-            sidebar_btn_x + 26,
-            toggle_base,
-            sidebar_btn_x + sidebar_btn_w.saturating_sub(54),
-            toggle_fg,
-            11.5,
-            hovered_toggle_btn,
+            btn.0 + 22,
+            cy + 4,
+            btn.0 + btn.2.saturating_sub(44),
+            fg,
+            11.0,
+            false,
         );
-
-        // Indicador de atajo Ctrl+B a la derecha en Inter
+        let shortcut = "Ctrl+B";
+        let sw = self.measure_ui_text(shortcut, 9.5, false);
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Ctrl+B",
-            sidebar_btn_x + sidebar_btn_w.saturating_sub(44),
-            toggle_base,
-            sidebar_btn_x + sidebar_btn_w - 4,
-            theme.ansi[8],
-            10.5,
+            shortcut,
+            btn.0 + btn.2.saturating_sub(sw + 8),
+            cy + 4,
+            btn.0 + btn.2,
+            theme.text_muted(),
+            9.5,
             false,
         );
     }
 
-    /// Renderiza un botón flotante sutil en la esquina inferior izquierda para volver a desplegar la barra lateral (los Ajustes están solo en la barra superior)
+    /// Botón flotante para recuperar la barra lateral cuando está oculta.
     pub fn render_floating_sidebar_toggle(
         &mut self,
         buffer: &mut [u32],
@@ -399,22 +409,16 @@ impl TerminalRenderer {
         if width == 0 || height == 0 {
             return;
         }
-
-        let btn_w = 32;
+        let btn_w = 30;
         let btn_h = 30;
         let btn_x = 8;
         let btn_y = height.saturating_sub(btn_h + 8 + status_bar_h);
-        let border_color = theme.border_color();
-
-        // Botón 1: Desplegar barra lateral [ PanelLeft ]
-        let bg_color = if hovered_toggle {
+        let bg = if hovered_toggle {
             theme.surface_hover()
         } else {
-            theme.surface_bg()
+            theme.chrome_bg_elevated()
         };
-        crate::ui::draw_rounded_rect(
-            buffer, width, height, btn_x, btn_y, btn_w, btn_h, 6, bg_color,
-        );
+        crate::ui::draw_rounded_rect(buffer, width, height, btn_x, btn_y, btn_w, btn_h, 4, bg);
         crate::ui::stroke_rounded_rect(
             buffer,
             width,
@@ -423,16 +427,9 @@ impl TerminalRenderer {
             btn_y,
             btn_w,
             btn_h,
-            6,
-            border_color,
+            4,
+            theme.chrome_line(),
         );
-
-        let icon_fg = if hovered_toggle {
-            theme.accent_color()
-        } else {
-            theme.ansi[7]
-        };
-
         self.draw_lucide_icon(
             buffer,
             width,
@@ -441,7 +438,11 @@ impl TerminalRenderer {
             btn_x + (btn_w / 2),
             btn_y + (btn_h / 2),
             13.0,
-            icon_fg,
+            if hovered_toggle {
+                theme.accent_color()
+            } else {
+                theme.text_secondary()
+            },
         );
     }
 
@@ -462,7 +463,7 @@ impl TerminalRenderer {
             return None;
         }
 
-        let track_w = 6;
+        let track_w = 4;
         let track_x = sidebar_width.saturating_sub(track_w + 3);
         let track_y = list_start_y;
         let track_h = list_max_y.saturating_sub(list_start_y);

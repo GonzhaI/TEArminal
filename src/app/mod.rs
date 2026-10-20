@@ -532,7 +532,7 @@ impl AxonApp {
 
     pub fn file_explorer_offset(&self) -> usize {
         if self.file_explorer.visible {
-            self.file_explorer.width + 16
+            self.file_explorer.width
         } else {
             0
         }

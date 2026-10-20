@@ -182,6 +182,7 @@ mod bench {
         let tabs: Vec<SidebarTabItem> = (0..8)
             .map(|i| SidebarTabItem {
                 title: format!("pwsh — axon/src #{i}"),
+                detail: Some("C:\\Users\\dev\\axon".to_string()),
                 is_active: i == 2,
                 has_unread: i % 3 == 0,
                 pane_count: 1 + (i % 2),
@@ -365,6 +366,7 @@ fn test_sidebar_rendering_and_layout() {
     let tabs = vec![
         SidebarTabItem {
             title: "Terminal 1".to_string(),
+            detail: Some("C:\\Users\\dev".to_string()),
             is_active: true,
             has_unread: false,
             pane_count: 1,
@@ -374,6 +376,7 @@ fn test_sidebar_rendering_and_layout() {
         },
         SidebarTabItem {
             title: "Terminal 2".to_string(),
+            detail: Some("2 paneles".to_string()),
             is_active: false,
             has_unread: true,
             pane_count: 2,
@@ -508,7 +511,7 @@ fn test_ai_agent_detection_and_status_bar() {
     );
     assert_eq!(icon_none, crate::ui::LucideIcon::Dot);
     assert_eq!(label_none, "LOCAL");
-    assert_eq!(fg_none, theme.ansi[8]);
+    assert_eq!(fg_none, theme.text_muted());
 
     let (icon_agy, label_agy, fg_agy) = crate::renderer::TerminalRenderer::status_bar_badge_info(
         AiAgentStatus::Agy,
@@ -568,26 +571,26 @@ fn test_top_tab_bar_geometry_and_layout() {
 
     let rects = TopTabBarRects::compute(1200, 3);
     assert_eq!(rects.bar_h, 38);
-    assert_eq!(rects.tabs_start_x, 273);
-    assert_eq!(rects.tab_w, 160);
+    assert_eq!(rects.tabs_start_x, 76);
+    assert_eq!(rects.tab_w, 190);
 
     let tab0 = rects.tab_rect(0);
-    assert_eq!(tab0, (273, 4, 160, 30));
+    assert_eq!(tab0, (76, 0, 190, 38));
 
     let close0 = rects.close_btn_rect(0);
-    assert_eq!(close0.0, 273 + 160 - 20);
+    assert_eq!(close0.0, 76 + 190 - 26);
     assert_eq!(close0.1, 10);
-    assert_eq!(close0.2, 16);
-    assert_eq!(close0.3, 16);
+    assert_eq!(close0.2, 18);
+    assert_eq!(close0.3, 18);
 
     // Plus button debe situarse después de las 3 pestañas
-    assert!(rects.plus_btn.0 > tab0.0 + (3 * 160));
+    assert!(rects.plus_btn.0 > tab0.0 + (3 * 190));
     // Settings button, files button y controles de ventana al extremo derecho
-    assert_eq!(rects.settings_btn.0, 1200 - 194);
-    assert_eq!(rects.files_btn.0, 1200 - 160);
-    assert_eq!(rects.win_min_btn.0, 1200 - 126);
-    assert_eq!(rects.win_max_btn.0, 1200 - 84);
-    assert_eq!(rects.win_close_btn.0, 1200 - 42);
+    assert_eq!(rects.settings_btn.0, 1200 - 212);
+    assert_eq!(rects.files_btn.0, 1200 - 178);
+    assert_eq!(rects.win_min_btn.0, 1200 - 138);
+    assert_eq!(rects.win_max_btn.0, 1200 - 92);
+    assert_eq!(rects.win_close_btn.0, 1200 - 46);
 
     // Validar que con 30 pestañas NO se desborde sobre los controles de la derecha
     let compact_rects = TopTabBarRects::compute(1200, 30);
@@ -931,4 +934,392 @@ fn test_d3d11_presenter_lifecycle() {
             DestroyWindow(hwnd_sys);
         }
     }
+}
+
+/// Previsualización manual de la interfaz (no forma parte de la suite):
+/// `cargo test preview_ui_scenes -- --ignored --nocapture` deja PPM en `%TEMP%/axon-preview`.
+#[test]
+#[ignore]
+fn preview_ui_scenes() {
+    use crate::app::SIDEBAR_WIDTH;
+    use crate::renderer::{SettingsPageState, SidebarTabItem};
+    use crate::theme::Theme;
+
+    let cfg = AxonConfig::default();
+    let theme = Theme::default();
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (1440usize, 900usize);
+    let status_h = crate::renderer::StatusBarRects::BAR_H;
+    let top_h = crate::renderer::TopTitleBarRects::compute(w).bar_h;
+    let out = std::env::temp_dir().join("axon-preview");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let write_ppm = |buf: &[u32], name: &str| {
+        let mut data = format!("P6\n{} {}\n255\n", w, h).into_bytes();
+        for px in buf {
+            data.push(((px >> 16) & 0xFF) as u8);
+            data.push(((px >> 8) & 0xFF) as u8);
+            data.push((px & 0xFF) as u8);
+        }
+        std::fs::write(out.join(name), data).unwrap();
+    };
+
+    let tabs: Vec<SidebarTabItem> = vec![
+        SidebarTabItem {
+            title: "axon".into(),
+            detail: Some("C:\\Users\\dev\\axon".into()),
+            is_active: true,
+            has_unread: false,
+            pane_count: 2,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+        SidebarTabItem {
+            title: "api".into(),
+            detail: Some("~/dev/api".into()),
+            is_active: false,
+            has_unread: true,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+        SidebarTabItem {
+            title: "deploy".into(),
+            detail: Some("ssh prod-01".into()),
+            is_active: false,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+    ];
+
+    let mut term = crate::terminal::TerminalState::new(110, 34, 2000, theme.clone());
+    let script = concat!(
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test\x1b]133;C\x07\r\n",
+        "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+        "\x1b[38;5;114m    Finished\x1b[0m `test` profile [unoptimized] target(s) in 4.21s\r\n",
+        "\x1b[38;5;114m     Running\x1b[0m unittests src\\main.rs\r\n",
+        "\x1b[1mtest result: \x1b[38;5;114mok\x1b[0m\x1b[1m. 204 passed; 0 failed; finished in 22.9s\x1b[0m\r\n",
+        "\x1b]133;D;0\x07",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
+        "\x1b[38;5;221m M\x1b[0m src\\renderer\\pane.rs\r\n",
+        "\x1b[38;5;221m M\x1b[0m src\\renderer\\status_bar.rs\r\n",
+        "\x1b[38;5;114m??\x1b[0m PRODUCT.md\r\n",
+        "\x1b]133;D;0\x07",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
+        "\x1b[38;5;203merror:\x1b[0m script \"build\" no encontrado\r\n",
+        "\x1b]133;D;1\x07",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m ",
+    );
+    term.process_bytes(script.as_bytes());
+
+    // 1. Terminal con barra lateral y título de ventana
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    r.render_top_title_bar(
+        &mut buf,
+        w,
+        h,
+        "axon",
+        Some("main"),
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    let pane_w = w - SIDEBAR_WIDTH;
+    let pane_h = h - top_h - status_h;
+    r.render_pane(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        top_h,
+        pane_w,
+        pane_h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        Some("~/dev/axon"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::Claude,
+        Some("opus-4.6"),
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "terminal.ppm");
+
+    // 2. Pestañas horizontales
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
+    r.render_top_tab_bar(
+        &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false, true,
+        &theme,
+    );
+    r.render_pane(
+        &mut buf,
+        w,
+        h,
+        0,
+        top_tabs.bar_h,
+        w,
+        h - top_tabs.bar_h - status_h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        0,
+        Some("~/dev/axon"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::Claude,
+        Some("opus-4.6"),
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "horizontal.ppm");
+
+    // 3. Explorador acoplado sobre el terminal
+    let mut explorer =
+        crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
+    explorer.is_focused = true;
+    let explorer_w = explorer.width;
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    r.render_top_title_bar(
+        &mut buf,
+        w,
+        h,
+        "axon",
+        Some("main"),
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_pane(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        top_h,
+        w - SIDEBAR_WIDTH - explorer_w,
+        h - top_h - status_h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+    r.render_file_explorer(&mut buf, w, h, top_h, status_h, &explorer, &theme);
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        0,
+        Some("~/dev/axon"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::Claude,
+        Some("opus-4.6"),
+        false,
+        true,
+        &theme,
+    );
+    write_ppm(&buf, "explorer.ppm");
+
+    // 4. Ajustes
+    let settings = SettingsPageState {
+        section: crate::renderer::SettingsSection::Appearance,
+        ..Default::default()
+    };
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    r.render_top_title_bar(
+        &mut buf, w, h, "Ajustes", None, false, false, false, false, false, false, false, &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_settings_page(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        top_h,
+        status_h,
+        &cfg,
+        &settings,
+        &theme,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        0,
+        Some("Ajustes"),
+        None,
+        None,
+        110,
+        34,
+        AiAgentStatus::None,
+        None,
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "settings.ppm");
+
+    // 5. Visor de archivos
+    let path = std::env::current_dir()
+        .unwrap()
+        .join("src/renderer/pane.rs");
+    let tab = crate::app::TerminalTab::new_file_viewer(90, path);
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    r.render_top_title_bar(
+        &mut buf,
+        w,
+        h,
+        "pane.rs",
+        Some("main"),
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_file_viewer(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        top_h,
+        w - SIDEBAR_WIDTH,
+        h - top_h - status_h,
+        0,
+        true,
+        viewer,
+        &theme,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        0,
+        Some("~/dev/axon/src/renderer"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::None,
+        None,
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "viewer.ppm");
+
+    println!("previews in {}", out.display());
 }

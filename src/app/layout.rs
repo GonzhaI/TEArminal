@@ -534,6 +534,53 @@ impl TerminalTab {
         }
     }
 
+    /// Contexto real de la pestaña para la segunda línea de la barra lateral:
+    /// carpeta contenedora, directorio remoto o número de paneles. Nada decorativo.
+    pub fn sidebar_detail(&self) -> Option<String> {
+        if self.is_settings {
+            return Some("Preferencias".to_string());
+        }
+        if let Some(ref viewer) = self.file_viewer {
+            if let Some(ref dest) = viewer.remote_destination {
+                return Some(dest.clone());
+            }
+            return viewer
+                .path
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .or_else(|| Some("Archivo".to_string()));
+        }
+        let active = self.active_pane()?;
+        let panes = if self.panes.len() > 1 {
+            Some(format!("{} paneles", self.panes.len()))
+        } else {
+            None
+        };
+        if let Some(ssh) = active.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
+            let remote = ssh
+                .remote_dir
+                .clone()
+                .unwrap_or_else(|| "Sesión remota".to_string());
+            return Some(match panes {
+                Some(panes) => format!("{remote} · {panes}"),
+                None => remote,
+            });
+        }
+        if panes.is_some() {
+            return panes;
+        }
+        let dir = active.terminal.current_dir.as_deref()?;
+        let text = dir.parent().unwrap_or(dir).display().to_string();
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
     pub fn display_title(&self) -> String {
         if self.is_settings {
             return "Ajustes".to_string();

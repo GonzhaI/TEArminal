@@ -206,11 +206,17 @@ pub fn encode_kitty_key(
     }
     let mod_val = 1 + mod_mask;
 
-    let is_functional = key_num >= 57358 || matches!(key_num, 9 | 13 | 27 | 127);
-    let should_encode = (flags & 8) != 0 // Reportar todas las teclas como secuencias de escape
-        || (flags & 2) != 0 // Reportar tipos de evento
-        || mod_val > 1 // Algún modificador activo
-        || is_functional; // Teclas funcionales o ambiguas
+    // Reglas de codificación de Kitty Keyboard Protocol (CSI u):
+    // 1. Si flag 8 está activo (report all keys as escape codes): codificar todas las teclas.
+    // 2. Si flag 2 está activo (report event types) y es repetición o liberación: codificar para informar del evento.
+    // 3. Si hay modificadores activos (mod_val > 1): codificar como CSI key;mod u (Shift+Enter, Ctrl+C, Ctrl+Flechas, etc.).
+    // 4. Si no hay modificadores (mod_val == 1):
+    //    - Solo Escape (27) se codifica bajo flag 1 (disambiguate) para separarlo del prefijo de escape.
+    //    - Enter, Tab, Backspace y las teclas de navegación (flechas, Home, End, PageUp, etc.) NO deben
+    //      enviarse como CSI u cuando se pulsan sin modificadores a menos que flag 8 esté activo, para
+    //      preservar las secuencias VT clásicas (\r, \t, \x7f, \x1b[A, \x1bOA) que esperan los agentes CLI y shells.
+    let should_encode =
+        (flags & 8) != 0 || (flags & 2) != 0 || mod_val > 1 || (key_num == 27 && (flags & 1) != 0);
 
     if !should_encode {
         return None;

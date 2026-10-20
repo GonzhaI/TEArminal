@@ -24,7 +24,7 @@
 * **Motor VT completo:** TrueColor, pantalla alterna, ratón SGR, *bracketed paste*, imágenes inline (Kitty Graphics Protocol e iTerm2), doble ancho (CJK, emoji) y *grapheme clustering* (UAX #29).
 * **Multi-ventana y desprendimiento de pestañas:** abre nuevas ventanas con `Ctrl+Shift+N` o mueve pestañas a una nueva ventana mediante clic derecho (*«Mover a nueva ventana»*) o arrastrándolas fuera de la barra (*tab tear-off*).
 * **Auto-actualización automática:** comprueba en segundo plano nuevas versiones desde GitHub Releases, avisa en la barra de estado e instala la actualización con 1 clic (solo si el SHA-256 del instalador coincide con el de `SHA256SUMS.txt` de la misma release; si no, abre la página de la versión).
-* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, 817 temas de iTerm2 (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, aceleración opcional por GPU Direct3D 11 (DirectFlip), ligaduras tipográficas y restauración de sesión.
+* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, temas propios `Axon Night` y `Axon Day` sobre 817 temas de iTerm2 (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, aceleración opcional por GPU Direct3D 11 (DirectFlip), ligaduras tipográficas y restauración de sesión.
 * **Teclado correcto en Windows:** `AltGr` sin Ctrl atascado, `Ctrl+Backspace` borra palabra y `Alt+Tab` sin tabuladores fantasma.
 
 ## Atajos

@@ -78,6 +78,73 @@ pub struct Theme {
     pub selection: Color,
     pub selection_fg: Color,
     pub ansi: [Color; 16],
+    /// Acento de la interfaz. No es un color ANSI: la UI no debe depender de que el tema tenga
+    /// un verde o un azul utilizables como acento.
+    pub ui_accent: Color,
+}
+
+/// Temas propios de Axon, derivados del logotipo (grafito azulado, azul de marca, verde y cian).
+/// No viven en `themes.txt`: ese archivo es la copia intacta de iterm2-color-schemes.
+const AXON_NIGHT: Theme = Theme {
+    background: Color::from_rgb(0x14, 0x18, 0x21),
+    foreground: Color::from_rgb(0xd6, 0xde, 0xeb),
+    cursor: Color::from_rgb(0x7c, 0xc4, 0xff),
+    selection: Color::from_rgb(0x24, 0x34, 0x4d),
+    selection_fg: Color::from_rgb(0xf2, 0xf6, 0xfc),
+    ui_accent: Color::from_rgb(0x5b, 0x9b, 0xff),
+    ansi: [
+        Color::from_rgb(0x1b, 0x22, 0x30),
+        Color::from_rgb(0xf0, 0x71, 0x78),
+        Color::from_rgb(0x5b, 0xd0, 0x8a),
+        Color::from_rgb(0xf2, 0xc6, 0x6d),
+        Color::from_rgb(0x6f, 0xa8, 0xff),
+        Color::from_rgb(0xc7, 0x92, 0xea),
+        Color::from_rgb(0x38, 0xbd, 0xf8),
+        Color::from_rgb(0xc3, 0xcb, 0xd8),
+        Color::from_rgb(0x5a, 0x65, 0x77),
+        Color::from_rgb(0xff, 0x8a, 0x93),
+        Color::from_rgb(0x7e, 0xe2, 0xa8),
+        Color::from_rgb(0xff, 0xd9, 0x8a),
+        Color::from_rgb(0x8d, 0xbb, 0xff),
+        Color::from_rgb(0xd7, 0xa8, 0xff),
+        Color::from_rgb(0x67, 0xd6, 0xff),
+        Color::from_rgb(0xf2, 0xf6, 0xfc),
+    ],
+};
+
+const AXON_DAY: Theme = Theme {
+    background: Color::from_rgb(0xf6, 0xf7, 0xf9),
+    foreground: Color::from_rgb(0x1a, 0x21, 0x30),
+    cursor: Color::from_rgb(0x25, 0x63, 0xeb),
+    selection: Color::from_rgb(0xd5, 0xe2, 0xfa),
+    selection_fg: Color::from_rgb(0x0f, 0x17, 0x2a),
+    ui_accent: Color::from_rgb(0x25, 0x63, 0xeb),
+    ansi: [
+        Color::from_rgb(0x3b, 0x43, 0x53),
+        Color::from_rgb(0xc0, 0x36, 0x2c),
+        Color::from_rgb(0x1f, 0x7a, 0x4d),
+        Color::from_rgb(0x8a, 0x5a, 0x00),
+        Color::from_rgb(0x1d, 0x4e, 0xd8),
+        Color::from_rgb(0x7a, 0x3d, 0xb8),
+        Color::from_rgb(0x0e, 0x74, 0x90),
+        Color::from_rgb(0x5a, 0x64, 0x76),
+        Color::from_rgb(0x8a, 0x93, 0xa3),
+        Color::from_rgb(0xa3, 0x2b, 0x22),
+        Color::from_rgb(0x18, 0x6b, 0x43),
+        Color::from_rgb(0x7a, 0x50, 0x00),
+        Color::from_rgb(0x1e, 0x40, 0xaf),
+        Color::from_rgb(0x6b, 0x2f, 0xa0),
+        Color::from_rgb(0x0b, 0x64, 0x78),
+        Color::from_rgb(0x1a, 0x21, 0x30),
+    ],
+};
+
+fn builtin_theme(name: &str) -> Option<(&'static str, Theme)> {
+    match name_key(name).as_str() {
+        "axonnight" | "axon" | "night" => Some(("Axon Night", AXON_NIGHT.clone())),
+        "axonday" | "day" => Some(("Axon Day", AXON_DAY.clone())),
+        _ => None,
+    }
 }
 
 impl Default for Theme {
@@ -105,6 +172,34 @@ fn hex(s: &str) -> Option<Color> {
     Some(Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
+/// Luminancia relativa WCAG (0..1) de un color opaco.
+fn luminance(c: Color) -> f32 {
+    let channel = |v: u8| {
+        let s = v as f32 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+}
+
+/// Contraste WCAG entre dos colores opacos (1..21).
+pub fn contrast_ratio(a: Color, b: Color) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Acento de interfaz para temas ajenos: el primer color del tema que sea legible sobre su fondo.
+/// La UI nunca inventa un color fuera de la paleta, pero tampoco hereda un azul ilegible.
+fn ui_accent_for(background: Color, foreground: Color, ansi: &[Color; 16]) -> Color {
+    [ansi[4], ansi[6], ansi[2], ansi[5], foreground]
+        .into_iter()
+        .find(|c| contrast_ratio(*c, background) >= 4.5)
+        .unwrap_or(foreground)
+}
+
 /// Interpreta una línea de `themes.txt`; `None` si está malformada.
 fn parse_line(line: &str) -> Option<(&str, Theme)> {
     let mut f = line.split('\t');
@@ -124,18 +219,21 @@ fn parse_line(line: &str) -> Option<(&str, Theme)> {
         cursor,
         selection,
         selection_fg,
+        ui_accent: ui_accent_for(background, foreground, &ansi),
         ansi,
     };
     Some((name, theme))
 }
 
 impl Theme {
-    pub const DEFAULT_DARK: &'static str = "Catppuccin Frappe";
-    pub const DEFAULT_LIGHT: &'static str = "Catppuccin Latte";
+    pub const DEFAULT_DARK: &'static str = "Axon Night";
+    pub const DEFAULT_LIGHT: &'static str = "Axon Day";
 
-    /// Nombres de todos los temas incorporados, en orden alfabético.
+    /// Nombres de todos los temas incorporados: los dos propios y los 817 de iTerm2.
     pub fn names() -> impl Iterator<Item = &'static str> {
-        THEMES.lines().map(first_field)
+        ["Axon Night", "Axon Day"]
+            .into_iter()
+            .chain(THEMES.lines().map(first_field))
     }
 
     /// Temas cuyo nombre contiene `filter` (sin distinguir mayúsculas ni separadores).
@@ -150,6 +248,9 @@ impl Theme {
     }
 
     fn find(name: &str) -> Option<(&'static str, Theme)> {
+        if let Some(builtin) = builtin_theme(name) {
+            return Some(builtin);
+        }
         // Camino rápido: el nombre exacto de la lista (la interfaz lo usa en cada fila dibujada)
         if let Some(line) = THEMES.lines().find(|l| first_field(l) == name) {
             return parse_line(line);
@@ -157,8 +258,9 @@ impl Theme {
         let key = name_key(name);
         let key = match key.as_str() {
             // Valores de versiones anteriores de `axon.toml`
-            "frappe" | "dark" | "default" => name_key(Self::DEFAULT_DARK),
-            "latte" => name_key(Self::DEFAULT_LIGHT),
+            "frappe" => name_key("Catppuccin Frappe"),
+            "latte" => name_key("Catppuccin Latte"),
+            "dark" | "default" => name_key(Self::DEFAULT_DARK),
             "onedark" => name_key("Atom One Dark"),
             "solarizeddark" => name_key("iTerm2 Solarized Dark"),
             _ => key,
@@ -197,53 +299,72 @@ impl Theme {
         !self.is_light()
     }
 
-    /// Desplaza el fondo hacia el blanco (tema oscuro) o hacia el negro (tema claro).
-    fn shade(&self, dark_up: u8, light_down: u8) -> Color {
-        let b = self.background;
-        if self.is_light() {
-            Color::from_rgb(
-                b.r.saturating_sub(light_down),
-                b.g.saturating_sub(light_down),
-                b.b.saturating_sub(light_down),
-            )
-        } else {
-            Color::from_rgb(
-                b.r.saturating_add(dark_up),
-                b.g.saturating_add(dark_up),
-                b.b.saturating_add(dark_up),
-            )
-        }
+    /// Mezcla lineal en sRGB entre dos colores opacos (`t` = 0 devuelve `a`, 1 devuelve `b`).
+    pub fn mix(&self, a: Color, b: Color, t: f32) -> Color {
+        let t = t.clamp(0.0, 1.0);
+        let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+        Color::from_rgb(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b))
     }
 
-    /// Fondo de la barra lateral: algo más oscuro que el terminal
+    /// Fondo del chrome (barras, pestañas inactivas). Un paso hacia el texto, nunca un gris ajeno.
+    pub fn chrome_bg(&self) -> Color {
+        self.mix(self.background, self.foreground, 0.045)
+    }
+
+    /// Superficie elevada: filas activas, tarjetas, menús.
+    pub fn chrome_bg_elevated(&self) -> Color {
+        self.mix(self.background, self.foreground, 0.08)
+    }
+
+    /// Hairline de 1 px para separar regiones.
+    pub fn chrome_line(&self) -> Color {
+        self.mix(self.background, self.foreground, 0.12)
+    }
+
+    /// Hairline con más presencia (foco, bordes de controles).
+    pub fn chrome_line_strong(&self) -> Color {
+        self.mix(self.background, self.foreground, 0.22)
+    }
+
+    /// Texto secundario legible (≥ 4,5:1 sobre el fondo en los temas propios).
+    pub fn text_secondary(&self) -> Color {
+        self.mix(self.foreground, self.background, 0.28)
+    }
+
+    /// Texto terciario: metadatos que se leen, no decoración.
+    pub fn text_muted(&self) -> Color {
+        self.mix(self.foreground, self.background, 0.48)
+    }
+
+    /// Relleno translúcido del acento para estados seleccionados.
+    pub fn accent_soft(&self, alpha: u8) -> Color {
+        let a = self.ui_accent;
+        Color::from_rgba(a.r, a.g, a.b, alpha)
+    }
+
+    /// Fondo de la barra lateral y de las barras de chrome.
     pub fn sidebar_bg(&self) -> Color {
-        let k = if self.is_light() { 0.94 } else { 0.84 };
-        let b = self.background;
-        Color::from_rgb(
-            (b.r as f32 * k).round() as u8,
-            (b.g as f32 * k).round() as u8,
-            (b.b as f32 * k).round() as u8,
-        )
+        self.chrome_bg()
     }
 
-    /// Color divisorio sutil y fino acorde al tema
+    /// Color divisorio sutil y fino acorde al tema.
     pub fn border_color(&self) -> Color {
-        self.shade(28, 35)
+        self.chrome_line()
     }
 
-    /// Color de superficie para tarjetas, ítems activos y botones
+    /// Color de superficie para tarjetas, ítems activos y botones.
     pub fn surface_bg(&self) -> Color {
-        self.shade(20, 20)
+        self.chrome_bg_elevated()
     }
 
-    /// Color de superficie para estados hover
+    /// Color de superficie para estados hover.
     pub fn surface_hover(&self) -> Color {
-        self.shade(36, 40)
+        self.mix(self.background, self.foreground, 0.12)
     }
 
-    /// Color de acento de interfaz primario
+    /// Color de acento de interfaz primario.
     pub fn accent_color(&self) -> Color {
-        self.ansi[2]
+        self.ui_accent
     }
 
     /// Resuelve índices de 256 colores estándar ANSI
@@ -313,8 +434,27 @@ mod tests {
     fn test_all_builtin_themes_parse() {
         let lines = THEMES.lines().count();
         assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
-        assert_eq!(Theme::names().count(), lines);
+        assert_eq!(Theme::names().count(), lines + 2);
         assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
+    }
+
+    #[test]
+    fn test_axon_builtin_themes() {
+        let night = Theme::from_name("Axon Night");
+        assert_eq!(night.background, Color::from_rgb(0x14, 0x18, 0x21));
+        assert!(!night.is_light());
+        assert!(contrast_ratio(night.foreground, night.background) >= 7.0);
+        assert!(contrast_ratio(night.ui_accent, night.background) >= 4.5);
+
+        let day = Theme::from_name("Axon Day");
+        assert!(day.is_light());
+        assert!(contrast_ratio(day.foreground, day.background) >= 7.0);
+        assert!(contrast_ratio(day.ui_accent, day.background) >= 4.5);
+
+        assert_eq!(Theme::canonical_name("axon night"), "Axon Night");
+        assert_eq!(Theme::canonical_name("AXON DAY"), "Axon Day");
+        assert_eq!(Theme::DEFAULT_DARK, "Axon Night");
+        assert_eq!(Theme::DEFAULT_LIGHT, "Axon Day");
     }
 
     #[test]
@@ -333,12 +473,12 @@ mod tests {
         assert_eq!(Theme::canonical_name("tokyo night"), "TokyoNight");
         assert_eq!(Theme::canonical_name("DRACULA"), "Dracula");
         // Valores de configuraciones antiguas
-        assert_eq!(Theme::canonical_name("frappe"), Theme::DEFAULT_DARK);
+        assert_eq!(Theme::canonical_name("frappe"), "Catppuccin Frappe");
         assert_eq!(
             Theme::canonical_name("Catppuccin Frappé"),
-            Theme::DEFAULT_DARK
+            "Catppuccin Frappe"
         );
-        assert_eq!(Theme::canonical_name("latte"), Theme::DEFAULT_LIGHT);
+        assert_eq!(Theme::canonical_name("latte"), "Catppuccin Latte");
         assert_eq!(Theme::canonical_name("one dark"), "Atom One Dark");
         assert_eq!(
             Theme::canonical_name("solarized dark"),
@@ -346,7 +486,10 @@ mod tests {
         );
         // Desconocido: tema por defecto
         assert_eq!(Theme::canonical_name("no existe"), Theme::DEFAULT_DARK);
+        assert_eq!(Theme::canonical_name("dark"), Theme::DEFAULT_DARK);
+        assert_eq!(Theme::canonical_name("default"), Theme::DEFAULT_DARK);
         assert!(!Theme::search("solarized dark").is_empty());
+        assert_eq!(Theme::search("axon night"), vec!["Axon Night"]);
         assert!(Theme::search("zzzz").is_empty());
     }
 }

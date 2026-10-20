@@ -1418,13 +1418,13 @@ fn test_explorer_edge_drag_resizes_and_clamps_width() {
     let mut ex = FileExplorer::new(None, false);
     ex.visible = true;
     let (win_w, win_h) = (1000, 600);
-    // El borde izquierdo está en `win_w - width - 8`
+    // El borde izquierdo está en `win_w - width`
     let (px, py, _, _) = ex.panel_geometry(win_w, win_h, 40, 26);
     assert!(ex.on_resize_edge(px, py + 10, win_w, win_h, 40, 26));
     assert!(!ex.on_resize_edge(px + 50, py + 10, win_w, win_h, 40, 26));
     // Arrastrar a la izquierda ensancha; el ratón queda sobre el borde nuevo
     ex.set_width_from_edge(600, win_w);
-    assert_eq!(ex.width, 392);
+    assert_eq!(ex.width, 400);
     // Límites: mínimo fijo y como máximo la mitad de la ventana
     ex.set_width_from_edge(990, win_w);
     assert_eq!(ex.width, FILE_EXPLORER_MIN_WIDTH);
@@ -2032,6 +2032,53 @@ fn test_encode_kitty_key_various_combinations() {
             1
         ),
         Some(b"\x1b[57362;5u".to_vec())
+    );
+
+    // Flecha arriba sin modificadores con flag 1 (disambiguate): None (debe emitir secuencia VT estándar \x1b[A o \x1bOA)
+    assert_eq!(
+        encode_kitty_key(
+            &up_key,
+            phys_up,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        None
+    );
+
+    // Enter sin modificadores con flag 1: None (debe emitir \r estándar)
+    assert_eq!(
+        encode_kitty_key(
+            &enter_key,
+            phys_enter,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        None
+    );
+
+    // Escape sin modificadores con flag 1: \x1b[27u (se desambigua del prefijo Alt/escape)
+    let esc_key = Key::Named(NamedKey::Escape);
+    let phys_esc = PhysicalKey::Code(KeyCode::Escape);
+    assert_eq!(
+        encode_kitty_key(
+            &esc_key,
+            phys_esc,
+            false,
+            false,
+            false,
+            false,
+            KeyEventType::Press,
+            1
+        ),
+        Some(b"\x1b[27u".to_vec())
     );
 
     // Evento de liberación (Release) sin flag 2 no genera secuencia

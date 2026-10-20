@@ -106,6 +106,17 @@ impl TerminalRenderer {
 
     /// Mide el ancho en píxeles de un texto renderizado con Inter
     pub fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
+        self.measure_ui_text_tracked(text, size_px, semibold, 0.0)
+    }
+
+    /// Mide texto con tracking adicional entre caracteres (micro-etiquetas en mayúsculas).
+    pub fn measure_ui_text_tracked(
+        &self,
+        text: &str,
+        size_px: f32,
+        semibold: bool,
+        tracking: f32,
+    ) -> usize {
         let font = if semibold {
             &self.inter_semibold_font
         } else {
@@ -122,7 +133,8 @@ impl TerminalRenderer {
                     .or_insert_with(|| font.metrics(c, effective_size).advance_width)
             })
             .sum();
-        width.round() as usize
+        let gaps = text.chars().count().saturating_sub(1) as f32;
+        (width + gaps * tracking * self.ui_scale_ratio()).round() as usize
     }
 
     /// Dibuja texto proporcional moderno utilizando la tipografía Inter
@@ -139,8 +151,31 @@ impl TerminalRenderer {
         size_px: f32,
         semibold: bool,
     ) -> usize {
+        self.draw_ui_text_tracked(
+            buffer, buf_width, buf_height, text, start_x, baseline_y, max_x, color, size_px,
+            semibold, 0.0,
+        )
+    }
+
+    /// Igual que `draw_ui_text`, con separación extra entre caracteres.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_ui_text_tracked(
+        &mut self,
+        buffer: &mut [u32],
+        buf_width: usize,
+        buf_height: usize,
+        text: &str,
+        start_x: usize,
+        baseline_y: usize,
+        max_x: usize,
+        color: Color,
+        size_px: f32,
+        semibold: bool,
+        tracking: f32,
+    ) -> usize {
         let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
+        let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
 
         for c in text.chars() {
@@ -195,7 +230,7 @@ impl TerminalRenderer {
                 glyph_y,
                 color,
             );
-            cur_x += *advance;
+            cur_x += *advance + tracking_px;
         }
 
         cur_x.round() as usize

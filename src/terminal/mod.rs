@@ -87,6 +87,9 @@ pub struct TerminalState {
     // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
     pub bracketed_paste_mode: bool,
 
+    // Modo de teclas de cursor de aplicación (DECCKM: ?1h / ?1l)
+    pub cursor_key_mode: bool,
+
     // Soporte para protocolos interactivos TUI (Herdr, Ratatui, Lazygit)
     pub mouse_reporting_normal: bool, // Modo 1000: Reporte de clics
     pub mouse_reporting_button_event: bool, // Modo 1002: Clics y arrastre
@@ -173,6 +176,7 @@ impl TerminalState {
             remote_file_results: Vec::new(),
             remote_file_parts: Vec::new(),
             bracketed_paste_mode: false,
+            cursor_key_mode: false,
             mouse_reporting_normal: false,
             mouse_reporting_button_event: false,
             mouse_reporting_any_event: false,
@@ -428,6 +432,7 @@ impl TerminalState {
             self.current_flags = 0;
             self.sync_update_mode = false;
             self.sync_update_start = None;
+            self.cursor_key_mode = false;
         }
     }
 

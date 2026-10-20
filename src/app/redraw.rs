@@ -67,6 +67,7 @@ impl AxonApp {
             .enumerate()
             .map(|(idx, t)| SidebarTabItem {
                 title: t.display_title(),
+                detail: t.sidebar_detail(),
                 is_active: idx == active_idx,
                 has_unread: t.has_unread,
                 pane_count: t.panes.len(),

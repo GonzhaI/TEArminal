@@ -31,20 +31,40 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let (x, y, w, h) = menu.bounds();
-        // Sombra suave, fondo y borde
+        // Sombra corta, superficie elevada y hairline: un menú, no una isla.
         crate::ui::draw_rounded_rect(
             buffer,
             width,
             height,
-            x + 2,
-            y + 4,
+            x + 1,
+            y + 3,
             w,
             h,
-            10,
-            Color::from_rgba(0, 0, 0, 70),
+            6,
+            Color::from_rgba(0, 0, 0, 80),
         );
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.surface_bg());
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 10, theme.border_color());
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            6,
+            theme.chrome_bg_elevated(),
+        );
+        crate::ui::stroke_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            6,
+            theme.chrome_line_strong(),
+        );
 
         let accent = theme.accent_color();
         for (i, item) in menu.items.iter().enumerate() {
@@ -59,7 +79,7 @@ impl TerminalRenderer {
                     r.1 + r.3 / 2,
                     r.2.saturating_sub(16),
                     1,
-                    theme.border_color().to_u32_xrgb(),
+                    theme.chrome_line().to_u32_xrgb(),
                 );
                 continue;
             }
@@ -70,22 +90,22 @@ impl TerminalRenderer {
                     buffer,
                     width,
                     height,
-                    r.0,
+                    r.0 + 4,
                     r.1,
-                    r.2,
+                    r.2.saturating_sub(8),
                     r.3,
-                    6,
-                    Color::from_rgba(accent.r(), accent.g(), accent.b(), 34),
+                    3,
+                    theme.accent_soft(30),
                 );
             }
             let (label_fg, icon_fg) = match (item.enabled, hovered) {
-                (false, _) => (theme.ansi[8], theme.ansi[8]),
+                (false, _) => (theme.text_muted(), theme.text_muted()),
                 (true, true) => (theme.foreground, accent),
-                (true, false) => (theme.foreground, theme.ansi[7]),
+                (true, false) => (theme.foreground, theme.text_secondary()),
             };
             let cy = r.1 + r.3 / 2;
             if let Some(icon) = item.icon {
-                self.draw_lucide_icon(buffer, width, height, icon, r.0 + 18, cy, 12.5, icon_fg);
+                self.draw_lucide_icon(buffer, width, height, icon, r.0 + 18, cy, 12.0, icon_fg);
             }
             self.draw_ui_text(
                 buffer,
@@ -96,11 +116,11 @@ impl TerminalRenderer {
                 cy + 4,
                 r.0 + r.2 - 8,
                 label_fg,
-                12.0,
+                11.5,
                 false,
             );
             if !item.shortcut.is_empty() {
-                let sw = self.measure_ui_text(item.shortcut, 10.5, false);
+                let sw = self.measure_ui_text(item.shortcut, 10.0, false);
                 self.draw_ui_text(
                     buffer,
                     width,
@@ -109,8 +129,8 @@ impl TerminalRenderer {
                     (r.0 + r.2).saturating_sub(sw + 10),
                     cy + 4,
                     r.0 + r.2,
-                    theme.ansi[8],
-                    10.5,
+                    theme.text_muted(),
+                    10.0,
                     false,
                 );
             }

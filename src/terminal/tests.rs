@@ -6,8 +6,8 @@ use std::time::Instant;
 #[test]
 fn test_default_theme_palette() {
     let theme = Theme::default();
-    assert_eq!(theme.background, Color::from_rgb(0x30, 0x34, 0x46));
-    assert_eq!(theme.cursor, Color::from_rgb(0xf2, 0xd5, 0xcf));
+    assert_eq!(theme.background, Color::from_rgb(0x14, 0x18, 0x21));
+    assert_eq!(theme.cursor, Color::from_rgb(0x7c, 0xc4, 0xff));
     assert_eq!(theme.ansi.len(), 16);
 }
 
@@ -322,6 +322,20 @@ fn test_bracketed_paste_mode() {
     // Desactivar modo bracketed paste (?2004l)
     term.process_bytes(b"\x1b[?2004l");
     assert!(!term.bracketed_paste_mode);
+}
+
+#[test]
+fn test_decckm_cursor_key_mode() {
+    let theme = Theme::default();
+    let mut term = TerminalState::new(80, 24, 1000, theme);
+
+    assert!(!term.cursor_key_mode);
+    // Activar modo de teclas de cursor de aplicación (?1h)
+    term.process_bytes(b"\x1b[?1h");
+    assert!(term.cursor_key_mode);
+    // Desactivar modo de teclas de cursor (?1l)
+    term.process_bytes(b"\x1b[?1l");
+    assert!(!term.cursor_key_mode);
 }
 
 #[test]

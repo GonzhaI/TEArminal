@@ -3,6 +3,8 @@
 #[derive(Debug, Clone)]
 pub struct SidebarTabItem {
     pub title: String,
+    /// Segunda línea de la pestaña lateral: contexto real (carpeta, SSH, paneles), no decoración.
+    pub detail: Option<String>,
     pub is_active: bool,
     pub has_unread: bool,
     pub pane_count: usize,

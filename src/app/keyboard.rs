@@ -1348,12 +1348,48 @@ impl AxonApp {
             }
             Key::Named(NamedKey::Escape) => active.pty.write_input(&[0x1b]),
             Key::Named(NamedKey::Delete) => active.pty.write_input(b"\x1b[3~"),
-            Key::Named(NamedKey::Home) => active.pty.write_input(b"\x1b[H"),
-            Key::Named(NamedKey::End) => active.pty.write_input(b"\x1b[F"),
-            Key::Named(NamedKey::ArrowUp) => active.pty.write_input(b"\x1b[A"),
-            Key::Named(NamedKey::ArrowDown) => active.pty.write_input(b"\x1b[B"),
-            Key::Named(NamedKey::ArrowRight) => active.pty.write_input(b"\x1b[C"),
-            Key::Named(NamedKey::ArrowLeft) => active.pty.write_input(b"\x1b[D"),
+            Key::Named(NamedKey::Home) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOH");
+                } else {
+                    active.pty.write_input(b"\x1b[H");
+                }
+            }
+            Key::Named(NamedKey::End) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOF");
+                } else {
+                    active.pty.write_input(b"\x1b[F");
+                }
+            }
+            Key::Named(NamedKey::ArrowUp) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOA");
+                } else {
+                    active.pty.write_input(b"\x1b[A");
+                }
+            }
+            Key::Named(NamedKey::ArrowDown) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOB");
+                } else {
+                    active.pty.write_input(b"\x1b[B");
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOC");
+                } else {
+                    active.pty.write_input(b"\x1b[C");
+                }
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                if active.terminal.cursor_key_mode {
+                    active.pty.write_input(b"\x1bOD");
+                } else {
+                    active.pty.write_input(b"\x1b[D");
+                }
+            }
             Key::Named(NamedKey::F1) => active.pty.write_input(b"\x1bOP"),
             Key::Named(NamedKey::F2) => active.pty.write_input(b"\x1bOQ"),
             Key::Named(NamedKey::F3) => active.pty.write_input(b"\x1bOR"),

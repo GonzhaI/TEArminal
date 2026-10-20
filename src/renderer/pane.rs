@@ -46,8 +46,8 @@ impl TerminalRenderer {
         if terminal.scrollback.is_empty() {
             return None;
         }
-        let track_w = 6;
-        let track_x = (rect_x + rect_width).saturating_sub(track_w + 3);
+        let track_w = 4;
+        let track_x = (rect_x + rect_width).saturating_sub(track_w + 4);
         let track_y = rect_y + self.margin_y;
         let track_h = rect_height.saturating_sub(self.margin_y * 2);
         if track_h == 0 {
@@ -379,7 +379,70 @@ impl TerminalRenderer {
             }
         }
 
-        // 3. Renderizar cursor sólido
+        // 3. Canal de bloques de comando (OSC 133): estado en el margen y regla tenue entre entradas.
+        if !terminal.is_alt_screen && !terminal.command_blocks.is_empty() {
+            let visible_end = view_start + visible_rows.len();
+            let content_right = max_x.saturating_sub(10);
+            for block in &terminal.command_blocks {
+                let start = block.prompt_line;
+                let end = block
+                    .output_end
+                    .unwrap_or_else(|| terminal.current_global_line())
+                    .max(start);
+                if end < view_start || start >= visible_end {
+                    continue;
+                }
+                let status = match block.exit_code {
+                    Some(0) => theme.ansi[2],
+                    Some(_) => theme.ansi[1],
+                    None => theme.accent_color(),
+                };
+                let top = base_y + start.saturating_sub(view_start) * self.row_height;
+                let bottom_line = end.min(visible_end.saturating_sub(1));
+                let bottom = base_y + (bottom_line - view_start + 1) * self.row_height;
+                let rail_h = bottom
+                    .saturating_sub(top)
+                    .min((rect_y + rect_h).saturating_sub(top));
+                if rail_h > 4 {
+                    let rail = theme.mix(theme.background, status, 0.32);
+                    fill_rect(
+                        buffer,
+                        width,
+                        clip,
+                        rect_x + 5,
+                        top + 3,
+                        2,
+                        rail_h - 3,
+                        rail.to_u32_xrgb(),
+                    );
+                }
+                fill_rect(
+                    buffer,
+                    width,
+                    clip,
+                    rect_x + 4,
+                    top + 4,
+                    4,
+                    2,
+                    status.to_u32_xrgb(),
+                );
+                if start > view_start {
+                    let rule = theme.mix(theme.background, theme.foreground, 0.07);
+                    fill_rect(
+                        buffer,
+                        width,
+                        clip,
+                        base_x,
+                        top.saturating_sub(1),
+                        content_right.saturating_sub(base_x),
+                        1,
+                        rule.to_u32_xrgb(),
+                    );
+                }
+            }
+        }
+
+        // 4. Renderizar cursor sólido
         if terminal.scroll_offset == 0
             && terminal.cursor_visible
             && cursor_visible
@@ -475,7 +538,7 @@ impl TerminalRenderer {
             }
         }
 
-        // 4. Renderizar imágenes inline (Protocolo iTerm2 / OSC 1337)
+        // 5. Renderizar imágenes inline (Protocolo iTerm2 / OSC 1337)
         let view_end = view_start + visible_rows.len();
         for img in &terminal.images {
             if img.line_index + img.height_rows > view_start && img.line_index < view_end {
@@ -524,7 +587,7 @@ impl TerminalRenderer {
             }
         }
 
-        // 5. Scrollbar del panel si tiene historial
+        // 6. Scrollbar del panel si tiene historial
         if !terminal.scrollback.is_empty() {
             if let Some((thumb_x, thumb_y, thumb_w, thumb_h)) =
                 self.pane_scrollbar_geometry(rect_x, rect_y, rect_w, rect_h, terminal)
@@ -549,23 +612,63 @@ impl TerminalRenderer {
             }
         }
 
-        // 6. Si hay múltiples paneles, dibujar un borde sutil indicador en el panel activo
+        // 7. Foco en paneles divididos: perímetro de 1 px y remate de 2 px, en el acento del tema.
         if has_multiple_panes && is_active_pane {
-            let active_border = theme.ansi[2]; // Verde sutil del tema
-                                               // Línea superior fina indicadora de foco
-            Self::draw_rect(
+            let accent = theme.accent_color();
+            let border = theme.mix(theme.background, accent, 0.55);
+            fill_rect(
                 buffer,
                 width,
-                height,
+                clip,
+                rect_x,
+                rect_y,
+                rect_w,
+                1,
+                border.to_u32_xrgb(),
+            );
+            fill_rect(
+                buffer,
+                width,
+                clip,
+                rect_x,
+                rect_y + rect_h.saturating_sub(1),
+                rect_w,
+                1,
+                border.to_u32_xrgb(),
+            );
+            fill_rect(
+                buffer,
+                width,
+                clip,
+                rect_x,
+                rect_y,
+                1,
+                rect_h,
+                border.to_u32_xrgb(),
+            );
+            fill_rect(
+                buffer,
+                width,
+                clip,
+                rect_x + rect_w.saturating_sub(1),
+                rect_y,
+                1,
+                rect_h,
+                border.to_u32_xrgb(),
+            );
+            fill_rect(
+                buffer,
+                width,
+                clip,
                 rect_x,
                 rect_y,
                 rect_w,
                 2,
-                active_border,
+                accent.to_u32_xrgb(),
             );
         }
 
-        // 7. Botón flotante "Ir hasta abajo" cuando hay desplazamiento hacia arriba
+        // 8. Botón "ir hasta abajo" mientras la vista está desplazada.
         if terminal.scroll_offset > 0 && !terminal.is_alt_screen {
             let (btn_x, btn_y, btn_w, btn_h) =
                 crate::renderer::pane_scroll_to_bottom_btn_rect(rect_x, rect_y, rect_w, rect_h);
@@ -573,17 +676,17 @@ impl TerminalRenderer {
                 let bg_color = if terminal.scroll_to_bottom_hovered {
                     theme.surface_hover()
                 } else {
-                    theme.surface_bg()
+                    theme.chrome_bg_elevated()
                 };
-                let border_color = theme.border_color();
+                let border_color = theme.chrome_line();
                 let icon_color = if terminal.scroll_to_bottom_hovered {
-                    theme.accent_color()
-                } else {
                     theme.foreground
+                } else {
+                    theme.text_secondary()
                 };
 
                 crate::ui::draw_rounded_rect(
-                    buffer, width, height, btn_x, btn_y, btn_w, btn_h, 6, bg_color,
+                    buffer, width, height, btn_x, btn_y, btn_w, btn_h, 4, bg_color,
                 );
                 crate::ui::stroke_rounded_rect(
                     buffer,
@@ -593,7 +696,7 @@ impl TerminalRenderer {
                     btn_y,
                     btn_w,
                     btn_h,
-                    6,
+                    4,
                     border_color,
                 );
                 self.draw_lucide_icon(
@@ -603,7 +706,7 @@ impl TerminalRenderer {
                     crate::ui::LucideIcon::ChevronDown,
                     btn_x + btn_w / 2,
                     btn_y + btn_h / 2,
-                    14.0,
+                    13.0,
                     icon_color,
                 );
             }

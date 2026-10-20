@@ -193,6 +193,8 @@ impl FileExplorer {
     pub const HEADER_HEIGHT: usize = 36;
     pub const SUBHEADER_HEIGHT: usize = 28;
     pub const ITEM_HEIGHT: usize = 24;
+    /// Aire entre el sub-encabezado y la primera fila de la lista
+    pub const LIST_TOP_PAD: usize = 6;
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[inline]
@@ -214,7 +216,7 @@ impl FileExplorer {
         (panel_x + panel_w.saturating_sub(58), panel_y + 8, 22, 20)
     }
 
-    /// Calcula la geometría exacta del panel flotante del explorador de archivos
+    /// Calcula la geometría del panel acoplado del explorador de archivos.
     #[inline]
     pub fn panel_geometry(
         &self,
@@ -223,11 +225,9 @@ impl FileExplorer {
         top_offset: usize,
         status_bar_h: usize,
     ) -> (usize, usize, usize, usize) {
-        let margin_top = top_offset + 8;
-        let margin_bottom = status_bar_h + 8;
-        let panel_x = win_w.saturating_sub(self.width + 8);
-        let panel_y = margin_top;
-        let panel_h = win_h.saturating_sub(margin_top + margin_bottom);
+        let panel_x = win_w.saturating_sub(self.width);
+        let panel_y = top_offset;
+        let panel_h = win_h.saturating_sub(top_offset + status_bar_h);
         (panel_x, panel_y, self.width, panel_h)
     }
 
@@ -241,7 +241,7 @@ impl FileExplorer {
 
     /// Ancho que deja el borde izquierdo del panel bajo el ratón en `mx`
     pub fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
-        self.width = Self::clamp_width(win_w.saturating_sub(mx + 8), win_w);
+        self.width = Self::clamp_width(win_w.saturating_sub(mx), win_w);
     }
 
     /// ¿Está `(mx, my)` sobre el borde izquierdo del panel (franja de agarre para redimensionar)?
@@ -1000,7 +1000,8 @@ impl FileExplorer {
 
     /// Obtiene el índice del elemento en la posición Y considerando el desplazamiento superior
     pub fn item_at_y(&self, my: usize, top_offset: usize) -> Option<usize> {
-        let list_top = top_offset + Self::HEADER_HEIGHT + Self::SUBHEADER_HEIGHT;
+        let list_top =
+            top_offset + Self::HEADER_HEIGHT + Self::SUBHEADER_HEIGHT + Self::LIST_TOP_PAD;
         if my < list_top {
             return None;
         }
@@ -1220,7 +1221,9 @@ mod tests {
         }
 
         // item_at_y
-        let first_item_y = FileExplorer::HEADER_HEIGHT + FileExplorer::SUBHEADER_HEIGHT + 4;
+        let first_item_y = FileExplorer::HEADER_HEIGHT
+            + FileExplorer::SUBHEADER_HEIGHT
+            + FileExplorer::LIST_TOP_PAD;
         assert_eq!(explorer.item_at_y(first_item_y, 0), Some(0));
 
         // toggle visibility

@@ -155,8 +155,8 @@ impl TerminalRenderer {
             .horizontal_line_metrics(self.font_size)
             .map(|m| m.ascent.ceil() as usize)
             .unwrap_or(self.font_size.ceil() as usize);
-        self.margin_x = (10.0 * scale_factor as f32).round() as usize;
-        self.margin_y = (8.0 * scale_factor as f32).round() as usize;
+        self.margin_x = (14.0 * scale_factor as f32).round() as usize;
+        self.margin_y = (10.0 * scale_factor as f32).round() as usize;
         self.glyph_cache.clear();
         for slot in self.ascii_cache.iter_mut() {
             *slot = None;

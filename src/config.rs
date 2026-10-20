@@ -490,13 +490,13 @@ mod tests {
         let a = load("Dracula");
         assert_eq!(
             (a.theme.as_str(), a.theme_light.as_str()),
-            ("Dracula", "Catppuccin Latte")
+            ("Dracula", "Axon Day")
         );
         // Un `theme` claro (modo claro antiguo) pasa a la ranura clara
         let a = load("latte");
         assert_eq!(
             (a.theme.as_str(), a.theme_light.as_str()),
-            ("Catppuccin Frappe", "latte")
+            ("Axon Night", "latte")
         );
         let _ = fs::remove_dir_all(&dir);
     }
