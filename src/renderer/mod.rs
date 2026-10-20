@@ -11,6 +11,7 @@ mod blocks;
 mod composer;
 mod context_menu;
 pub mod d3d11;
+mod dialog;
 mod draw;
 mod explorer_panel;
 mod file_viewer;

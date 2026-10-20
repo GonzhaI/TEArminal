@@ -8,6 +8,7 @@ mod click;
 mod clipboard;
 mod context_menu;
 mod cursor;
+mod dialog;
 mod fs_watcher;
 mod handler;
 mod host;
@@ -29,6 +30,7 @@ mod wheel;
 pub use crate::renderer::D3D11Presenter;
 pub use ai_usage::*;
 pub use context_menu::*;
+pub use dialog::*;
 pub use host::AxonHost;
 pub use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub use layout::*;
@@ -101,6 +103,8 @@ pub struct AxonApp {
     hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
+    /// Diálogo modal abierto (captura ratón y teclado hasta cerrarse).
+    pub dialog: Option<Dialog>,
     pub file_explorer: crate::explorer::FileExplorer,
     hovered_files_btn: bool,
     pub last_terminal_tab_index: usize,
@@ -343,6 +347,7 @@ impl AxonApp {
             hovered_pane_btn: None,
             settings_page_state: SettingsPageState::default(),
             context_menu: None,
+            dialog: None,
             file_explorer,
             hovered_files_btn: false,
             last_terminal_tab_index: 0,

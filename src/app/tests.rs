@@ -2337,3 +2337,53 @@ fn test_clean_block_command_drops_control_and_format_chars() {
     );
     assert_eq!(clean_block_command("echo ñ ✓"), "echo ñ ✓");
 }
+
+#[test]
+fn test_shorten_home_uses_backslashes_for_windows_paths() {
+    use super::shell_context::shorten_home;
+    let p = std::path::Path::new("D:/proyectos/axon");
+    assert_eq!(shorten_home(p), r"D:\proyectos\axon");
+    let p = std::path::Path::new("/home/user/proyecto");
+    assert_eq!(shorten_home(p), "/home/user/proyecto");
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let p = std::path::PathBuf::from(format!("{}/GitHub/axon", home.to_string_lossy()));
+        assert_eq!(shorten_home(&p), r"~\GitHub\axon");
+    }
+}
+
+#[test]
+fn test_dialog_escape_cancels_and_enter_adds_the_project() {
+    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let dir = std::env::temp_dir().join(format!("axon_dialog_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dialog = |d: &std::path::Path| {
+        Dialog::confirm(
+            "Agregar proyecto",
+            "mensaje".into(),
+            "Agregar",
+            DialogAction::AddProject(d.to_path_buf()),
+        )
+    };
+    let (enter, esc) = (Key::Named(NamedKey::Enter), Key::Named(NamedKey::Escape));
+    let before = app.config.projects.len();
+
+    // Sin diálogo, la tecla sigue su curso
+    assert!(!app.dialog_key(&enter, KeyEventType::Press));
+
+    // Esc cancela sin agregar; el resto de teclas se descartan sin cerrarlo
+    app.dialog = Some(dialog(&dir));
+    assert!(app.dialog_key(&Key::Character("a".into()), KeyEventType::Press));
+    assert!(app.dialog.is_some(), "una tecla cualquiera no lo cierra");
+    assert!(app.dialog_key(&esc, KeyEventType::Press));
+    assert!(app.dialog.is_none());
+    assert_eq!(app.config.projects.len(), before);
+
+    // Intro acepta y agrega la carpeta como proyecto
+    app.dialog = Some(dialog(&dir));
+    assert!(app.dialog_key(&enter, KeyEventType::Release));
+    assert!(app.dialog.is_some(), "soltar la tecla no acepta");
+    assert!(app.dialog_key(&enter, KeyEventType::Press));
+    assert!(app.dialog.is_none());
+    assert_eq!(app.config.projects.len(), before + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

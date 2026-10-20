@@ -622,8 +622,22 @@ impl TerminalRenderer {
                         row_y,
                         text_max_x.saturating_sub(sep_x + 1),
                         row_h,
-                        Color::from_rgba(c.r(), c.g(), c.b(), 36).to_u32_xrgb(),
+                        // `fill_rect` es opaco: el tinte se mezcla con el lienzo, no se pasa con alfa
+                        theme.background.blend_over(c, 34),
                     );
+                    // Marca sólida en el borde de las líneas añadidas y quitadas
+                    if c != accent {
+                        fill_rect(
+                            buffer,
+                            width,
+                            clip,
+                            sep_x + 1,
+                            row_y,
+                            3,
+                            row_h,
+                            c.to_u32_xrgb(),
+                        );
+                    }
                 }
             }
 

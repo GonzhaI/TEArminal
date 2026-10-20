@@ -17,6 +17,11 @@ impl AxonApp {
             (800, 600)
         };
 
+        // La rueda no atraviesa un diálogo modal
+        if self.dialog.is_some() {
+            return;
+        }
+
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
         // Cualquier rueda despierta las barras de scroll (se auto-ocultan tras un instante)

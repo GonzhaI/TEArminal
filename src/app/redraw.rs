@@ -34,6 +34,7 @@ struct SceneParams<'a> {
     panel_right: bool,
     top_project: &'a TopBarProject,
     hovered_switcher: bool,
+    dialog: Option<&'a Dialog>,
 }
 
 impl AxonApp {
@@ -150,6 +151,7 @@ impl AxonApp {
             panel_right,
             top_project: &top_project,
             hovered_switcher: self.hovered_switcher,
+            dialog: self.dialog.as_ref(),
         };
 
         // 1. Si la aceleración por hardware GPU (Direct3D 11 DirectFlip) está activa, presentar vía VRAM
@@ -431,6 +433,27 @@ fn draw_full_scene(
         }
     }
 
+    // Marco del panel de pestañas superiores: tarjeta con esquinas redondeadas sobre el tono de las
+    // barras. Va después del explorador alojado, que pinta hasta el borde del panel.
+    if p.is_horizontal && p.sidebar_visible {
+        let x0 = if p.panel_right {
+            width.saturating_sub(SIDEBAR_WIDTH)
+        } else {
+            0
+        };
+        let top = SidebarRects::TOP;
+        let usable = height.saturating_sub(p.status_bar_h);
+        crate::ui::frame_card(
+            buffer,
+            width,
+            height,
+            (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top)),
+            SidebarRects::CARD_INSET,
+            SidebarRects::CARD_RADIUS,
+            theme.bar_bg(),
+        );
+    }
+
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
             buffer,
@@ -511,6 +534,10 @@ fn draw_full_scene(
 
     if let Some(menu) = context_menu {
         renderer.render_context_menu(buffer, width, height, menu, theme);
+    }
+
+    if let Some(dialog) = p.dialog {
+        renderer.render_dialog(buffer, width, height, dialog, theme);
     }
 }
 

@@ -4,8 +4,7 @@
 
 use super::*;
 use crate::renderer::{
-    AiAgentStatus, ProjectsPanelRects, SessionStatus, SidebarChange, SidebarHeader, SidebarProject,
-    SidebarRects,
+    AiAgentStatus, ProjectsPanelRects, SessionStatus, SidebarHeader, SidebarProject, SidebarRects,
 };
 use crate::ui::LucideIcon;
 use std::path::{Path, PathBuf};
@@ -15,6 +14,13 @@ use std::path::{Path, PathBuf};
 pub(super) enum Membership {
     Project(usize),
     Loose,
+}
+
+/// Nombre con el que se lista una carpeta como proyecto (su último componente).
+fn project_folder_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 /// Estado de la sesión según OSC 133. `None` en Ajustes y visores de archivo.
@@ -48,25 +54,68 @@ impl AxonApp {
         if tab.is_settings {
             return None;
         }
-        let dir: Option<PathBuf> = if let Some(viewer) = &tab.file_viewer {
-            if viewer.remote_destination.is_some() {
-                None
-            } else {
-                viewer.path.parent().map(Path::to_path_buf)
-            }
-        } else {
-            let terminal = &tab.active_pane()?.terminal;
-            let remote = terminal.ssh_session.as_ref().is_some_and(|s| s.is_active);
-            if remote {
-                None
-            } else {
-                terminal.current_dir.clone()
-            }
-        };
         Some(
-            dir.and_then(|d| crate::projects::project_for(&self.config.projects, &d))
+            Self::tab_dir(tab)
+                .and_then(|d| crate::projects::project_for(&self.config.projects, &d))
                 .map_or(Membership::Loose, Membership::Project),
         )
+    }
+
+    /// Carpeta local de la sesión (la del visor de archivos o la del shell); `None` por SSH.
+    fn tab_dir(tab: &TerminalTab) -> Option<PathBuf> {
+        if let Some(viewer) = &tab.file_viewer {
+            return match viewer.remote_destination {
+                Some(_) => None,
+                None => viewer.path.parent().map(Path::to_path_buf),
+            };
+        }
+        let terminal = &tab.active_pane()?.terminal;
+        if terminal.ssh_session.as_ref().is_some_and(|s| s.is_active) {
+            return None;
+        }
+        terminal.current_dir.clone()
+    }
+
+    /// Repositorio donde está la sesión a la vista cuando no pertenece a ningún proyecto: lo que ofrece
+    /// la fila «Agregar "repo"» del panel (modo de pestañas superiores). No agrega nada por sí sola.
+    pub(super) fn suggested_project(&self) -> Option<PathBuf> {
+        if !self.is_horizontal_tabs() || self.selected_membership() != Membership::Loose {
+            return None;
+        }
+        let index = match self.tab_membership(self.active_tab_index) {
+            Some(_) => self.active_tab_index,
+            None => self.last_terminal_tab_index,
+        };
+        let root = shell_context::git_root(&Self::tab_dir(self.tabs.get(index)?)?)?;
+        root.is_dir().then_some(root)
+    }
+
+    /// Filas de la lista del panel superior: proyectos, la sugerencia si hay y «Agregar proyecto».
+    pub(super) fn panel_row_count(&self) -> usize {
+        self.panel_rail().len() + usize::from(self.suggested_project().is_some()) + 1
+    }
+
+    /// Clic en la fila `i` del panel superior: abre el proyecto, pide confirmar la sugerencia o abre
+    /// el selector de carpetas.
+    pub(super) fn click_panel_row(&mut self, i: usize) {
+        let rail_len = self.panel_rail().len();
+        if i < rail_len {
+            self.click_rail(i);
+        } else if let Some(root) = self.suggested_project().filter(|_| i == rail_len) {
+            let name = project_folder_name(&root);
+            let message = format!(
+                "Se agregará {} a tus proyectos. Las sesiones que abras dentro de esa carpeta se agruparán bajo «{name}».",
+                shell_context::shorten_home(&root)
+            );
+            self.open_dialog(Dialog::confirm(
+                "Agregar proyecto",
+                message,
+                "Agregar",
+                DialogAction::AddProject(root),
+            ));
+        } else {
+            self.add_project_with_picker();
+        }
     }
 
     /// Lista que muestra el panel: la de la pestaña activa o, en Ajustes, la de la última sesión vista.
@@ -131,7 +180,7 @@ impl AxonApp {
                         }
                     }
                     Membership::Loose => SidebarProject {
-                        name: "Sueltas".to_string(),
+                        name: "Sesiones".to_string(),
                         branch: None,
                         status,
                         initial: '·',
@@ -169,7 +218,7 @@ impl AxonApp {
                     Some(shell_context::shorten_home(Path::new(&p.path))),
                 )
             }
-            Membership::Loose => ("Sueltas".to_string(), Some("Sin proyecto".to_string())),
+            Membership::Loose => ("Sesiones".to_string(), Some("Sin proyecto".to_string())),
         };
         let active = self.active_tab_index;
         let branch = if self.tab_membership(active) == Some(selected) {
@@ -183,34 +232,8 @@ impl AxonApp {
             path,
             on_right: self.panel_on_right(),
             list_end: self.panel_list_end(usable_h),
-            explorer_visible: self.file_explorer.visible,
-            changes: self.panel_changes(),
+            suggestion: self.suggested_project().map(|p| project_folder_name(&p)),
         }
-    }
-
-    /// Archivos con cambios de git para la sección «Cambios» del panel, ordenados por ruta.
-    pub(super) fn panel_changes(&self) -> Vec<SidebarChange> {
-        let Some(root) = self.file_explorer.git_root.as_deref() else {
-            return Vec::new();
-        };
-        let mut changes: Vec<SidebarChange> = self
-            .file_explorer
-            .git_statuses
-            .iter()
-            .filter(|(path, status)| {
-                **status != crate::explorer::GitFileStatus::Deleted && path.starts_with(root)
-            })
-            .map(|(path, status)| SidebarChange {
-                name: path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                path: path.clone(),
-                status: *status,
-            })
-            .collect();
-        changes.sort_by(|a, b| a.path.cmp(&b.path));
-        changes
     }
 
     /// Segunda línea de la fila de sesión: agente, modelo y minutos si corre un agente de IA; si no,
@@ -236,28 +259,6 @@ impl AxonApp {
             return Some(detail);
         }
         tab.sidebar_detail()
-    }
-
-    /// Archivo de la sección «Cambios» bajo `(mx, my)` (coordenadas locales al panel).
-    pub(super) fn panel_change_at(&self, mx: usize, my: usize, usable_h: usize) -> Option<PathBuf> {
-        if !self.file_explorer.visible {
-            return None;
-        }
-        let list_end = self.panel_list_end(usable_h);
-        let (x, width) = if self.is_horizontal_tabs() {
-            (8, SidebarRects::WIDTH - 16)
-        } else {
-            (
-                SidebarRects::PAD_X,
-                SidebarRects::WIDTH - SidebarRects::PAD_X - 8,
-            )
-        };
-        let top = crate::renderer::PanelChangesRects::top(list_end);
-        let bottom = SidebarRects::content_bottom(usable_h);
-        let changes = self.panel_changes();
-        let rows = crate::renderer::PanelChangesRects::shown_rows(bottom, top, changes.len());
-        let i = crate::renderer::PanelChangesRects::row_at(mx, my, x, top, width, rows)?;
-        changes.get(i).map(|c| c.path.clone())
     }
 
     /// Carpeta donde abre una sesión nueva: la raíz del proyecto a la vista, si es una carpeta.
@@ -287,7 +288,7 @@ impl AxonApp {
                 }
             }
             Membership::Loose => TopBarProject {
-                title: "Sueltas".to_string(),
+                title: "Sesiones".to_string(),
                 initial: '·',
                 color_slot: 7,
                 is_loose: true,
@@ -371,9 +372,13 @@ impl AxonApp {
     /// Menú de las filas del panel de proyectos (modo de pestañas superiores).
     pub(super) fn row_menu(&self, my: usize, usable_h: usize) -> Vec<MenuItem> {
         let rail = self.panel_rail();
-        let hit =
-            ProjectsPanelRects::row_at(my, usable_h, rail.len() + 1, self.sidebar_scroll_offset)
-                .and_then(|i| rail.get(i).copied());
+        let hit = ProjectsPanelRects::row_at(
+            my,
+            usable_h,
+            self.panel_row_count(),
+            self.sidebar_scroll_offset,
+        )
+        .and_then(|i| rail.get(i).copied());
         self.project_menu(hit)
     }
 
@@ -402,7 +407,7 @@ impl AxonApp {
         }
     }
 
-    fn request_redraw(&self) {
+    pub(super) fn request_redraw(&self) {
         if let Some(w) = &self.window {
             w.request_redraw();
         }

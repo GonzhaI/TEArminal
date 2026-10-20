@@ -109,6 +109,22 @@ impl TerminalRenderer {
         self.measure_ui_text_tracked(text, size_px, semibold, 0.0)
     }
 
+    /// `text` recortado con «…» para que quepa en `max_w` px (sin cambios si ya cabe).
+    pub fn fit_ui_text(&self, text: &str, max_w: usize, size_px: f32, semibold: bool) -> String {
+        if self.measure_ui_text(text, size_px, semibold) <= max_w {
+            return text.to_string();
+        }
+        let mut out: String = text.to_string();
+        while !out.is_empty() {
+            out.pop();
+            let candidate = format!("{}…", out.trim_end());
+            if self.measure_ui_text(&candidate, size_px, semibold) <= max_w {
+                return candidate;
+            }
+        }
+        String::new()
+    }
+
     /// Mide texto con tracking adicional entre caracteres (micro-etiquetas en mayúsculas).
     pub fn measure_ui_text_tracked(
         &self,

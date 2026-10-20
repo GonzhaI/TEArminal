@@ -5,7 +5,7 @@
 //! y los manejadores del ratón restan `panel_x`.
 
 use super::*;
-use crate::renderer::{PanelChangesRects, ProjectsPanelRects, Rect, SidebarRects};
+use crate::renderer::{ProjectsPanelRects, Rect, SidebarRects};
 
 impl AxonApp {
     pub(super) fn panel_on_right(&self) -> bool {
@@ -67,7 +67,7 @@ impl AxonApp {
     /// visible la lista cede espacio.
     pub(super) fn panel_list_end(&self, usable_h: usize) -> usize {
         if self.is_horizontal_tabs() {
-            ProjectsPanelRects::rows_end(usable_h, self.panel_rail().len() + 1)
+            ProjectsPanelRects::rows_end(usable_h, self.panel_row_count())
         } else {
             SidebarRects::list_end(
                 usable_h,
@@ -81,7 +81,7 @@ impl AxonApp {
     pub(super) fn panel_scroll_extent(&self, usable_h: usize) -> (usize, usize) {
         if self.is_horizontal_tabs() {
             (
-                self.panel_rail().len() + 1,
+                self.panel_row_count(),
                 ProjectsPanelRects::visible_rows(usable_h),
             )
         } else {
@@ -92,26 +92,15 @@ impl AxonApp {
         }
     }
 
-    /// Filas de la sección «Cambios» que caben en el panel (0 si no hay cambios o no hay explorador).
-    pub(super) fn panel_change_rows(&self, usable_h: usize) -> usize {
-        if !self.file_explorer.visible {
-            return 0;
-        }
-        let top = PanelChangesRects::top(self.panel_list_end(usable_h));
-        let bottom = SidebarRects::content_bottom(usable_h);
-        PanelChangesRects::shown_rows(bottom, top, self.panel_changes().len())
-    }
-
     /// Coloca el explorador: dentro del panel en vertical y acoplado al borde derecho en los demás casos.
     pub(super) fn sync_explorer_dock(&mut self, win_w: usize, win_h: usize) {
         self.file_explorer.dock = if self.panel_shown() && self.file_explorer.visible {
             let usable_h = win_h.saturating_sub(self.status_bar_height());
             let list_end = self.panel_list_end(usable_h);
-            let changes = self.panel_change_rows(usable_h);
             let (x, y, w, h) = if self.is_horizontal_tabs() {
-                ProjectsPanelRects::explorer_rect_after(usable_h, list_end, changes)
+                ProjectsPanelRects::explorer_rect_after(usable_h, list_end)
             } else {
-                SidebarRects::explorer_rect_after(usable_h, list_end, changes)
+                SidebarRects::explorer_rect_after(usable_h, list_end)
             };
             Some((self.panel_x(win_w) + x, y, w, h))
         } else {

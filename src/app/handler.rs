@@ -552,6 +552,24 @@ impl AxonApp {
             );
         }
 
+        // Modelo y consumo de IA de la barra de estado: se reescanean solos mientras hay un agente
+        // en la pestaña activa (si no, solo se actualizaban al pasar el ratón por el badge)
+        if self.is_focused && !self.occluded && self.config.appearance.show_status_bar {
+            let tab = &self.tabs[self.active_tab_index];
+            let agents = if tab.file_viewer.is_some() {
+                Vec::new()
+            } else {
+                super::ai_usage::active_agents(tab)
+            };
+            if !agents.is_empty() {
+                let (due, next) = self.ai_usage.periodic_scan(now);
+                if due {
+                    self.spawn_ai_local_scan(agents);
+                }
+                earliest(&mut wake, next);
+            }
+        }
+
         if has_more_pty_data {
             earliest(&mut wake, now);
         }

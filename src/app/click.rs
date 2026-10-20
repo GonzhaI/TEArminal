@@ -18,6 +18,11 @@ impl AxonApp {
         let offset = self.sidebar_offset();
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
+        // Diálogo modal abierto: es lo único que atiende el ratón
+        if self.dialog_click(mx, my, (win_w, win_h), state, button) {
+            return;
+        }
+
         // Menú contextual abierto: un clic sobre una opción la ejecuta; cualquier otro clic lo cierra
         if let Some(menu) = &self.context_menu {
             if state != ElementState::Pressed {
@@ -272,14 +277,11 @@ impl AxonApp {
                             return;
                         }
                         if button == MouseButton::Left {
-                            if list.len() > 1 {
-                                let cr = top_rects.close_btn_rect(pos);
-                                if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3
-                                {
-                                    crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
-                                    self.close_tab(idx);
-                                    return;
-                                }
+                            let cr = top_rects.close_btn_rect(pos);
+                            if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
+                                crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
+                                self.close_tab(idx);
+                                return;
                             }
                             crate::logger::log(&format!("-> Clic en pestaña {}", idx));
                             self.click_tab(idx);
@@ -361,26 +363,20 @@ impl AxonApp {
         }
 
         // Modalidad horizontal: panel de proyectos (el explorador alojado dentro atiende su propio ratón)
-        if self.is_horizontal_tabs() {
-            if let Some(lx) = self.panel_local_x(mx, my, win_w) {
-                if state == ElementState::Pressed && button == MouseButton::Left {
-                    let usable_h = win_h.saturating_sub(self.status_bar_height());
-                    if let Some(path) = self.panel_change_at(lx, my, usable_h) {
-                        self.open_file_in_viewer(&path, false);
-                        return;
-                    }
-                    let entries = self.panel_rail().len() + 1;
-                    if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
-                        my,
-                        usable_h,
-                        entries,
-                        self.sidebar_scroll_offset,
-                    ) {
-                        self.click_rail(i);
-                    }
+        if self.is_horizontal_tabs() && self.panel_local_x(mx, my, win_w).is_some() {
+            if state == ElementState::Pressed && button == MouseButton::Left {
+                let usable_h = win_h.saturating_sub(self.status_bar_height());
+                let entries = self.panel_row_count();
+                if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
+                    my,
+                    usable_h,
+                    entries,
+                    self.sidebar_scroll_offset,
+                ) {
+                    self.click_panel_row(i);
                 }
-                return;
             }
+            return;
         }
 
         // Modalidad vertical: comprobación de botones de alternar barra lateral y clics en el sidebar
@@ -418,13 +414,6 @@ impl AxonApp {
                 if state == ElementState::Pressed
                     && (button == MouseButton::Left || button == MouseButton::Middle)
                 {
-                    // Fila de la sección «Cambios»: abre el archivo en el visor
-                    if button == MouseButton::Left {
-                        if let Some(path) = self.panel_change_at(mx, my, usable_h) {
-                            self.open_file_in_viewer(&path, false);
-                            return;
-                        }
-                    }
                     // Riel de proyectos: abrir uno o agregar el último cuadrado
                     if mx < crate::renderer::SidebarRects::RAIL_W {
                         let count = self.panel_rail().len() + 1;
@@ -840,6 +829,25 @@ impl AxonApp {
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
                 if state == ElementState::Pressed && button == MouseButton::Left {
+                    // Pestañas «Archivos» · «Cambios»
+                    let tabs = crate::renderer::ExplorerTabsRects::compute(
+                        panel_x,
+                        panel_y,
+                        panel_w,
+                        crate::explorer::FileExplorer::HEADER_HEIGHT,
+                    );
+                    if let Some(changes) = tabs.tab_at(mx, my) {
+                        self.file_explorer.is_focused = true;
+                        if changes != self.file_explorer.changes_only {
+                            self.file_explorer.toggle_changes_only();
+                        }
+                        self.last_explorer_click_idx = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+
                     // Clic en la barra de desplazamiento del explorador de archivos
                     if let Some((track, thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
                         win_w,
@@ -848,12 +856,12 @@ impl AxonApp {
                         status_bar_h,
                         &self.file_explorer,
                     ) {
-                        let hit_x = track.0.saturating_sub(4);
-                        if mx >= hit_x
-                            && mx < panel_x + panel_w
-                            && my >= track.1
-                            && my < track.1 + track.3
-                        {
+                        if TerminalRenderer::explorer_scrollbar_hit(
+                            track,
+                            panel_x + panel_w,
+                            mx,
+                            my,
+                        ) {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.explorer_scrollbar_dragging = true;
                                 self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;

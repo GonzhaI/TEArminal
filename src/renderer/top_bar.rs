@@ -158,14 +158,21 @@ impl TerminalRenderer {
                 true,
             );
         }
+        // El nombre se recorta con «…» antes del chevron, que ocupa los últimos 28 px del chip.
+        let title = self.fit_ui_text(
+            &project.title,
+            w.saturating_sub(37 + 28),
+            tokens::TITLE,
+            true,
+        );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            &project.title,
+            &title,
             x + 37,
             y + h / 2 + 4,
-            x + w - 20,
+            x + w - 24,
             theme.foreground,
             tokens::TITLE,
             true,
@@ -416,7 +423,7 @@ impl TerminalRenderer {
                 );
             }
 
-            let show_close = rects.tab_w >= 76 && tabs.len() > 1 && (tab.is_active || is_hovered);
+            let show_close = rects.tab_w >= 76 && (tab.is_active || is_hovered);
 
             if !compact {
                 let text_color = if tab.is_active {

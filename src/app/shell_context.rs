@@ -35,6 +35,16 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
     None
 }
 
+/// Raíz del repositorio git que contiene `start` (sube como mucho 12 niveles; `.git` puede ser
+/// carpeta o archivo, como en los worktrees).
+pub(super) fn git_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    start
+        .ancestors()
+        .take(12)
+        .find(|dir| dir.join(".git").exists())
+        .map(std::path::Path::to_path_buf)
+}
+
 pub(super) fn shorten_home(path: &std::path::Path) -> String {
     static HOME: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     let home = HOME.get_or_init(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));
@@ -44,7 +54,7 @@ pub(super) fn shorten_home(path: &std::path::Path) -> String {
             return if rel_str.is_empty() {
                 "~".to_string()
             } else {
-                format!("~\\{}", rel_str)
+                format!("~\\{}", rel_str.replace('/', "\\"))
             };
         }
         let s = path.to_string_lossy();
@@ -53,14 +63,22 @@ pub(super) fn shorten_home(path: &std::path::Path) -> String {
             let rest = &s[h.len()..];
             return if rest.is_empty() {
                 "~".to_string()
-            } else if rest.starts_with('\\') || rest.starts_with('/') {
-                format!("~{rest}")
             } else {
-                format!("~\\{rest}")
+                // OSC 7 entrega el cwd con `/`: la barra de estado usa `\` en todo el trayecto.
+                format!(
+                    "~\\{}",
+                    rest.trim_start_matches(['\\', '/']).replace('/', "\\")
+                )
             };
         }
     }
-    path.to_string_lossy().into_owned()
+    let s = path.to_string_lossy();
+    // Solo rutas de unidad de Windows; las remotas (SSH) son POSIX y conservan `/`.
+    if s.as_bytes().get(1) == Some(&b':') {
+        s.replace('/', "\\")
+    } else {
+        s.into_owned()
+    }
 }
 
 pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {

@@ -59,7 +59,7 @@ impl TopTabBarRects {
     /// La marca ocupa el extremo izquierdo; las pestañas empiezan después.
     pub const BRAND_W: usize = 88;
     /// Selector de proyecto de la barra de pestañas; las pestañas empiezan después.
-    pub const SWITCHER_W: usize = 126;
+    pub const SWITCHER_W: usize = 150;
     pub const TAB_GAP: usize = 3;
     pub const CLOSE_W: usize = 24;
     pub const PLUS_W: usize = 28;
@@ -668,6 +668,12 @@ impl SidebarRects {
     pub const RAIL_ITEM: usize = 40;
     pub const RAIL_STEP: usize = 50;
     pub const TOP: usize = 38;
+    /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`ui::frame_card`).
+    pub const CARD_INSET: usize = 6;
+    pub const CARD_RADIUS: usize = 10;
+    /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire
+    /// dentro de la tarjeta y alinea los bordes de todas las secciones.
+    pub const PAD_R: usize = 20;
     /// Nombre del proyecto, rama y carpeta.
     pub const HEADER_H: usize = 66;
     /// Y de la primera fila.
@@ -723,13 +729,9 @@ impl SidebarRects {
         Self::LIST_START_Y + rows.clamp(1, cap_rows) * stride
     }
 
-    /// Rectángulo del explorador alojado bajo la lista y la sección «Cambios» (`change_rows` filas).
-    pub fn explorer_rect_after(usable_h: usize, list_end: usize, change_rows: usize) -> Rect {
-        let top = if change_rows == 0 {
-            list_end + 8
-        } else {
-            PanelChangesRects::top(list_end) + PanelChangesRects::height(change_rows) + 8
-        };
+    /// Rectángulo del explorador alojado bajo la lista de sesiones.
+    pub fn explorer_rect_after(usable_h: usize, list_end: usize) -> Rect {
+        let top = list_end + 8;
         let bottom = Self::content_bottom(usable_h);
         (
             Self::RAIL_W,
@@ -863,13 +865,9 @@ impl ProjectsPanelRects {
         (rel % Self::ROW_STEP < Self::ROW_H && slot < shown).then_some(scroll + slot)
     }
 
-    /// Rectángulo del explorador alojado bajo los proyectos y la sección «Cambios».
-    pub fn explorer_rect_after(usable_h: usize, rows_end: usize, change_rows: usize) -> Rect {
-        let top = if change_rows == 0 {
-            rows_end + 8
-        } else {
-            PanelChangesRects::top(rows_end) + PanelChangesRects::height(change_rows) + 8
-        };
+    /// Rectángulo del explorador alojado bajo los proyectos.
+    pub fn explorer_rect_after(usable_h: usize, rows_end: usize) -> Rect {
+        let top = rows_end + 8;
         let bottom = SidebarRects::content_bottom(usable_h);
         (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
     }
@@ -1086,65 +1084,91 @@ impl SettingsPageRects {
     }
 }
 
-/// Geometría de la sección «Cambios» del panel lateral: cabecera con contador y filas de archivos.
-/// Es local al panel (igual que `SidebarRects`) y la comparten dibujo, clic y hover.
-pub struct PanelChangesRects;
+/// Pestañas «Archivos» · «Cambios» que encabezan el explorador: dos mitades iguales con el margen
+/// de la tarjeta del panel. La comparten dibujo, clic y hover.
+#[derive(Debug, Clone, Copy)]
+pub struct ExplorerTabsRects {
+    pub files: Rect,
+    pub changes: Rect,
+}
 
-impl PanelChangesRects {
-    pub const HEADER_H: usize = 30;
-    pub const ROW_H: usize = 26;
-    /// Aire entre el fin de la lista de sesiones y la sección.
-    pub const GAP: usize = 4;
-    pub const MAX_ROWS: usize = 6;
-    /// Alto que se reserva bajo la sección para la cabecera y dos filas de «Archivos».
-    const TREE_RESERVE: usize = 110;
-
-    /// Y donde empieza la sección, justo bajo la lista de sesiones o de proyectos.
-    #[inline]
-    pub fn top(list_end: usize) -> usize {
-        list_end + Self::GAP
+impl ExplorerTabsRects {
+    pub fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
+        let inner = panel_w.saturating_sub(16);
+        let half = inner / 2;
+        Self {
+            files: (panel_x + 8, panel_y, half, header_h),
+            changes: (panel_x + 8 + half, panel_y, inner - half, header_h),
+        }
     }
 
-    /// Filas de cambios que caben entre `top` y `bottom`, sin dejar el árbol de archivos sin sitio.
-    pub fn shown_rows(bottom: usize, top: usize, total: usize) -> usize {
-        if total == 0 || bottom <= top {
-            return 0;
-        }
-        let available = bottom - top;
-        let min = Self::HEADER_H + Self::ROW_H + Self::TREE_RESERVE;
-        if available < min {
-            return 0;
-        }
-        total
-            .min((available - Self::HEADER_H - Self::TREE_RESERVE) / Self::ROW_H)
-            .min(Self::MAX_ROWS)
-    }
-
-    /// Alto de la sección para `rows` filas; 0 si no se muestra.
-    #[inline]
-    pub fn height(rows: usize) -> usize {
-        if rows == 0 {
-            0
+    /// `Some(true)` sobre «Cambios», `Some(false)` sobre «Archivos».
+    pub fn tab_at(&self, mx: usize, my: usize) -> Option<bool> {
+        let inside = |r: Rect| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3;
+        if inside(self.files) {
+            Some(false)
+        } else if inside(self.changes) {
+            Some(true)
         } else {
-            Self::HEADER_H + rows * Self::ROW_H
+            None
+        }
+    }
+}
+
+/// Botones del diálogo modal (`app::Dialog`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogButton {
+    Cancel,
+    Accept,
+}
+
+/// Geometría del diálogo modal: panel centrado y sus dos botones. La comparten dibujo, clic y hover.
+#[derive(Debug, Clone, Copy)]
+pub struct DialogRects {
+    pub panel: Rect,
+    pub cancel: Rect,
+    pub accept: Rect,
+}
+
+impl DialogRects {
+    pub const W: usize = 400;
+    pub const H: usize = 176;
+    pub const PAD: usize = 22;
+    pub const BTN_W: usize = 104;
+    pub const BTN_H: usize = 34;
+    const BTN_GAP: usize = 10;
+
+    pub fn compute(win_w: usize, win_h: usize) -> Self {
+        let w = Self::W.min(win_w.saturating_sub(32));
+        let x = win_w.saturating_sub(w) / 2;
+        let y = win_h.saturating_sub(Self::H) / 2;
+        let by = y + Self::H - Self::PAD - Self::BTN_H;
+        let accept_x = (x + w).saturating_sub(Self::PAD + Self::BTN_W);
+        Self {
+            panel: (x, y, w, Self::H),
+            cancel: (
+                accept_x.saturating_sub(Self::BTN_GAP + Self::BTN_W),
+                by,
+                Self::BTN_W,
+                Self::BTN_H,
+            ),
+            accept: (accept_x, by, Self::BTN_W, Self::BTN_H),
         }
     }
 
-    #[inline]
-    pub fn row_rect(x: usize, top: usize, w: usize, i: usize) -> Rect {
-        (x, top + Self::HEADER_H + i * Self::ROW_H, w, Self::ROW_H)
+    pub fn button_at(&self, mx: usize, my: usize) -> Option<DialogButton> {
+        let inside = |r: Rect| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3;
+        if inside(self.accept) {
+            Some(DialogButton::Accept)
+        } else if inside(self.cancel) {
+            Some(DialogButton::Cancel)
+        } else {
+            None
+        }
     }
 
-    /// Fila `i` (0..rows) bajo `(mx, my)`.
-    pub fn row_at(
-        mx: usize,
-        my: usize,
-        x: usize,
-        top: usize,
-        w: usize,
-        rows: usize,
-    ) -> Option<usize> {
-        let i = my.checked_sub(top + Self::HEADER_H)? / Self::ROW_H;
-        (i < rows && mx >= x && mx < x + w).then_some(i)
+    pub fn contains(&self, mx: usize, my: usize) -> bool {
+        let (x, y, w, h) = self.panel;
+        mx >= x && mx < x + w && my >= y && my < y + h
     }
 }

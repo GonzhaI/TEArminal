@@ -286,6 +286,11 @@ impl AxonApp {
             }
         }
 
+        // Con un diálogo modal abierto solo se resaltan sus botones
+        if self.dialog_hover(mx, my, (win_w, win_h)) {
+            return;
+        }
+
         // Con el menú contextual abierto solo se resalta su opción bajo el ratón
         if let Some(menu) = &mut self.context_menu {
             let hovered = menu.item_at(mx, my);
@@ -367,11 +372,9 @@ impl AxonApp {
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         new_hovered_tab = Some(idx);
                         is_pointer = true;
-                        if list.len() > 1 {
-                            let cr = top_rects.close_btn_rect(pos);
-                            if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
-                                new_hovered_close = Some(idx);
-                            }
+                        let cr = top_rects.close_btn_rect(pos);
+                        if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
+                            new_hovered_close = Some(idx);
                         }
                         break;
                     }
@@ -571,14 +574,14 @@ impl AxonApp {
         if self.is_horizontal_tabs() {
             let usable_h = win_h.saturating_sub(self.status_bar_height());
             let mut new_row = None;
-            if let Some(lx) = self.panel_local_x(mx, my, win_w) {
+            if self.panel_local_x(mx, my, win_w).is_some() {
                 new_row = crate::renderer::ProjectsPanelRects::row_at(
                     my,
                     usable_h,
-                    self.panel_rail().len() + 1,
+                    self.panel_row_count(),
                     self.sidebar_scroll_offset,
                 );
-                is_pointer |= new_row.is_some() || self.panel_change_at(lx, my, usable_h).is_some();
+                is_pointer |= new_row.is_some();
             }
             if self.hovered_project != new_row {
                 self.hovered_project = new_row;
@@ -827,13 +830,22 @@ impl AxonApp {
                         status_bar_h,
                         &self.file_explorer,
                     ) {
-                    mx >= track.0
-                        && mx < track.0 + track.2
-                        && my >= track.1
-                        && my < track.1 + track.3
+                    TerminalRenderer::explorer_scrollbar_hit(track, panel_x + panel_w, mx, my)
                 } else {
                     false
                 };
+                let hovered_tab = crate::renderer::ExplorerTabsRects::compute(
+                    panel_x,
+                    panel_y,
+                    panel_w,
+                    crate::explorer::FileExplorer::HEADER_HEIGHT,
+                )
+                .tab_at(mx, my);
+                if self.file_explorer.hovered_tab != hovered_tab {
+                    self.file_explorer.hovered_tab = hovered_tab;
+                    needs_redraw = true;
+                }
+                is_pointer |= is_over_scrollbar || hovered_tab.is_some();
 
                 let item_hover = if is_over_scrollbar {
                     None
@@ -854,9 +866,11 @@ impl AxonApp {
                 }
             } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
+                || self.file_explorer.hovered_tab.is_some()
             {
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
+                self.file_explorer.hovered_tab = None;
                 needs_redraw = true;
             }
         }

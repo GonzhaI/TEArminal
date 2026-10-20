@@ -1132,28 +1132,16 @@ fn preview_ui_scenes() {
             is_loose: false,
         },
     ];
-    let changes: Vec<crate::renderer::SidebarChange> =
-        ["theme.rs", "config.rs", "tokens.rs", "README.md"]
-            .iter()
-            .map(|name| crate::renderer::SidebarChange {
-                name: (*name).to_string(),
-                path: std::path::PathBuf::from("src/renderer").join(name),
-                status: crate::explorer::GitFileStatus::Modified,
-            })
-            .collect();
     let header = crate::renderer::SidebarHeader {
         title: "axon".into(),
         branch: Some("main".into()),
         path: Some("C:\\Users\\dev\\axon".into()),
         on_right: false,
         list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, false),
-        explorer_visible: false,
-        changes: Vec::new(),
+        suggestion: None,
     };
     let header_exp = crate::renderer::SidebarHeader {
         list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, true),
-        explorer_visible: true,
-        changes: changes.clone(),
         ..header.clone()
     };
 
@@ -1261,8 +1249,6 @@ fn preview_ui_scenes() {
     let h_header = crate::renderer::SidebarHeader {
         on_right: true,
         list_end: rows_end,
-        explorer_visible: true,
-        changes: changes.clone(),
         ..Default::default()
     };
     let mut buf = vec![0u32; w * h];
@@ -1308,13 +1294,7 @@ fn preview_ui_scenes() {
     }
     let mut h_explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
-    let h_change_rows = crate::renderer::PanelChangesRects::shown_rows(
-        crate::renderer::SidebarRects::content_bottom(usable_h),
-        crate::renderer::PanelChangesRects::top(rows_end),
-        h_header.changes.len(),
-    );
-    let er =
-        crate::renderer::ProjectsPanelRects::explorer_rect_after(usable_h, rows_end, h_change_rows);
+    let er = crate::renderer::ProjectsPanelRects::explorer_rect_after(usable_h, rows_end);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
     r.render_pane(
         &mut buf,
@@ -1371,15 +1351,9 @@ fn preview_ui_scenes() {
     let mut explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
     explorer.is_focused = true;
-    let change_rows = crate::renderer::PanelChangesRects::shown_rows(
-        crate::renderer::SidebarRects::content_bottom(h - status_h),
-        crate::renderer::PanelChangesRects::top(header_exp.list_end),
-        header_exp.changes.len(),
-    );
     explorer.dock = Some(crate::renderer::SidebarRects::explorer_rect_after(
         h - status_h,
         header_exp.list_end,
-        change_rows,
     ));
     let explorer_w = 0;
     let mut buf = vec![0u32; w * h];
@@ -1631,19 +1605,9 @@ fn preview_ui_scenes() {
     }
     explorer.dock = Some((
         x0 + crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect_after(
-            h - status_h,
-            header_exp.list_end,
-            change_rows,
-        )
-        .1,
+        crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).1,
         SIDEBAR_WIDTH - crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect_after(
-            h - status_h,
-            header_exp.list_end,
-            change_rows,
-        )
-        .3,
+        crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).3,
     ));
     r.render_pane(
         &mut buf,
@@ -2395,4 +2359,173 @@ fn test_composer_only_at_prompt() {
     assert!(layout(&term).is_some(), "de vuelta en el prompt reaparece");
     term.process_bytes(b"\x1b[?1049h");
     assert!(layout(&term).is_none(), "pantalla alterna (TUI): nada");
+}
+
+#[test]
+fn test_dialog_geometry_hit_testing() {
+    use crate::renderer::{DialogButton, DialogRects};
+    let r = DialogRects::compute(1000, 700);
+    let (px, py, pw, ph) = r.panel;
+    assert_eq!((px * 2 + pw, py * 2 + ph), (1000, 700), "centrado");
+    let center = |(x, y, w, h): crate::renderer::Rect| (x + w / 2, y + h / 2);
+    let (ax, ay) = center(r.accept);
+    let (cx, cy) = center(r.cancel);
+    assert_eq!(r.button_at(ax, ay), Some(DialogButton::Accept));
+    assert_eq!(r.button_at(cx, cy), Some(DialogButton::Cancel));
+    assert!(
+        r.cancel.0 + r.cancel.2 < r.accept.0,
+        "los botones no se solapan"
+    );
+    assert_eq!(r.button_at(px + 4, py + 4), None);
+    assert!(r.contains(px + 4, py + 4) && !r.contains(px.saturating_sub(1), py));
+    // En ventanas estrechas el panel se encoge y los botones siguen dentro de él
+    let narrow = DialogRects::compute(300, 400);
+    assert!(
+        narrow.panel.2 <= 268
+            && narrow.accept.0 + narrow.accept.2 <= narrow.panel.0 + narrow.panel.2
+    );
+}
+
+/// Previsualización manual del panel superior (marco, sugerencia, selección en «Cambios») y del modal:
+/// `cargo test preview_panel_card -- --ignored --nocapture` deja PNG en `%TEMP%/axon-preview`.
+#[test]
+#[ignore]
+fn preview_panel_card() {
+    use crate::app::{Dialog, DialogAction, SIDEBAR_WIDTH};
+    use crate::renderer::{SidebarHeader, SidebarProject, SidebarRects};
+    use crate::theme::Theme;
+
+    let cfg = AxonConfig::default();
+    let theme = Theme::default();
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (900usize, 560usize);
+    let status_h = crate::renderer::StatusBarRects::BAR_H;
+    let out = std::env::var_os("AXON_PREVIEW_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
+    std::fs::create_dir_all(&out).unwrap();
+    let save = |buf: &[u32], name: &str| {
+        let rgb: Vec<u8> = buf
+            .iter()
+            .flat_map(|px| [(px >> 16) as u8, (px >> 8) as u8, *px as u8])
+            .collect();
+        image::RgbImage::from_raw(w as u32, h as u32, rgb)
+            .unwrap()
+            .save(out.join(name))
+            .unwrap();
+    };
+
+    let projects = vec![SidebarProject {
+        name: "Sesiones".into(),
+        branch: None,
+        status: Some(crate::renderer::SessionStatus::Idle),
+        initial: 'S',
+        color_slot: 4,
+        is_active: true,
+        has_news: false,
+        is_loose: true,
+    }];
+    let header = SidebarHeader {
+        title: "Sesiones".into(),
+        list_end: crate::renderer::ProjectsPanelRects::rows_end(h - status_h, 3),
+        suggestion: Some("axon".into()),
+        ..Default::default()
+    };
+
+    let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
+    r.render_projects_panel(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &projects,
+        &header,
+        Some(1),
+        0,
+        false,
+        &theme,
+    );
+    let mut explorer =
+        crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
+    explorer.is_focused = true;
+    explorer.dock = Some(crate::renderer::ProjectsPanelRects::explorer_rect_after(
+        h - status_h,
+        header.list_end,
+    ));
+    r.scrollbars_awake = true;
+    let mut changes_buf = buf.clone();
+    r.render_file_explorer(
+        &mut buf,
+        w,
+        h,
+        SidebarRects::TOP,
+        status_h,
+        &explorer,
+        &theme,
+    );
+    explorer.toggle_changes_only();
+    explorer.hovered_tab = Some(true);
+    r.render_file_explorer(
+        &mut changes_buf,
+        w,
+        h,
+        SidebarRects::TOP,
+        status_h,
+        &explorer,
+        &theme,
+    );
+    let region = (
+        0,
+        SidebarRects::TOP,
+        SIDEBAR_WIDTH,
+        h - status_h - SidebarRects::TOP,
+    );
+    for frame in [&mut buf, &mut changes_buf] {
+        crate::ui::frame_card(
+            frame,
+            w,
+            h,
+            region,
+            SidebarRects::CARD_INSET,
+            SidebarRects::CARD_RADIUS,
+            theme.bar_bg(),
+        );
+    }
+    save(&changes_buf, "panel-changes.png");
+    save(&buf, "panel-card.png");
+
+    let dialog = Dialog::confirm(
+        "Agregar proyecto",
+        r"Se agregará ~\GitHub\axon a tus proyectos. Las sesiones que abras dentro de esa carpeta se agruparán bajo «axon».".into(),
+        "Agregar",
+        DialogAction::AddProject(std::path::PathBuf::from("axon")),
+    );
+    r.render_dialog(&mut buf, w, h, &dialog, &theme);
+    save(&buf, "dialog.png");
+    // Visor en modo «Cambios» (diff) de un archivo modificado del repositorio
+    {
+        let path = std::env::current_dir().unwrap().join("src/app/click.rs");
+        let mut viewer = crate::app::TerminalTab::new_file_viewer(1, path.clone())
+            .file_viewer
+            .unwrap();
+        viewer.git_base = crate::explorer::git_head_lines(&path);
+        viewer.toggle_diff();
+        let mut diff_buf = vec![theme.background.to_u32_xrgb(); w * h];
+        r.render_file_viewer(
+            &mut diff_buf,
+            w,
+            h,
+            0,
+            0,
+            w,
+            h - status_h,
+            0,
+            true,
+            &viewer,
+            &theme,
+        );
+        save(&diff_buf, "viewer-diff.png");
+    }
+    println!("PNG en {}", out.display());
 }

@@ -67,27 +67,27 @@ impl TerminalRenderer {
             true,
         );
         let count = entries.iter().filter(|p| !p.is_loose).count().to_string();
-        let count_w = self.measure_mono_text(&count, tokens::MICRO, false) + 14;
-        let badge_x = panel_w.saturating_sub(count_w + 12);
+        let cw = self.measure_mono_text(&count, tokens::MICRO, false);
+        let count_w = (cw + 16).max(22);
+        let badge_x = panel_w.saturating_sub(count_w + SidebarRects::PAD_R);
         crate::ui::draw_rounded_rect(
             buffer,
             width,
             height,
             badge_x,
-            header_cy.saturating_sub(9),
+            header_cy.saturating_sub(10),
             count_w,
-            18,
-            9,
-            theme.surface_bg(),
+            20,
+            10,
+            theme.background,
         );
-        let cw = self.measure_mono_text(&count, tokens::MICRO, false);
         self.draw_mono_text(
             buffer,
             width,
             height,
             &count,
             badge_x + (count_w.saturating_sub(cw)) / 2,
-            header_cy + 4,
+            header_cy + 5,
             badge_x + count_w,
             theme.text_secondary(),
             tokens::MICRO,
@@ -95,13 +95,23 @@ impl TerminalRenderer {
         );
 
         // 3. Filas: cada proyecto y, al final, «Agregar proyecto».
-        let total = entries.len() + 1;
+        let total = entries.len() + usize::from(header.suggestion.is_some()) + 1;
         let visible = ProjectsPanelRects::visible_rows(usable_h);
         for (slot, i) in (scroll_offset..total).take(visible).enumerate() {
             let (rx, ry, rw, rh) = ProjectsPanelRects::row_rect(slot);
             let hovered = hovered_row == Some(i);
             let Some(project) = entries.get(i) else {
-                self.draw_add_project_row((rx, ry, rw, rh), hovered, buffer, width, height, theme);
+                // Tras los proyectos: la sugerencia (si hay) y, al final, «Agregar proyecto».
+                let suggestion = header.suggestion.as_deref().filter(|_| i == entries.len());
+                self.draw_add_project_row(
+                    (rx, ry, rw, rh),
+                    hovered,
+                    suggestion,
+                    buffer,
+                    width,
+                    height,
+                    theme,
+                );
                 continue;
             };
             if project.is_active {
@@ -283,34 +293,16 @@ impl TerminalRenderer {
                 );
             }
         }
-
-        // 4. Sección «Cambios» entre los proyectos y el explorador (que dibuja «Archivos»).
-        let changes_top = crate::renderer::PanelChangesRects::top(header.list_end);
-        let change_rows = crate::renderer::PanelChangesRects::shown_rows(
-            SidebarRects::content_bottom(usable_h),
-            changes_top,
-            header.changes.len(),
-        );
-        if header.explorer_visible && change_rows > 0 {
-            self.draw_changes_section(
-                buffer,
-                width,
-                height,
-                8,
-                changes_top,
-                panel_w.saturating_sub(16),
-                &header.changes[..change_rows],
-                header.changes.len(),
-                theme,
-            );
-        }
     }
 
-    /// Última fila de la lista: cuadrado discontinuo con «+» y el texto «Agregar proyecto».
+    /// Fila de agregar: cuadrado con «+» y el texto «Agregar proyecto». Con `suggestion` (el repositorio
+    /// de la sesión a la vista) es la oferta «Agregar "repo"», resaltada con el acento.
+    #[allow(clippy::too_many_arguments)]
     fn draw_add_project_row(
         &mut self,
         row: Rect,
         hovered: bool,
+        suggestion: Option<&str>,
         buffer: &mut [u32],
         width: usize,
         height: usize,
@@ -331,7 +323,7 @@ impl TerminalRenderer {
             );
         }
         let sq = (rx + 10, ry + (rh - 22) / 2, 22, 22);
-        let color = if hovered {
+        let color = if hovered || suggestion.is_some() {
             theme.accent_color()
         } else {
             theme.chrome_line_strong()
@@ -345,27 +337,40 @@ impl TerminalRenderer {
             sq.0 + 11,
             sq.1 + 11,
             13.0,
-            if hovered {
+            if hovered || suggestion.is_some() {
                 theme.accent_color()
             } else {
                 theme.text_muted()
             },
         );
+        let text_x = sq.0 + sq.2 + 12;
+        let label = match suggestion {
+            Some(name) => format!("Agregar «{name}»"),
+            None => "Agregar proyecto".to_string(),
+        };
+        let label = self.fit_ui_text(
+            &label,
+            (rx + rw).saturating_sub(text_x + 12),
+            tokens::TITLE,
+            false,
+        );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Agregar proyecto",
-            sq.0 + sq.2 + 12,
+            &label,
+            text_x,
             ry + rh / 2 + 4,
             rx + rw - 8,
             if hovered {
                 theme.foreground
+            } else if suggestion.is_some() {
+                theme.accent_color()
             } else {
                 theme.text_muted()
             },
             tokens::TITLE,
-            false,
+            suggestion.is_some(),
         );
     }
 }

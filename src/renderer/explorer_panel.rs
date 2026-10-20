@@ -44,45 +44,88 @@ impl TerminalRenderer {
             buffer, width, height, panel_x, panel_y, 1, panel_h, edge_color,
         );
 
-        // 2. Cabecera de sección: icono Lucide y título en caja normal (sin barra de herramientas).
+        // 2. Pestañas «Archivos» · «Cambios»: la activa lleva el acento y una línea de 2 px bajo ella,
+        //    sobre un filete que cruza las dos mitades.
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
-        let header_center_y = panel_y + (header_h / 2);
-
-        self.draw_lucide_icon(
+        let tabs = ExplorerTabsRects::compute(panel_x, panel_y, panel_w, header_h);
+        Self::draw_rect(
             buffer,
             width,
             height,
-            if explorer.changes_only {
-                crate::ui::LucideIcon::GitBranch
-            } else {
-                crate::ui::LucideIcon::Folder
-            },
-            panel_x + 16,
-            header_center_y,
-            14.0,
-            if explorer.changes_only {
+            panel_x + 8,
+            panel_y + header_h - 1,
+            panel_w.saturating_sub(16),
+            1,
+            theme.chrome_line(),
+        );
+        let change_count = explorer.change_count();
+        for (rect, label, active, hovered) in [
+            (
+                tabs.files,
+                "Archivos",
+                !explorer.changes_only,
+                explorer.hovered_tab == Some(false),
+            ),
+            (
+                tabs.changes,
+                "Cambios",
+                explorer.changes_only,
+                explorer.hovered_tab == Some(true),
+            ),
+        ] {
+            let color = if active {
                 theme.accent_color()
+            } else if hovered {
+                theme.foreground
             } else {
                 theme.text_secondary()
-            },
-        );
-
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            if explorer.changes_only {
-                "Cambios"
-            } else {
-                "Archivos"
-            },
-            panel_x + 30,
-            header_center_y + 4,
-            panel_x + panel_w.saturating_sub(12),
-            theme.foreground,
-            tokens::SECTION,
-            true,
-        );
+            };
+            let count = (label == "Cambios" && change_count > 0).then(|| change_count.to_string());
+            let label_w = self.measure_ui_text(label, tokens::TITLE, active);
+            let count_w = count
+                .as_ref()
+                .map_or(0, |c| 6 + self.measure_mono_text(c, tokens::MICRO, false));
+            let x = rect.0 + rect.2.saturating_sub(label_w + count_w) / 2;
+            let baseline = rect.1 + (rect.3 - 1) / 2 + 4;
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                label,
+                x,
+                baseline,
+                rect.0 + rect.2,
+                color,
+                tokens::TITLE,
+                active,
+            );
+            if let Some(count) = count {
+                self.draw_mono_text(
+                    buffer,
+                    width,
+                    height,
+                    &count,
+                    x + label_w + 6,
+                    baseline,
+                    rect.0 + rect.2,
+                    if active { color } else { theme.text_muted() },
+                    tokens::MICRO,
+                    false,
+                );
+            }
+            if active {
+                Self::draw_rect(
+                    buffer,
+                    width,
+                    height,
+                    rect.0,
+                    rect.1 + rect.3 - 2,
+                    rect.2,
+                    2,
+                    theme.accent_color(),
+                );
+            }
+        }
 
         // 3. Lista de elementos (archivos y carpetas), justo bajo la cabecera.
         let list_y = panel_y
@@ -108,17 +151,15 @@ impl TerminalRenderer {
                 width,
                 height,
                 msg,
-                panel_x + 16,
+                panel_x + 24,
                 empty_base,
-                panel_x + panel_w - 16,
+                panel_x + panel_w - 24,
                 color,
                 tokens::DETAIL,
                 false,
             );
             return;
         }
-
-        let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
 
         for (rel_idx, item) in explorer
             .items
@@ -136,63 +177,28 @@ impl TerminalRenderer {
             let is_selected = explorer.selected_index == Some(actual_idx)
                 || explorer.selected_path.as_ref() == Some(&item.path);
 
-            let has_scrollbar = explorer.items.len() > visible_items;
-            let row_w = if has_scrollbar {
-                panel_w.saturating_sub(14)
-            } else {
-                panel_w
-            };
+            let row_w = panel_w;
 
-            if is_selected {
-                Self::draw_rect(
+            if is_selected || is_hovered {
+                Self::draw_list_row_highlight(
                     buffer,
                     width,
                     height,
-                    panel_x,
-                    item_y,
-                    row_w,
-                    item_h,
-                    if explorer.is_focused {
-                        theme.surface_hover()
-                    } else {
-                        theme.surface_bg()
-                    },
-                );
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    panel_x,
-                    item_y,
-                    2,
-                    item_h,
-                    if explorer.is_focused {
-                        theme.accent_color()
-                    } else {
-                        theme.chrome_line_strong()
-                    },
-                );
-            } else if is_hovered {
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    panel_x,
-                    item_y,
-                    row_w,
-                    item_h,
-                    theme.surface_hover(),
+                    (panel_x, item_y, row_w, item_h),
+                    is_selected,
+                    explorer.is_focused,
+                    theme,
                 );
             }
 
             let indent = item.depth * 12;
             let item_center_y = item_y + (item_h / 2);
             let item_base = item_center_y + 4;
-            let content_x = panel_x + 12 + indent;
+            let content_x = panel_x + 16 + indent;
 
             // Insignia de Git si el archivo/carpeta tiene estado
             let badge_w = if item.git_status.is_some() { 16 } else { 0 };
-            let max_name_x = panel_x + row_w.saturating_sub(badge_w + 6);
+            let max_name_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + badge_w + 6);
 
             if item.is_dir {
                 // Directorio: Lucide Chevron + Folder/FolderOpen
@@ -232,14 +238,9 @@ impl TerminalRenderer {
                     },
                 );
 
+                // Con cambios de git, el nombre y la letra llevan el color del estado.
                 let dir_color = if let Some(git) = item.git_status {
-                    match git {
-                        crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
-                        crate::explorer::GitFileStatus::Untracked
-                        | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
-                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1],  // Rojo
-                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6],  // Cian
-                    }
+                    Self::git_status_color(git, theme)
                 } else if is_selected {
                     theme.accent_color()
                 } else if is_hovered {
@@ -286,13 +287,7 @@ impl TerminalRenderer {
                 );
 
                 let text_color = if let Some(git) = item.git_status {
-                    match git {
-                        crate::explorer::GitFileStatus::Modified => theme.ansi[3], // Amarillo
-                        crate::explorer::GitFileStatus::Untracked
-                        | crate::explorer::GitFileStatus::Added => theme.ansi[2], // Verde
-                        crate::explorer::GitFileStatus::Deleted => theme.ansi[1],  // Rojo
-                        crate::explorer::GitFileStatus::Renamed => theme.ansi[6],  // Cian
-                    }
+                    Self::git_status_color(git, theme)
                 } else if is_selected {
                     theme.accent_color()
                 } else if is_hovered {
@@ -316,14 +311,16 @@ impl TerminalRenderer {
 
             // Renderizar insignia de Git a la derecha (M, U, A, D)
             if let Some(git) = item.git_status {
-                let (badge_letter, badge_color) = match git {
-                    crate::explorer::GitFileStatus::Modified => ("M", theme.ansi[3]),
-                    crate::explorer::GitFileStatus::Untracked => ("U", theme.ansi[2]),
-                    crate::explorer::GitFileStatus::Added => ("A", theme.ansi[2]),
-                    crate::explorer::GitFileStatus::Deleted => ("D", theme.ansi[1]),
-                    crate::explorer::GitFileStatus::Renamed => ("R", theme.ansi[6]),
+                let badge_letter = match git {
+                    crate::explorer::GitFileStatus::Modified => "M",
+                    crate::explorer::GitFileStatus::Untracked => "U",
+                    crate::explorer::GitFileStatus::Added => "A",
+                    crate::explorer::GitFileStatus::Deleted => "D",
+                    crate::explorer::GitFileStatus::Renamed => "R",
                 };
-                let badge_x = panel_x + row_w.saturating_sub(14);
+                let badge_color = Self::git_status_color(git, theme);
+                let bw = self.measure_mono_text(badge_letter, tokens::MICRO, true);
+                let badge_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + bw);
                 self.draw_mono_text(
                     buffer,
                     width,
@@ -342,8 +339,8 @@ impl TerminalRenderer {
         // 5. Barra de desplazamiento del explorador si la lista excede el área visible
         let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
         if explorer.items.len() > visible_items && visible_items > 0 {
-            let track_w = 4;
-            let track_x = panel_x + panel_w.saturating_sub(track_w + 4);
+            let track_w = Self::EXPLORER_SCROLLBAR_W;
+            let track_x = Self::explorer_scrollbar_x(panel_x, panel_w);
             let track_y = list_y;
             let track_h = list_max_y.saturating_sub(list_y);
 
@@ -377,6 +374,33 @@ impl TerminalRenderer {
         }
     }
 
+    /// Color de un estado de git: amarillo modificado, verde añadido o sin seguir, rojo borrado y cian
+    /// renombrado. Lo usan el nombre y la letra del explorador (árbol y vista «Cambios»).
+    pub fn git_status_color(status: crate::explorer::GitFileStatus, theme: &Theme) -> Color {
+        use crate::explorer::GitFileStatus::*;
+        match status {
+            Modified => theme.ansi[3],
+            Untracked | Added => theme.ansi[2],
+            Deleted => theme.ansi[1],
+            Renamed => theme.ansi[6],
+        }
+    }
+
+    /// Ancho del carril de la barra del explorador.
+    pub const EXPLORER_SCROLLBAR_W: usize = 8;
+
+    /// X del carril: junto al borde de la tarjeta del panel, con 2 px de aire.
+    pub fn explorer_scrollbar_x(panel_x: usize, panel_w: usize) -> usize {
+        (panel_x + panel_w)
+            .saturating_sub(Self::EXPLORER_SCROLLBAR_W + 2 + SidebarRects::CARD_INSET)
+    }
+
+    /// Zona que responde como barra (clic y hover): el carril, 8 px a su izquierda y el margen del
+    /// panel, para no agarrar por error la fila que queda detrás.
+    pub fn explorer_scrollbar_hit(track: Rect, panel_right: usize, mx: usize, my: usize) -> bool {
+        mx + 8 >= track.0 && mx < panel_right && my >= track.1 && my < track.1 + track.3
+    }
+
     pub fn explorer_scrollbar_geometry(
         width: usize,
         height: usize,
@@ -401,8 +425,8 @@ impl TerminalRenderer {
             return None;
         }
 
-        let track_w = 4;
-        let track_x = panel_x + panel_w.saturating_sub(track_w + 4);
+        let track_w = Self::EXPLORER_SCROLLBAR_W;
+        let track_x = Self::explorer_scrollbar_x(panel_x, panel_w);
         let track_y = list_y;
         let track_h = list_max_y.saturating_sub(list_y);
 

@@ -272,6 +272,19 @@ impl AiUsageState {
         should_scan
     }
 
+    /// Reescaneo en segundo plano mientras hay un agente a la vista (sin esperar al hover del badge):
+    /// devuelve si hay que lanzarlo ahora y cuándo volver a despertar.
+    pub fn periodic_scan(&mut self, now: Instant) -> (bool, Instant) {
+        const POLL: Duration = Duration::from_secs(4);
+        let next = self.last_local_scan.map_or(now, |t| t + POLL);
+        if self.local_scan_in_flight || now < next {
+            return (false, next.max(now));
+        }
+        self.local_scan_in_flight = true;
+        self.last_local_scan = Some(now);
+        (true, now + POLL)
+    }
+
     /// Si toca consultar los límites de Claude (solo con Claude en la pestaña y como mucho 1 vez por minuto)
     pub(super) fn limits_due(&mut self, agents: &[AiAgentStatus]) -> bool {
         let due = agents.contains(&AiAgentStatus::Claude)
@@ -734,6 +747,20 @@ fn scan_agy_transcript(
     scan
 }
 
+/// Modelo que anuncia `/model` en la transcripción de Claude Code: «Set model to `Sonnet 5.5` and
+/// saved…» o «Kept model as `Opus 5.5 (default)`». El sufijo «(default)» no es parte del nombre.
+fn model_from_slash_command(line: &str) -> Option<String> {
+    if !line.contains("local-command-stdout>") {
+        return None;
+    }
+    let (_, after) = line
+        .split_once("Set model to `")
+        .or_else(|| line.split_once("Kept model as `"))?;
+    let name = after.split_once('`')?.0;
+    let name = name.strip_suffix(" (default)").unwrap_or(name).trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
 fn scan_claude_transcript(
     path: &Path,
     now_epoch: u64,
@@ -752,6 +779,12 @@ fn scan_claude_transcript(
     let cutoff_24h = now_epoch.saturating_sub(24 * 3600);
 
     for line in content.lines() {
+        // `/model` queda en la transcripción al instante; el `model` de un mensaje solo llega con la
+        // siguiente respuesta, así que sin esto la barra de estado iría un turno atrasada.
+        if let Some(m) = model_from_slash_command(line) {
+            scan.last_model = Some(m);
+            continue;
+        }
         if !line.contains("\"usage\"") {
             continue;
         }
@@ -1087,6 +1120,36 @@ mod tests {
         assert!(!state.limits_due(&[AiAgentStatus::Agy]));
         assert!(state.limits_due(&[AiAgentStatus::Agy, AiAgentStatus::Claude]));
         assert!(!state.limits_due(&[AiAgentStatus::Claude]), "caché de 60 s");
+    }
+
+    #[test]
+    fn test_model_from_slash_command_reads_model_switch_without_a_new_turn() {
+        let set = r#"{"type":"user","message":{"content":"<local-command-stdout>Set model to `Sonnet 5.5` and saved as your default for new sessions</local-command-stdout>"}}"#;
+        let kept = r#"{"type":"system","content":"<local-command-stdout>Kept model as `Opus 5.5 (default)`</local-command-stdout>"}"#;
+        assert_eq!(model_from_slash_command(set).as_deref(), Some("Sonnet 5.5"));
+        assert_eq!(model_from_slash_command(kept).as_deref(), Some("Opus 5.5"));
+        // Texto normal que menciona la frase no es un `/model`
+        let chat = r#"{"message":{"content":"Set model to `Haiku 5.5`"}}"#;
+        assert_eq!(model_from_slash_command(chat), None);
+
+        // El último `/model` de la transcripción manda sobre la respuesta anterior
+        let path = std::env::temp_dir().join(format!("axon_model_{}.jsonl", std::process::id()));
+        let reply = r#"{"type":"assistant","timestamp":"2026-10-20T17:19:00Z","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":1,"output_tokens":1}}}"#;
+        std::fs::write(&path, format!("{reply}\n{set}\n")).unwrap();
+        let scan = scan_claude_transcript(&path, now_unix_secs(), &mut None);
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(scan.last_model.as_deref(), Some("Sonnet 5.5"));
+    }
+
+    #[test]
+    fn test_periodic_scan_is_throttled_and_never_overlaps() {
+        let mut state = AiUsageState::default();
+        let t0 = Instant::now();
+        assert!(state.periodic_scan(t0).0, "primer escaneo inmediato");
+        assert!(!state.periodic_scan(t0).0, "uno en vuelo");
+        state.local_scan_in_flight = false;
+        assert!(!state.periodic_scan(t0 + Duration::from_secs(1)).0);
+        assert!(state.periodic_scan(t0 + Duration::from_secs(5)).0);
     }
 
     #[test]

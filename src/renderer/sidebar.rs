@@ -438,28 +438,7 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Sección «Cambios» del panel (bajo las sesiones) y, debajo, el explorador con «Archivos».
-        let changes_top = crate::renderer::PanelChangesRects::top(header.list_end);
-        let change_rows = crate::renderer::PanelChangesRects::shown_rows(
-            SidebarRects::content_bottom(usable_h),
-            changes_top,
-            header.changes.len(),
-        );
-        if header.explorer_visible && change_rows > 0 {
-            self.draw_changes_section(
-                buffer,
-                width,
-                height,
-                SidebarRects::PAD_X,
-                changes_top,
-                sidebar_width.saturating_sub(SidebarRects::PAD_X + 8),
-                &header.changes[..change_rows],
-                header.changes.len(),
-                theme,
-            );
-        }
-
-        // 6. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
+        // 5. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
         let btn = SidebarRects::settings_btn_rect(usable_h);
         if hovered_toggle_btn {
             crate::ui::draw_rounded_rect(
@@ -490,123 +469,50 @@ impl TerminalRenderer {
         );
     }
 
-    /// Sección «Cambios»: cabecera con icono, título y contador; una fila por archivo con su insignia.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn draw_changes_section(
-        &mut self,
+    /// Resalte de una fila de lista del panel (Archivos y Cambios): inset de 8 px, esquinas redondeadas
+    /// y, si está seleccionada, una marca de acento (gris cuando la lista no tiene el foco).
+    pub(crate) fn draw_list_row_highlight(
         buffer: &mut [u32],
         width: usize,
         height: usize,
-        x: usize,
-        top: usize,
-        w: usize,
-        changes: &[SidebarChange],
-        total: usize,
+        row: Rect,
+        selected: bool,
+        focused: bool,
         theme: &Theme,
     ) {
-        use crate::explorer::GitFileStatus;
-        use crate::renderer::PanelChangesRects;
-
-        let center_y = top + PanelChangesRects::HEADER_H / 2;
-        self.draw_lucide_icon(
+        let (x, y, w, h) = row;
+        let fill = if selected && !focused {
+            theme.surface_bg()
+        } else {
+            theme.surface_hover()
+        };
+        crate::ui::draw_rounded_rect(
             buffer,
             width,
             height,
-            crate::ui::LucideIcon::GitBranch,
-            x + 16,
-            center_y,
-            13.0,
-            theme.accent_color(),
+            x + 8,
+            y,
+            w.saturating_sub(16),
+            h,
+            6,
+            fill,
         );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            "Cambios",
-            x + 30,
-            center_y + 4,
-            x + w.saturating_sub(40),
-            theme.foreground,
-            tokens::SECTION,
-            true,
-        );
-        if total > 0 {
-            let badge = (x + w.saturating_sub(24), center_y.saturating_sub(9), 24, 18);
+        if selected {
+            let bar = if focused {
+                theme.accent_color()
+            } else {
+                theme.chrome_line_strong()
+            };
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,
                 height,
-                badge.0,
-                badge.1,
-                badge.2,
-                badge.3,
-                9,
-                theme.surface_bg(),
-            );
-            let label = total.to_string();
-            let lw = self.measure_mono_text(&label, tokens::MICRO, false);
-            self.draw_mono_text(
-                buffer,
-                width,
-                height,
-                &label,
-                badge.0 + (badge.2.saturating_sub(lw)) / 2,
-                badge.1 + 13,
-                badge.0 + badge.2,
-                theme.text_secondary(),
-                tokens::MICRO,
-                false,
-            );
-        }
-
-        for (i, change) in changes.iter().enumerate() {
-            let (rx, ry, rw, rh) = PanelChangesRects::row_rect(x, top, w, i);
-            let cy = ry + rh / 2;
-            let ext = change
-                .path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            let (icon, color) = match ext {
-                "rs" => (crate::ui::LucideIcon::FileCode, theme.ansi[1]),
-                "toml" | "json" | "yaml" | "yml" => {
-                    (crate::ui::LucideIcon::FileJson, theme.ansi[3])
-                }
-                "md" | "txt" => (crate::ui::LucideIcon::FileText, theme.ansi[6]),
-                _ => (crate::ui::LucideIcon::File, theme.ansi[8]),
-            };
-            self.draw_lucide_icon(buffer, width, height, icon, rx + 18, cy, 11.5, color);
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                &change.name,
-                rx + 30,
-                cy + 4,
-                rx + rw.saturating_sub(24),
-                theme.text_secondary(),
-                tokens::BODY,
-                false,
-            );
-            let (letter, badge_color) = match change.status {
-                GitFileStatus::Modified => ("M", theme.ansi[3]),
-                GitFileStatus::Untracked => ("U", theme.ansi[2]),
-                GitFileStatus::Added => ("A", theme.ansi[2]),
-                GitFileStatus::Deleted => ("D", theme.ansi[1]),
-                GitFileStatus::Renamed => ("R", theme.ansi[6]),
-            };
-            let bw = self.measure_mono_text(letter, tokens::DETAIL, false);
-            self.draw_mono_text(
-                buffer,
-                width,
-                height,
-                letter,
-                rx + rw.saturating_sub(bw),
-                cy + 4,
-                rx + rw,
-                badge_color,
-                tokens::DETAIL,
-                false,
+                x + 12,
+                y + 6,
+                2,
+                h.saturating_sub(12),
+                1,
+                bar,
             );
         }
     }

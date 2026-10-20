@@ -59,6 +59,31 @@ pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
     )
 }
 
+/// Estado de una carpeta según lo que cambió dentro: si todo es del mismo tipo, ese (verde añadido,
+/// rojo borrado); con una mezcla, o con modificados, amarillo. `None` si no cambió nada.
+pub fn dir_git_status(
+    git_map: &HashMap<PathBuf, GitFileStatus>,
+    dir: &Path,
+) -> Option<GitFileStatus> {
+    let mut found: Option<GitFileStatus> = None;
+    for (path, status) in git_map {
+        if !path.starts_with(dir) {
+            continue;
+        }
+        let kind = match status {
+            GitFileStatus::Untracked | GitFileStatus::Added => GitFileStatus::Added,
+            GitFileStatus::Deleted => GitFileStatus::Deleted,
+            GitFileStatus::Modified | GitFileStatus::Renamed => GitFileStatus::Modified,
+        };
+        match found {
+            None => found = Some(kind),
+            Some(prev) if prev == kind => {}
+            Some(_) => return Some(GitFileStatus::Modified),
+        }
+    }
+    found
+}
+
 /// Ejecuta `git status --porcelain -z` sobre `repo_root` y devuelve el estado por ruta absoluta.
 /// `--no-optional-locks`: sin él `git status` toma `index.lock` para refrescar el índice y hace fallar un
 /// `git add`/`commit` que el usuario o un agente lance a la vez.
@@ -164,6 +189,8 @@ pub struct FileExplorer {
     pub git_root: Option<PathBuf>,
     /// Vista «Cambios»: lista plana solo con los archivos modificados según git
     pub changes_only: bool,
+    /// Pestaña bajo el ratón: `Some(true)` «Cambios», `Some(false)` «Archivos».
+    pub hovered_tab: Option<bool>,
     /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
     pub is_pinned: bool,
     pub hovered_pin_btn: bool,
@@ -304,6 +331,7 @@ impl FileExplorer {
             dock: None,
             git_root: None,
             changes_only: false,
+            hovered_tab: None,
             is_pinned: false,
             hovered_pin_btn: false,
             remote_session: None,
@@ -713,12 +741,7 @@ impl FileExplorer {
         } else {
             for item in &mut self.items {
                 if item.is_dir {
-                    let has_changes = self.git_statuses.keys().any(|p| p.starts_with(&item.path));
-                    item.git_status = if has_changes {
-                        Some(GitFileStatus::Modified)
-                    } else {
-                        None
-                    };
+                    item.git_status = dir_git_status(&self.git_statuses, &item.path);
                 } else {
                     item.git_status = self.git_statuses.get(&item.path).copied();
                 }
@@ -743,6 +766,17 @@ impl FileExplorer {
         } else {
             self.git_status_req = Some((repo_root, self.changes_only));
         }
+    }
+
+    /// Archivos con cambios de git (sin los borrados): el contador de la pestaña «Cambios».
+    pub fn change_count(&self) -> usize {
+        if self.changes_only {
+            return self.items.len();
+        }
+        self.git_statuses
+            .values()
+            .filter(|s| **s != GitFileStatus::Deleted)
+            .count()
     }
 
     /// Alterna entre el árbol de archivos y la lista de archivos con cambios (solo sesiones locales)
@@ -862,12 +896,7 @@ impl FileExplorer {
         for (path, name) in dirs {
             let is_expanded = expanded_paths.contains(&path);
 
-            let has_git_changes = git_map.keys().any(|p| p.starts_with(&path));
-            let git_status = if has_git_changes {
-                Some(GitFileStatus::Modified)
-            } else {
-                None
-            };
+            let git_status = dir_git_status(git_map, &path);
 
             out.push(ExplorerItem {
                 path: path.clone(),
@@ -1142,6 +1171,46 @@ impl FileExplorer {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_dir_git_status_uses_one_color_per_kind_and_yellow_for_mixes() {
+        use GitFileStatus::*;
+        let map = |entries: &[(&str, GitFileStatus)]| -> HashMap<PathBuf, GitFileStatus> {
+            entries
+                .iter()
+                .map(|(p, s)| (PathBuf::from(p), *s))
+                .collect()
+        };
+        let dir = Path::new("repo/src");
+        assert_eq!(dir_git_status(&map(&[]), dir), None);
+        assert_eq!(
+            dir_git_status(&map(&[("repo/docs/a.md", Modified)]), dir),
+            None
+        );
+        assert_eq!(
+            dir_git_status(
+                &map(&[("repo/src/a.rs", Untracked), ("repo/src/b.rs", Added)]),
+                dir
+            ),
+            Some(Added)
+        );
+        assert_eq!(
+            dir_git_status(&map(&[("repo/src/a.rs", Deleted)]), dir),
+            Some(Deleted)
+        );
+        assert_eq!(
+            dir_git_status(&map(&[("repo/src/a.rs", Renamed)]), dir),
+            Some(Modified)
+        );
+        assert_eq!(
+            dir_git_status(
+                &map(&[("repo/src/a.rs", Deleted), ("repo/src/b.rs", Added)]),
+                dir
+            ),
+            Some(Modified),
+            "una mezcla es amarillo"
+        );
+    }
     use super::*;
 
     /// `-z` entrega los nombres sin comillas ni escapes y el origen de un renombrado va en otra entrada
