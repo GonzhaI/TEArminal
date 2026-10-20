@@ -554,17 +554,13 @@ fn draw_panel(
     macro_rules! render {
         ($buf:expr, $w:expr) => {
             if p.is_horizontal {
-                renderer.render_projects_panel(
+                renderer.render_files_panel(
                     $buf,
                     $w,
                     height,
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
-                    p.projects,
-                    p.header,
-                    p.hovered_project,
-                    p.sidebar_scroll_offset,
-                    p.hovered_toggle_btn,
+                    p.header.on_right,
                     theme,
                 )
             } else {

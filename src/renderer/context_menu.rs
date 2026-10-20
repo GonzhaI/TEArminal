@@ -9,7 +9,7 @@ impl TerminalRenderer {
         let content = items
             .iter()
             .map(|i| {
-                let label = self.measure_ui_text(i.label, 12.0, false);
+                let label = self.measure_ui_text(&i.label, 12.0, false);
                 if i.shortcut.is_empty() {
                     label
                 } else {
@@ -111,7 +111,7 @@ impl TerminalRenderer {
                 buffer,
                 width,
                 height,
-                item.label,
+                &item.label,
                 r.0 + 36,
                 cy + 4,
                 r.0 + r.2 - 8,

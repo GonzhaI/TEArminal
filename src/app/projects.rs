@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::renderer::{
-    AiAgentStatus, ProjectsPanelRects, SessionStatus, SidebarHeader, SidebarProject, SidebarRects,
+    AiAgentStatus, SessionStatus, SidebarHeader, SidebarProject, SidebarRects, TopTabBarRects,
 };
 use crate::ui::LucideIcon;
 use std::path::{Path, PathBuf};
@@ -77,7 +77,8 @@ impl AxonApp {
     }
 
     /// Repositorio donde está la sesión a la vista cuando no pertenece a ningún proyecto: lo que ofrece
-    /// la fila «Agregar "repo"» del panel (modo de pestañas superiores). No agrega nada por sí sola.
+    /// la entrada «Agregar "repo"» del desplegable de proyectos (modo de pestañas superiores). No agrega
+    /// nada por sí sola.
     pub(super) fn suggested_project(&self) -> Option<PathBuf> {
         if !self.is_horizontal_tabs() || self.selected_membership() != Membership::Loose {
             return None;
@@ -90,13 +91,8 @@ impl AxonApp {
         root.is_dir().then_some(root)
     }
 
-    /// Filas de la lista del panel superior: proyectos, la sugerencia si hay y «Agregar proyecto».
-    pub(super) fn panel_row_count(&self) -> usize {
-        self.panel_rail().len() + usize::from(self.suggested_project().is_some()) + 1
-    }
-
-    /// Clic en la fila `i` del panel superior: abre el proyecto, pide confirmar la sugerencia o abre
-    /// el selector de carpetas.
+    /// Clic en la fila `i` del desplegable de proyectos: abre el proyecto o pide confirmar la
+    /// sugerencia (`i` = tras los proyectos); cualquier otra abre el selector de carpetas.
     pub(super) fn click_panel_row(&mut self, i: usize) {
         let rail_len = self.panel_rail().len();
         if i < rail_len {
@@ -162,27 +158,15 @@ impl AxonApp {
                 let has_news = m != selected
                     && (0..self.tabs.len())
                         .any(|i| self.tabs[i].has_unread && self.tab_membership(i) == Some(m));
-                let status = self.membership_status(m);
                 match m {
-                    Membership::Project(i) => {
-                        let name = self.config.projects[i].name.clone();
-                        let branch =
-                            crate::projects::read_branch(Path::new(&self.config.projects[i].path));
-                        SidebarProject {
-                            initial: crate::projects::initial(&name),
-                            name,
-                            branch,
-                            status,
-                            color_slot: crate::projects::color_slot(i),
-                            is_active: m == selected,
-                            has_news,
-                            is_loose: false,
-                        }
-                    }
+                    Membership::Project(i) => SidebarProject {
+                        initial: crate::projects::initial(&self.config.projects[i].name),
+                        color_slot: crate::projects::color_slot(i),
+                        is_active: m == selected,
+                        has_news,
+                        is_loose: false,
+                    },
                     Membership::Loose => SidebarProject {
-                        name: "Sesiones".to_string(),
-                        branch: None,
-                        status,
                         initial: '·',
                         color_slot: 7,
                         is_active: m == selected,
@@ -192,20 +176,6 @@ impl AxonApp {
                 }
             })
             .collect()
-    }
-
-    /// Estado más urgente de las sesiones de `m` (en curso, falló, terminó, en espera).
-    fn membership_status(&self, m: Membership) -> Option<SessionStatus> {
-        let rank = |s: SessionStatus| match s {
-            SessionStatus::Running => 3,
-            SessionStatus::Failed => 2,
-            SessionStatus::Done => 1,
-            SessionStatus::Idle => 0,
-        };
-        (0..self.tabs.len())
-            .filter(|&i| self.tab_membership(i) == Some(m))
-            .filter_map(|i| session_status(&self.tabs[i]))
-            .max_by_key(|&s| rank(s))
     }
 
     pub(super) fn sidebar_header(&mut self, usable_h: usize) -> SidebarHeader {
@@ -232,7 +202,6 @@ impl AxonApp {
             path,
             on_right: self.panel_on_right(),
             list_end: self.panel_list_end(usable_h),
-            suggestion: self.suggested_project().map(|p| project_folder_name(&p)),
         }
     }
 
@@ -297,14 +266,67 @@ impl AxonApp {
         }
     }
 
-    /// Pasa al proyecto siguiente del riel (el selector de la barra superior).
-    pub(super) fn cycle_project(&mut self) {
-        let rail = self.panel_rail();
+    /// Entradas del desplegable del selector de la barra superior: los proyectos (el activo con una
+    /// marca), la sugerencia si hay y «Agregar proyecto».
+    pub(super) fn project_dropdown(&self) -> Vec<MenuItem> {
         let selected = self.selected_membership();
-        if let Some(pos) = rail.iter().position(|&m| m == selected) {
-            if rail.len() > 1 {
-                self.select_membership(rail[(pos + 1) % rail.len()]);
-            }
+        let rail = self.panel_rail();
+        let mut items: Vec<MenuItem> = rail
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                let (label, icon) = match m {
+                    Membership::Project(p) => {
+                        (self.config.projects[p].name.clone(), LucideIcon::Folder)
+                    }
+                    Membership::Loose => ("Sesiones".to_string(), LucideIcon::Folder),
+                };
+                let icon = if m == selected {
+                    LucideIcon::Check
+                } else {
+                    icon
+                };
+                MenuItem::new(label, icon, "", MenuAction::PanelRow(i), true)
+            })
+            .collect();
+        if !items.is_empty() {
+            items.push(MenuItem::separator());
+        }
+        if let Some(root) = self.suggested_project() {
+            items.push(MenuItem::new(
+                format!("Agregar «{}»", project_folder_name(&root)),
+                LucideIcon::Plus,
+                "",
+                MenuAction::PanelRow(rail.len()),
+                true,
+            ));
+        }
+        items.push(MenuItem::new(
+            "Agregar proyecto…",
+            LucideIcon::Plus,
+            "",
+            MenuAction::AddProject,
+            true,
+        ));
+        items
+    }
+
+    /// Abre el desplegable de proyectos justo debajo del selector de la barra superior.
+    pub(super) fn open_project_dropdown(&mut self, win: (usize, usize)) {
+        let tabs = self.panel_tab_indices().len();
+        let (x, y, _, h) = TopTabBarRects::compute(win.0, tabs).switcher_btn;
+        self.show_menu(self.project_dropdown(), (x, y + h + 2), win);
+    }
+
+    /// Clic derecho sobre la fila `i` del desplegable: ofrece quitar el proyecto, si lo es.
+    pub(super) fn open_project_row_menu(
+        &mut self,
+        i: usize,
+        at: (usize, usize),
+        win: (usize, usize),
+    ) {
+        if let Some(m @ Membership::Project(_)) = self.panel_rail().get(i).copied() {
+            self.show_menu(self.project_menu(Some(m)), at, win);
         }
     }
 
@@ -366,19 +388,6 @@ impl AxonApp {
     pub(super) fn rail_menu(&self, mx: usize, my: usize) -> Vec<MenuItem> {
         let rail = self.panel_rail();
         let hit = SidebarRects::rail_at(mx, my, rail.len() + 1).and_then(|i| rail.get(i).copied());
-        self.project_menu(hit)
-    }
-
-    /// Menú de las filas del panel de proyectos (modo de pestañas superiores).
-    pub(super) fn row_menu(&self, my: usize, usable_h: usize) -> Vec<MenuItem> {
-        let rail = self.panel_rail();
-        let hit = ProjectsPanelRects::row_at(
-            my,
-            usable_h,
-            self.panel_row_count(),
-            self.sidebar_scroll_offset,
-        )
-        .and_then(|i| rail.get(i).copied());
         self.project_menu(hit)
     }
 

@@ -46,6 +46,11 @@ impl AxonApp {
             if button != MouseButton::Right {
                 return;
             }
+            // Clic derecho sobre un proyecto del desplegable: ofrece quitarlo
+            if let Some(MenuAction::PanelRow(i)) = action {
+                self.open_project_row_menu(i, (mx, my), (win_w, win_h));
+                return;
+            }
         }
         if button == MouseButton::Right
             && state == ElementState::Pressed
@@ -210,9 +215,9 @@ impl AxonApp {
                 let list = self.panel_tab_indices();
                 let top_rects = TopTabBarRects::compute(win_w, list.len());
 
-                // Clic en el selector de proyecto: pasa al siguiente
+                // Clic en el selector de proyecto: abre el desplegable de proyectos
                 if TopTabBarRects::inside(mx, my, top_rects.switcher_btn) {
-                    self.cycle_project();
+                    self.open_project_dropdown((win_w, win_h));
                     return;
                 }
 
@@ -362,20 +367,9 @@ impl AxonApp {
             return;
         }
 
-        // Modalidad horizontal: panel de proyectos (el explorador alojado dentro atiende su propio ratón)
+        // Modalidad horizontal: lo que el panel tiene fuera del explorador (su margen) no hace nada;
+        // el explorador alojado dentro atiende su propio ratón
         if self.is_horizontal_tabs() && self.panel_local_x(mx, my, win_w).is_some() {
-            if state == ElementState::Pressed && button == MouseButton::Left {
-                let usable_h = win_h.saturating_sub(self.status_bar_height());
-                let entries = self.panel_row_count();
-                if let Some(i) = crate::renderer::ProjectsPanelRects::row_at(
-                    my,
-                    usable_h,
-                    entries,
-                    self.sidebar_scroll_offset,
-                ) {
-                    self.click_panel_row(i);
-                }
-            }
             return;
         }
 

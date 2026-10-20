@@ -5,7 +5,7 @@
 //! y los manejadores del ratón restan `panel_x`.
 
 use super::*;
-use crate::renderer::{ProjectsPanelRects, Rect, SidebarRects};
+use crate::renderer::{FilesPanelRects, Rect, SidebarRects};
 
 impl AxonApp {
     pub(super) fn panel_on_right(&self) -> bool {
@@ -13,7 +13,7 @@ impl AxonApp {
     }
 
     /// ¿Se ve el panel lateral? Con pestañas verticales lista proyectos y sesiones; con las superiores,
-    /// los proyectos (las sesiones son las pestañas).
+    /// solo el explorador (los proyectos están en el selector de la barra y las sesiones son las pestañas).
     pub(super) fn panel_shown(&self) -> bool {
         self.sidebar_visible
     }
@@ -63,27 +63,21 @@ impl AxonApp {
         (x, usable_h.saturating_sub(38), 30, 30)
     }
 
-    /// Fin (y) de la lista del panel (sesiones en vertical, proyectos en horizontal): con el explorador
-    /// visible la lista cede espacio.
+    /// Fin (y) de la lista de sesiones del panel vertical: con el explorador visible la lista cede
+    /// espacio. Con pestañas superiores el panel no tiene lista.
     pub(super) fn panel_list_end(&self, usable_h: usize) -> usize {
-        if self.is_horizontal_tabs() {
-            ProjectsPanelRects::rows_end(usable_h, self.panel_row_count())
-        } else {
-            SidebarRects::list_end(
-                usable_h,
-                self.panel_tab_indices().len(),
-                self.file_explorer.visible,
-            )
-        }
+        SidebarRects::list_end(
+            usable_h,
+            self.panel_tab_indices().len(),
+            self.file_explorer.visible,
+        )
     }
 
-    /// Filas de la lista del panel y cuántas caben: base del desplazamiento con la rueda.
+    /// Filas de la lista de sesiones y cuántas caben: base del desplazamiento con la rueda. Sin
+    /// pestañas verticales no hay lista que desplazar.
     pub(super) fn panel_scroll_extent(&self, usable_h: usize) -> (usize, usize) {
         if self.is_horizontal_tabs() {
-            (
-                self.panel_row_count(),
-                ProjectsPanelRects::visible_rows(usable_h),
-            )
+            (0, 0)
         } else {
             (
                 self.panel_tab_indices().len(),
@@ -92,15 +86,15 @@ impl AxonApp {
         }
     }
 
-    /// Coloca el explorador: dentro del panel en vertical y acoplado al borde derecho en los demás casos.
+    /// Coloca el explorador: dentro del panel (bajo la lista en vertical, ocupándolo entero con pestañas
+    /// superiores) y acoplado al borde derecho con el panel oculto.
     pub(super) fn sync_explorer_dock(&mut self, win_w: usize, win_h: usize) {
         self.file_explorer.dock = if self.panel_shown() && self.file_explorer.visible {
             let usable_h = win_h.saturating_sub(self.status_bar_height());
-            let list_end = self.panel_list_end(usable_h);
             let (x, y, w, h) = if self.is_horizontal_tabs() {
-                ProjectsPanelRects::explorer_rect_after(usable_h, list_end)
+                FilesPanelRects::explorer_rect(usable_h)
             } else {
-                SidebarRects::explorer_rect_after(usable_h, list_end)
+                SidebarRects::explorer_rect_after(usable_h, self.panel_list_end(usable_h))
             };
             Some((self.panel_x(win_w) + x, y, w, h))
         } else {

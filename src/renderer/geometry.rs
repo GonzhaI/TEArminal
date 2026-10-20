@@ -825,49 +825,14 @@ impl SidebarRects {
     }
 }
 
-/// Geometría del panel de proyectos del modo de pestañas superiores. Es local al panel, que mide
-/// `SidebarRects::WIDTH`, y la comparten dibujo, clic, hover y rueda.
-pub struct ProjectsPanelRects;
+/// Geometría del panel del modo de pestañas superiores: el explorador ocupa todo el panel, que mide
+/// `SidebarRects::WIDTH`. Es local al panel.
+pub struct FilesPanelRects;
 
-impl ProjectsPanelRects {
-    pub const HEADER_H: usize = 40;
-    pub const ROW_H: usize = 46;
-    pub const ROW_STEP: usize = 48;
-    pub const ROWS_TOP: usize = SidebarRects::TOP + Self::HEADER_H + 4;
-
-    /// Filas que caben (proyectos y «Agregar proyecto»): como mucho el 40 % del alto libre.
-    pub fn visible_rows(usable_h: usize) -> usize {
-        let free = SidebarRects::content_bottom(usable_h).saturating_sub(8 + Self::ROWS_TOP);
-        (free * 2 / 5 / Self::ROW_STEP).max(2)
-    }
-
-    /// Fin (y) de la lista con `entries` filas.
-    pub fn rows_end(usable_h: usize, entries: usize) -> usize {
-        Self::ROWS_TOP + entries.min(Self::visible_rows(usable_h)) * Self::ROW_STEP
-    }
-
-    /// Rectángulo de la fila visible `slot`.
-    #[inline]
-    pub fn row_rect(slot: usize) -> Rect {
-        (
-            8,
-            Self::ROWS_TOP + slot * Self::ROW_STEP,
-            SidebarRects::WIDTH - 16,
-            Self::ROW_H,
-        )
-    }
-
-    /// Fila bajo `my`, como índice absoluto en las `entries` filas (con el desplazamiento `scroll`).
-    pub fn row_at(my: usize, usable_h: usize, entries: usize, scroll: usize) -> Option<usize> {
-        let rel = my.checked_sub(Self::ROWS_TOP)?;
-        let slot = rel / Self::ROW_STEP;
-        let shown = Self::visible_rows(usable_h).min(entries.saturating_sub(scroll));
-        (rel % Self::ROW_STEP < Self::ROW_H && slot < shown).then_some(scroll + slot)
-    }
-
-    /// Rectángulo del explorador alojado bajo los proyectos.
-    pub fn explorer_rect_after(usable_h: usize, rows_end: usize) -> Rect {
-        let top = rows_end + 8;
+impl FilesPanelRects {
+    /// Rectángulo del explorador alojado: desde el margen de la tarjeta hasta el fondo.
+    pub fn explorer_rect(usable_h: usize) -> Rect {
+        let top = SidebarRects::TOP + SidebarRects::CARD_INSET;
         let bottom = SidebarRects::content_bottom(usable_h);
         (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
     }

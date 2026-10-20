@@ -570,25 +570,6 @@ impl AxonApp {
             }
         }
 
-        // Hover en el panel de proyectos (modo de pestañas superiores)
-        if self.is_horizontal_tabs() {
-            let usable_h = win_h.saturating_sub(self.status_bar_height());
-            let mut new_row = None;
-            if self.panel_local_x(mx, my, win_w).is_some() {
-                new_row = crate::renderer::ProjectsPanelRects::row_at(
-                    my,
-                    usable_h,
-                    self.panel_row_count(),
-                    self.sidebar_scroll_offset,
-                );
-                is_pointer |= new_row.is_some();
-            }
-            if self.hovered_project != new_row {
-                self.hovered_project = new_row;
-                needs_redraw = true;
-            }
-        }
-
         // Detección de hover en la pestaña de Ajustes (si está activa)
         if is_settings_active && mx >= offset && my >= top_offset {
             let page_w = win_w.saturating_sub(offset + self.panel_right_inset());

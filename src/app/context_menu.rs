@@ -4,6 +4,7 @@
 use super::*;
 use crate::renderer::Rect;
 use crate::ui::LucideIcon;
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +40,8 @@ pub enum MenuAction {
     NewTab,
     AddProject,
     RemoveProject(usize),
+    /// Fila `i` del desplegable de proyectos (`AxonApp::click_panel_row`).
+    PanelRow(usize),
     NewWindow,
     OpenSettings,
     ToggleExplorer,
@@ -54,7 +57,7 @@ pub enum MenuAction {
 
 #[derive(Debug, Clone)]
 pub struct MenuItem {
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     pub icon: Option<LucideIcon>,
     pub shortcut: &'static str,
     /// `None` = separador
@@ -64,14 +67,14 @@ pub struct MenuItem {
 
 impl MenuItem {
     pub(super) fn new(
-        label: &'static str,
+        label: impl Into<Cow<'static, str>>,
         icon: LucideIcon,
         shortcut: &'static str,
         action: MenuAction,
         enabled: bool,
     ) -> Self {
         Self {
-            label,
+            label: label.into(),
             icon: Some(icon),
             shortcut,
             action: Some(action),
@@ -79,9 +82,9 @@ impl MenuItem {
         }
     }
 
-    fn separator() -> Self {
+    pub(super) fn separator() -> Self {
         Self {
-            label: "",
+            label: Cow::Borrowed(""),
             icon: None,
             shortcut: "",
             action: None,
@@ -106,7 +109,7 @@ impl ContextMenu {
     pub const PAD: usize = 6;
 
     /// Crea el menú y lo coloca dentro de la ventana (se abre hacia el lado con espacio).
-    fn new(
+    pub(super) fn new(
         items: Vec<MenuItem>,
         w: usize,
         (mx, my): (usize, usize),
@@ -210,8 +213,8 @@ impl AxonApp {
         } else if let Some(lx) = self.panel_local_x(mx, my, win_w) {
             // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
             if self.is_horizontal_tabs() {
-                let usable_h = win_h.saturating_sub(status_bar_h);
-                self.row_menu(my, usable_h)
+                // Con pestañas superiores el panel es solo el explorador, que tiene su propio menú
+                return false;
             } else if lx < crate::renderer::SidebarRects::RAIL_W {
                 self.rail_menu(lx, my)
             } else {
@@ -361,15 +364,25 @@ impl AxonApp {
             self.terminal_menu(has_selection, clicked_url)
         };
 
+        self.show_menu(items, (mx, my), (win_w, win_h));
+        true
+    }
+
+    /// Abre un menú con `items` anclado en `at`, dentro de la ventana `win`.
+    pub(super) fn show_menu(
+        &mut self,
+        items: Vec<MenuItem>,
+        at: (usize, usize),
+        win: (usize, usize),
+    ) {
         let w = self
             .renderer
             .as_ref()
             .map_or(244, |r| r.context_menu_width(&items));
-        self.context_menu = Some(ContextMenu::new(items, w, (mx, my), (win_w, win_h)));
+        self.context_menu = Some(ContextMenu::new(items, w, at, win));
         if let Some(w) = &self.window {
             w.request_redraw();
         }
-        true
     }
 
     pub(super) fn tab_or_window_menu(&self, tab: Option<usize>) -> Vec<MenuItem> {
@@ -851,6 +864,7 @@ impl AxonApp {
             MenuAction::NewTab => self.create_new_tab(),
             MenuAction::AddProject => self.add_project_with_picker(),
             MenuAction::RemoveProject(i) => self.remove_project(i),
+            MenuAction::PanelRow(i) => self.click_panel_row(i),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),

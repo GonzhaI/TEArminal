@@ -94,7 +94,7 @@ impl TerminalRenderer {
     }
 
     /// Selector de proyecto de la barra de pestañas: monograma, nombre y, si otro proyecto tiene novedades,
-    /// un punto. Un clic pasa al siguiente proyecto.
+    /// un punto. Un clic abre el desplegable de proyectos.
     #[allow(clippy::too_many_arguments)]
     fn draw_project_switcher(
         &mut self,

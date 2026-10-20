@@ -2305,12 +2305,19 @@ fn test_top_tabs_show_only_the_sessions_of_the_project_in_view() {
     app.add_project(&b);
     assert_eq!(app.tabs.len(), 3);
 
-    // Las pestañas superiores son las del proyecto a la vista; el selector pasa al siguiente
+    // Las pestañas superiores son las del proyecto a la vista; el desplegable lista los proyectos
+    // (el de la vista con marca), un separador y «Agregar proyecto»
     assert_eq!(app.panel_tab_indices().len(), 1);
     assert_eq!(app.top_bar_project().title, "b");
-    app.cycle_project();
+    let items = app.project_dropdown();
+    let labels: Vec<_> = items.iter().map(|i| i.label.as_ref()).collect();
+    assert_eq!(labels, ["a", "b", "Sesiones", "", "Agregar proyecto…"]);
+    assert!(matches!(items[1].icon, Some(crate::ui::LucideIcon::Check)));
+    assert!(matches!(items[0].icon, Some(crate::ui::LucideIcon::Folder)));
+    // Cada fila del desplegable abre su proyecto
+    app.click_panel_row(2);
     assert_eq!(app.selected_membership(), Membership::Loose);
-    app.cycle_project();
+    app.click_panel_row(0);
     assert_eq!(app.selected_membership(), Membership::Project(0));
     assert_eq!(app.top_bar_project().title, "a");
 

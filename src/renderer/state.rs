@@ -27,11 +27,6 @@ impl SessionStatus {
 /// Proyecto del riel de la barra lateral.
 #[derive(Debug, Clone)]
 pub struct SidebarProject {
-    pub name: String,
-    /// Rama git de la carpeta del proyecto, si es un repositorio.
-    pub branch: Option<String>,
-    /// Estado agregado de sus sesiones (el más urgente); `None` si no tiene sesiones abiertas.
-    pub status: Option<SessionStatus>,
     pub initial: char,
     /// Índice ANSI del color del proyecto.
     pub color_slot: usize,
@@ -71,8 +66,6 @@ pub struct SidebarHeader {
     pub on_right: bool,
     /// Fin (y) de la lista de sesiones; bajo ella queda el explorador.
     pub list_end: usize,
-    /// Repositorio de la sesión a la vista que aún no es proyecto: nombre de la fila «Agregar "x"».
-    pub suggestion: Option<String>,
 }
 
 #[derive(Debug, Clone)]

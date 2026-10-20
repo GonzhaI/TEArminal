@@ -48,18 +48,6 @@ pub fn add(projects: &mut Vec<ProjectConfig>, path: &Path) -> usize {
     projects.len() - 1
 }
 
-/// Rama del repositorio en `root` leyendo `.git/HEAD` (el commit abreviado si `HEAD` está suelto).
-/// `None` si no es un repositorio o `.git` es un archivo (worktree).
-pub fn read_branch(root: &Path) -> Option<String> {
-    let head = std::fs::read_to_string(root.join(".git").join("HEAD")).ok()?;
-    let head = head.trim();
-    match head.strip_prefix("ref: refs/heads/") {
-        Some(name) => Some(name.to_string()),
-        None => (head.len() >= 7 && head.chars().all(|c| c.is_ascii_hexdigit()))
-            .then(|| head[..7].to_string()),
-    }
-}
-
 /// Inicial en mayúscula que representa al proyecto en el riel.
 pub fn initial(name: &str) -> char {
     name.chars()
@@ -121,21 +109,6 @@ mod tests {
         let b = add(&mut projects, &PathBuf::from(r"c:\DEV\axon\"));
         assert_eq!((a, b, projects.len()), (0, 0, 1));
         assert_eq!(projects[0].name, "axon");
-    }
-
-    #[test]
-    fn test_branch_is_read_from_git_head() {
-        let dir = std::env::temp_dir().join(format!("axon-branch-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join(".git")).unwrap();
-        let head = dir.join(".git").join("HEAD");
-        std::fs::write(&head, "ref: refs/heads/feature/auth\n").unwrap();
-        assert_eq!(read_branch(&dir).as_deref(), Some("feature/auth"));
-        std::fs::write(&head, "0123456789abcdef0123456789abcdef01234567\n").unwrap();
-        assert_eq!(read_branch(&dir).as_deref(), Some("0123456"));
-        std::fs::write(&head, "basura").unwrap();
-        assert_eq!(read_branch(&dir), None);
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(read_branch(&dir), None);
     }
 
     #[test]
