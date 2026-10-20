@@ -1272,6 +1272,8 @@ impl AxonApp {
 
         if let Some(rect) = clicked_pane_rect {
             self.file_explorer.is_focused = false;
+            // El compositor solo se dibuja en el panel enfocado: el primer clic solo enfoca.
+            let was_active = active_tab.active_pane_id == rect.pane_id;
             // Cambiar foco al panel clickeado si no está activo
             if active_tab.active_pane_id != rect.pane_id {
                 active_tab.active_pane_id = rect.pane_id;
@@ -1347,6 +1349,29 @@ impl AxonApp {
                             }
                         }
                     }
+                }
+
+                // Botón «enviar» del compositor: equivale a pulsar Enter en el prompt.
+                if button == MouseButton::Left
+                    && state == ElementState::Pressed
+                    && was_active
+                    && self.renderer.as_ref().is_some_and(|renderer| {
+                        renderer
+                            .composer_layout(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                                &pane.terminal,
+                            )
+                            .is_some_and(|c| c.send_at(mx, my))
+                    })
+                {
+                    pane.pty.write_input(b"\r");
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
                 }
 
                 // Tarjetas de bloque (OSC 133): copiar el comando, repetirlo o atender la tarjeta de error.

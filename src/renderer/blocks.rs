@@ -86,7 +86,7 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 
 /// Fila con contenido visible (texto, fondo o decoración). Las filas vacías del final de un bloque
 /// (el salto de línea anterior al OSC 133;D) no agrandan la tarjeta.
-fn row_has_content(row: Option<&[Cell]>) -> bool {
+pub(super) fn row_has_content(row: Option<&[Cell]>) -> bool {
     row.is_some_and(|row| {
         row.iter().any(|c| {
             c.c != ' '

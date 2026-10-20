@@ -277,11 +277,11 @@ impl TerminalRenderer {
             cursor_visible,
             is_active_pane,
             has_multiple_panes,
-            None,
+            ComposerChips::default(),
         );
     }
 
-    /// Igual que `render_pane`, con la rama del repositorio para la franja de contexto de los bloques.
+    /// Igual que `render_pane`, con el contexto (rama y agente) de la franja de bloques y del compositor.
     #[allow(clippy::too_many_arguments)]
     pub fn render_pane_with_context(
         &mut self,
@@ -297,7 +297,7 @@ impl TerminalRenderer {
         cursor_visible: bool,
         is_active_pane: bool,
         _has_multiple_panes: bool,
-        branch: Option<&str>,
+        chips: ComposerChips<'_>,
     ) {
         if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
             return;
@@ -759,8 +759,21 @@ impl TerminalRenderer {
 
         // 5b. Franja de contexto sobre el área (carpeta · rama · comandos con error).
         self.draw_block_context_strip(
-            buffer, width, height, rect_x, rect_y, rect_w, terminal, branch, theme,
+            buffer,
+            width,
+            height,
+            rect_x,
+            rect_y,
+            rect_w,
+            terminal,
+            chips.branch,
+            theme,
         );
+        if is_active_pane {
+            self.draw_composer(
+                buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, chips, theme,
+            );
+        }
 
         // 6. Scrollbar del panel si tiene historial
         if !terminal.scrollback.is_empty() {

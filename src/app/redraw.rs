@@ -368,6 +368,15 @@ fn draw_full_scene(
                     );
                 }
                 let branch = pane.get_git_branch();
+                let pane_agent = detect_ai_agent(pane.terminal.window_title.as_deref());
+                let agent_badge = (pane_agent != AiAgentStatus::None).then(|| {
+                    TerminalRenderer::status_bar_badge_info(
+                        pane_agent,
+                        None,
+                        ai_snapshot.model_for(pane_agent),
+                        theme,
+                    )
+                });
                 renderer.render_pane_with_context(
                     buffer,
                     width,
@@ -381,7 +390,12 @@ fn draw_full_scene(
                     p.cursor_visible,
                     is_active,
                     has_multiple,
-                    branch.as_deref(),
+                    crate::renderer::ComposerChips {
+                        branch: branch.as_deref(),
+                        agent: agent_badge
+                            .as_ref()
+                            .map(|(icon, label, color)| (*icon, label.as_str(), *color)),
+                    },
                 );
             }
         }

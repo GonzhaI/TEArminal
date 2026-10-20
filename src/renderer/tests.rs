@@ -2204,7 +2204,10 @@ fn preview_ui_scenes() {
             true,
             true,
             false,
-            Some("main"),
+            crate::renderer::ComposerChips {
+                branch: Some("main"),
+                agent: None,
+            },
         );
         r.render_status_bar_with_ai(
             &mut buf,
@@ -2238,6 +2241,56 @@ fn preview_ui_scenes() {
             .unwrap()
             .save(out.join("wp4-bloques.png"))
             .unwrap();
+    }
+
+    // 10. WP6 · compositor sobre el prompt (mock v2-superior-izquierda, parte inferior)
+    {
+        let mut term = crate::terminal::TerminalState::new(110, 30, 2000, theme.clone());
+        term.current_dir = Some(std::path::PathBuf::from("C:\\Users\\dev\\axon"));
+        term.process_bytes(
+            concat!(
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test\x1b]133;C\x07\r\n",
+                "   Compiling axon v0.9.0\r\n",
+                "\x1b]133;D;0\x07",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo clippy --all-targets",
+            )
+            .as_bytes(),
+        );
+        let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
+        let (pane_x, pane_y, pane_w, pane_h) = (60, top_h, w - 60, h - top_h - status_h);
+        r.render_pane_with_context(
+            &mut buf,
+            w,
+            h,
+            pane_x,
+            pane_y,
+            pane_w,
+            pane_h,
+            &term,
+            &theme,
+            true,
+            true,
+            false,
+            crate::renderer::ComposerChips {
+                branch: Some("main"),
+                agent: Some((
+                    crate::ui::LucideIcon::Sparkles,
+                    "Claude Sonnet 5.5",
+                    theme.ansi[5],
+                )),
+            },
+        );
+        let layout = r
+            .composer_layout(pane_x, pane_y, pane_w, pane_h, &term)
+            .expect("el panel está en el prompt: debe haber compositor");
+        assert!(layout.chips_row.is_some() && layout.send_btn.is_some());
+        write_ppm(&buf, "wp6-compositor.ppm");
+
+        // En una ejecución (OSC 133;C) o en pantalla alterna no hay compositor.
+        term.process_bytes(b"\x1b]133;C\x07\r\n");
+        assert!(r
+            .composer_layout(pane_x, pane_y, pane_w, pane_h, &term)
+            .is_none());
     }
 
     println!("previews in {}", out.display());
@@ -2305,4 +2358,41 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
         );
     }
     assert_eq!(narrow, narrow_with);
+}
+
+/// El compositor solo existe con el panel en el prompt (OSC 133 entre A y C), sin pantalla alterna ni
+/// scroll, y su botón «enviar» solo con la fila de chips libre.
+#[test]
+fn test_composer_only_at_prompt() {
+    use crate::theme::Theme;
+    let theme = Theme::default();
+    let r = TerminalRenderer::new(&AxonConfig::default(), 1.0);
+    let mut term = crate::terminal::TerminalState::new(100, 30, 100, theme);
+    let layout = |t: &crate::terminal::TerminalState| r.composer_layout(0, 0, 900, 600, t);
+
+    assert!(
+        layout(&term).is_none(),
+        "sin OSC 133 no hay prompt conocido"
+    );
+
+    term.process_bytes(b"\x1b]133;A\x07PS> \x1b]133;B\x07ls");
+    let at_prompt = layout(&term).expect("en el prompt hay compositor");
+    assert!(at_prompt.chips_row.is_some() && at_prompt.send_btn.is_some());
+    let (x, y, w, h) = at_prompt.send_btn.unwrap();
+    assert!(at_prompt.send_at(x + w / 2, y + h / 2));
+    assert!(!at_prompt.send_at(x.saturating_sub(40), y));
+
+    let narrow = r.composer_layout(0, 0, 300, 600, &term);
+    assert!(narrow.is_none(), "panel demasiado estrecho");
+
+    term.process_bytes(b"\x1b]133;C\x07\r\n");
+    assert!(
+        layout(&term).is_none(),
+        "ejecutando un comando no hay compositor"
+    );
+
+    term.process_bytes(b"\x1b]133;D;0\x07\x1b]133;A\x07PS> ");
+    assert!(layout(&term).is_some(), "de vuelta en el prompt reaparece");
+    term.process_bytes(b"\x1b[?1049h");
+    assert!(layout(&term).is_none(), "pantalla alterna (TUI): nada");
 }
