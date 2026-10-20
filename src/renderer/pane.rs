@@ -65,6 +65,188 @@ impl TerminalRenderer {
         Some((track_x, thumb_y, track_w, thumb_h))
     }
 
+    /// Botón de la cabecera de panel: fondo solo al pasar el ratón, icono atenuado.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_pane_header_button(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        rect: (usize, usize, usize, usize),
+        icon: crate::ui::LucideIcon,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = rect;
+        if hovered {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                x,
+                y,
+                w,
+                h,
+                4,
+                theme.surface_hover(),
+            );
+        }
+        let fg = if hovered {
+            theme.foreground
+        } else {
+            theme.text_secondary()
+        };
+        self.draw_lucide_icon(buffer, width, height, icon, x + w / 2, y + h / 2, 14.0, fg);
+    }
+
+    /// Cabecera de un panel dividido (38 px): icono, título, subtítulo atenuado, acciones
+    /// (dividir · maximizar · cerrar) y línea de acento en el panel enfocado.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_pane_header(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        slot: (usize, usize, usize),
+        title: &str,
+        subtitle: Option<&str>,
+        icon: crate::ui::LucideIcon,
+        icon_color: Color,
+        focused: bool,
+        zoomed: bool,
+        hovered: Option<PaneHeaderButton>,
+        theme: &Theme,
+    ) {
+        let (x, y, w) = slot;
+        if w < 120 || width == 0 || height == 0 || y >= height {
+            return;
+        }
+        let rects = PaneHeaderRects::compute(x, y, w);
+        let clip: Clip = (
+            x,
+            y,
+            (x + w).min(width),
+            (y + PaneHeaderRects::CONTENT_OFFSET).min(height),
+        );
+        fill_rect(
+            buffer,
+            width,
+            clip,
+            x,
+            y,
+            w,
+            PaneHeaderRects::HEIGHT,
+            theme.chrome_bg().to_u32_xrgb(),
+        );
+        // Línea que separa la cabecera del terminal y acento del panel enfocado sobre ella
+        fill_rect(
+            buffer,
+            width,
+            clip,
+            x,
+            y + PaneHeaderRects::HEIGHT,
+            w,
+            PaneHeaderRects::BORDER,
+            theme.chrome_line().to_u32_xrgb(),
+        );
+        if focused {
+            fill_rect(
+                buffer,
+                width,
+                clip,
+                x,
+                y + PaneHeaderRects::HEIGHT - 2,
+                w,
+                2,
+                theme.accent_color().to_u32_xrgb(),
+            );
+        }
+
+        let cy = y + PaneHeaderRects::HEIGHT / 2;
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            icon,
+            x + PaneHeaderRects::ICON_X,
+            cy,
+            15.0,
+            icon_color,
+        );
+
+        // El texto no invade los botones que se dibujan en este panel
+        let buttons_left = if focused {
+            rects.split_btn.0
+        } else {
+            rects.close_btn.0
+        };
+        let text_max = buttons_left.saturating_sub(12);
+        let baseline = cy + 4;
+        let title_end = self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            title,
+            x + PaneHeaderRects::TEXT_X,
+            baseline,
+            text_max,
+            theme.foreground,
+            tokens::TITLE,
+            true,
+        );
+        if let Some(subtitle) = subtitle.filter(|s| !s.is_empty()) {
+            let sx = title_end + 10;
+            if sx < text_max {
+                self.draw_ui_text(
+                    buffer,
+                    width,
+                    height,
+                    subtitle,
+                    sx,
+                    baseline,
+                    text_max,
+                    theme.text_muted(),
+                    tokens::BODY,
+                    false,
+                );
+            }
+        }
+
+        if focused {
+            self.draw_pane_header_button(
+                buffer,
+                width,
+                height,
+                rects.split_btn,
+                crate::ui::LucideIcon::Columns2,
+                hovered == Some(PaneHeaderButton::Split),
+                theme,
+            );
+            self.draw_pane_header_button(
+                buffer,
+                width,
+                height,
+                rects.zoom_btn,
+                if zoomed {
+                    crate::ui::LucideIcon::Minimize2
+                } else {
+                    crate::ui::LucideIcon::Maximize2
+                },
+                hovered == Some(PaneHeaderButton::Zoom),
+                theme,
+            );
+        }
+        self.draw_pane_header_button(
+            buffer,
+            width,
+            height,
+            rects.close_btn,
+            crate::ui::LucideIcon::X,
+            hovered == Some(PaneHeaderButton::Close),
+            theme,
+        );
+    }
+
     /// Renderiza un panel de terminal en un rectángulo específico del framebuffer
     pub fn render_pane(
         &mut self,
@@ -79,7 +261,7 @@ impl TerminalRenderer {
         theme: &Theme,
         cursor_visible: bool,
         is_active_pane: bool,
-        has_multiple_panes: bool,
+        _has_multiple_panes: bool,
     ) {
         if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
             return;
@@ -612,61 +794,8 @@ impl TerminalRenderer {
             }
         }
 
-        // 7. Foco en paneles divididos: perímetro de 1 px y remate de 2 px, en el acento del tema.
-        if has_multiple_panes && is_active_pane {
-            let accent = theme.accent_color();
-            let border = theme.mix(theme.background, accent, 0.55);
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                rect_x,
-                rect_y,
-                rect_w,
-                1,
-                border.to_u32_xrgb(),
-            );
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                rect_x,
-                rect_y + rect_h.saturating_sub(1),
-                rect_w,
-                1,
-                border.to_u32_xrgb(),
-            );
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                rect_x,
-                rect_y,
-                1,
-                rect_h,
-                border.to_u32_xrgb(),
-            );
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                rect_x + rect_w.saturating_sub(1),
-                rect_y,
-                1,
-                rect_h,
-                border.to_u32_xrgb(),
-            );
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                rect_x,
-                rect_y,
-                rect_w,
-                2,
-                accent.to_u32_xrgb(),
-            );
-        }
+        // 7. Foco: la cabecera de cada panel (arriba) marca el panel activo con su línea de acento.
+        //    El contenido no lleva marco para no competir con la rejilla del terminal.
 
         // 8. Botón "ir hasta abajo" mientras la vista está desplazada.
         if terminal.scroll_offset > 0 && !terminal.is_alt_screen {

@@ -1250,6 +1250,55 @@ impl AxonApp {
             }
         }
 
+        // 2b. Cabecera de un panel dividido: foco y botones dividir · maximizar · cerrar
+        if button == MouseButton::Left && state == ElementState::Pressed {
+            let offset = self.sidebar_offset();
+            let top_offset = self.top_offset();
+            let right_offset = self.file_explorer_offset();
+            let term_area_w = win_w.saturating_sub(offset + right_offset);
+            let term_area_h = win_h.saturating_sub(top_offset + self.status_bar_height());
+            let tab = &self.tabs[self.active_tab_index];
+            let hit = if tab.is_settings || tab.file_viewer.is_some() {
+                None
+            } else {
+                tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h)
+                    .iter()
+                    .find_map(|rect| {
+                        if !rect.has_header {
+                            return None;
+                        }
+                        let header = PaneHeaderRects::compute(rect.x, rect.slot_y, rect.width);
+                        if !PaneHeaderRects::inside(mx, my, header.header) {
+                            return None;
+                        }
+                        let focused = tab.active_pane_id == rect.pane_id;
+                        Some((rect.pane_id, focused, header.button_at(mx, my, focused)))
+                    })
+            };
+            if let Some((pane_id, focused, hit)) = hit {
+                if !focused {
+                    self.tabs[self.active_tab_index].active_pane_id = pane_id;
+                }
+                match hit {
+                    Some(PaneHeaderButton::Split) => {
+                        self.split_active_pane(SplitDirection::Vertical);
+                    }
+                    Some(PaneHeaderButton::Zoom) => {
+                        if self.tabs[self.active_tab_index].toggle_pane_zoom(pane_id) {
+                            self.recompute_grid_for_all_tabs();
+                            self.save_session();
+                        }
+                    }
+                    Some(PaneHeaderButton::Close) => self.close_pane_by_id(pane_id),
+                    None => {}
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                return;
+            }
+        }
+
         // 3. Clics en paneles de terminal activa
         let bypass = self.modifiers.shift_key();
         let offset = self.sidebar_offset();

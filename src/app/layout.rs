@@ -87,9 +87,14 @@ impl Divider {
 pub struct PaneRect {
     pub pane_id: usize,
     pub x: usize,
+    /// Borde superior del área del terminal (ya descuenta la cabecera del panel)
     pub y: usize,
     pub width: usize,
     pub height: usize,
+    /// Borde superior del hueco completo, cabecera incluida: de ahí cuelga `PaneHeaderRects`
+    pub slot_y: usize,
+    /// El panel se dibuja con cabecera (pestaña dividida)
+    pub has_header: bool,
 }
 
 pub struct TerminalPane {
@@ -218,6 +223,79 @@ impl TerminalPane {
         }
         self.cached_git_branch.clone()
     }
+
+    /// El panel corre un agente de IA (✧): lo avisa el wrapper del shell o el título de la ventana.
+    pub fn is_agent_pane(&self) -> bool {
+        self.terminal.agent_running
+            || shell_context::detect_ai_agent(self.terminal.window_title.as_deref())
+                != AiAgentStatus::None
+    }
+
+    /// Título de la cabecera del panel: el título que el shell puso a su ventana (el del agente) y,
+    /// si no hay, el de la pestaña.
+    pub fn header_title(&self, tab_title: &str) -> String {
+        let raw = self
+            .terminal
+            .window_title
+            .as_deref()
+            .filter(|t| !t.trim().is_empty())
+            .unwrap_or(tab_title);
+        TerminalTab::clean_display_title(raw, self.terminal.current_dir.as_deref())
+    }
+
+    /// Subtítulo atenuado de la cabecera: destino SSH, carpeta del proyecto o el comando en marcha.
+    pub fn header_subtitle(&self) -> Option<String> {
+        if let Some(ssh) = self.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
+            return Some(ssh.destination.clone());
+        }
+        let cwd_name = self
+            .terminal
+            .current_dir
+            .as_deref()
+            .and_then(|d| d.file_name())
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .map(str::to_string);
+        // Un agente se identifica por su proyecto, no por el comando que lo lanzó
+        if self.is_agent_pane() {
+            return cwd_name;
+        }
+        self.running_command().or(cwd_name)
+    }
+
+    /// Comando en curso según OSC 133 (entre «salida empieza» y «comando terminado»).
+    fn running_command(&self) -> Option<String> {
+        let term = &self.terminal;
+        if term.is_alt_screen {
+            return None;
+        }
+        let block = term.active_block.as_ref()?;
+        // Mientras solo se teclea (sin OSC 133;C) el subtítulo sigue siendo la carpeta
+        block.output_start?;
+        let line = block.command_line?;
+        command_hint(&term.row_text_to_string(term.get_buffer_line(line)?))
+    }
+}
+
+/// Texto del comando sin el prefijo del prompt (`PS C:\x> `, `$ `, `❯ `) y acotado para la
+/// cabecera. OSC 133 solo da la línea donde se escribió, no el comando aislado.
+pub(super) fn command_hint(line: &str) -> Option<String> {
+    let text = line.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let cut = text
+        .char_indices()
+        .filter(|(i, c)| {
+            matches!(c, '>' | '$' | '#' | '❯') && text[i + c.len_utf8()..].starts_with(' ')
+        })
+        .map(|(i, _)| i + 1)
+        .next_back();
+    let hint = cut.map_or(text, |i| text[i..].trim_start()).trim();
+    if hint.is_empty() {
+        return None;
+    }
+    Some(hint.chars().take(48).collect())
 }
 
 pub struct TerminalTab {
@@ -231,6 +309,8 @@ pub struct TerminalTab {
     pub file_viewer: Option<FileViewerState>,
     /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
     pub is_preview: bool,
+    /// Panel maximizado: ocupa todo el área y el resto del reparto queda oculto (solo mientras es el activo)
+    pub zoomed_pane: Option<usize>,
 }
 
 impl TerminalTab {
@@ -247,6 +327,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
+            zoomed_pane: None,
         }
     }
 
@@ -268,6 +349,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
+            zoomed_pane: None,
         }
     }
 
@@ -282,6 +364,7 @@ impl TerminalTab {
             is_settings: true,
             file_viewer: None,
             is_preview: false,
+            zoomed_pane: None,
         }
     }
 
@@ -400,6 +483,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
+            zoomed_pane: None,
         }
     }
 
@@ -521,6 +605,7 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
+            zoomed_pane: None,
         }
     }
 
@@ -705,15 +790,45 @@ impl TerminalTab {
     /// Única fuente de la geometría de paneles y divisores (dibujo, clics y arrastre)
     fn geometry(&self, x: usize, y: usize, w: usize, h: usize) -> (Vec<PaneRect>, Vec<Divider>) {
         let mut out = (Vec::new(), Vec::new());
-        if !(self.is_settings || self.file_viewer.is_some() || self.panes.is_empty()) {
-            Self::walk(&self.layout, (x, y, w, h), &mut Vec::new(), &mut out);
+        if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
+            return out;
         }
+        let has_header = self.panes.len() > 1;
+        // El zoom solo vale mientras su panel es el activo: al navegar a otro se recupera el reparto
+        if let Some(pane_id) = self
+            .zoomed_pane
+            .filter(|id| *id == self.active_pane_id && self.find_pane(*id).is_some())
+        {
+            let offset = if has_header {
+                crate::renderer::PaneHeaderRects::CONTENT_OFFSET
+            } else {
+                0
+            };
+            out.0.push(PaneRect {
+                pane_id,
+                x,
+                y: y + offset,
+                width: w,
+                height: h.saturating_sub(offset),
+                slot_y: y,
+                has_header,
+            });
+            return out;
+        }
+        Self::walk(
+            &self.layout,
+            (x, y, w, h),
+            has_header,
+            &mut Vec::new(),
+            &mut out,
+        );
         out
     }
 
     fn walk(
         node: &PaneNode,
         (x, y, w, h): (usize, usize, usize, usize),
+        has_header: bool,
         path: &mut Vec<bool>,
         out: &mut (Vec<PaneRect>, Vec<Divider>),
     ) {
@@ -725,12 +840,19 @@ impl TerminalTab {
         } = node
         else {
             if let PaneNode::Leaf(pane_id) = node {
+                let offset = if has_header {
+                    crate::renderer::PaneHeaderRects::CONTENT_OFFSET
+                } else {
+                    0
+                };
                 out.0.push(PaneRect {
                     pane_id: *pane_id,
                     x,
-                    y,
+                    y: y + offset,
                     width: w,
-                    height: h,
+                    height: h.saturating_sub(offset),
+                    slot_y: y,
+                    has_header,
                 });
             }
             return;
@@ -762,10 +884,10 @@ impl TerminalTab {
             avail,
         });
         path.push(false);
-        Self::walk(first, rect1, path, out);
+        Self::walk(first, rect1, has_header, path, out);
         path.pop();
         path.push(true);
-        Self::walk(second, rect2, path, out);
+        Self::walk(second, rect2, has_header, path, out);
         path.pop();
     }
 
@@ -844,6 +966,23 @@ impl TerminalTab {
             Self::split_leaf_in_tree(self.layout.clone(), active_id, new_pane_id, direction);
         self.panes.push(new_pane);
         self.active_pane_id = new_pane_id;
+        // El panel nuevo debe verse: dividir con uno maximizado restauraría un reparto oculto
+        self.zoomed_pane = None;
+    }
+
+    /// Maximiza `pane_id` (ocupa todo el área) o restaura el reparto si ya estaba maximizado.
+    /// Devuelve `true` si el estado cambió.
+    pub fn toggle_pane_zoom(&mut self, pane_id: usize) -> bool {
+        let next = if self.zoomed_pane == Some(pane_id) || self.panes.len() < 2 {
+            None
+        } else {
+            Some(pane_id)
+        };
+        if self.zoomed_pane == next {
+            return false;
+        }
+        self.zoomed_pane = next;
+        true
     }
 
     fn split_leaf_in_tree(
@@ -892,6 +1031,9 @@ impl TerminalTab {
             if let Some(p) = self.panes.last() {
                 self.active_pane_id = p.id;
             }
+        }
+        if self.zoomed_pane == Some(pane_id) {
+            self.zoomed_pane = None;
         }
     }
 

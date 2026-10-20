@@ -200,6 +200,24 @@ fn test_app_tab_switching_and_toggle() {
 }
 
 #[test]
+fn test_command_hint_strips_the_shell_prompt() {
+    assert_eq!(
+        super::layout::command_hint("PS C:\\Users\\dev\\axon> cargo test --release").as_deref(),
+        Some("cargo test --release")
+    );
+    assert_eq!(
+        super::layout::command_hint("dev@staging-01:~/api$ systemctl status api").as_deref(),
+        Some("systemctl status api")
+    );
+    // Sin prompt reconocible se conserva la línea; una línea vacía no da subtítulo
+    assert_eq!(
+        super::layout::command_hint("cargo test").as_deref(),
+        Some("cargo test")
+    );
+    assert_eq!(super::layout::command_hint("   "), None);
+}
+
+#[test]
 fn test_split_panes_layout_and_tree() {
     use crate::app::{SplitDirection, TerminalPane, TerminalTab};
     use crate::pty::PtyManager;
@@ -238,14 +256,48 @@ fn test_split_panes_layout_and_tree() {
     // Ambos comparten el mismo ancho (1000)
     assert_eq!(h_rects[0].width, 1000);
     assert_eq!(h_rects[1].width, 1000);
-    // La suma de alturas + divisor (2px) debe ser exactamente 600
-    assert_eq!(h_rects[0].height + h_rects[1].height + 2, 600);
-    assert_eq!(h_rects[0].y, 0);
-    assert_eq!(h_rects[1].y, h_rects[0].height + 2);
+    // Cada panel reserva su cabecera: contenido + cabecera + divisor suman exactamente 600
+    let hdr = PaneHeaderRects::CONTENT_OFFSET;
+    assert!(h_rects[0].has_header && h_rects[1].has_header);
+    assert_eq!(h_rects[0].height + h_rects[1].height + 2 + hdr * 2, 600);
+    assert_eq!(h_rects[0].slot_y, 0);
+    assert_eq!(h_rects[0].y, hdr);
+    assert_eq!(h_rects[1].slot_y, h_rects[0].height + hdr + 2);
+    assert_eq!(h_rects[1].y, h_rects[1].slot_y + hdr);
 
     let dividers = tab.compute_dividers(0, 0, 1000, 600);
     assert_eq!(dividers.len(), 1);
-    assert_eq!(dividers[0].rect, (0, h_rects[0].height, 1000, 2));
+    assert_eq!(dividers[0].rect, (0, h_rects[0].height + hdr, 1000, 2));
+
+    // 2b. Maximizar: solo el panel activo ocupa el área (con su cabecera) y no quedan divisores
+    assert!(tab.toggle_pane_zoom(2));
+    let zoomed = tab.compute_pane_rects(0, 0, 1000, 600);
+    assert_eq!(zoomed.len(), 1);
+    assert_eq!(zoomed[0].pane_id, 2);
+    assert_eq!(zoomed[0].width, 1000);
+    assert_eq!(zoomed[0].height, 600 - hdr);
+    assert!(tab.compute_dividers(0, 0, 1000, 600).is_empty());
+    // Restaurar el reparto
+    assert!(tab.toggle_pane_zoom(2));
+    assert_eq!(tab.compute_pane_rects(0, 0, 1000, 600).len(), 2);
+
+    // 2c. Botones de la cabecera: dividir/maximizar solo en el panel enfocado
+    let header = PaneHeaderRects::compute(0, 0, 600);
+    let center = |r: (usize, usize, usize, usize)| (r.0 + r.2 / 2, r.1 + r.3 / 2);
+    let (sx, sy) = center(header.split_btn);
+    let (zx, zy) = center(header.zoom_btn);
+    let (cx, cy) = center(header.close_btn);
+    assert_eq!(
+        header.button_at(sx, sy, true),
+        Some(PaneHeaderButton::Split)
+    );
+    assert_eq!(header.button_at(zx, zy, true), Some(PaneHeaderButton::Zoom));
+    assert_eq!(header.button_at(sx, sy, false), None);
+    assert_eq!(
+        header.button_at(cx, cy, false),
+        Some(PaneHeaderButton::Close)
+    );
+    assert_eq!(header.button_at(10, 300, true), None);
 
     // 3. Cerrar un panel (Ctrl + Alt + W) y validar que el árbol colapsa limpiamente
     tab.close_pane(1);

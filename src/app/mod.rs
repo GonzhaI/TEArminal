@@ -43,9 +43,9 @@ use shell_context::get_git_branch;
 use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
-    AiAgentStatus, EditingSettingField, SettingsPageRects, SettingsPageState, SettingsSection,
-    SidebarHeader, SidebarProject, SidebarTabItem, StatusBarRects, StatusMeter, TerminalRenderer,
-    TopBarProject, TopTabBarRects, TopTitleBarRects,
+    AiAgentStatus, EditingSettingField, PaneHeaderButton, PaneHeaderRects, SettingsPageRects,
+    SettingsPageState, SettingsSection, SidebarHeader, SidebarProject, SidebarTabItem,
+    StatusBarRects, StatusMeter, TerminalRenderer, TopBarProject, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -96,6 +96,8 @@ pub struct AxonApp {
     hovered_switcher: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
+    /// Botón de la cabecera de un panel dividido bajo el ratón
+    hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
     pub file_explorer: crate::explorer::FileExplorer,
@@ -335,6 +337,7 @@ impl AxonApp {
             hovered_switcher: false,
             hovered_settings_btn: false,
             hovered_toggle_btn: false,
+            hovered_pane_btn: None,
             settings_page_state: SettingsPageState::default(),
             context_menu: None,
             file_explorer,
