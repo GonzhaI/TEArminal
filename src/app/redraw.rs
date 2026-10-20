@@ -328,10 +328,13 @@ fn draw_full_scene(
         let dividers =
             active_tab.compute_dividers(p.offset, p.top_offset, term_area_w, term_area_h);
         let has_multiple = pane_rects.len() > 1;
+        let focused_pane_id = active_tab.active_pane_id;
+        let zoomed = active_tab.zoomed_pane;
+        let tab_title = active_tab.title.clone();
 
         for rect in &pane_rects {
-            if let Some(pane) = active_tab.find_pane(rect.pane_id) {
-                let is_active = rect.pane_id == active_tab.active_pane_id;
+            if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                let is_active = rect.pane_id == focused_pane_id;
                 if rect.has_header {
                     let ssh_pane = pane
                         .terminal
@@ -354,17 +357,18 @@ fn draw_full_scene(
                         width,
                         height,
                         (rect.x, rect.slot_y, rect.width),
-                        &pane.header_title(&active_tab.title),
+                        &pane.header_title(&tab_title),
                         pane.header_subtitle().as_deref(),
                         icon,
                         icon_color,
                         is_active,
-                        active_tab.zoomed_pane == Some(rect.pane_id),
+                        zoomed == Some(rect.pane_id),
                         hovered,
                         theme,
                     );
                 }
-                renderer.render_pane(
+                let branch = pane.get_git_branch();
+                renderer.render_pane_with_context(
                     buffer,
                     width,
                     height,
@@ -377,6 +381,7 @@ fn draw_full_scene(
                     p.cursor_visible,
                     is_active,
                     has_multiple,
+                    branch.as_deref(),
                 );
             }
         }

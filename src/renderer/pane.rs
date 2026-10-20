@@ -247,7 +247,8 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza un panel de terminal en un rectángulo específico del framebuffer
+    /// Renderiza un panel de terminal en un rectángulo específico del framebuffer (sin rama: lo usan los tests)
+    #[cfg(test)]
     pub fn render_pane(
         &mut self,
         buffer: &mut [u32],
@@ -261,7 +262,42 @@ impl TerminalRenderer {
         theme: &Theme,
         cursor_visible: bool,
         is_active_pane: bool,
+        has_multiple_panes: bool,
+    ) {
+        self.render_pane_with_context(
+            buffer,
+            width,
+            height,
+            rect_x,
+            rect_y,
+            rect_w,
+            rect_h,
+            terminal,
+            theme,
+            cursor_visible,
+            is_active_pane,
+            has_multiple_panes,
+            None,
+        );
+    }
+
+    /// Igual que `render_pane`, con la rama del repositorio para la franja de contexto de los bloques.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_pane_with_context(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        rect_x: usize,
+        rect_y: usize,
+        rect_w: usize,
+        rect_h: usize,
+        terminal: &TerminalState,
+        theme: &Theme,
+        cursor_visible: bool,
+        is_active_pane: bool,
         _has_multiple_panes: bool,
+        branch: Option<&str>,
     ) {
         if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
             return;
@@ -286,16 +322,26 @@ impl TerminalRenderer {
 
         let norm_sel = terminal.selection_ordered();
 
+        // Tarjetas de bloque (OSC 133): fondo antes que las celdas, cabecera después.
+        let hidden_headers = self.block_header_lines(rect_x, rect_y, rect_w, rect_h, terminal);
+        self.draw_block_card_frames(
+            buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, theme,
+        );
+
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
             let cell_y = base_y + (row_idx * self.row_height);
             if cell_y + self.row_height > max_y {
                 break;
             }
+            let global_row = view_start + row_idx;
+            // La cabecera de la tarjeta sustituye el prompt y el comando de esa fila.
+            if hidden_headers.contains(&global_row) {
+                continue;
+            }
             let cols_in_row = row.len().min(max_cols);
             let row_slice = &row[..cols_in_row];
 
-            let global_row = view_start + row_idx;
             let line_used = row
                 .iter()
                 .rposition(|cell| {
@@ -561,68 +607,10 @@ impl TerminalRenderer {
             }
         }
 
-        // 3. Canal de bloques de comando (OSC 133): estado en el margen y regla tenue entre entradas.
-        if !terminal.is_alt_screen && !terminal.command_blocks.is_empty() {
-            let visible_end = view_start + visible_rows.len();
-            let content_right = max_x.saturating_sub(10);
-            for block in &terminal.command_blocks {
-                let start = block.prompt_line;
-                let end = block
-                    .output_end
-                    .unwrap_or_else(|| terminal.current_global_line())
-                    .max(start);
-                if end < view_start || start >= visible_end {
-                    continue;
-                }
-                let status = match block.exit_code {
-                    Some(0) => theme.ansi[2],
-                    Some(_) => theme.ansi[1],
-                    None => theme.accent_color(),
-                };
-                let top = base_y + start.saturating_sub(view_start) * self.row_height;
-                let bottom_line = end.min(visible_end.saturating_sub(1));
-                let bottom = base_y + (bottom_line - view_start + 1) * self.row_height;
-                let rail_h = bottom
-                    .saturating_sub(top)
-                    .min((rect_y + rect_h).saturating_sub(top));
-                if rail_h > 4 {
-                    let rail = theme.mix(theme.background, status, 0.32);
-                    fill_rect(
-                        buffer,
-                        width,
-                        clip,
-                        rect_x + 5,
-                        top + 3,
-                        2,
-                        rail_h - 3,
-                        rail.to_u32_xrgb(),
-                    );
-                }
-                fill_rect(
-                    buffer,
-                    width,
-                    clip,
-                    rect_x + 4,
-                    top + 4,
-                    4,
-                    2,
-                    status.to_u32_xrgb(),
-                );
-                if start > view_start {
-                    let rule = theme.mix(theme.background, theme.foreground, 0.07);
-                    fill_rect(
-                        buffer,
-                        width,
-                        clip,
-                        base_x,
-                        top.saturating_sub(1),
-                        content_right.saturating_sub(base_x),
-                        1,
-                        rule.to_u32_xrgb(),
-                    );
-                }
-            }
-        }
+        // 3. Canal de bloques de comando (OSC 133): tarjetas con cabecera, estado y acciones.
+        self.draw_block_card_chrome(
+            buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, theme,
+        );
 
         // 4. Renderizar cursor sólido
         if terminal.scroll_offset == 0
@@ -768,6 +756,11 @@ impl TerminalRenderer {
                 }
             }
         }
+
+        // 5b. Franja de contexto sobre el área (carpeta · rama · comandos con error).
+        self.draw_block_context_strip(
+            buffer, width, height, rect_x, rect_y, rect_w, terminal, branch, theme,
+        );
 
         // 6. Scrollbar del panel si tiene historial
         if !terminal.scrollback.is_empty() {

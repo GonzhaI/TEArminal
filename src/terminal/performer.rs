@@ -1,9 +1,24 @@
 //! Intérprete de secuencias VT/ANSI: traduce los eventos de `vte` en cambios de `TerminalState`.
 
 use super::*;
+use std::time::Instant;
 
 pub(super) struct Performer<'a> {
     pub(super) state: &'a mut TerminalState,
+}
+
+impl<'a> Performer<'a> {
+    /// Texto del comando en `line`, desde la columna marcada por OSC 133;B.
+    fn command_text(&self, line: usize, start_col: usize) -> Option<String> {
+        let row = self.state.get_buffer_line(line)?;
+        let start = start_col.min(row.len());
+        let mut text = String::new();
+        for cell in row[start..].iter().filter(|c| c.width > 0) {
+            self.state.append_cell_text(cell, &mut text);
+        }
+        let text = text.trim_end().to_string();
+        (!text.is_empty()).then_some(text)
+    }
 }
 
 impl<'a> Perform for Performer<'a> {
@@ -1010,18 +1025,34 @@ impl<'a> Performer<'a> {
                     output_start: None,
                     output_end: None,
                     exit_code: None,
+                    command: None,
+                    command_col: self.state.cursor_x,
+                    started: None,
+                    finished: None,
+                    error_dismissed: false,
                 });
             }
             b'B' => {
                 // Command Start (OSC 133;B)
                 if let Some(block) = &mut self.state.active_block {
                     block.command_line = Some(cur_line);
+                    block.command_col = self.state.cursor_x;
                 }
             }
             b'C' => {
                 // Output Start (OSC 133;C)
+                let start_col = self
+                    .state
+                    .active_block
+                    .as_ref()
+                    .map_or(0, |b| b.command_col);
+                let command = self.command_text(cur_line, start_col);
                 if let Some(block) = &mut self.state.active_block {
                     block.output_start = Some(cur_line);
+                    block.started = Some(Instant::now());
+                    if command.is_some() {
+                        block.command = command;
+                    }
                 }
             }
             b'D' => {
@@ -1037,6 +1068,12 @@ impl<'a> Performer<'a> {
                 if let Some(mut block) = self.state.active_block.take() {
                     block.output_end = Some(cur_line);
                     block.exit_code = exit_code;
+                    block.finished = Some(Instant::now());
+                    if block.command.is_none() {
+                        block.command = self
+                            .command_text(block.command_line.unwrap_or(cur_line), block.command_col)
+                            .filter(|c| !c.is_empty());
+                    }
                     self.state.push_command_block(block);
                 }
             }

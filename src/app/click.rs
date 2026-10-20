@@ -1349,6 +1349,86 @@ impl AxonApp {
                     }
                 }
 
+                // Tarjetas de bloque (OSC 133): copiar el comando, repetirlo o atender la tarjeta de error.
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let hit = self.renderer.as_ref().and_then(|renderer| {
+                        let cards = renderer.block_cards(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                            &pane.terminal,
+                        );
+                        cards.iter().find_map(|card| {
+                            card.button_at(mx, my)
+                                .map(|button| (card.block_index, button))
+                        })
+                    });
+                    if let Some((block_index, action)) = hit {
+                        let terminal = &mut pane.terminal;
+                        // El índice de la tarjeta en curso cae justo después de los bloques cerrados.
+                        let block = if block_index < terminal.command_blocks.len() {
+                            terminal.command_blocks.get_mut(block_index)
+                        } else {
+                            terminal.active_block.as_mut()
+                        };
+                        // El comando lo tecleó el usuario, pero la salida es no confiable: una sola línea, sin control.
+                        let command = block
+                            .as_ref()
+                            .and_then(|b| b.command.as_deref())
+                            .map(|c| c.chars().filter(|c| !c.is_control()).collect::<String>());
+                        let exit_code = block.as_ref().and_then(|b| b.exit_code);
+                        match action {
+                            crate::renderer::BlockCardButton::Copy => {
+                                if let (Some(command), Some(cb)) = (command, &mut self.clipboard) {
+                                    let _ = cb.set_text(command);
+                                }
+                            }
+                            crate::renderer::BlockCardButton::Repeat => {
+                                // Solo con el panel en el prompt: si corre otro comando, el texto iría a su entrada.
+                                let running = terminal
+                                    .active_block
+                                    .as_ref()
+                                    .is_some_and(|b| b.output_start.is_some());
+                                if let (Some(command), false) = (command, running) {
+                                    pane.pty.write_input(format!("{command}\r").as_bytes());
+                                }
+                            }
+                            // Sin agente integrado, «Explicar» deja en el portapapeles la petición lista para pegar.
+                            crate::renderer::BlockCardButton::Explain => {
+                                if let (Some(command), Some(cb)) = (command, &mut self.clipboard) {
+                                    let code = exit_code.unwrap_or(1);
+                                    let _ = cb.set_text(format!(
+                                        "El comando `{command}` terminó con código {code}. Explica el error y propón la solución."
+                                    ));
+                                }
+                            }
+                            crate::renderer::BlockCardButton::Ignore => {
+                                if let Some(block) = block {
+                                    block.error_dismissed = true;
+                                }
+                            }
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                }
+
+                // La cabecera de una tarjeta no inicia una selección de texto.
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let on_header = self.renderer.as_ref().is_some_and(|renderer| {
+                        renderer
+                            .block_cards(rect.x, rect.y, rect.width, rect.height, &pane.terminal)
+                            .iter()
+                            .any(|card| card.header_at(mx, my))
+                    });
+                    if on_header {
+                        return;
+                    }
+                }
+
                 if pane.terminal.is_mouse_reporting_active() && !bypass {
                     if let Some(renderer) = &self.renderer {
                         let term_x = mx.saturating_sub(rect.x);

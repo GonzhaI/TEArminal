@@ -7,6 +7,7 @@
 // hover): son primitivas planas, y agruparlas en structs solo trasladaría el ruido a cada llamada.
 #![allow(clippy::too_many_arguments)]
 
+mod blocks;
 mod context_menu;
 pub mod d3d11;
 mod draw;
@@ -30,6 +31,7 @@ use glyphs::{
     EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
 };
 
+pub use blocks::BlockCardButton;
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};

@@ -2089,6 +2089,157 @@ fn preview_ui_scenes() {
             .unwrap();
     }
 
+    // 9. WP4 · bloques OSC 133 como tarjetas con franja de contexto (mock v2-superior-izquierda)
+    {
+        use crate::ui::LucideIcon;
+        let mut cards_term = crate::terminal::TerminalState::new(110, 30, 2000, theme.clone());
+        cards_term.current_dir = Some(std::path::PathBuf::from("C:\\Users\\dev\\axon"));
+        cards_term.process_bytes(
+            concat!(
+                "\r\n\r\n",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test --release\x1b]133;C\x07\r\n",
+                "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+                "\x1b[38;5;114m    Finished\x1b[0m `release` profile [optimized] in 1m 06s\r\n",
+                "     Running unittests src\\main.rs\r\n",
+                "\x1b[1mtest result: \x1b[38;5;114mok\x1b[0m\x1b[1m. 205 passed; 0 failed\x1b[0m\r\n",
+                "\x1b]133;D;0\x07",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
+                "\x1b[38;5;221m M\x1b[0m src\\theme.rs\r\n",
+                "\x1b[38;5;221m M\x1b[0m src\\config.rs\r\n",
+                "\x1b[38;5;221m M\x1b[0m src\\renderer\\tokens.rs\r\n",
+                "\x1b[38;5;114m??\x1b[0m mock\\a.html\r\n",
+                "\x1b]133;D;0\x07",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
+                "\x1b[38;5;203merror:\x1b[0m script \"build\" no encontrado en package.json\r\n",
+                "\x1b[38;5;245mDid you mean one of these?\x1b[0m\r\n",
+                "    build:release  build:debug\r\n",
+                "\x1b]133;D;1\x07",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07claude\x1b]133;C\x07\r\n",
+                " \x1b[38;5;114m●\x1b[0m Actualizo la lista de sesiones con el estado del agente.\r\n",
+                "   \x1b[38;5;245mUpdate(src/renderer/sidebar.rs)\x1b[0m \x1b[38;5;114m+38\x1b[0m \x1b[38;5;203m-12\x1b[0m\r\n",
+            )
+            .as_bytes(),
+        );
+        let durations = [
+            std::time::Duration::from_millis(22_900),
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(400),
+        ];
+        for (block, duration) in cards_term.command_blocks.iter_mut().zip(durations) {
+            block.finished = block.started.map(|s| s + duration);
+        }
+        if let Some(running) = cards_term.active_block.as_mut() {
+            running.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(254));
+        }
+
+        let mut buf = vec![0u32; w * h];
+        buf.fill(theme.background.to_u32_xrgb());
+        let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
+        r.render_top_tab_bar(
+            &mut buf,
+            w,
+            h,
+            &wp1_tabs,
+            &top_project,
+            false,
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &theme,
+        );
+        r.render_sidebar(
+            &mut buf,
+            w,
+            h,
+            SIDEBAR_WIDTH,
+            status_h,
+            &projects,
+            &header,
+            None,
+            &tabs,
+            0,
+            None,
+            None,
+            false,
+            false,
+            false,
+            &theme,
+        );
+        let pane_x = SIDEBAR_WIDTH;
+        let pane_y = wp4_rects.bar_h;
+        let pane_w = w - SIDEBAR_WIDTH;
+        let pane_h = h - wp4_rects.bar_h - status_h;
+        r.render_pane_header(
+            &mut buf,
+            w,
+            h,
+            (pane_x, pane_y, pane_w),
+            "axon",
+            Some("cargo test"),
+            LucideIcon::Terminal,
+            theme.text_secondary(),
+            true,
+            false,
+            None,
+            &theme,
+        );
+        let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
+        r.render_pane_with_context(
+            &mut buf,
+            w,
+            h,
+            pane_x,
+            pane_y + header_offset,
+            pane_w,
+            pane_h - header_offset,
+            &cards_term,
+            &theme,
+            true,
+            true,
+            false,
+            Some("main"),
+        );
+        r.render_status_bar_with_ai(
+            &mut buf,
+            w,
+            h,
+            SIDEBAR_WIDTH,
+            Some("C:\\Users\\dev\\axon"),
+            Some("main"),
+            None,
+            110,
+            30,
+            AiAgentStatus::Claude,
+            Some("claude-sonnet-5-5"),
+            &wp1_meters,
+            false,
+            false,
+            &theme,
+        );
+        write_ppm(&buf, "wp4-bloques.ppm");
+        let rgb: Vec<u8> = buf
+            .iter()
+            .flat_map(|px| {
+                [
+                    ((px >> 16) & 0xFF) as u8,
+                    ((px >> 8) & 0xFF) as u8,
+                    (px & 0xFF) as u8,
+                ]
+            })
+            .collect();
+        image::RgbImage::from_raw(w as u32, h as u32, rgb)
+            .unwrap()
+            .save(out.join("wp4-bloques.png"))
+            .unwrap();
+    }
+
     println!("previews in {}", out.display());
 }
 

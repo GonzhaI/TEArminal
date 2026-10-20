@@ -102,6 +102,23 @@ pub struct CommandBlock {
     pub output_start: Option<usize>,
     pub output_end: Option<usize>,
     pub exit_code: Option<i32>,
+    /// Texto del comando sin el prompt (desde OSC 133;C), para copiarlo o repetirlo.
+    pub command: Option<String>,
+    /// Columna en la que empieza el comando dentro de `command_line`.
+    pub command_col: usize,
+    /// Marca de tiempo del inicio de la ejecución (OSC 133;C).
+    pub started: Option<std::time::Instant>,
+    /// Marca de tiempo del fin (OSC 133;D); su diferencia con `started` es la duración.
+    pub finished: Option<std::time::Instant>,
+    /// El usuario descartó los botones «Explicar» / «Ignorar» de esta tarjeta de error.
+    pub error_dismissed: bool,
+}
+
+impl CommandBlock {
+    /// Duración real de la ejecución, si el shell reportó inicio y fin.
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        Some(self.finished?.duration_since(self.started?))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
