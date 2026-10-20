@@ -193,10 +193,11 @@ pub struct RemoteLsReq {
 
 impl FileExplorer {
     pub const HEADER_HEIGHT: usize = 38;
-    pub const SUBHEADER_HEIGHT: usize = 30;
+    /// Aire entre la cabecera de sección y la lista (sin barra de herramientas).
+    pub const SUBHEADER_HEIGHT: usize = 0;
     pub const ITEM_HEIGHT: usize = 26;
     /// Aire entre el sub-encabezado y la primera fila de la lista
-    pub const LIST_TOP_PAD: usize = 8;
+    pub const LIST_TOP_PAD: usize = 4;
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[inline]

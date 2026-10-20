@@ -640,7 +640,6 @@ impl SidebarRects {
     pub const PAD_X: usize = Self::RAIL_W + 8;
     pub const CLOSE_SIZE: usize = 24;
     pub const PLUS_SIZE: usize = 28;
-    pub const TOGGLE_H: usize = 30;
 
     /// Cuadrado `i` del riel: los proyectos, las sesiones sueltas si las hay y, al final, «Agregar proyecto».
     #[inline]
@@ -671,10 +670,7 @@ impl SidebarRects {
 
     #[inline]
     pub fn list_max_y(usable_h: usize) -> usize {
-        Self::toggle_btn_rect(usable_h)
-            .1
-            .saturating_sub(8)
-            .max(Self::LIST_START_Y)
+        Self::content_bottom(usable_h).max(Self::LIST_START_Y)
     }
 
     /// Fin (y) de la lista de sesiones. Sin explorador llega hasta el pie; con él la lista cede espacio:
@@ -689,10 +685,14 @@ impl SidebarRects {
         Self::LIST_START_Y + rows.clamp(1, cap_rows) * stride
     }
 
-    /// Rectángulo del explorador alojado bajo la lista y sobre el pie (local al panel).
-    pub fn explorer_rect(usable_h: usize, list_end: usize) -> Rect {
-        let top = list_end + 8;
-        let bottom = Self::toggle_btn_rect(usable_h).1.saturating_sub(8);
+    /// Rectángulo del explorador alojado bajo la lista y la sección «Cambios» (`change_rows` filas).
+    pub fn explorer_rect_after(usable_h: usize, list_end: usize, change_rows: usize) -> Rect {
+        let top = if change_rows == 0 {
+            list_end + 8
+        } else {
+            PanelChangesRects::top(list_end) + PanelChangesRects::height(change_rows) + 8
+        };
+        let bottom = Self::content_bottom(usable_h);
         (
             Self::RAIL_W,
             top,
@@ -714,6 +714,24 @@ impl SidebarRects {
     #[inline]
     pub fn row_y(vis_idx: usize) -> usize {
         Self::LIST_START_Y + vis_idx * (Self::TAB_ITEM_H + Self::TAB_SPACING)
+    }
+
+    /// Borde inferior del contenido del panel (sin el pie, que ya no existe).
+    #[inline]
+    pub fn content_bottom(usable_h: usize) -> usize {
+        usable_h.saturating_sub(8)
+    }
+
+    /// Botón de ajustes al fondo del riel (modo vertical): abre Ajustes.
+    #[inline]
+    pub fn settings_btn_rect(usable_h: usize) -> Rect {
+        let size = 30;
+        (
+            (Self::RAIL_W - size) / 2,
+            usable_h.saturating_sub(size + 16),
+            size,
+            size,
+        )
     }
 
     /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
@@ -756,17 +774,6 @@ impl SidebarRects {
         (idx < total_tabs).then_some(idx)
     }
 
-    /// Botón «Ocultar» del pie, compartido por dibujo y clic (también cuando la barra está oculta).
-    #[inline]
-    pub fn toggle_btn_rect(usable_h: usize) -> Rect {
-        (
-            Self::PAD_X,
-            usable_h.saturating_sub(Self::TOGGLE_H + 8),
-            Self::WIDTH - Self::PAD_X - 8,
-            Self::TOGGLE_H,
-        )
-    }
-
     #[inline]
     pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect.2 > 0
@@ -788,22 +795,9 @@ impl ProjectsPanelRects {
     pub const ROW_STEP: usize = 48;
     pub const ROWS_TOP: usize = SidebarRects::TOP + Self::HEADER_H + 4;
 
-    /// Botón «Ocultar panel» del pie.
-    #[inline]
-    pub fn toggle_btn_rect(usable_h: usize) -> Rect {
-        (
-            8,
-            usable_h.saturating_sub(SidebarRects::TOGGLE_H + 8),
-            SidebarRects::WIDTH - 16,
-            SidebarRects::TOGGLE_H,
-        )
-    }
-
     /// Filas que caben (proyectos y «Agregar proyecto»): como mucho el 40 % del alto libre.
     pub fn visible_rows(usable_h: usize) -> usize {
-        let free = Self::toggle_btn_rect(usable_h)
-            .1
-            .saturating_sub(8 + Self::ROWS_TOP);
+        let free = SidebarRects::content_bottom(usable_h).saturating_sub(8 + Self::ROWS_TOP);
         (free * 2 / 5 / Self::ROW_STEP).max(2)
     }
 
@@ -831,10 +825,14 @@ impl ProjectsPanelRects {
         (rel % Self::ROW_STEP < Self::ROW_H && slot < shown).then_some(scroll + slot)
     }
 
-    /// Rectángulo del explorador alojado bajo la lista y sobre el pie.
-    pub fn explorer_rect(usable_h: usize, rows_end: usize) -> Rect {
-        let top = rows_end + 8;
-        let bottom = Self::toggle_btn_rect(usable_h).1.saturating_sub(8);
+    /// Rectángulo del explorador alojado bajo los proyectos y la sección «Cambios».
+    pub fn explorer_rect_after(usable_h: usize, rows_end: usize, change_rows: usize) -> Rect {
+        let top = if change_rows == 0 {
+            rows_end + 8
+        } else {
+            PanelChangesRects::top(rows_end) + PanelChangesRects::height(change_rows) + 8
+        };
+        let bottom = SidebarRects::content_bottom(usable_h);
         (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
     }
 }
@@ -907,5 +905,68 @@ impl SettingsPageRects {
     /// Fila de la lista de temas bajo el ratón, si hay alguna
     pub fn theme_row_at(&self, mx: usize, my: usize) -> Option<usize> {
         Self::inside(mx, my, self.theme_list).then(|| (my - self.theme_list.1) / Self::THEME_ROW_H)
+    }
+}
+
+/// Geometría de la sección «Cambios» del panel lateral: cabecera con contador y filas de archivos.
+/// Es local al panel (igual que `SidebarRects`) y la comparten dibujo, clic y hover.
+pub struct PanelChangesRects;
+
+impl PanelChangesRects {
+    pub const HEADER_H: usize = 30;
+    pub const ROW_H: usize = 26;
+    /// Aire entre el fin de la lista de sesiones y la sección.
+    pub const GAP: usize = 4;
+    pub const MAX_ROWS: usize = 6;
+    /// Alto que se reserva bajo la sección para la cabecera y dos filas de «Archivos».
+    const TREE_RESERVE: usize = 110;
+
+    /// Y donde empieza la sección, justo bajo la lista de sesiones o de proyectos.
+    #[inline]
+    pub fn top(list_end: usize) -> usize {
+        list_end + Self::GAP
+    }
+
+    /// Filas de cambios que caben entre `top` y `bottom`, sin dejar el árbol de archivos sin sitio.
+    pub fn shown_rows(bottom: usize, top: usize, total: usize) -> usize {
+        if total == 0 || bottom <= top {
+            return 0;
+        }
+        let available = bottom - top;
+        let min = Self::HEADER_H + Self::ROW_H + Self::TREE_RESERVE;
+        if available < min {
+            return 0;
+        }
+        total
+            .min((available - Self::HEADER_H - Self::TREE_RESERVE) / Self::ROW_H)
+            .min(Self::MAX_ROWS)
+    }
+
+    /// Alto de la sección para `rows` filas; 0 si no se muestra.
+    #[inline]
+    pub fn height(rows: usize) -> usize {
+        if rows == 0 {
+            0
+        } else {
+            Self::HEADER_H + rows * Self::ROW_H
+        }
+    }
+
+    #[inline]
+    pub fn row_rect(x: usize, top: usize, w: usize, i: usize) -> Rect {
+        (x, top + Self::HEADER_H + i * Self::ROW_H, w, Self::ROW_H)
+    }
+
+    /// Fila `i` (0..rows) bajo `(mx, my)`.
+    pub fn row_at(
+        mx: usize,
+        my: usize,
+        x: usize,
+        top: usize,
+        w: usize,
+        rows: usize,
+    ) -> Option<usize> {
+        let i = my.checked_sub(top + Self::HEADER_H)? / Self::ROW_H;
+        (i < rows && mx >= x && mx < x + w).then_some(i)
     }
 }

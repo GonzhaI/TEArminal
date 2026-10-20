@@ -110,57 +110,62 @@ impl TerminalRenderer {
         // 3. Cabecera del proyecto: nombre, rama y carpeta. El botón «+» abre una sesión nueva.
         let col_x = rail_w + 14;
         let plus = SidebarRects::plus_btn();
-        let title_end = self.draw_ui_text(
+        // La rama va como píldora alineada a la derecha, junto al «+».
+        let chip = header.branch.as_ref().map(|branch| {
+            let text_w = self.measure_mono_text(branch, tokens::MICRO + 0.5, false);
+            let chip_w = text_w + 28;
+            let x = plus.0.saturating_sub(8).saturating_sub(chip_w);
+            (branch.clone(), x, chip_w)
+        });
+        let title_max = chip
+            .as_ref()
+            .map_or(plus.0.saturating_sub(8), |(_, x, _)| x.saturating_sub(8));
+        let _ = self.draw_ui_text(
             buffer,
             width,
             height,
             &header.title,
             col_x,
             top + 26,
-            plus.0.saturating_sub(8),
+            title_max,
             theme.foreground,
             tokens::SECTION + 1.5,
             true,
         );
-        if let Some(branch) = &header.branch {
-            let chip_x = title_end + 10;
-            let text_w = self.measure_mono_text(branch, tokens::MICRO + 0.5, false);
-            let chip_w = text_w + 28;
-            if chip_x + chip_w < plus.0 {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    chip_x,
-                    top + 12,
-                    chip_w,
-                    20,
-                    6,
-                    theme.surface_bg(),
-                );
-                self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
-                    crate::ui::LucideIcon::GitBranch,
-                    chip_x + 11,
-                    top + 22,
-                    11.0,
-                    theme.accent_color(),
-                );
-                self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
-                    branch,
-                    chip_x + 22,
-                    top + 26,
-                    chip_x + chip_w,
-                    theme.text_secondary(),
-                    tokens::MICRO + 0.5,
-                    false,
-                );
-            }
+        if let Some((branch, chip_x, chip_w)) = &chip {
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                *chip_x,
+                top + 10,
+                *chip_w,
+                22,
+                11,
+                theme.surface_bg(),
+            );
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::GitBranch,
+                chip_x + 11,
+                top + 21,
+                11.0,
+                theme.accent_color(),
+            );
+            self.draw_mono_text(
+                buffer,
+                width,
+                height,
+                branch,
+                chip_x + 22,
+                top + 25,
+                chip_x + chip_w - 4,
+                theme.text_secondary(),
+                tokens::MICRO + 0.5,
+                false,
+            );
         }
         if let Some(path) = &header.path {
             self.draw_mono_text(
@@ -265,19 +270,32 @@ impl TerminalRenderer {
                 _ => theme.text_muted(),
             };
 
-            // Indicador: punto de estado en terminales; icono en Ajustes y visores.
-            if tab.status.is_some() {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    tab_x + 14,
-                    tab_y + 13,
-                    8,
-                    8,
-                    4,
-                    status_color,
-                );
+            // Indicador: anillo en curso, punto lleno terminado/falló/en espera; icono en Ajustes y visores.
+            if let Some(status) = tab.status {
+                match status {
+                    SessionStatus::Running => crate::ui::stroke_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        tab_x + 13,
+                        tab_y + 12,
+                        10,
+                        10,
+                        5,
+                        status_color,
+                    ),
+                    _ => crate::ui::draw_rounded_rect(
+                        buffer,
+                        width,
+                        height,
+                        tab_x + 14,
+                        tab_y + 13,
+                        8,
+                        8,
+                        4,
+                        status_color,
+                    ),
+                }
             } else {
                 self.draw_lucide_icon(
                     buffer,
@@ -354,16 +372,16 @@ impl TerminalRenderer {
                 );
             }
             if let Some(detail) = &tab.detail {
-                self.draw_mono_text(
+                self.draw_ui_text(
                     buffer,
                     width,
                     height,
                     detail,
                     title_x,
-                    tab_y + 38,
+                    tab_y + 39,
                     tab_x + tab_w - 10,
                     theme.text_muted(),
-                    tokens::MICRO + 0.5,
+                    tokens::BODY,
                     false,
                 );
             }
@@ -420,32 +438,29 @@ impl TerminalRenderer {
             );
         }
 
-        // El explorador va alojado bajo la lista: una hairline lo separa de las sesiones.
-        if header.explorer_visible {
-            Self::draw_rect(
+        // 5. Sección «Cambios» del panel (bajo las sesiones) y, debajo, el explorador con «Archivos».
+        let changes_top = crate::renderer::PanelChangesRects::top(header.list_end);
+        let change_rows = crate::renderer::PanelChangesRects::shown_rows(
+            SidebarRects::content_bottom(usable_h),
+            changes_top,
+            header.changes.len(),
+        );
+        if header.explorer_visible && change_rows > 0 {
+            self.draw_changes_section(
                 buffer,
                 width,
                 height,
-                rail_w,
-                list_max_y + 3,
-                sidebar_width.saturating_sub(rail_w + 1),
-                1,
-                line,
+                SidebarRects::PAD_X,
+                changes_top,
+                sidebar_width.saturating_sub(SidebarRects::PAD_X + 8),
+                &header.changes[..change_rows],
+                header.changes.len(),
+                theme,
             );
         }
 
-        // 6. Pie: ocultar la barra lateral, con atajo como dato.
-        let btn = SidebarRects::toggle_btn_rect(usable_h);
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            rail_w,
-            btn.1.saturating_sub(8),
-            sidebar_width.saturating_sub(rail_w + 1),
-            1,
-            line,
-        );
+        // 6. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
+        let btn = SidebarRects::settings_btn_rect(usable_h);
         if hovered_toggle_btn {
             crate::ui::draw_rounded_rect(
                 buffer,
@@ -459,61 +474,141 @@ impl TerminalRenderer {
                 theme.surface_hover(),
             );
         }
-        let fg = if hovered_toggle_btn {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        let cy = btn.1 + btn.3 / 2;
         self.draw_lucide_icon(
             buffer,
             width,
             height,
-            if header.on_right {
-                crate::ui::LucideIcon::PanelRight
+            crate::ui::LucideIcon::Sliders,
+            btn.0 + btn.2 / 2,
+            btn.1 + btn.3 / 2,
+            16.0,
+            if hovered_toggle_btn {
+                theme.foreground
             } else {
-                crate::ui::LucideIcon::PanelLeft
+                theme.text_secondary()
             },
-            btn.0 + 12,
-            cy,
+        );
+    }
+
+    /// Sección «Cambios»: cabecera con icono, título y contador; una fila por archivo con su insignia.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_changes_section(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        x: usize,
+        top: usize,
+        w: usize,
+        changes: &[SidebarChange],
+        total: usize,
+        theme: &Theme,
+    ) {
+        use crate::explorer::GitFileStatus;
+        use crate::renderer::PanelChangesRects;
+
+        let center_y = top + PanelChangesRects::HEADER_H / 2;
+        self.draw_lucide_icon(
+            buffer,
+            width,
+            height,
+            crate::ui::LucideIcon::GitBranch,
+            x + 16,
+            center_y,
             13.0,
-            fg,
+            theme.accent_color(),
         );
         self.draw_ui_text(
             buffer,
             width,
             height,
-            "Ocultar panel",
-            btn.0 + 24,
-            cy + 4,
-            btn.0 + btn.2.saturating_sub(76),
-            fg,
-            tokens::BODY,
-            false,
+            "Cambios",
+            x + 30,
+            center_y + 4,
+            x + w.saturating_sub(40),
+            theme.foreground,
+            tokens::SECTION,
+            true,
         );
+        if total > 0 {
+            let badge = (x + w.saturating_sub(24), center_y.saturating_sub(9), 24, 18);
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                badge.0,
+                badge.1,
+                badge.2,
+                badge.3,
+                9,
+                theme.surface_bg(),
+            );
+            let label = total.to_string();
+            let lw = self.measure_mono_text(&label, tokens::MICRO, false);
+            self.draw_mono_text(
+                buffer,
+                width,
+                height,
+                &label,
+                badge.0 + (badge.2.saturating_sub(lw)) / 2,
+                badge.1 + 13,
+                badge.0 + badge.2,
+                theme.text_secondary(),
+                tokens::MICRO,
+                false,
+            );
+        }
 
-        let b_w = self.measure_mono_text("B", tokens::MICRO, false) + 12;
-        let ctrl_w = self.measure_mono_text("Ctrl", tokens::MICRO, false) + 12;
-        let bx = btn.0 + btn.2 - b_w - 8;
-        let cx = bx - ctrl_w - 4;
-        self.draw_keycap(
-            buffer,
-            width,
-            height,
-            cx,
-            cy - tokens::KEYCAP_H / 2,
-            "Ctrl",
-            theme,
-        );
-        self.draw_keycap(
-            buffer,
-            width,
-            height,
-            bx,
-            cy - tokens::KEYCAP_H / 2,
-            "B",
-            theme,
-        );
+        for (i, change) in changes.iter().enumerate() {
+            let (rx, ry, rw, rh) = PanelChangesRects::row_rect(x, top, w, i);
+            let cy = ry + rh / 2;
+            let ext = change
+                .path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            let (icon, color) = match ext {
+                "rs" => (crate::ui::LucideIcon::FileCode, theme.ansi[1]),
+                "toml" | "json" | "yaml" | "yml" => {
+                    (crate::ui::LucideIcon::FileJson, theme.ansi[3])
+                }
+                "md" | "txt" => (crate::ui::LucideIcon::FileText, theme.ansi[6]),
+                _ => (crate::ui::LucideIcon::File, theme.ansi[8]),
+            };
+            self.draw_lucide_icon(buffer, width, height, icon, rx + 18, cy, 11.5, color);
+            self.draw_ui_text(
+                buffer,
+                width,
+                height,
+                &change.name,
+                rx + 30,
+                cy + 4,
+                rx + rw.saturating_sub(24),
+                theme.text_secondary(),
+                tokens::BODY,
+                false,
+            );
+            let (letter, badge_color) = match change.status {
+                GitFileStatus::Modified => ("M", theme.ansi[3]),
+                GitFileStatus::Untracked => ("U", theme.ansi[2]),
+                GitFileStatus::Added => ("A", theme.ansi[2]),
+                GitFileStatus::Deleted => ("D", theme.ansi[1]),
+                GitFileStatus::Renamed => ("R", theme.ansi[6]),
+            };
+            let bw = self.measure_mono_text(letter, tokens::DETAIL, false);
+            self.draw_mono_text(
+                buffer,
+                width,
+                height,
+                letter,
+                rx + rw.saturating_sub(bw),
+                cy + 4,
+                rx + rw,
+                badge_color,
+                tokens::DETAIL,
+                false,
+            );
+        }
     }
 
     /// Cuadrado de proyecto del riel: color propio, inicial y marca lateral del activo.

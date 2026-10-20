@@ -4,7 +4,8 @@
 
 use super::*;
 use crate::renderer::{
-    ProjectsPanelRects, SessionStatus, SidebarHeader, SidebarProject, SidebarRects,
+    AiAgentStatus, ProjectsPanelRects, SessionStatus, SidebarChange, SidebarHeader, SidebarProject,
+    SidebarRects,
 };
 use crate::ui::LucideIcon;
 use std::path::{Path, PathBuf};
@@ -183,7 +184,80 @@ impl AxonApp {
             on_right: self.panel_on_right(),
             list_end: self.panel_list_end(usable_h),
             explorer_visible: self.file_explorer.visible,
+            changes: self.panel_changes(),
         }
+    }
+
+    /// Archivos con cambios de git para la sección «Cambios» del panel, ordenados por ruta.
+    pub(super) fn panel_changes(&self) -> Vec<SidebarChange> {
+        let Some(root) = self.file_explorer.git_root.as_deref() else {
+            return Vec::new();
+        };
+        let mut changes: Vec<SidebarChange> = self
+            .file_explorer
+            .git_statuses
+            .iter()
+            .filter(|(path, status)| {
+                **status != crate::explorer::GitFileStatus::Deleted && path.starts_with(root)
+            })
+            .map(|(path, status)| SidebarChange {
+                name: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                path: path.clone(),
+                status: *status,
+            })
+            .collect();
+        changes.sort_by(|a, b| a.path.cmp(&b.path));
+        changes
+    }
+
+    /// Segunda línea de la fila de sesión: agente, modelo y minutos si corre un agente de IA; si no,
+    /// el contexto real de la pestaña (comando, carpeta o SSH).
+    pub(super) fn session_detail(&self, tab: &TerminalTab) -> Option<String> {
+        if let Some(kind) = super::ai_usage::active_agents(tab).first().copied() {
+            let agent = match kind {
+                AiAgentStatus::Claude => "claude",
+                AiAgentStatus::Agy => "agy",
+                AiAgentStatus::Gemini => "gemini",
+                AiAgentStatus::Aider => "aider",
+                AiAgentStatus::Copilot => "copilot",
+                AiAgentStatus::Ollama => "ollama",
+                AiAgentStatus::None => "",
+            };
+            let mut detail = agent.to_string();
+            if let Some(model) = self.ai_usage.snapshot.model_for(kind) {
+                detail.push_str(", ");
+                detail.push_str(model);
+            }
+            let mins = (tab.started_at.elapsed().as_secs() / 60).max(1);
+            detail.push_str(&format!(", {mins} min"));
+            return Some(detail);
+        }
+        tab.sidebar_detail()
+    }
+
+    /// Archivo de la sección «Cambios» bajo `(mx, my)` (coordenadas locales al panel).
+    pub(super) fn panel_change_at(&self, mx: usize, my: usize, usable_h: usize) -> Option<PathBuf> {
+        if !self.file_explorer.visible {
+            return None;
+        }
+        let list_end = self.panel_list_end(usable_h);
+        let (x, width) = if self.is_horizontal_tabs() {
+            (8, SidebarRects::WIDTH - 16)
+        } else {
+            (
+                SidebarRects::PAD_X,
+                SidebarRects::WIDTH - SidebarRects::PAD_X - 8,
+            )
+        };
+        let top = crate::renderer::PanelChangesRects::top(list_end);
+        let bottom = SidebarRects::content_bottom(usable_h);
+        let changes = self.panel_changes();
+        let rows = crate::renderer::PanelChangesRects::shown_rows(bottom, top, changes.len());
+        let i = crate::renderer::PanelChangesRects::row_at(mx, my, x, top, width, rows)?;
+        changes.get(i).map(|c| c.path.clone())
     }
 
     /// Carpeta donde abre una sesión nueva: la raíz del proyecto a la vista, si es una carpeta.

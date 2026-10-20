@@ -61,6 +61,14 @@ pub struct TopBarProject {
     pub has_news: bool,
 }
 
+/// Archivo con cambios de git en la sección «Cambios» del panel.
+#[derive(Debug, Clone)]
+pub struct SidebarChange {
+    pub name: String,
+    pub path: std::path::PathBuf,
+    pub status: crate::explorer::GitFileStatus,
+}
+
 /// Cabecera de la columna de sesiones: el proyecto seleccionado.
 #[derive(Debug, Clone, Default)]
 pub struct SidebarHeader {
@@ -69,9 +77,11 @@ pub struct SidebarHeader {
     pub path: Option<String>,
     /// El panel está a la derecha: el borde que lo separa del contenido es el izquierdo.
     pub on_right: bool,
-    /// Fin (y) de la lista de sesiones; bajo ella queda el explorador si está visible.
+    /// Fin (y) de la lista de sesiones; bajo ella queda la sección «Cambios» y el explorador.
     pub list_end: usize,
     pub explorer_visible: bool,
+    /// Archivos con cambios (sección «Cambios» del panel); vacío fuera de un repositorio.
+    pub changes: Vec<SidebarChange>,
 }
 
 #[derive(Debug, Clone)]

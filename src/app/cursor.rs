@@ -444,7 +444,7 @@ impl AxonApp {
                     TopTabBarRects::inside(
                         lx,
                         my,
-                        crate::renderer::SidebarRects::toggle_btn_rect(usable_h),
+                        crate::renderer::SidebarRects::settings_btn_rect(usable_h),
                     )
                 })
             } else {
@@ -569,29 +569,17 @@ impl AxonApp {
         if self.is_horizontal_tabs() {
             let usable_h = win_h.saturating_sub(self.status_bar_height());
             let mut new_row = None;
-            let mut new_toggle = false;
             if let Some(lx) = self.panel_local_x(mx, my, win_w) {
-                new_toggle = TopTabBarRects::inside(
-                    lx,
+                new_row = crate::renderer::ProjectsPanelRects::row_at(
                     my,
-                    crate::renderer::ProjectsPanelRects::toggle_btn_rect(usable_h),
+                    usable_h,
+                    self.panel_rail().len() + 1,
+                    self.sidebar_scroll_offset,
                 );
-                if !new_toggle {
-                    new_row = crate::renderer::ProjectsPanelRects::row_at(
-                        my,
-                        usable_h,
-                        self.panel_rail().len() + 1,
-                        self.sidebar_scroll_offset,
-                    );
-                }
-                is_pointer |= new_toggle || new_row.is_some();
+                is_pointer |= new_row.is_some() || self.panel_change_at(lx, my, usable_h).is_some();
             }
             if self.hovered_project != new_row {
                 self.hovered_project = new_row;
-                needs_redraw = true;
-            }
-            if self.hovered_toggle_btn != new_toggle {
-                self.hovered_toggle_btn = new_toggle;
                 needs_redraw = true;
             }
         }
@@ -829,22 +817,6 @@ impl AxonApp {
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let sub_y = panel_y + crate::explorer::FileExplorer::HEADER_HEIGHT;
-                let nav_y = sub_y + (crate::explorer::FileExplorer::SUBHEADER_HEIGHT - 24) / 2;
-                let back_x = panel_x + 8;
-                let is_back_hover =
-                    mx >= back_x && mx < back_x + 24 && my >= nav_y && my < nav_y + 24;
-
-                let fwd_x = back_x + 26;
-                let is_fwd_hover = mx >= fwd_x && mx < fwd_x + 24 && my >= nav_y && my < nav_y + 24;
-
-                let up_x = fwd_x + 26;
-                let is_up_hover = mx >= up_x && mx < up_x + 24 && my >= nav_y && my < nav_y + 24;
-
-                let (px, py, pw, ph) =
-                    crate::explorer::FileExplorer::pin_btn_rect(panel_x, panel_y, panel_w);
-                let is_pin_hover = mx >= px && mx < px + pw && my >= py && my < py + ph;
-
                 let is_over_scrollbar = if let Some((track, _thumb)) =
                     TerminalRenderer::explorer_scrollbar_geometry(
                         win_w,
@@ -867,41 +839,20 @@ impl AxonApp {
                     self.file_explorer.item_at_y(my, panel_y)
                 };
 
-                if is_pin_hover
-                    || is_back_hover
-                    || is_fwd_hover
-                    || is_up_hover
-                    || item_hover.is_some()
-                {
+                if item_hover.is_some() {
                     is_pointer = true;
                 }
 
-                if self.file_explorer.hovered_pin_btn != is_pin_hover
-                    || self.file_explorer.hovered_back_btn != is_back_hover
-                    || self.file_explorer.hovered_forward_btn != is_fwd_hover
-                    || self.file_explorer.hovered_up_btn != is_up_hover
-                    || self.file_explorer.hovered_index != item_hover
+                if self.file_explorer.hovered_index != item_hover
                     || self.file_explorer.hovered_scrollbar != is_over_scrollbar
                 {
-                    self.file_explorer.hovered_pin_btn = is_pin_hover;
-                    self.file_explorer.hovered_back_btn = is_back_hover;
-                    self.file_explorer.hovered_forward_btn = is_fwd_hover;
-                    self.file_explorer.hovered_up_btn = is_up_hover;
                     self.file_explorer.hovered_index = item_hover;
                     self.file_explorer.hovered_scrollbar = is_over_scrollbar;
                     needs_redraw = true;
                 }
-            } else if self.file_explorer.hovered_pin_btn
-                || self.file_explorer.hovered_back_btn
-                || self.file_explorer.hovered_forward_btn
-                || self.file_explorer.hovered_up_btn
-                || self.file_explorer.hovered_index.is_some()
+            } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
             {
-                self.file_explorer.hovered_pin_btn = false;
-                self.file_explorer.hovered_back_btn = false;
-                self.file_explorer.hovered_forward_btn = false;
-                self.file_explorer.hovered_up_btn = false;
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
                 needs_redraw = true;
