@@ -254,6 +254,11 @@ impl AxonApp {
                     return;
                 }
 
+                // Clic en [🔍] Buscar: la paleta (WP5) aún no existe; no arrastra la ventana.
+                if TopTabBarRects::inside(mx, my, top_rects.search_btn) {
+                    return;
+                }
+
                 // Clic en pestañas o en botón cerrar 'x'
                 for (pos, &idx) in list.iter().enumerate() {
                     let tr = top_rects.tab_rect(pos);
@@ -331,6 +336,11 @@ impl AxonApp {
 
                 if TopTabBarRects::inside(mx, my, title_rects.settings_btn) {
                     self.open_or_switch_settings_tab();
+                    return;
+                }
+
+                // Píldora de búsqueda: la paleta (WP5) aún no existe; el clic no arrastra la ventana.
+                if TopTabBarRects::inside(mx, my, title_rects.search_box) {
                     return;
                 }
 

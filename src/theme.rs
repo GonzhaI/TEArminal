@@ -243,6 +243,13 @@ impl Theme {
         self.mix(self.background, self.foreground, 0.045)
     }
 
+    /// Fondo de las barras de ventana y de estado: en temas oscuros un paso hacia la sombra, para que
+    /// el chrome se separe del lienzo; en claros apenas se distingue de él.
+    pub fn bar_bg(&self) -> Color {
+        let depth = if self.is_dark() { 0.26 } else { 0.05 };
+        self.mix(self.background, Color::from_rgb(0, 0, 0), depth)
+    }
+
     /// Superficie elevada: filas activas, tarjetas, menús.
     pub fn chrome_bg_elevated(&self) -> Color {
         self.mix(self.background, self.foreground, 0.08)

@@ -3,7 +3,7 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Marca de Axon: icono + wordmark con tracking. Sin decoración fuera de la marca.
+    /// Marca de Axon: el prompt `>_` en acento y el wordmark. Sin decoración fuera de la marca.
     fn draw_brand(
         &mut self,
         buffer: &mut [u32],
@@ -13,38 +13,83 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let cy = bar_h / 2;
+        self.draw_mono_text(
+            buffer,
+            width,
+            height,
+            ">_",
+            16,
+            cy + 4,
+            40,
+            theme.accent_color(),
+            tokens::BODY,
+            true,
+        );
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            "Axon",
+            42,
+            cy + 5,
+            TopTabBarRects::BRAND_W,
+            theme.foreground,
+            tokens::TITLE,
+            true,
+        );
+    }
+
+    /// Píldora de búsqueda centrada del modo vertical: icono, invitación y atajo Ctrl K.
+    fn draw_search_pill(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        rect: Rect,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = rect;
+        if w < 40 || h == 0 {
+            return;
+        }
+        crate::ui::draw_rounded_rect(
+            buffer,
+            width,
+            height,
+            x,
+            y,
+            w,
+            h,
+            9,
+            theme.mix(theme.bar_bg(), theme.background, 0.4),
+        );
+        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 9, theme.chrome_bg());
         self.draw_lucide_icon(
             buffer,
             width,
             height,
-            crate::ui::LucideIcon::SquareTerminal,
-            18,
-            cy,
-            15.0,
-            theme.accent_color(),
+            crate::ui::LucideIcon::Search,
+            x + 16,
+            y + h / 2,
+            13.0,
+            theme.text_muted(),
         );
-        self.draw_ui_text_tracked(
+        let keycap = "Ctrl K";
+        let keycap_w = self.measure_mono_text(keycap, tokens::MICRO, false) + 12;
+        let keycap_x = x + w - 8 - keycap_w;
+        let keycap_y = y + (h.saturating_sub(tokens::KEYCAP_H)) / 2;
+        self.draw_keycap(buffer, width, height, keycap_x, keycap_y, keycap, theme);
+        self.draw_ui_text(
             buffer,
             width,
             height,
-            "AXON",
-            30,
-            cy + 4,
-            TopTabBarRects::BRAND_W.saturating_sub(14),
-            theme.foreground,
-            tokens::MICRO,
-            true,
-            1.5,
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            TopTabBarRects::BRAND_W.saturating_sub(10),
-            10,
-            1,
-            bar_h.saturating_sub(20),
-            theme.chrome_line(),
+            "Buscar sesiones, archivos y comandos",
+            x + 30,
+            y + h / 2 + 4,
+            keycap_x.saturating_sub(8),
+            theme.text_secondary(),
+            tokens::BODY,
+            false,
         );
     }
 
@@ -62,15 +107,17 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let (x, y, w, h) = rect;
-        let bg = if hovered {
+        // El selector es una píldora, no solo el avatar: superficie apenas más clara que la barra y
+        // hairline, como el resto de controles del chrome.
+        let chip_bg = if hovered {
             theme.surface_hover()
         } else {
-            theme.surface_bg()
+            theme.mix(theme.bar_bg(), theme.background, 0.4)
         };
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 9, bg);
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 9, theme.chrome_line());
+        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 8, chip_bg);
+        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 8, theme.surface_bg());
 
-        let sq = (x + 6, y + (h - 22) / 2, 22, 22);
+        let sq = (x + 7, y + (h.saturating_sub(24)) / 2, 24, 24);
         if project.is_loose {
             crate::ui::draw_rounded_rect(
                 buffer,
@@ -88,8 +135,8 @@ impl TerminalRenderer {
                 width,
                 height,
                 crate::ui::LucideIcon::Terminal,
-                sq.0 + 11,
-                sq.1 + 11,
+                sq.0 + 12,
+                sq.1 + 12,
                 13.0,
                 theme.foreground,
             );
@@ -104,7 +151,7 @@ impl TerminalRenderer {
                 height,
                 &label,
                 sq.0 + sq.2.saturating_sub(lw) / 2,
-                sq.1 + 16,
+                sq.1 + 17,
                 sq.0 + sq.2,
                 theme.background,
                 12.0,
@@ -116,9 +163,9 @@ impl TerminalRenderer {
             width,
             height,
             &project.title,
-            x + 36,
+            x + 37,
             y + h / 2 + 4,
-            x + w - 24,
+            x + w - 20,
             theme.foreground,
             tokens::TITLE,
             true,
@@ -128,38 +175,28 @@ impl TerminalRenderer {
             width,
             height,
             crate::ui::LucideIcon::ChevronDown,
-            x + w - 13,
+            x + w - 18,
             y + h / 2,
-            12.0,
+            11.0,
             theme.text_muted(),
         );
         if project.has_news {
+            crate::ui::draw_rounded_rect(buffer, width, height, x + w - 8, y, 9, 9, 4, chip_bg);
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,
                 height,
-                x + w - 7,
-                y - 3,
-                11,
-                11,
+                x + w - 6,
+                y + 2,
                 5,
-                theme.chrome_bg(),
-            );
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x + w - 5,
-                y - 1,
-                7,
-                7,
-                3,
+                5,
+                2,
                 theme.ansi[3],
             );
         }
     }
 
-    /// Botón de icono del chrome: plano, 30×30, radio 4, sin borde salvo estado activo.
+    /// Botón de icono del chrome: 32×32, radio 8, relleno solo con hover o estado activo.
     fn draw_chrome_action(
         &mut self,
         buffer: &mut [u32],
@@ -173,13 +210,16 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let (x, y, w, h) = rect;
+        if w == 0 || h == 0 {
+            return;
+        }
         if active || hovered {
             let bg = if active {
-                theme.accent_soft(30)
+                theme.surface_bg()
             } else {
                 theme.surface_hover()
             };
-            crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 4, bg);
+            crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 8, bg);
         }
         let fg = if active {
             theme.accent_color()
@@ -200,7 +240,7 @@ impl TerminalRenderer {
         );
     }
 
-    /// Pestaña activa: superficie del lienzo con esquinas superiores redondeadas y regla de acento.
+    /// Pestaña activa: superficie del lienzo con esquinas superiores redondeadas.
     fn draw_active_tab_surface(
         buffer: &mut [u32],
         width: usize,
@@ -210,7 +250,7 @@ impl TerminalRenderer {
     ) {
         let y = 5;
         let h = r.3.saturating_sub(y);
-        crate::ui::draw_rounded_rect(buffer, width, height, r.0, y, r.2, h, 5, theme.background);
+        crate::ui::draw_rounded_rect(buffer, width, height, r.0, y, r.2, h, 6, theme.background);
         // Base cuadrada: la pestaña se funde con el lienzo en el borde inferior.
         Self::draw_rect(
             buffer,
@@ -222,16 +262,50 @@ impl TerminalRenderer {
             h.saturating_sub(6),
             theme.background,
         );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            r.0 + 8,
-            y,
-            r.2.saturating_sub(16),
-            2,
-            theme.accent_color(),
-        );
+    }
+
+    /// Spinner de ocho segmentos con estela: la pestaña que ejecuta un comando.
+    fn draw_tab_spinner(
+        &mut self,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        cx: usize,
+        cy: usize,
+        color: Color,
+    ) {
+        const SEGMENTS: usize = 8;
+        const ALPHA: [u8; SEGMENTS] = [255, 205, 158, 116, 82, 56, 36, 22];
+        let phase = Self::spinner_phase();
+        let radius = 5.0f32;
+        for i in 0..SEGMENTS {
+            let angle =
+                (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
+            let px = cx as f32 + angle.cos() * radius;
+            let py = cy as f32 + angle.sin() * radius;
+            let step = (i + SEGMENTS - phase % SEGMENTS) % SEGMENTS;
+            let dot = Color::from_rgba(color.r, color.g, color.b, ALPHA[step]);
+            crate::ui::draw_rounded_rect(
+                buffer,
+                width,
+                height,
+                (px - 1.0).round().max(0.0) as usize,
+                (py - 1.0).round().max(0.0) as usize,
+                2,
+                2,
+                1,
+                dot,
+            );
+        }
+    }
+
+    /// Fase del spinner en pasos de 110 ms.
+    fn spinner_phase() -> usize {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        ((ms / 110) % 8) as usize
     }
 
     /// Renderiza la barra horizontal de pestañas: franja plana, pestañas y regla de acento.
@@ -262,10 +336,9 @@ impl TerminalRenderer {
 
         let rects = TopTabBarRects::compute(width, tabs.len());
         let bar_h = rects.bar_h;
-        let line = theme.chrome_line();
 
         // 1. Franja superior
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.chrome_bg());
+        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
 
         // 2. Selector de proyecto
         self.draw_project_switcher(
@@ -295,23 +368,11 @@ impl TerminalRenderer {
                     width,
                     height,
                     r.0,
-                    6,
-                    r.2,
-                    r.3.saturating_sub(6),
                     5,
+                    r.2,
+                    r.3.saturating_sub(5),
+                    6,
                     theme.surface_hover(),
-                );
-            } else {
-                // Separador solo entre pestañas inactivas: una hairline, nunca una cápsula.
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    r.0 + r.2,
-                    12,
-                    1,
-                    bar_h.saturating_sub(24),
-                    line,
                 );
             }
 
@@ -332,23 +393,28 @@ impl TerminalRenderer {
                 icon_x += 5;
             }
 
-            let icon_color = if tab.is_active {
-                theme.foreground
-            } else if is_hovered {
-                theme.text_secondary()
+            // La pestaña que ejecuta un comando muestra el spinner en lugar del icono de tipo: es el
+            // único indicador animado del chrome y sale de OSC 133 (`SessionStatus`), nunca inventado.
+            if tab.status == Some(SessionStatus::Running) {
+                let color = if tab.is_active {
+                    theme.foreground
+                } else {
+                    theme.text_secondary()
+                };
+                self.draw_tab_spinner(buffer, width, height, icon_x, r.1 + (r.3 / 2), color);
             } else {
-                theme.text_muted()
-            };
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                tab_icon(tab),
-                icon_x,
-                r.1 + (r.3 / 2),
-                14.0,
-                icon_color,
-            );
+                let icon_color = tab_icon_color(tab, tab.is_active, is_hovered, theme);
+                self.draw_lucide_icon(
+                    buffer,
+                    width,
+                    height,
+                    tab_icon(tab),
+                    icon_x,
+                    r.1 + (r.3 / 2),
+                    14.0,
+                    icon_color,
+                );
+            }
 
             let show_close = rects.tab_w >= 76 && tabs.len() > 1 && (tab.is_active || is_hovered);
 
@@ -362,11 +428,17 @@ impl TerminalRenderer {
                 };
                 let title_x = r.0 + 34;
                 let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
+                // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
+                // barra muestra solo el destino («staging-01»), como en el bosquejo.
+                let title = match tab.title.strip_prefix("ssh: ") {
+                    Some(target) => target.rsplit('@').next().unwrap_or(target),
+                    None => tab.title.as_str(),
+                };
                 let title_end = self.draw_ui_text(
                     buffer,
                     width,
                     height,
-                    &tab.title,
+                    title,
                     title_x,
                     r.1 + (r.3 / 2) + 4,
                     title_max,
@@ -449,16 +521,27 @@ impl TerminalRenderer {
             theme,
         );
 
-        // 5. Acciones de la derecha
+        // 5. Acciones de la derecha: buscar · panel · ajustes
+        self.draw_chrome_action(
+            buffer,
+            width,
+            height,
+            rects.search_btn,
+            crate::ui::LucideIcon::Search,
+            false,
+            false,
+            16.0,
+            theme,
+        );
         self.draw_chrome_action(
             buffer,
             width,
             height,
             rects.files_btn,
-            crate::ui::LucideIcon::FolderTree,
+            crate::ui::LucideIcon::PanelLeft,
             explorer_visible,
             hovered_files,
-            15.0,
+            16.0,
             theme,
         );
         self.draw_chrome_action(
@@ -466,23 +549,11 @@ impl TerminalRenderer {
             width,
             height,
             rects.settings_btn,
-            crate::ui::LucideIcon::Settings,
+            crate::ui::LucideIcon::Sliders,
             false,
             hovered_settings,
-            15.0,
+            16.0,
             theme,
-        );
-
-        // Separador antes de los controles de ventana
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            rects.win_min_btn.0.saturating_sub(4),
-            10,
-            1,
-            bar_h.saturating_sub(20),
-            line,
         );
 
         // 6. Controles de ventana
@@ -499,24 +570,6 @@ impl TerminalRenderer {
             is_maximized,
             theme,
         );
-
-        // 7. Hairline inferior; la pestaña activa la interrumpe para fundirse con el lienzo.
-        Self::draw_rect(buffer, width, height, 0, bar_h - 1, width, 1, line);
-        if let Some(tab) = tabs.iter().position(|t| t.is_active) {
-            let r = rects.tab_rect(tab);
-            if r.0 + r.2 <= rects.plus_btn.0 {
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    r.0,
-                    bar_h - 1,
-                    r.2,
-                    1,
-                    theme.background,
-                );
-            }
-        }
     }
 
     /// Dibuja los botones de control de ventana estándar (Minimizar, Maximizar, Cerrar)
@@ -604,22 +657,23 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar).
+    /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar): marca,
+    /// píldora de búsqueda centrada y controles de ventana. El título y la rama viven en la barra de estado.
     #[allow(clippy::too_many_arguments)]
     pub fn render_top_title_bar(
         &mut self,
         buffer: &mut [u32],
         width: usize,
         height: usize,
-        title: &str,
-        git_branch: Option<&str>,
-        hovered_files: bool,
-        hovered_settings: bool,
+        _title: &str,
+        _git_branch: Option<&str>,
+        _hovered_files: bool,
+        _hovered_settings: bool,
         hovered_win_min: bool,
         hovered_win_max: bool,
         hovered_win_close: bool,
         is_maximized: bool,
-        explorer_visible: bool,
+        _explorer_visible: bool,
         theme: &Theme,
     ) {
         if width == 0 || height == 0 {
@@ -627,90 +681,10 @@ impl TerminalRenderer {
         }
         let rects = TopTitleBarRects::compute(width);
         let bar_h = rects.bar_h;
-        let line = theme.chrome_line();
 
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.chrome_bg());
+        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
         self.draw_brand(buffer, width, height, bar_h, theme);
-
-        // Título alineado a la izquierda tras la marca; la rama es contexto, no decoración.
-        let title_x = TopTabBarRects::BRAND_W;
-        let actions_left = rects.settings_btn.0.saturating_sub(20);
-        let branch_w = git_branch
-            .map(|b| self.measure_mono_text(b, tokens::DETAIL, false) + 20)
-            .unwrap_or(0);
-        let title_max = actions_left.saturating_sub(branch_w + 16);
-        let title_end = self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            title,
-            title_x,
-            bar_h / 2 + 4,
-            title_max,
-            theme.foreground,
-            tokens::SECTION,
-            true,
-        );
-        if let Some(branch) = git_branch {
-            let bx = title_end + 12;
-            if bx + branch_w < actions_left {
-                self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
-                    crate::ui::LucideIcon::GitBranch,
-                    bx + 5,
-                    bar_h / 2,
-                    11.0,
-                    theme.accent_color(),
-                );
-                self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
-                    branch,
-                    bx + 15,
-                    bar_h / 2 + 4,
-                    actions_left,
-                    theme.text_secondary(),
-                    tokens::DETAIL,
-                    false,
-                );
-            }
-        }
-
-        self.draw_chrome_action(
-            buffer,
-            width,
-            height,
-            rects.files_btn,
-            crate::ui::LucideIcon::FolderTree,
-            explorer_visible,
-            hovered_files,
-            15.0,
-            theme,
-        );
-        self.draw_chrome_action(
-            buffer,
-            width,
-            height,
-            rects.settings_btn,
-            crate::ui::LucideIcon::Settings,
-            false,
-            hovered_settings,
-            15.0,
-            theme,
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            rects.win_min_btn.0.saturating_sub(4),
-            10,
-            1,
-            bar_h.saturating_sub(20),
-            line,
-        );
+        self.draw_search_pill(buffer, width, height, rects.search_box, theme);
         self.draw_window_controls(
             buffer,
             width,
@@ -724,6 +698,29 @@ impl TerminalRenderer {
             is_maximized,
             theme,
         );
-        Self::draw_rect(buffer, width, height, 0, bar_h - 1, width, 1, line);
+    }
+}
+
+/// Color del icono de la pestaña según su tipo: terminal, agente o servidor. Es información, así que
+/// el color sigue al tipo y no al estado de la pestaña.
+fn tab_icon_color(tab: &SidebarTabItem, active: bool, hovered: bool, theme: &Theme) -> Color {
+    if tab.is_settings || tab.is_file_viewer {
+        return if active {
+            theme.foreground
+        } else if hovered {
+            theme.text_secondary()
+        } else {
+            theme.text_muted()
+        };
+    }
+    // La pestaña activa no colorea sus iconos: el título ya manda y el tipo es información secundaria.
+    if active {
+        return theme.foreground;
+    }
+    match tab_icon(tab) {
+        crate::ui::LucideIcon::Sparkles => theme.ansi[5],
+        crate::ui::LucideIcon::Server => theme.ansi[6],
+        crate::ui::LucideIcon::Terminal => theme.ansi[4],
+        _ => theme.text_muted(),
     }
 }

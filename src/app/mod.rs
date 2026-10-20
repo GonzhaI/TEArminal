@@ -43,9 +43,9 @@ use shell_context::get_git_branch;
 use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
-    AiAgentStatus, EditingSettingField, SettingsPageRects, SettingsPageState, SettingsSection,
-    SidebarHeader, SidebarProject, SidebarTabItem, StatusBarRects, StatusMeter, TerminalRenderer,
-    TopBarProject, TopTabBarRects, TopTitleBarRects,
+    AiAgentStatus, EditingSettingField, SessionStatus, SettingsPageRects, SettingsPageState,
+    SettingsSection, SidebarHeader, SidebarProject, SidebarTabItem, StatusBarRects,
+    TerminalRenderer, TopBarProject, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -114,6 +114,8 @@ pub struct AxonApp {
     mouse_pos: PhysicalPosition<f64>,
     mouse_down: bool,
     cursor_timer: Instant,
+    /// Último avance del spinner de la pestaña que ejecuta (barra superior).
+    spinner_timer: Instant,
     /// Fase actual del parpadeo del cursor (true = visible)
     cursor_on: bool,
     /// Peticiones en banda al bash remoto aún sin respuesta
@@ -352,6 +354,7 @@ impl AxonApp {
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
             mouse_down: false,
             cursor_timer: Instant::now(),
+            spinner_timer: Instant::now(),
             cursor_on: true,
             pending_remote: Vec::new(),
             ssh_tx,

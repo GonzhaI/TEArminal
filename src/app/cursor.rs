@@ -1302,66 +1302,86 @@ impl AxonApp {
         }
 
         // Hover en el indicador de modelo/agente de IA y de actualización en la barra de estado inferior
-        let (new_hovered_ai, new_hovered_update) =
-            if self.config.appearance.show_status_bar && !is_settings_active {
-                let active_tab = &self.tabs[self.active_tab_index];
-                let (ssh_host, ai_status) = if let Some(ref viewer) = active_tab.file_viewer {
-                    (viewer.remote_destination.as_deref(), AiAgentStatus::None)
-                } else if let Some(pane) = active_tab
-                    .panes
-                    .iter()
-                    .find(|p| p.id == active_tab.active_pane_id)
-                {
-                    let s_host = pane
-                        .terminal
-                        .ssh_session
-                        .as_ref()
-                        .filter(|s| s.is_active)
-                        .map(|s| s.destination.as_str());
-                    let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
-                    (s_host, ai)
-                } else {
-                    (None, AiAgentStatus::None)
-                };
-                let active_model = self.ai_usage.snapshot.model_for(ai_status);
-                let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
-                    ai_status,
-                    ssh_host,
-                    active_model,
-                    &self.theme,
-                );
-                let label_w = self
-                    .renderer
+        let (new_hovered_ai, new_hovered_update) = if self.config.appearance.show_status_bar
+            && !is_settings_active
+        {
+            let active_tab = &self.tabs[self.active_tab_index];
+            let (ssh_host, ai_status, dims) = if let Some(ref viewer) = active_tab.file_viewer {
+                (
+                    viewer.remote_destination.as_deref(),
+                    AiAgentStatus::None,
+                    (0, viewer.lines.len()),
+                )
+            } else if let Some(pane) = active_tab
+                .panes
+                .iter()
+                .find(|p| p.id == active_tab.active_pane_id)
+            {
+                let s_host = pane
+                    .terminal
+                    .ssh_session
                     .as_ref()
-                    .map(|r| r.measure_ui_text(&badge_label, 11.0, true))
-                    .unwrap_or(badge_label.len() * 7);
-
-                let update_info = crate::updater::get_available_update();
-                let update_text = update_info
-                    .as_ref()
-                    .map(|u| format!("v{} disponible", u.latest_version));
-                let update_w = update_text.as_ref().map(|t| {
-                    self.renderer
-                        .as_ref()
-                        .map(|r| r.measure_ui_text(t, 11.0, true))
-                        .unwrap_or(t.len() * 7)
-                });
-
-                let sb_rects = StatusBarRects::compute(win_w, win_h, label_w, update_w);
-                let ai_hov = if self.hovered_ai_badge {
-                    let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
-                    let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
-                    StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
-                } else {
-                    StatusBarRects::inside(mx, my, sb_rects.ai_badge)
-                };
-                let update_hov = sb_rects
-                    .update_badge
-                    .is_some_and(|r| StatusBarRects::inside(mx, my, r));
-                (ai_hov, update_hov)
+                    .filter(|s| s.is_active)
+                    .map(|s| s.destination.as_str());
+                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                (s_host, ai, (pane.terminal.cols, pane.terminal.rows))
             } else {
-                (false, false)
+                (None, AiAgentStatus::None, (100, 30))
             };
+            let active_model = self.ai_usage.snapshot.model_for(ai_status);
+            let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
+                ai_status,
+                ssh_host,
+                active_model,
+                &self.theme,
+            );
+            let label_w = self
+                .renderer
+                .as_ref()
+                .map(|r| r.measure_ui_text(&badge_label, 10.5, true))
+                .unwrap_or(badge_label.len() * 7);
+
+            let update_info = crate::updater::get_available_update();
+            let update_text = update_info
+                .as_ref()
+                .map(|u| format!("v{} disponible", u.latest_version));
+            let update_w = update_text.as_ref().map(|t| {
+                self.renderer
+                    .as_ref()
+                    .map(|r| r.measure_mono_text(t, 10.5, false))
+                    .unwrap_or(t.len() * 7)
+            });
+
+            // Las dimensiones y los medidores van a la derecha del badge: misma geometría que el dibujo.
+            let dims_text = format!("{} × {}", dims.0, dims.1);
+            let meters = TerminalRenderer::status_meters_for(&self.ai_usage.snapshot, ai_status);
+            let (dims_w, meters_w) =
+                self.renderer
+                    .as_ref()
+                    .map_or((dims_text.len() * 6, meters.len() * 150), |r| {
+                        (
+                            r.measure_mono_text(&dims_text, 10.0, false),
+                            r.status_meters_width(&meters),
+                        )
+                    });
+
+            let sb_rects = StatusBarRects::compute_with_status(
+                win_w, win_h, label_w, update_w, dims_w, meters_w,
+            );
+            let ai_hov = if self.hovered_ai_badge {
+                let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
+                let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
+                StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
+            } else {
+                StatusBarRects::inside(mx, my, sb_rects.ai_badge)
+            };
+            let update_hov = sb_rects
+                .update_badge
+                .is_some_and(|r| StatusBarRects::inside(mx, my, r));
+            (ai_hov, update_hov)
+        } else {
+            (false, false)
+        };
 
         if new_hovered_ai {
             is_pointer = true;

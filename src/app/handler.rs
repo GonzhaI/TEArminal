@@ -471,6 +471,25 @@ impl AxonApp {
             earliest(&mut wake, self.cursor_timer + BLINK);
         }
 
+        // Spinner de la pestaña que ejecuta: solo con foco y a la vista. 110 ms por paso, el mismo
+        // compás que dibuja la barra superior; sin pestañas en curso no arma ningún despertar.
+        if self.is_focused && !self.occluded {
+            const SPINNER: std::time::Duration = std::time::Duration::from_millis(110);
+            let running = self
+                .tabs
+                .iter()
+                .any(|t| super::projects::session_status(t) == Some(SessionStatus::Running));
+            if running {
+                if self.spinner_timer.elapsed() >= SPINNER {
+                    self.spinner_timer = Instant::now();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                earliest(&mut wake, self.spinner_timer + SPINNER);
+            }
+        }
+
         // Auto-ocultamiento de la barra de desplazamiento: un repintado exacto al expirar
         let hide_at = self.last_scroll_time + std::time::Duration::from_millis(1250);
         if now < hide_at {

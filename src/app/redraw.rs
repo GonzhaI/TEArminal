@@ -432,15 +432,7 @@ fn draw_full_scene(
             };
 
         let active_model = ai_snapshot.model_for(ai_status);
-        let meters: Vec<StatusMeter> = ai_snapshot
-            .limits_for(ai_status)
-            .iter()
-            .take(2)
-            .map(|l| StatusMeter {
-                label: short_limit_label(&l.label),
-                percent: l.percent,
-            })
-            .collect();
+        let meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
         renderer.render_status_bar_with_ai(
             buffer,
             width,
@@ -532,16 +524,4 @@ fn draw_panel(
         buffer[y * width + x0..y * width + x0 + SIDEBAR_WIDTH].copy_from_slice(src);
     }
     renderer.panel_buf = panel;
-}
-
-/// Etiqueta corta del medidor: «Sesión (5 h)» pasa a «5 h» y el límite semanal a «Semana».
-fn short_limit_label(label: &str) -> String {
-    let lower = label.to_lowercase();
-    if lower.contains("5 h") {
-        "5 h".to_string()
-    } else if lower.contains("sem") || lower.contains("7 d") {
-        "Semana".to_string()
-    } else {
-        label.chars().take(10).collect()
-    }
 }

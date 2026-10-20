@@ -584,7 +584,7 @@ fn test_ai_agent_detection_and_status_bar() {
         &theme,
     );
     assert_eq!(icon_none, crate::ui::LucideIcon::Dot);
-    assert_eq!(label_none, "LOCAL");
+    assert_eq!(label_none, "Local");
     assert_eq!(fg_none, theme.text_muted());
 
     let (icon_agy, label_agy, fg_agy) = crate::renderer::TerminalRenderer::status_bar_badge_info(
@@ -594,8 +594,24 @@ fn test_ai_agent_detection_and_status_bar() {
         &theme,
     );
     assert_eq!(icon_agy, crate::ui::LucideIcon::Sparkles);
-    assert_eq!(label_agy, "AGY · Gemini 3.8 Flash (Medium)");
+    assert_eq!(label_agy, "AGY Gemini 3.8 Flash (Medium)");
     assert_eq!(fg_agy, theme.ansi[6]);
+
+    // El badge muestra el nombre legible del modelo, nunca el identificador crudo.
+    for (raw, expected) in [
+        ("opus-4.6", "Claude Opus 4.6"),
+        ("claude-sonnet-5-5", "Claude Sonnet 5.5"),
+        ("claude-opus-4-6-20251101", "Claude Opus 4.6"),
+        ("Sonnet 4.5", "Claude Sonnet 4.5"),
+    ] {
+        let (_, label, _) = crate::renderer::TerminalRenderer::status_bar_badge_info(
+            AiAgentStatus::Claude,
+            None,
+            Some(raw),
+            &theme,
+        );
+        assert_eq!(label, expected, "modelo `{raw}`");
+    }
 
     // Validar que render_status_bar cubre todo el ancho inferior (0..width)
     let config = AxonConfig::load_or_default();
@@ -620,20 +636,19 @@ fn test_ai_agent_detection_and_status_bar() {
     );
 
     // El status bar cubre todo el ancho inferior (0..width), por encima del cual reposa el sidebar
-    let status_bg = theme.sidebar_bg().to_u32_xrgb();
-    let border_c = theme.border_color().to_u32_xrgb();
+    let status_bg = theme.bar_bg().to_u32_xrgb();
     assert_eq!(
-        buffer[(600 - 26) * 1000 + 5],
-        border_c,
-        "El borde superior del status bar debe extenderse por todo el ancho"
+        buffer[(600 - 28) * 1000 + 5],
+        status_bg,
+        "El status bar debe empezar en su primera fila, sin hairline sobre el lienzo"
     );
     assert_eq!(
-        buffer[(600 - 20) * 1000 + 5],
+        buffer[(600 - 22) * 1000 + 5],
         status_bg,
         "El fondo del status bar debe dibujarse a todo lo ancho"
     );
     assert_eq!(
-        buffer[(600 - 20) * 1000 + sidebar_offset + 5],
+        buffer[(600 - 22) * 1000 + sidebar_offset + 5],
         status_bg,
         "El fondo del status bar debe dibujarse en el área de trabajo"
     );
@@ -646,23 +661,26 @@ fn test_top_tab_bar_geometry_and_layout() {
     let rects = TopTabBarRects::compute(1200, 3);
     assert_eq!(rects.bar_h, 38);
     assert_eq!(rects.tabs_start_x, TopTabBarRects::SWITCHER_W);
-    assert_eq!(rects.tab_w, 190);
+    assert_eq!(rects.tab_w, 177);
 
     let tab0 = rects.tab_rect(0);
-    assert_eq!(tab0, (TopTabBarRects::SWITCHER_W, 0, 190, 38));
+    assert_eq!(tab0, (TopTabBarRects::SWITCHER_W, 0, 177, 38));
 
     let close0 = rects.close_btn_rect(0);
-    assert_eq!(close0.0, TopTabBarRects::SWITCHER_W + 190 - 30);
+    assert_eq!(close0.0, TopTabBarRects::SWITCHER_W + 177 - 30);
     assert_eq!(close0.1, 7);
     assert_eq!(close0.2, 24);
     assert_eq!(close0.3, 24);
 
     // Plus button debe situarse después de las 3 pestañas
-    assert!(rects.plus_btn.0 > tab0.0 + (3 * 190));
-    // Settings button, files button y controles de ventana al extremo derecho
-    assert_eq!(rects.settings_btn.0, 1200 - 212);
-    assert_eq!(rects.files_btn.0, 1200 - 178);
+    assert!(rects.plus_btn.0 > tab0.0 + (3 * 177));
+    // Acciones (buscar · panel · ajustes) y controles de ventana al extremo derecho
+    assert_eq!(rects.settings_btn.0, 1200 - 178);
+    assert_eq!(rects.files_btn.0, 1200 - 212);
+    assert_eq!(rects.search_btn.0, 1200 - 246);
     assert_eq!(rects.win_min_btn.0, 1200 - 138);
+    assert_eq!(rects.settings_btn.3, TopTabBarRects::ACTION);
+    assert!(rects.search_btn.0 + rects.search_btn.2 <= rects.files_btn.0);
     assert_eq!(rects.win_max_btn.0, 1200 - 92);
     assert_eq!(rects.win_close_btn.0, 1200 - 46);
 
@@ -1028,7 +1046,9 @@ fn preview_ui_scenes() {
     let (w, h) = (1440usize, 900usize);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
     let top_h = crate::renderer::TopTitleBarRects::compute(w).bar_h;
-    let out = std::env::temp_dir().join("axon-preview");
+    let out = std::env::var_os("AXON_PREVIEW_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
     std::fs::create_dir_all(&out).unwrap();
 
     let write_ppm = |buf: &[u32], name: &str| {
@@ -1209,7 +1229,7 @@ fn preview_ui_scenes() {
         110,
         34,
         AiAgentStatus::Claude,
-        Some("opus-4.6"),
+        Some("claude-sonnet-5-5"),
         &[],
         false,
         false,
@@ -1312,7 +1332,7 @@ fn preview_ui_scenes() {
         110,
         34,
         AiAgentStatus::Claude,
-        Some("opus-4.6"),
+        Some("claude-sonnet-5-5"),
         &[
             crate::renderer::StatusMeter {
                 label: "5 h".into(),
@@ -1399,7 +1419,7 @@ fn preview_ui_scenes() {
         110,
         34,
         AiAgentStatus::Claude,
-        Some("opus-4.6"),
+        Some("claude-sonnet-5-5"),
         &[],
         false,
         true,
@@ -1617,13 +1637,204 @@ fn preview_ui_scenes() {
         110,
         34,
         AiAgentStatus::Claude,
-        Some("opus-4.6"),
+        Some("claude-sonnet-5-5"),
         &[],
         false,
         true,
         &theme,
     );
     write_ppm(&buf, "right.ppm");
+
+    // 7. WP1 · modo vertical: marca, píldora centrada y barra de estado del bosquejo
+    let wp1_meters = [
+        crate::renderer::StatusMeter {
+            label: "5 h".into(),
+            percent: 42.0,
+        },
+        crate::renderer::StatusMeter {
+            label: "Semana".into(),
+            percent: 18.0,
+        },
+    ];
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    r.render_top_title_bar(
+        &mut buf,
+        w,
+        h,
+        "axon",
+        Some("main"),
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &projects,
+        &header,
+        None,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_pane(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        top_h,
+        w - SIDEBAR_WIDTH,
+        h - top_h - status_h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        Some("C:\\Users\\dev\\axon"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::Claude,
+        Some("claude-sonnet-5-5"),
+        &wp1_meters,
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "wp1-vertical.ppm");
+
+    // 8. WP1 · modo superior: pestañas con icono de tipo, spinner en la que corre y acciones a la derecha
+    let wp1_tabs = vec![
+        SidebarTabItem {
+            index: 0,
+            status: Some(crate::renderer::SessionStatus::Idle),
+            title: "axon".into(),
+            detail: Some("pwsh".into()),
+            is_active: true,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+        SidebarTabItem {
+            index: 1,
+            status: Some(crate::renderer::SessionStatus::Running),
+            title: "Claude, rediseño".into(),
+            detail: Some("claude".into()),
+            is_active: false,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+        SidebarTabItem {
+            index: 2,
+            status: Some(crate::renderer::SessionStatus::Idle),
+            title: "ssh: dev@staging-01".into(),
+            detail: Some("~/api".into()),
+            is_active: false,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        },
+    ];
+    let mut buf = vec![0u32; w * h];
+    buf.fill(theme.background.to_u32_xrgb());
+    let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
+    r.render_top_tab_bar(
+        &mut buf,
+        w,
+        h,
+        &wp1_tabs,
+        &top_project,
+        false,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        status_h,
+        &projects,
+        &header,
+        None,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_pane(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        wp1_rects.bar_h,
+        w - SIDEBAR_WIDTH,
+        h - wp1_rects.bar_h - status_h,
+        &term,
+        &theme,
+        true,
+        true,
+        false,
+    );
+    r.render_status_bar_with_ai(
+        &mut buf,
+        w,
+        h,
+        SIDEBAR_WIDTH,
+        Some("C:\\Users\\dev\\axon"),
+        Some("main"),
+        None,
+        110,
+        34,
+        AiAgentStatus::Claude,
+        Some("claude-sonnet-5-5"),
+        &wp1_meters,
+        false,
+        false,
+        &theme,
+    );
+    write_ppm(&buf, "wp1-superior.ppm");
 
     println!("previews in {}", out.display());
 }

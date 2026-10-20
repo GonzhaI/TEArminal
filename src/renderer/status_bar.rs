@@ -2,6 +2,18 @@
 
 use super::*;
 
+/// Hueco entre la etiqueta de un medidor y su carril.
+const METER_LABEL_GAP: usize = 8;
+/// Hueco entre el carril y el porcentaje.
+const METER_PCT_GAP: usize = 8;
+/// Separación entre medidores.
+const METER_GAP: usize = 17;
+/// Cuerpo del porcentaje: un paso por debajo de la etiqueta, como en el bosquejo.
+const METER_PCT_SIZE: f32 = 9.0;
+/// Etiquetas del grupo de estado (badge y medidores): los 12 px del bosquejo, a la escala por
+/// defecto de `ui_font_size`.
+const STATUS_LABEL_SIZE: f32 = 10.5;
+
 impl TerminalRenderer {
     /// Renderiza la barra de estado informativa inferior (Status Bar) con tipografía Inter e iconos Lucide
     #[cfg(test)]
@@ -57,7 +69,7 @@ impl TerminalRenderer {
         _explorer_visible: bool,
         theme: &Theme,
     ) {
-        if width == 0 || height < 26 {
+        if width == 0 || height < StatusBarRects::BAR_H {
             return;
         }
 
@@ -66,7 +78,7 @@ impl TerminalRenderer {
         let center_y = bar_y + (bar_h / 2);
         let baseline = center_y + 4;
 
-        // 1. Fondo y hairline superior: la barra pertenece al chrome, no al lienzo.
+        // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
         Self::draw_rect(
             buffer,
             width,
@@ -75,23 +87,13 @@ impl TerminalRenderer {
             bar_y,
             width,
             bar_h,
-            theme.chrome_bg(),
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            0,
-            bar_y,
-            width,
-            1,
-            theme.chrome_line(),
+            theme.bar_bg(),
         );
 
-        // 2. Badge derecho: punto de estado + agente y modelo. Sin cápsula: solo el texto.
-        let (_, badge_label, ai_fg) =
+        // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones de la rejilla.
+        let (badge_icon, badge_label, ai_fg) =
             Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
-        let ai_text_w = self.measure_ui_text(&badge_label, tokens::DETAIL, true);
+        let ai_text_w = self.measure_ui_text(&badge_label, STATUS_LABEL_SIZE, true);
         let update_info = crate::updater::get_available_update();
         let update_text = update_info
             .as_ref()
@@ -99,35 +101,15 @@ impl TerminalRenderer {
         let update_w = update_text
             .as_ref()
             .map(|t| self.measure_mono_text(t, tokens::MICRO + 0.5, false));
-        let rects = StatusBarRects::compute(width, height, ai_text_w, update_w);
-        let (bx, by, bw, bh) = rects.ai_badge;
-        let right_limit = rects
-            .update_badge
-            .map_or(bx, |(ux, _, _, _)| ux)
-            .saturating_sub(10);
-
-        // Medidores de los límites reales del agente (solo Claude los tiene): etiqueta, barra y porcentaje.
-        let limit_before_meters = right_limit;
-        let right_limit = self.draw_status_meters(
-            buffer,
-            width,
-            height,
-            meters,
-            right_limit,
-            (bar_y, bar_h),
-            baseline,
-            theme,
-        );
-
-        // Dimensiones de la rejilla como dato, en el extremo derecho del grupo de estado.
         let dims = format!("{cols} × {rows}");
         let dims_w = self.measure_mono_text(&dims, tokens::MICRO, false);
-        let dims_x = right_limit.saturating_sub(dims_w);
-        let dims_x = if right_limit < limit_before_meters {
-            dims_x
-        } else {
-            dims_x.max(width.saturating_sub(320))
-        };
+        let meters_w = self.status_meters_width(meters);
+        let rects = StatusBarRects::compute_with_status(
+            width, height, ai_text_w, update_w, dims_w, meters_w,
+        );
+
+        // Dimensiones como dato, en el extremo derecho.
+        let dims_x = width.saturating_sub(StatusBarRects::RIGHT_PAD + dims_w);
         self.draw_mono_text(
             buffer,
             width,
@@ -135,16 +117,36 @@ impl TerminalRenderer {
             &dims,
             dims_x,
             baseline,
-            right_limit,
+            width.saturating_sub(StatusBarRects::RIGHT_PAD),
             theme.text_muted(),
             tokens::MICRO,
             false,
         );
-        let dims_sep_x = dims_x.saturating_sub(10);
 
-        // 3. Izquierda: SSH, carpeta y rama. Segmentos con separador hairline, sin iconos de relleno.
-        let mut cur_x = 12;
-        let text_limit = dims_sep_x.saturating_sub(18);
+        // Medidores de los límites reales del agente (solo Claude los tiene), a la izquierda de las
+        // dimensiones: etiqueta, barra y porcentaje. La geometría decide si caben.
+        if rects.meters.2 > 0 {
+            self.draw_status_meters(
+                buffer,
+                width,
+                height,
+                meters,
+                rects.meters.0 + rects.meters.2,
+                (bar_y, bar_h),
+                baseline,
+                ai_fg,
+                theme,
+            );
+        }
+
+        let (bx, by, bw, bh) = rects.ai_badge;
+
+        // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
+        let mut cur_x = 14;
+        let text_limit = rects
+            .update_badge
+            .map_or(bx, |(ux, _, _, _)| ux)
+            .saturating_sub(18);
 
         if let Some(ssh) = ssh_host {
             self.draw_lucide_icon(
@@ -170,18 +172,7 @@ impl TerminalRenderer {
                 tokens::DETAIL,
                 true,
             );
-            cur_x = adv + 12;
-            Self::draw_rect(
-                buffer,
-                width,
-                height,
-                cur_x,
-                bar_y + 7,
-                1,
-                bar_h.saturating_sub(14),
-                theme.chrome_line(),
-            );
-            cur_x += 11;
+            cur_x = adv + 14;
         }
 
         if let Some(dir) = cwd {
@@ -208,20 +199,7 @@ impl TerminalRenderer {
                 tokens::DETAIL,
                 false,
             );
-            cur_x = adv + 12;
-            if git_branch.is_some() {
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    cur_x,
-                    bar_y + 7,
-                    1,
-                    bar_h.saturating_sub(14),
-                    theme.chrome_line(),
-                );
-                cur_x += 11;
-            }
+            cur_x = adv + 14;
         }
 
         if let Some(branch) = git_branch {
@@ -250,19 +228,7 @@ impl TerminalRenderer {
             );
         }
 
-        // 4. Separador antes de las dimensiones.
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
-            dims_sep_x,
-            bar_y + 7,
-            1,
-            bar_h.saturating_sub(14),
-            theme.chrome_line(),
-        );
-
-        // 5. Actualización disponible: icono + texto de acento, sin relleno.
+        // 4. Actualización disponible: icono + texto de acento, sin relleno.
         if let (Some((ub_x, _ub_y, ub_w, _ub_h)), Some(utext)) = (rects.update_badge, update_text) {
             self.draw_lucide_icon(
                 buffer,
@@ -286,19 +252,10 @@ impl TerminalRenderer {
                 tokens::MICRO + 0.5,
                 false,
             );
-            Self::draw_rect(
-                buffer,
-                width,
-                height,
-                ub_x + ub_w + 3,
-                bar_y + 7,
-                1,
-                bar_h.saturating_sub(14),
-                theme.chrome_line(),
-            );
         }
 
-        // 6. Badge de agente: punto de color y etiqueta; el modelo va en tinta secundaria.
+        // 5. Badge de agente: icono del agente + nombre legible y modelo. El color de marca es solo
+        // del icono; el texto es el del chrome (legible), como en el bosquejo.
         if hovered_ai_badge {
             crate::ui::draw_rounded_rect(
                 buffer,
@@ -308,44 +265,40 @@ impl TerminalRenderer {
                 by + 3,
                 bw,
                 bh.saturating_sub(6),
-                3,
+                6,
                 theme.accent_soft(26),
             );
         }
-        crate::ui::draw_rounded_rect(buffer, width, height, bx + 8, center_y - 2, 4, 4, 2, ai_fg);
-        let (name, model) = badge_label
-            .split_once(" · ")
-            .map_or((badge_label.as_str(), None), |(n, m)| (n, Some(m)));
-        let name_end = self.draw_ui_text_tracked(
+        self.draw_lucide_icon(
             buffer,
             width,
             height,
-            name,
-            bx + 18,
+            badge_icon,
+            bx + 8,
+            center_y,
+            10.0,
+            ai_fg,
+        );
+        let label_fg = if ai_status == AiAgentStatus::None {
+            ai_fg
+        } else {
+            theme.foreground
+        };
+        self.draw_ui_text(
+            buffer,
+            width,
+            height,
+            &badge_label,
+            bx + 22,
             baseline,
             bx + bw,
-            ai_fg,
-            tokens::MICRO,
+            label_fg,
+            STATUS_LABEL_SIZE,
             true,
-            0.8,
         );
-        if let Some(model) = model {
-            self.draw_mono_text(
-                buffer,
-                width,
-                height,
-                model,
-                name_end + 6,
-                baseline,
-                bx + bw - 8,
-                theme.text_secondary(),
-                tokens::MICRO + 0.5,
-                false,
-            );
-        }
     }
 
-    /// Dibuja los medidores terminando en `right_limit` y devuelve el límite que queda a su izquierda.
+    /// Dibuja los medidores terminando en `right_limit` y devuelve el borde izquierdo que ocupan.
     /// El porcentaje va siempre como texto: el color de la barra solo refuerza.
     #[allow(clippy::too_many_arguments)]
     fn draw_status_meters(
@@ -357,19 +310,21 @@ impl TerminalRenderer {
         right_limit: usize,
         (bar_y, bar_h): (usize, usize),
         baseline: usize,
+        fill_color: Color,
         theme: &Theme,
     ) -> usize {
-        const TRACK_W: usize = 56;
         let mut x = right_limit;
-        for meter in meters.iter().rev() {
-            let pct = format!("{:.0}%", meter.percent.clamp(0.0, 100.0));
-            let pct_w = self.measure_mono_text(&pct, tokens::MICRO, false);
-            let label_w = self.measure_ui_text(&meter.label, tokens::DETAIL, false);
-            let total = label_w + 8 + TRACK_W + 6 + pct_w;
-            if x < total + 220 {
-                break;
+        // De derecha a izquierda: el primer medidor de la lista queda a la izquierda del segundo.
+        for (i, meter) in meters.iter().enumerate().rev() {
+            if i + 1 < meters.len() {
+                x = x.saturating_sub(METER_GAP);
             }
-            let start = x - total;
+            let pct = format!("{:.0}%", meter.percent.clamp(0.0, 100.0));
+            let pct_w = self.measure_ui_text(&pct, METER_PCT_SIZE, false);
+            let label_w = self.measure_ui_text(&meter.label, STATUS_LABEL_SIZE, false);
+            let total =
+                label_w + METER_LABEL_GAP + StatusBarRects::METER_TRACK_W + METER_PCT_GAP + pct_w;
+            let start = x.saturating_sub(total);
             self.draw_ui_text(
                 buffer,
                 width,
@@ -378,32 +333,40 @@ impl TerminalRenderer {
                 start,
                 baseline,
                 start + label_w,
-                theme.text_muted(),
-                tokens::DETAIL,
+                theme.text_secondary(),
+                STATUS_LABEL_SIZE,
                 false,
             );
-            let track_x = start + label_w + 8;
-            let track_y = bar_y + bar_h / 2 - 2;
+            let track_x = start + label_w + METER_LABEL_GAP;
+            let track_y = bar_y + (bar_h.saturating_sub(StatusBarRects::METER_TRACK_H)) / 2;
             crate::ui::draw_rounded_rect(
                 buffer,
                 width,
                 height,
                 track_x,
                 track_y,
-                TRACK_W,
-                5,
-                2,
-                theme.chrome_line_strong(),
+                StatusBarRects::METER_TRACK_W,
+                StatusBarRects::METER_TRACK_H,
+                3,
+                theme.chrome_line(),
             );
-            let fill =
-                ((meter.percent.clamp(0.0, 100.0) / 100.0) * TRACK_W as f32).round() as usize;
+            let fill = ((meter.percent.clamp(0.0, 100.0) / 100.0)
+                * StatusBarRects::METER_TRACK_W as f32)
+                .round() as usize;
             if fill > 0 {
+                // El primer carril (5 h) lleva el color del agente; el semanal, el acento de la UI,
+                // salvo aviso de límite.
+                let base = if i == 0 {
+                    fill_color
+                } else {
+                    theme.accent_color()
+                };
                 let color = if meter.percent >= 90.0 {
                     theme.ansi[1]
                 } else if meter.percent >= 70.0 {
                     theme.ansi[3]
                 } else {
-                    theme.accent_color()
+                    base
                 };
                 crate::ui::draw_rounded_rect(
                     buffer,
@@ -412,26 +375,59 @@ impl TerminalRenderer {
                     track_x,
                     track_y,
                     fill.max(3),
-                    5,
-                    2,
+                    StatusBarRects::METER_TRACK_H,
+                    3,
                     color,
                 );
             }
-            self.draw_mono_text(
+            self.draw_ui_text(
                 buffer,
                 width,
                 height,
                 &pct,
-                track_x + TRACK_W + 6,
+                track_x + StatusBarRects::METER_TRACK_W + METER_PCT_GAP,
                 baseline,
                 x,
                 theme.text_secondary(),
-                tokens::MICRO,
+                METER_PCT_SIZE,
                 false,
             );
-            x = start.saturating_sub(16);
+            x = start;
         }
         x
+    }
+
+    /// Ancho total de los medidores con sus separaciones, para reservarles sitio en la barra.
+    pub fn status_meters_width(&self, meters: &[StatusMeter]) -> usize {
+        let mut total = 0;
+        for (i, meter) in meters.iter().enumerate() {
+            if i > 0 {
+                total += METER_GAP;
+            }
+            let pct = format!("{:.0}%", meter.percent.clamp(0.0, 100.0));
+            total += self.measure_ui_text(&meter.label, STATUS_LABEL_SIZE, false)
+                + METER_LABEL_GAP
+                + StatusBarRects::METER_TRACK_W
+                + METER_PCT_GAP
+                + self.measure_ui_text(&pct, METER_PCT_SIZE, false);
+        }
+        total
+    }
+
+    /// Medidores de la barra de estado a partir de los límites reales del agente de la pestaña.
+    pub fn status_meters_for(
+        snapshot: &crate::app::AiUsageSnapshot,
+        kind: AiAgentStatus,
+    ) -> Vec<StatusMeter> {
+        snapshot
+            .limits_for(kind)
+            .iter()
+            .take(2)
+            .map(|l| StatusMeter {
+                label: short_limit_label(&l.label),
+                percent: l.percent,
+            })
+            .collect()
     }
 
     pub fn status_bar_badge_info(
@@ -441,29 +437,30 @@ impl TerminalRenderer {
         theme: &Theme,
     ) -> (crate::ui::LucideIcon, String, Color) {
         let (icon, base, fg) = match ai_status {
-            AiAgentStatus::Claude => (crate::ui::LucideIcon::Sparkles, "CLAUDE", theme.ansi[5]),
+            AiAgentStatus::Claude => (crate::ui::LucideIcon::Sparkles, "Claude", theme.ansi[5]),
             AiAgentStatus::Agy => (crate::ui::LucideIcon::Sparkles, "AGY", theme.ansi[6]),
-            AiAgentStatus::Gemini => (crate::ui::LucideIcon::Sparkles, "GEMINI", theme.ansi[4]),
-            AiAgentStatus::Aider => (crate::ui::LucideIcon::Bot, "AIDER", theme.ansi[2]),
-            AiAgentStatus::Copilot => (crate::ui::LucideIcon::Bot, "COPILOT", theme.ansi[6]),
-            AiAgentStatus::Ollama => (crate::ui::LucideIcon::Bot, "OLLAMA", theme.ansi[3]),
+            AiAgentStatus::Gemini => (crate::ui::LucideIcon::Sparkles, "Gemini", theme.ansi[4]),
+            AiAgentStatus::Aider => (crate::ui::LucideIcon::Bot, "Aider", theme.ansi[2]),
+            AiAgentStatus::Copilot => (crate::ui::LucideIcon::Bot, "Copilot", theme.ansi[6]),
+            AiAgentStatus::Ollama => (crate::ui::LucideIcon::Bot, "Ollama", theme.ansi[3]),
             AiAgentStatus::None => {
                 if ssh_host.is_some() {
                     return (
                         crate::ui::LucideIcon::Server,
-                        "REMOTO".to_string(),
+                        "Remoto".to_string(),
                         theme.ansi[2],
                     );
                 }
                 return (
                     crate::ui::LucideIcon::Dot,
-                    "LOCAL".to_string(),
+                    "Local".to_string(),
                     theme.text_muted(),
                 );
             }
         };
+        // El nombre legible, no el identificador: «opus-4.6» se muestra como «Opus 4.6».
         let label = match active_model.filter(|m| !m.is_empty()) {
-            Some(m) => format!("{base} · {m}"),
+            Some(model) => format!("{base} {}", pretty_model_name(model)),
             None => base.to_string(),
         };
         (icon, label, fg)
@@ -1017,5 +1014,86 @@ impl TerminalRenderer {
                 false,
             );
         }
+    }
+}
+
+/// Nombre legible de un modelo: `claude-sonnet-5-5` o `opus-4.6` pasan a «Sonnet 5.5» y «Opus 4.6».
+/// Un nombre ya legible («Gemini 3.8 Flash (Medium)») se devuelve igual.
+fn pretty_model_name(raw: &str) -> String {
+    let mut name = raw.trim();
+    for prefix in ["anthropic/", "anthropic.", "claude-", "claude/", "claude."] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            name = rest;
+        }
+    }
+    let tokens: Vec<&str> = name
+        .split(['-', '_', ' '])
+        .filter(|t| !t.is_empty())
+        .collect();
+    if tokens.is_empty() {
+        return raw.trim().to_string();
+    }
+
+    let mut head: Vec<&str> = Vec::new();
+    let mut version: Vec<&str> = Vec::new();
+    let mut tail: Vec<&str> = Vec::new();
+    for token in tokens {
+        let numeric = token.chars().all(|c| c.is_ascii_digit() || c == '.');
+        if numeric {
+            // La fecha del snapshot (`20251101`) no es parte del nombre del modelo.
+            if token.len() >= 8 {
+                continue;
+            }
+            if tail.is_empty() {
+                version.push(token);
+            } else {
+                tail.push(token);
+            }
+        } else if version.is_empty() {
+            head.push(token);
+        } else {
+            tail.push(token);
+        }
+    }
+
+    let mut out = String::new();
+    for word in &head {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    if !version.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&version.join("."));
+    }
+    if !tail.is_empty() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&tail.join(" "));
+    }
+    if out.is_empty() {
+        raw.trim().to_string()
+    } else {
+        out
+    }
+}
+
+/// Etiqueta corta del medidor: «Sesión (5 h)» pasa a «5 h» y el límite semanal a «Semana».
+pub(crate) fn short_limit_label(label: &str) -> String {
+    let lower = label.to_lowercase();
+    if lower.contains("5 h") {
+        "5 h".to_string()
+    } else if lower.contains("sem") || lower.contains("7 d") {
+        "Semana".to_string()
+    } else {
+        label.chars().take(10).collect()
     }
 }

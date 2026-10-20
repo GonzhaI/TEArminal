@@ -50,6 +50,8 @@ pub struct TopTabBarRects {
     pub win_min_btn: (usize, usize, usize, usize),
     pub win_max_btn: (usize, usize, usize, usize),
     pub win_close_btn: (usize, usize, usize, usize),
+    /// Buscar (paleta Ctrl K, WP5): solo se dibuja; el clic no hace nada todavía.
+    pub search_btn: (usize, usize, usize, usize),
 }
 
 impl TopTabBarRects {
@@ -57,10 +59,12 @@ impl TopTabBarRects {
     /// La marca ocupa el extremo izquierdo; las pestañas empiezan después.
     pub const BRAND_W: usize = 88;
     /// Selector de proyecto de la barra de pestañas; las pestañas empiezan después.
-    pub const SWITCHER_W: usize = 156;
-    pub const TAB_GAP: usize = 2;
+    pub const SWITCHER_W: usize = 126;
+    pub const TAB_GAP: usize = 3;
     pub const CLOSE_W: usize = 24;
     pub const PLUS_W: usize = 28;
+    /// Lado de los botones de acción del chrome (buscar, panel, ajustes).
+    pub const ACTION: usize = 32;
 
     pub fn compute(width: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
@@ -69,13 +73,30 @@ impl TopTabBarRects {
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
 
-        // Acciones a la izquierda de los controles de ventana, separadas por una hairline.
-        let actions_right = width.saturating_sub(ctrl_w * 3 + 10);
-        let files_btn = (actions_right.saturating_sub(30), 4, 30, 30);
-        let settings_btn = (actions_right.saturating_sub(64), 4, 30, 30);
+        // Acciones a la izquierda de los controles de ventana: buscar · panel · ajustes.
+        let actions_right = width.saturating_sub(ctrl_w * 3 + 8);
+        let action_y = (bar_h.saturating_sub(Self::ACTION)) / 2;
+        let settings_btn = (
+            actions_right.saturating_sub(Self::ACTION),
+            action_y,
+            Self::ACTION,
+            Self::ACTION,
+        );
+        let files_btn = (
+            settings_btn.0.saturating_sub(Self::ACTION + 2),
+            action_y,
+            Self::ACTION,
+            Self::ACTION,
+        );
+        let search_btn = (
+            files_btn.0.saturating_sub(Self::ACTION + 2),
+            action_y,
+            Self::ACTION,
+            Self::ACTION,
+        );
 
         let left_reserved = Self::SWITCHER_W;
-        let right_reserved = ctrl_w * 3 + 76;
+        let right_reserved = ctrl_w * 3 + 112;
         let available_space = width.saturating_sub(left_reserved + right_reserved);
 
         let plus_w = Self::PLUS_W;
@@ -85,10 +106,10 @@ impl TopTabBarRects {
             .saturating_sub(tabs_count.saturating_mul(gap));
         let tab_w = usable
             .checked_div(tabs_count)
-            .map_or(190, |w| w.clamp(20, 190));
+            .map_or(177, |w| w.clamp(20, 177));
 
         let tabs_start_x = left_reserved;
-        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap) + 6)
+        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap))
             .min(left_reserved + available_space.saturating_sub(plus_w));
         let plus_btn = (plus_x, 5, plus_w, plus_w);
 
@@ -97,13 +118,14 @@ impl TopTabBarRects {
             tabs_start_x,
             tab_w,
             tab_gap: gap,
-            switcher_btn: (8, 5, Self::SWITCHER_W - 16, 28),
+            switcher_btn: (12, 3, Self::SWITCHER_W - 26, 32),
             plus_btn,
             files_btn,
             settings_btn,
             win_min_btn,
             win_max_btn,
             win_close_btn,
+            search_btn,
         }
     }
 
@@ -151,10 +173,14 @@ pub struct TopTitleBarRects {
     pub win_min_btn: (usize, usize, usize, usize),
     pub win_max_btn: (usize, usize, usize, usize),
     pub win_close_btn: (usize, usize, usize, usize),
+    /// Píldora de búsqueda centrada del modo vertical (paleta Ctrl K, WP5).
+    pub search_box: (usize, usize, usize, usize),
 }
 
 impl TopTitleBarRects {
     pub const HEIGHT: usize = 38;
+    pub const SEARCH_W: usize = 420;
+    pub const SEARCH_H: usize = 30;
 
     pub fn compute(width: usize) -> Self {
         let bar_h = Self::HEIGHT;
@@ -162,16 +188,28 @@ impl TopTitleBarRects {
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
-        let actions_right = width.saturating_sub(ctrl_w * 3 + 10);
-        let files_btn = (actions_right.saturating_sub(30), 4, 30, 30);
-        let settings_btn = (actions_right.saturating_sub(64), 4, 30, 30);
+        // En vertical los accesos de archivos y ajustes viven en el panel (riel); la barra solo lleva
+        // la marca, la búsqueda y los controles de ventana.
+        let search_w =
+            Self::SEARCH_W.min(width.saturating_sub(TopTabBarRects::BRAND_W + ctrl_w * 3 + 80));
+        let search_box = if search_w >= 200 {
+            (
+                (width.saturating_sub(search_w)) / 2,
+                (bar_h.saturating_sub(Self::SEARCH_H)) / 2,
+                search_w,
+                Self::SEARCH_H,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
         Self {
             bar_h,
-            files_btn,
-            settings_btn,
+            files_btn: (0, 0, 0, 0),
+            settings_btn: (0, 0, 0, 0),
             win_min_btn,
             win_max_btn,
             win_close_btn,
+            search_box,
         }
     }
 }
@@ -843,30 +881,79 @@ impl ProjectsPanelRects {
 pub struct StatusBarRects {
     pub ai_badge: Rect,
     pub update_badge: Option<Rect>,
+    /// Medidores de límites; `0` de ancho cuando no hay sitio y no se dibujan.
+    pub meters: Rect,
 }
 
 impl StatusBarRects {
-    pub const BAR_H: usize = 26;
+    pub const BAR_H: usize = 28;
     pub const POPUP_W: usize = 392;
+    /// Margen derecho del grupo de estado (las dimensiones cierran la barra).
+    pub const RIGHT_PAD: usize = 14;
+    /// Separación entre bloques del grupo derecho (badge, medidores, dimensiones).
+    pub const GROUP_GAP: usize = 20;
+    /// Ancho de la barra de un medidor y alto del carril.
+    pub const METER_TRACK_W: usize = 82;
+    pub const METER_TRACK_H: usize = 6;
+    /// Ancho mínimo que debe quedar para la ruta y la rama: por debajo, los medidores no se dibujan.
+    pub const MIN_CONTENT_W: usize = 240;
 
     /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
     /// incluyendo el indicador opcional de nueva versión disponible
+    #[cfg(test)]
     pub fn compute(width: usize, height: usize, label_w: usize, update_w: Option<usize>) -> Self {
+        Self::compute_with_status(width, height, label_w, update_w, 0, 0)
+    }
+
+    /// Como `compute`, reservando a la derecha del badge las dimensiones de la rejilla (`dims_w`) y los
+    /// medidores de límites (`meters_w`). El grupo se ancla al borde derecho y el badge queda a su izquierda.
+    pub fn compute_with_status(
+        width: usize,
+        height: usize,
+        label_w: usize,
+        update_w: Option<usize>,
+        dims_w: usize,
+        meters_w: usize,
+    ) -> Self {
         let bar_y = height.saturating_sub(Self::BAR_H);
-        let text_x = width.saturating_sub(label_w + 32);
-        let badge_x = text_x.saturating_sub(6);
-        let badge_w = (label_w + 30).min(width.saturating_sub(badge_x + 4));
+        let badge_w = (label_w + 24).min(width);
+        let dims_block = if dims_w > 0 {
+            dims_w + Self::GROUP_GAP
+        } else {
+            0
+        };
+        let mut meters_block = if meters_w > 0 {
+            meters_w + Self::GROUP_GAP
+        } else {
+            0
+        };
+        // El grupo derecho no puede comerse el espacio de la ruta y la rama: si al colocar el badge no
+        // queda sitio para la izquierda, los medidores (lo opcional) se caen antes que el badge.
+        let mut badge_x =
+            width.saturating_sub(Self::RIGHT_PAD + dims_block + meters_block + badge_w);
+        if badge_x < Self::MIN_CONTENT_W && meters_block > 0 {
+            meters_block = 0;
+            badge_x = width.saturating_sub(Self::RIGHT_PAD + dims_block + badge_w);
+        }
+        let badge_right = badge_x + badge_w;
         let ai_badge = (badge_x, bar_y, badge_w, Self::BAR_H);
+
+        let meters = if meters_block > 0 {
+            (badge_right + Self::GROUP_GAP, bar_y, meters_w, Self::BAR_H)
+        } else {
+            (0, bar_y, 0, Self::BAR_H)
+        };
 
         let update_badge = update_w.map(|uw| {
             let ub_w = uw + 26;
-            let ub_x = badge_x.saturating_sub(ub_w + 8);
+            let ub_x = badge_x.saturating_sub(ub_w + 10);
             (ub_x, bar_y, ub_w, Self::BAR_H)
         });
 
         Self {
             ai_badge,
             update_badge,
+            meters,
         }
     }
 
