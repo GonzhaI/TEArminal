@@ -7,6 +7,7 @@ use crate::theme::Color;
 
 /// Dibuja `scene` sobre `buf` (`scene.w * scene.h` píxeles XRGB). El búfer no se limpia antes:
 /// la escena empieza con su propio `Op::Clear` si quiere fondo.
+#[allow(dead_code)] // solo hasta que se borre el render por software
 pub fn rasterize(scene: &Scene, buf: &mut [u32]) {
     let (w, h) = (scene.w as usize, scene.h as usize);
     debug_assert!(buf.len() >= w * h, "búfer menor que la escena");

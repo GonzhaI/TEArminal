@@ -8,7 +8,9 @@ mod bench {
     use super::*;
     use std::time::Instant;
 
-    /// Coste CPU de un fotograma completo de terminal. `cargo test --release bench_render -- --nocapture`
+    /// Coste CPU de GRABAR (solo grabar: la escena no se dibuja) un fotograma completo de terminal.
+    /// `cargo test --release bench_render -- --nocapture`. El coste de enviarlo a la GPU lo mide
+    /// `bench_gpu_encode_and_submit_full_frame`.
     #[test]
     fn bench_render_pane_full_frame() {
         let cfg = AxonConfig::default();
@@ -24,7 +26,6 @@ mod bench {
             );
             term.process_bytes(line.clone().as_bytes());
         }
-        let mut buf = vec![0u32; w * h];
         let mut canvas = Canvas::new();
         canvas.begin(w as u32, h as u32);
         r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
@@ -33,21 +34,9 @@ mod bench {
         for _ in 0..n {
             canvas.begin(w as u32, h as u32);
             r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
-            rasterize(canvas.scene(), &mut buf);
-        }
-        let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        let t = Instant::now();
-        for _ in 0..n {
-            canvas.begin(w as u32, h as u32);
-            r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
         }
         let record = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        let t = Instant::now();
-        for _ in 0..n {
-            buf.fill(theme.background.to_u32_xrgb());
-        }
-        let fill = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        println!("render_pane {w}x{h} ({cols}x{rows} celdas): {per:.2} ms/frame (grabar+rasterizar; solo grabar: {record:.2} ms); buffer.fill: {fill:.2} ms");
+        println!("render_pane {w}x{h} ({cols}x{rows} celdas): {record:.2} ms/frame (SOLO grabar la escena; no incluye dibujarla)");
     }
 
     /// Coste en CPU de un fotograma por la ruta GPU: grabar (`Canvas`) + `GpuRenderer::render` (encode, subida del
@@ -167,33 +156,27 @@ mod bench {
         );
     }
 
+    /// Solo graba (el SDF lo evalúa ahora el shader): coste de registrar 12 tarjetas con relleno y borde.
     #[test]
     fn bench_sdf_rounded_rect_and_stroke() {
-        let (w, h) = (1920usize, 1080usize);
-        let mut buf = vec![0xFF16_1618u32; w * h];
+        let (w, h) = (1920u32, 1080u32);
         let fill_color = Color::from_rgb(38, 42, 52);
         let stroke_color = Color::from_rgb(90, 100, 120);
         let n = if cfg!(debug_assertions) { 6 } else { 300 };
+        let mut canvas = Canvas::new();
         let t = Instant::now();
         for _ in 0..n {
+            canvas.begin(w, h);
             for i in 0..12 {
                 let y = 40 + i * 76;
-                crate::ui::paint::draw_rounded_rect(&mut buf, w, h, 80, y, 820, 64, 10, fill_color);
-                crate::ui::paint::stroke_rounded_rect(
-                    &mut buf,
-                    w,
-                    h,
-                    80,
-                    y,
-                    820,
-                    64,
-                    10,
-                    stroke_color,
-                );
+                canvas.rounded_fill(80, y, 820, 64, 10, fill_color);
+                canvas.rounded_stroke(80, y, 820, 64, 10, stroke_color);
             }
         }
         let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        println!("bench_sdf_rounded_rect_and_stroke (12 cards 820x64): {per:.3} ms/iter");
+        println!(
+            "bench_sdf_rounded_rect_and_stroke (12 cards 820x64, SOLO grabar): {per:.3} ms/iter"
+        );
     }
 
     #[test]
@@ -202,8 +185,6 @@ mod bench {
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
-        let mut buf = vec![0u32; w * h];
-
         let dir = std::env::temp_dir().join(format!("axon_bench_fv_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let rs_path = dir.join("sample.rs");
@@ -260,7 +241,6 @@ mod bench {
                 &fv_rs,
                 &theme,
             );
-            rasterize(canvas.scene(), &mut buf);
         }
         let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
@@ -289,12 +269,11 @@ mod bench {
                 &fv_md,
                 &theme,
             );
-            rasterize(canvas.scene(), &mut buf);
         }
         let md_ms = t_md.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
         let _ = std::fs::remove_dir_all(&dir);
-        println!("bench_render_file_viewer (1920x1080): Rust code = {rs_ms:.2} ms/frame | Markdown preview = {md_ms:.2} ms/frame");
+        println!("bench_render_file_viewer (1920x1080, SOLO grabar): Rust code = {rs_ms:.2} ms/frame | Markdown preview = {md_ms:.2} ms/frame");
     }
 
     #[test]
@@ -303,7 +282,6 @@ mod bench {
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
-        let mut buf = vec![0u32; w * h];
         let tabs: Vec<SidebarTabItem> = (0..8)
             .map(|i| SidebarTabItem {
                 index: 0,
@@ -411,7 +389,6 @@ mod bench {
                 true,
                 &theme,
             );
-            rasterize(canvas.scene(), &mut buf);
         }
         let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
@@ -419,10 +396,9 @@ mod bench {
         for _ in 0..n {
             canvas.begin(w as u32, h as u32);
             r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
-            rasterize(canvas.scene(), &mut buf);
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        println!("bench_render_ui_chrome: sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
+        println!("bench_render_ui_chrome (SOLO grabar): sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
     }
 }
 
@@ -807,8 +783,6 @@ fn test_render_frame_latency_and_fps_benchmark() {
 
     let width = 1920;
     let height = 1080;
-    let mut buffer = vec![0u32; width * height];
-
     // Warm up
     let mut canvas = Canvas::new();
     canvas.begin(width as u32, height as u32);
@@ -841,18 +815,17 @@ fn test_render_frame_latency_and_fps_benchmark() {
             true,
             false,
         );
-        rasterize(canvas.scene(), &mut buffer);
     }
     let total_elapsed = start.elapsed();
     let avg_frame_ms = total_elapsed.as_secs_f64() * 1000.0 / frames as f64;
     let potential_fps = frames as f64 / total_elapsed.as_secs_f64();
 
     println!(
-            "\n⚡ [Axon Render Benchmark 1080p Fullscreen] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
+            "\n⚡ [Axon Render Benchmark 1080p Fullscreen, SOLO grabar la escena] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
             frames, total_elapsed, avg_frame_ms, potential_fps
         );
 
-    // El renderizado por software en CPU de una grilla 1080p completa debe ser ultra fluido (<3ms en release y <35ms en debug)
+    // Grabar la escena de una grilla 1080p completa debe ser ultra fluido (<3ms en release y <35ms en debug)
     let max_allowed_ms = if cfg!(debug_assertions) { 40.0 } else { 16.6 };
     assert!(
         avg_frame_ms < max_allowed_ms,
@@ -1052,62 +1025,8 @@ fn test_config_gpu_option_defaults_to_true() {
     assert!(cfg.terminal.gpu);
 }
 
-#[test]
-fn test_d3d11_presenter_lifecycle() {
-    use windows::Win32::Foundation::HWND;
-    use windows_sys::Win32::Foundation::HWND as SysHWND;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT, WNDCLASSW,
-        WS_OVERLAPPEDWINDOW,
-    };
-
-    unsafe {
-        let class_name: Vec<u16> = "AxonD3D11TestClass\0".encode_utf16().collect();
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(DefWindowProcW),
-            lpszClassName: class_name.as_ptr(),
-            ..std::mem::zeroed()
-        };
-        RegisterClassW(&wc);
-
-        let hwnd_sys = CreateWindowExW(
-            0,
-            class_name.as_ptr(),
-            class_name.as_ptr(),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            320,
-            240,
-            0 as SysHWND,
-            0 as _,
-            0 as _,
-            std::ptr::null(),
-        );
-
-        if hwnd_sys != 0 as SysHWND {
-            let hwnd = HWND(hwnd_sys as _);
-            if let Ok(mut presenter) = D3D11Presenter::new(hwnd, 320, 240) {
-                assert_eq!(presenter.size(), (320, 240));
-                assert_eq!(presenter.buffer_mut().len(), 320 * 240);
-
-                // Llenar buffer y presentar
-                presenter.buffer_mut().fill(0x00FF0000);
-                assert!(presenter.present().is_ok());
-
-                // Redimensionar
-                assert!(presenter.resize(640, 480).is_ok());
-                assert_eq!(presenter.size(), (640, 480));
-                assert_eq!(presenter.buffer_mut().len(), 640 * 480);
-                assert!(presenter.present().is_ok());
-            }
-            DestroyWindow(hwnd_sys);
-        }
-    }
-}
-
 /// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
-/// `build_scenes` las rasteriza con la CPU; los tests de paridad GPU leen `canvas.scene()`.
+/// `build_scenes` las dibuja en la GPU (WARP); los tests de escenas de `gpu_scenes` leen `canvas.scene()`.
 pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Canvas)> {
     use crate::app::SIDEBAR_WIDTH;
     use crate::renderer::{SettingsPageState, SidebarTabItem};
@@ -2102,7 +2021,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     scenes
 }
 
-/// Las mismas escenas rasterizadas por la CPU sobre un búfer a cero.
+/// Las mismas escenas dibujadas por la GPU (WARP) sobre negro.
 pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> {
     build_recorded_scenes(w, h)
         .into_iter()
@@ -2147,33 +2066,6 @@ fn preview_ui_scenes() {
     println!("previews in {}", out.display());
 }
 
-/// Regresión visual: el hash de cada escena de referencia debe coincidir con `golden/hashes.txt`.
-/// Con `AXON_BLESS=1` reescribe ese archivo en lugar de comparar (ver `test_support`).
-#[test]
-fn test_golden_scene_hashes() {
-    use super::test_support::{bless_requested, frame_hash};
-    const GOLDEN: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/renderer/golden/hashes.txt"
-    );
-
-    let mut actual = String::new();
-    for (name, buf) in build_scenes(1440, 900) {
-        actual.push_str(&format!("{name}={:016x}\n", frame_hash(&buf)));
-    }
-
-    if bless_requested() {
-        std::fs::write(GOLDEN, &actual).unwrap();
-        return;
-    }
-    let expected = std::fs::read_to_string(GOLDEN)
-        .expect("falta golden/hashes.txt: generarlo con AXON_BLESS=1");
-    assert_eq!(
-        actual, expected,
-        "hashes de escenas distintos (si el cambio es intencional, AXON_BLESS=1)"
-    );
-}
-
 #[test]
 fn test_signature_distance_is_zero_for_identical_and_grows_with_difference() {
     use super::test_support::{signature, signature_distance};
@@ -2190,12 +2082,15 @@ fn test_signature_distance_is_zero_for_identical_and_grows_with_difference() {
     assert_eq!(signature_distance(&a, &b), 63.75);
 }
 
-/// Las firmas de bloques de cada escena deben coincidir con `golden/signatures.bin` (la GPU de la etapa 2
-/// se compara contra ellas con tolerancia). Con `AXON_BLESS=1` reescribe el archivo.
+/// Las firmas de bloques de cada escena dibujada por la GPU deben coincidir con `golden/signatures.bin` (congeladas
+/// con la antigua CPU) dentro de `SIGNATURE_TOLERANCE`. Con `AXON_BLESS=1` reescribe el archivo desde la GPU: ver la
+/// advertencia de `test_support::bless_requested` (solo tras revisar las imágenes y con `--test-threads=1`).
 /// Formato: por escena, `u8` largo del nombre, nombre UTF-8, `u32` LE largo de la firma, firma.
 #[test]
 fn test_golden_scene_signatures_match() {
-    use super::test_support::{bless_requested, signature, signature_distance};
+    use super::test_support::{
+        bless_requested, signature, signature_distance, SIGNATURE_TOLERANCE,
+    };
     const GOLDEN: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/renderer/golden/signatures.bin"
@@ -2230,10 +2125,10 @@ fn test_golden_scene_signatures_match() {
         assert_eq!(take(name_len), name.as_bytes(), "orden de escenas distinto");
         let len = u32::from_le_bytes(take(4).try_into().unwrap()) as usize;
         let expected = take(len);
-        assert_eq!(
-            signature_distance(sig, expected),
-            0.0,
-            "firma de la escena {name} distinta (si es intencional, AXON_BLESS=1)"
+        let d = signature_distance(sig, expected);
+        assert!(
+            d <= SIGNATURE_TOLERANCE,
+            "firma de la escena {name} distinta: {d} > {SIGNATURE_TOLERANCE} (si es intencional, AXON_BLESS=1)"
         );
     }
     assert_eq!(pos, data.len(), "signatures.bin tiene escenas de más");
@@ -2444,144 +2339,58 @@ fn test_scrollbar_geometry_is_shared_by_every_list() {
     }
 }
 
-/// Copia del bucle de imagen que había inline en `pane.rs` (sustituido por `Canvas::image`), como referencia.
-fn legacy_image(
-    buf: &mut [u32],
-    w: usize,
-    clip: Clip,
-    rgba: &[u8],
-    (iw, ih): (usize, usize),
-    (ix, iy, tw, th): (i32, i32, usize, usize),
-) {
-    for dy in 0..th {
-        let py = iy + dy as i32;
-        if py < clip.1 as i32 || py >= clip.3 as i32 {
-            continue;
-        }
-        let sy = dy * ih / th;
-        for dx in 0..tw {
-            let px = ix + dx as i32;
-            if px < clip.0 as i32 || px >= clip.2 as i32 {
-                continue;
-            }
-            let i = (sy * iw + dx * iw / tw) * 4;
-            if i + 3 < rgba.len() {
-                let (r, g, b, a) = (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]);
-                let idx = py as usize * w + px as usize;
-                if a == 255 {
-                    buf[idx] = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
-                } else if a > 0 {
-                    let d = buf[idx];
-                    let bg = Color::from_rgb((d >> 16) as u8, (d >> 8) as u8, d as u8);
-                    buf[idx] = bg.blend_over(Color::from_rgb(r, g, b), a);
-                }
-            }
-        }
-    }
-}
-
+/// Lo opaco es exacto en la GPU: el relleno solo toca la intersección con el recorte, `clear` pinta todo y un
+/// lienzo nuevo parte de negro. (Glifos, redondeados, imágenes y tarjetas tienen sus referencias PNG en
+/// `gpu_renderer`.)
 #[test]
-fn test_canvas_matches_legacy_primitives() {
+fn test_canvas_opaque_ops_are_exact_on_the_gpu() {
     const W: usize = 40;
     const H: usize = 30;
-    // Fondo con degradado para que las mezclas con alfa se noten
-    let base: Vec<u32> = (0..W * H)
-        .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
-        .collect();
-    let pair = || (base.clone(), base.clone());
-    // Graba con `Canvas` y rasteriza sobre `buf` tal cual está (el degradado, no un búfer a cero)
-    let draw = |buf: &mut Vec<u32>, f: &dyn Fn(&mut Canvas)| {
-        let mut cv = test_support::new_canvas(W, H);
-        f(&mut cv);
-        rasterize(cv.scene(), buf);
-    };
     let clip: Clip = (5, 4, 30, 22);
     let col = Color::from_rgb(200, 90, 30);
 
-    // Relleno con recorte por dos lados
-    let (mut a, mut b) = pair();
-    draw(&mut a, &|c| c.fill_rect(clip, 0, 0, 20, 15, col));
-    fill_rect(&mut b, W, clip, 0, 0, 20, 15, col.to_u32_xrgb());
-    assert_eq!(a, b, "fill_rect");
-
-    // clear
-    let (mut a, mut b) = pair();
-    draw(&mut a, &|c| c.clear(col));
-    b.fill(col.to_u32_xrgb());
-    assert_eq!(a, b, "clear");
-
-    // Glifo con alfa parcial pegado al borde del recorte
-    let glyph = Rc::new(CachedGlyph {
-        width: 4,
-        height: 3,
-        x_offset: 0,
-        y_offset: 0,
-        bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
-    });
-    let (mut a, mut b) = pair();
-    draw(&mut a, &|c| c.glyph(clip, &glyph, 3, 20, col));
-    blit_glyph(&mut b, W, clip, &glyph, 3, 20, col);
-    assert_eq!(a, b, "glyph");
-    assert_ne!(a, base, "el glifo debe dibujar algo");
-
-    // Redondeado y trazo, incluido un rectángulo que sale del búfer
-    for (x, y, w, h) in [(4, 3, 20, 14), (30, 22, 20, 14)] {
-        let (mut a, mut b) = pair();
-        draw(&mut a, &|cv| {
-            cv.rounded_fill(x, y, w, h, 5, col);
-            cv.rounded_stroke(x, y, w, h, 5, Color::from_rgb(10, 220, 240));
-        });
-        crate::ui::draw_rounded_rect(&mut b, W, H, x, y, w, h, 5, col);
-        crate::ui::stroke_rounded_rect(&mut b, W, H, x, y, w, h, 5, Color::from_rgb(10, 220, 240));
-        assert_eq!(a, b, "rounded {x},{y}");
+    let px = test_support::with_canvas(W, H, |c| c.fill_rect(clip, 0, 0, 20, 15, col));
+    for y in 0..H {
+        for x in 0..W {
+            let inside = (5..20).contains(&x) && (4..15).contains(&y);
+            let want = if inside { col.to_u32_xrgb() } else { 0 };
+            assert_eq!(px[y * W + x], want, "fill_rect ({x},{y})");
+        }
     }
 
-    // Imagen 2x2 con alfa 0/128/255 + otro píxel semitransparente, escalada y recortada
-    let rgba: Vec<u8> = vec![
-        255, 0, 0, 255, //
-        0, 255, 0, 128, //
-        0, 0, 255, 0, //
-        255, 255, 255, 40,
-    ];
-    let (mut a, mut b) = pair();
-    let dst = (-3, 2, 16, 12);
-    draw(&mut a, &|c| {
-        c.image(
-            clip,
-            ImageRef {
-                rgba: &rgba,
-                width: 2,
-                height: 2,
-            },
-            dst,
-        )
-    });
-    legacy_image(&mut b, W, clip, &rgba, (2, 2), dst);
-    assert_eq!(a, b, "image");
-    assert_ne!(a, base, "la imagen debe dibujar algo");
+    let px = test_support::with_canvas(W, H, |c| c.clear(col));
+    assert!(px.iter().all(|&p| p == col.to_u32_xrgb()), "clear");
 
-    // rgba truncada: no entra en pánico y no dibuja nada (el bucle antiguo leería a medias)
-    let (mut a, _) = pair();
-    draw(&mut a, &|c| {
-        c.image(
-            clip,
-            ImageRef {
-                rgba: &rgba[..15],
-                width: 2,
-                height: 2,
-            },
-            dst,
-        )
-    });
-    assert_eq!(a, base, "image truncada");
-
-    // Tarjeta
-    let (mut a, mut b) = pair();
-    draw(&mut a, &|c| c.card((2, 2, 30, 24), 3, 4, col));
-    crate::ui::frame_card(&mut b, W, H, (2, 2, 30, 24), 3, 4, col);
-    assert_eq!(a, b, "card");
-
+    assert!(test_support::with_canvas(W, H, |_| {})
+        .iter()
+        .all(|&p| p == 0));
     assert_eq!(test_support::new_canvas(W, H).size(), (W, H));
+}
+
+/// Una tarjeta (`Canvas::card`) deja el interior intacto, pinta de `outer` el margen y las esquinas redondeadas y
+/// es exacta en lo opaco (análogo del antiguo `frame_card` de la CPU).
+#[test]
+fn test_card_keeps_the_inside_and_rounds_the_corners_on_the_gpu() {
+    let (w, h) = (60usize, 50usize);
+    let inner = Color::from_rgb(200, 100, 50).to_u32_xrgb();
+    let outer = Color::from_rgb(10, 20, 30);
+    let buf = test_support::with_canvas(w, h, |c| {
+        c.clear(Color::from_u32_xrgb(inner));
+        c.card((0, 0, w, h), 6, 10, outer);
+    });
+    let at = |x: usize, y: usize| buf[y * w + x];
+    assert_eq!(at(0, 25), outer.to_u32_xrgb(), "margen izquierdo");
+    assert_eq!(at(w - 1, 25), outer.to_u32_xrgb(), "margen derecho");
+    assert_eq!(at(30, h - 1), outer.to_u32_xrgb(), "margen inferior");
+    assert_eq!(at(6, 6), outer.to_u32_xrgb(), "esquina redondeada");
+    assert_eq!(at(w - 7, h - 7), outer.to_u32_xrgb(), "esquina redondeada");
+    assert_eq!(at(30, 25), inner, "el interior no se toca");
+    assert_eq!(
+        at(6, 25),
+        inner,
+        "el borde recto de la tarjeta queda dentro"
+    );
+    assert_eq!(at(16, 6), inner, "fin de la esquina: borde superior recto");
 }
 
 #[test]
@@ -2618,6 +2427,8 @@ fn test_draw_helpers_write_through_canvas() {
 
 #[test]
 fn test_with_offset_equals_offscreen_copy() {
+    // GPU contra GPU: lo dibujado con `with_offset` (traslación + recorte) es idéntico a dibujarlo en un lienzo local
+    // y copiar la ventana visible.
     // Real: 60x50. Local (lo que ven las pantallas): 56x100, con el origen en (-4, -20) reales,
     // así que parte del contenido empieza en coordenadas reales negativas.
     const W: usize = 60;
@@ -2667,12 +2478,12 @@ fn test_with_offset_equals_offscreen_copy() {
         .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
         .collect();
 
-    // Método antiguo: búfer local prerrellenado, mismo dibujo y copia de la ventana
+    // Referencia: el dibujo en un lienzo local de 56x100 sobre el fondo (sin recorte ni traslación) y copia de la
+    // ventana visible, todo en la GPU
     let mut old = base.clone();
-    let mut scratch = vec![bg.to_u32_xrgb(); LW * LH];
     let mut local = test_support::new_canvas(LW, LH);
     ops(&mut local);
-    rasterize(local.scene(), &mut scratch);
+    let scratch = test_support::render_scene_over(local.scene(), &vec![bg.to_u32_xrgb(); LW * LH]);
     for ry in clip.1..clip.3 {
         for rx in clip.0..clip.2 {
             let (lx, ly) = (rx as i32 - dx, ry as i32 - dy);
@@ -2683,7 +2494,7 @@ fn test_with_offset_equals_offscreen_copy() {
     }
 
     // Método nuevo: fondo explícito en la ventana y dibujo desplazado y recortado
-    let mut new = base.clone();
+    let new;
     {
         let mut c = test_support::new_canvas(W, H);
         c.fill_rect(
@@ -2696,7 +2507,7 @@ fn test_with_offset_equals_offscreen_copy() {
         );
         c.with_offset(dx, dy, (LW, LH), clip, ops);
         assert_eq!(c.size(), (W, H), "with_offset restaura el estado");
-        rasterize(c.scene(), &mut new);
+        new = test_support::render_scene_over(c.scene(), &base);
     }
     assert_ne!(new, base, "el dibujo debe cambiar algo");
     assert_eq!(old, new);
@@ -3239,7 +3050,7 @@ mod gpu_renderer {
     };
     use crate::renderer::scene::{Op, Scene};
     use crate::renderer::test_support::{self, bless_requested, PARITY_TOLERANCE};
-    use crate::renderer::{rasterize, CachedGlyph, ImageRef};
+    use crate::renderer::{CachedGlyph, ImageRef};
     use crate::theme::Color;
     use std::rc::Rc;
     use windows::Win32::Graphics::Direct3D::*;
@@ -3298,69 +3109,52 @@ mod gpu_renderer {
         v
     }
 
-    /// Referencia congelada de `golden/refs/<name>.png`. Con `AXON_BLESS=1` la ESCRIBE a partir de `cpu` (la salida
-    /// del rasterizador de la CPU) y no compara; sin él, exige que `gpu` difiera <= `PARITY_TOLERANCE` por canal.
+    /// Compara `gpu` (`w` x `h`) con la referencia congelada `golden/refs/<name>.png` por canal, con tolerancia
+    /// `PARITY_TOLERANCE`.
     ///
-    /// La CPU solo es la fuente mientras exista (Task 20a). Tras eliminarla (Task 20b) bendecir escribirá desde la
-    /// GPU: hacerlo únicamente después de comprobar visualmente el resultado, o un fallo se congela como correcto.
-    fn check_reference(name: &str, cpu: &[u32], gpu: &[u32], w: usize, h: usize) {
+    /// **Con `AXON_BLESS=1` ESCRIBE la referencia desde `gpu` y no compara.** Bendecir congela como correcto lo que
+    /// salga: hacerlo únicamente tras mirar el PNG resultante, con `-- --test-threads=1` y solo para un caso
+    /// nuevo o un cambio de diseño deliberado (nunca para "arreglar" un fallo).
+    fn check_reference(name: &str, gpu: &[u32], w: usize, h: usize) {
         let path = test_support::reference_path("refs", name);
         if bless_requested() {
-            test_support::write_reference(&path, w, h, cpu);
+            test_support::write_reference(&path, w, h, gpu);
             return;
         }
         let (want, rw, rh) = test_support::read_reference(&path);
         assert_eq!((rw, rh), (w, h), "{name}: tamaño de la referencia");
         assert_eq!(gpu.len(), want.len(), "{name}: píxeles");
+        let mut max = 0u32;
+        let mut first_bad = None;
         for (i, (&r, &g)) in want.iter().zip(gpu).enumerate() {
             let d = (0..3)
                 .map(|s| ((r >> (8 * s)) & 255).abs_diff((g >> (8 * s)) & 255))
                 .max()
                 .unwrap();
-            assert!(
-                d <= u32::from(PARITY_TOLERANCE),
-                "{name}: referencia PNG, píxel ({}, {}): ref {r:#08x} GPU {g:#08x}",
-                i % w,
-                i / w
+            max = max.max(d);
+            if d > u32::from(PARITY_TOLERANCE) && first_bad.is_none() {
+                first_bad = Some((i % w, i / w, r, g));
+            }
+        }
+        println!("referencia {name}: diferencia máxima {max}");
+        if let Some((x, y, r, g)) = first_bad {
+            panic!(
+                "{name}: referencia PNG, píxel ({x}, {y}): ref {r:#08x} GPU {g:#08x} (máx {max})"
             );
         }
     }
 
-    /// Dibuja `scene` con la CPU y con la GPU sobre la misma base y exige diferencia por canal
-    /// <= `PARITY_TOLERANCE`. Devuelve la diferencia máxima medida.
-    fn assert_parity(name: &str, r: &mut GpuRenderer, scene: &Scene, base: Option<&[u32]>) -> u8 {
+    /// Dibuja `scene` en la GPU (sobre `base`, o sobre negro) y la compara con la referencia `name`
+    /// (`check_reference`).
+    fn assert_reference(name: &str, r: &mut GpuRenderer, scene: &Scene, base: Option<&[u32]>) {
         let (w, h) = (scene.w as usize, scene.h as usize);
-        let mut cpu = base.map_or_else(|| vec![0u32; w * h], |b| b.to_vec());
-        rasterize(scene, &mut cpu);
         let (gpu, gw, gh) = match base {
             Some(b) => r.render_to_pixels_over(scene, b),
             None => r.render_to_pixels(scene),
         }
         .unwrap();
         assert_eq!((gw as usize, gh as usize), (w, h), "{name}: tamaño");
-        let mut max = 0u8;
-        let mut first_bad = None;
-        let mut differing = 0usize;
-        for (i, (&c, &g)) in cpu.iter().zip(&gpu).enumerate() {
-            let d = (0..3)
-                .map(|s| ((c >> (8 * s)) & 255).abs_diff((g >> (8 * s)) & 255) as u8)
-                .max()
-                .unwrap();
-            differing += (d > 0) as usize;
-            max = max.max(d);
-            if d > PARITY_TOLERANCE && first_bad.is_none() {
-                first_bad = Some((i % w, i / w, c, g));
-            }
-        }
-        println!(
-            "paridad {name}: diferencia máxima {max}, {differing} píxeles distintos de {}",
-            w * h
-        );
-        check_reference(name, &cpu, &gpu, w, h);
-        if let Some((x, y, c, g)) = first_bad {
-            panic!("{name}: primer píxel fuera de tolerancia en ({x}, {y}): CPU {c:#08x} GPU {g:#08x} (máx {max})");
-        }
-        max
+        check_reference(name, &gpu, w, h);
     }
 
     fn kind_of(i: &Instance) -> u32 {
@@ -3461,8 +3255,7 @@ mod gpu_renderer {
         for (n, ((bw, bh), region, inset, radius)) in cases.into_iter().enumerate() {
             let mut c = test_support::new_canvas(bw, bh);
             c.card(region, inset, radius, outer);
-            let mut cpu = vec![SENTINEL; bw * bh];
-            rasterize(c.scene(), &mut cpu);
+            let drawn = test_support::render_scene_over(c.scene(), &vec![SENTINEL; bw * bh]);
             let (out, _) = encode_all(c.scene(), (bw as u32, bh as u32));
 
             let mut solid = vec![0u8; bw * bh];
@@ -3496,7 +3289,7 @@ mod gpu_renderer {
                     assert_eq!(solid[p], 0, "caso {n}: esquina y margen se pisan en {p}");
                     continue;
                 }
-                let changed = cpu[p] != SENTINEL;
+                let changed = drawn[p] != SENTINEL;
                 assert_eq!(
                     solid[p],
                     changed as u8,
@@ -3798,10 +3591,10 @@ mod gpu_renderer {
         );
     }
 
-    // ---- paridad GPU / CPU (WARP) -----------------------------------------------------------------
+    // ---- GPU (WARP) frente a las referencias PNG -----------------------------------------------------------------
 
     #[test]
-    fn test_gpu_parity_fill_with_clip() {
+    fn test_gpu_reference_fill_with_clip() {
         let (w, h) = (96usize, 64usize);
         let mut r = renderer();
         let base = gradient(w, h);
@@ -3824,17 +3617,17 @@ mod gpu_renderer {
         });
         c.fill_rect(full, 90, 60, 20, 20, Color::from_rgb(77, 88, 99)); // sale por la esquina
         c.fill_rect(full, 5, 5, 0, 7, Color::from_rgb(255, 0, 0)); // sin ancho
-        assert_parity("fill+clip", &mut r, c.scene(), Some(&base));
+        assert_reference("fill+clip", &mut r, c.scene(), Some(&base));
 
         // Clear primero y sin base
         let mut c = test_support::new_canvas(w, h);
         c.clear(Color::from_rgb(12, 34, 56));
         c.fill_rect(full, 1, 1, 10, 10, Color::from_rgb(200, 100, 50));
-        assert_parity("clear+fill", &mut r, c.scene(), None);
+        assert_reference("clear+fill", &mut r, c.scene(), None);
     }
 
     #[test]
-    fn test_gpu_parity_glyph_coverage() {
+    fn test_gpu_reference_glyph_coverage() {
         let (w, h) = (96usize, 64usize);
         let mut r = renderer();
         let base = gradient(w, h);
@@ -3876,11 +3669,11 @@ mod gpu_renderer {
         // Mismo glifo apilado: la mezcla en orden importa
         c.glyph(full, &a, 70, 3, Color::from_rgba(255, 0, 0, 100));
         c.glyph(full, &a, 72, 4, Color::from_rgba(0, 255, 0, 100));
-        assert_parity("glyph", &mut r, c.scene(), Some(&base));
+        assert_reference("glyph", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
-    fn test_gpu_parity_rounded_fill_and_stroke() {
+    fn test_gpu_reference_rounded_fill_and_stroke() {
         let (w, h) = (120usize, 80usize);
         let mut r = renderer();
         let base = gradient(w, h);
@@ -3920,11 +3713,11 @@ mod gpu_renderer {
         c.with_offset(60, 50, (30, 20), (0, 0, 20, 12), |c| {
             c.rounded_fill(0, 0, 40, 30, 9, Color::from_rgba(30, 130, 30, 220));
         });
-        assert_parity("rounded", &mut r, c.scene(), Some(&base));
+        assert_reference("rounded", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
-    fn test_gpu_parity_image_nearest_with_alpha() {
+    fn test_gpu_reference_image_nearest_with_alpha() {
         let (w, h) = (100usize, 70usize);
         let mut r = renderer();
         let base = gradient(w, h);
@@ -3950,11 +3743,11 @@ mod gpu_renderer {
         c.with_offset(60, 45, (40, 25), (0, 0, 40, 25), |c| {
             c.image((0, 0, 40, 25), im(&small, 4, 3), (-3, -2, 20, 14));
         });
-        assert_parity("image", &mut r, c.scene(), Some(&base));
+        assert_reference("image", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
-    fn test_gpu_parity_card() {
+    fn test_gpu_reference_card() {
         let mut r = renderer();
         let outer = Color::from_rgb(10, 20, 30);
         let cases: [CardCase; 6] = [
@@ -3977,17 +3770,17 @@ mod gpu_renderer {
                 Color::from_rgb(200, 180, 20),
             );
             c.card(region, inset, radius, outer);
-            assert_parity(&format!("card {n}"), &mut r, c.scene(), Some(&base));
+            assert_reference(&format!("card {n}"), &mut r, c.scene(), Some(&base));
         }
-        // Salida translúcida: la CPU ignora el alfa de `outer`
+        // Salida translúcida: el alfa de `outer` se ignora (la tarjeta es opaca)
         let base = gradient(60, 50);
         let mut c = test_support::new_canvas(60, 50);
         c.card((0, 0, 60, 50), 6, 10, Color::from_rgba(200, 40, 40, 90));
-        assert_parity("card translúcida", &mut r, c.scene(), Some(&base));
+        assert_reference("card translúcida", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
-    fn test_gpu_parity_ops_over_a_gradient_base() {
+    fn test_gpu_reference_ops_over_a_gradient_base() {
         let (w, h) = (128usize, 96usize);
         let mut r = renderer();
         let base = gradient(w, h);
@@ -4004,7 +3797,7 @@ mod gpu_renderer {
             }
         }
         // Formas translúcidas solapadas de dos en dos (cada píxel recibe como mucho 2 capas parciales):
-        // el resultado depende del orden. La CPU trunca en cada capa y la GPU redondea, así que con
+        // el resultado depende del orden. Las referencias (CPU) truncaban en cada capa y la GPU redondea, así que con
         // 3 o más capas la diferencia pasa de `PARITY_TOLERANCE` aunque no haya ningún error (ver el
         // informe de la tarea 16). Este test busca un orden o una mezcla equivocados, que dan
         // diferencias de decenas.
@@ -4048,7 +3841,7 @@ mod gpu_renderer {
         }
         c.fill_rect(full, 60, 42, 8, 3, Color::from_rgb(30, 60, 90));
         c.card((0, 0, w, h), 3, 6, Color::from_rgb(8, 8, 12));
-        assert_parity("orden sobre degradado", &mut r, c.scene(), Some(&base));
+        assert_reference("orden sobre degradado", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
@@ -4083,7 +3876,7 @@ mod gpu_renderer {
             );
         }
         assert!(c.scene().glyph_count() >= 200);
-        assert_parity("atlas lleno", &mut r, c.scene(), Some(&base));
+        assert_reference("atlas lleno", &mut r, c.scene(), Some(&base));
     }
 
     #[test]
@@ -4099,7 +3892,7 @@ mod gpu_renderer {
             c.fill_rect(full, x, y, 1, 1, col);
         }
         assert!(c.scene().ops.len() > 4096);
-        assert_parity("buffer de instancias", &mut r, c.scene(), None);
+        assert_reference("buffer de instancias", &mut r, c.scene(), None);
     }
 
     #[test]
@@ -4123,9 +3916,8 @@ mod gpu_renderer {
         c2.glyph(full, &small_a, 2, 2, col);
         c2.glyph(full, &small_b, 40, 2, col);
         c2.glyph(full, &small_a, 2, 30, col);
-        let mut cpu = base.clone();
-        rasterize(c2.scene(), &mut cpu);
-        let max = cpu
+        let (without, ..) = r.render_to_pixels_over(c2.scene(), &base).unwrap();
+        let max = without
             .iter()
             .zip(&gpu)
             .map(|(a, b)| {
@@ -4138,9 +3930,10 @@ mod gpu_renderer {
             .unwrap();
         assert!(
             max <= PARITY_TOLERANCE as u32,
-            "los glifos pequeños deben dibujarse (máx {max})"
+            "los glifos pequeños deben dibujarse y los enormes no (máx {max})"
         );
-        check_reference("glifo mayor que el atlas", &cpu, &gpu, w, h);
+        assert_ne!(gpu, base, "los glifos pequeños deben dibujar algo");
+        check_reference("glifo mayor que el atlas", &gpu, w, h);
     }
 
     #[test]
@@ -4158,27 +3951,17 @@ mod gpu_renderer {
         let (px, gw, gh) = r.render_to_pixels(c.scene()).unwrap();
         assert_eq!((gw, gh), (8192, 4));
         assert_eq!(px.len(), 8192 * 4);
-        let mut cpu = vec![0u32; w * h];
-        rasterize(c.scene(), &mut cpu);
-        let clamped: Vec<u32> = cpu
-            .chunks(w)
-            .flat_map(|row| &row[..8192])
-            .copied()
-            .collect();
-        check_reference("escena mayor que la textura", &clamped, &px, 8192, h);
-        for y in 0..h {
-            for x in 0..8192 {
-                let (a, b) = (cpu[y * w + x], px[y * 8192 + x]);
-                let d = (0..3)
-                    .map(|s| ((a >> (8 * s)) & 255).abs_diff((b >> (8 * s)) & 255))
-                    .max()
-                    .unwrap();
-                assert!(
-                    d <= PARITY_TOLERANCE as u32,
-                    "({x}, {y}): CPU {a:#08x} GPU {b:#08x}"
-                );
-            }
-        }
+        check_reference("escena mayor que la textura", &px, 8192, h);
+        // Lo opaco es exacto: fondo, relleno que cruza el límite y la columna del límite
+        let at = |x: usize, y: usize| px[y * 8192 + x];
+        assert_eq!(at(100, 0), 0x0A_141E, "fondo");
+        assert_eq!(at(8050, 3), 0xC8_6432, "relleno");
+        assert_eq!(at(8099, 0), 0xC8_6432, "junto al redondeado");
+        assert_ne!(
+            at(8191, 1),
+            0xC8_6432,
+            "el redondeado translúcido se mezcla"
+        );
     }
 
     #[test]
@@ -4402,7 +4185,8 @@ mod gpu_surface {
     }
 }
 
-/// Paridad de escenas completas GPU/CPU (etapa 2). Criterio estadístico: ver `test_support::SCENE_*`.
+/// Escenas completas dibujadas por la GPU frente a las referencias PNG y a las firmas (`golden/`). Criterio
+/// estadístico: ver `test_support::SCENE_*`.
 mod gpu_scenes {
     use crate::renderer::gpu::{DriverKind, GpuDevice, GpuRenderer};
     use crate::renderer::test_support::{
@@ -4461,17 +4245,17 @@ mod gpu_scenes {
 
     struct SceneStats {
         name: &'static str,
-        /// GPU frente a la firma del golden y a la CPU.
+        /// Distancia de firma de la GPU a la de `golden/signatures.bin`.
         distance: f32,
-        cpu: Diff,
         /// GPU frente a `golden/scenes/<name>.png`: (distancia de firma, diferencias). `None` al bendecir.
         reference: Option<(f32, Diff)>,
     }
 
-    /// Diferencia por canal GPU/CPU y GPU/referencia PNG de cada escena. Con `AXON_BLESS=1` escribe
-    /// `golden/scenes/<escena>.png` desde los fotogramas de la CPU (única vez que la CPU es la fuente: tras la
-    /// Task 20b bendecir escribirá desde la GPU, solo tras comprobarlo a ojo) y no compara con ellos. Bendecir con
-    /// `--test-threads=1`: los dos tests de escenas escriben los mismos archivos.
+    /// Distancia a las firmas y diferencia por canal GPU/referencia PNG de cada escena. Con `AXON_BLESS=1` escribe
+    /// `golden/scenes/<escena>.png` desde los fotogramas de la GPU y no compara con ellos.
+    ///
+    /// **Bendecir congela lo que dibuje la GPU como correcto**: solo tras mirar las imágenes (`preview_ui_scenes`)
+    /// y siempre con `-- --test-threads=1`, porque los dos tests de escenas escriben los mismos archivos.
     fn measure(r: &mut GpuRenderer, tag: &str) -> Vec<SceneStats> {
         let golden = test_support::read_golden_signatures();
         let recorded = super::build_recorded_scenes(W, H);
@@ -4479,15 +4263,12 @@ mod gpu_scenes {
         let mut all = Vec::new();
         for ((name, canvas), (gname, gsig)) in recorded.iter().zip(&golden) {
             assert_eq!(name, gname, "orden de escenas distinto del golden");
-            let cpu = canvas.snapshot();
             let (gpu, gw, gh) = r.render_to_pixels(canvas.scene()).unwrap();
             assert_eq!((gw as usize, gh as usize), (W, H), "{name}: tamaño");
-            // La firma CPU es la del golden (si no, el golden está desactualizado y lo dice otro test)
-            let (cpu_sig, gpu_sig) = (signature(&cpu, W, H), signature(&gpu, W, H));
-            assert_eq!(signature_distance(&cpu_sig, gsig), 0.0, "{name}: golden");
+            let gpu_sig = signature(&gpu, W, H);
             let path = test_support::reference_path("scenes", name);
             let reference = if bless_requested() {
-                test_support::write_reference(&path, W, H, &cpu);
+                test_support::write_reference(&path, W, H, &gpu);
                 None
             } else {
                 let (want, rw, rh) = test_support::read_reference(&path);
@@ -4498,19 +4279,21 @@ mod gpu_scenes {
             let st = SceneStats {
                 name,
                 distance: signature_distance(&gpu_sig, gsig),
-                cpu: Diff::between(&cpu, &gpu),
                 reference,
             };
-            println!(
-                "[{tag}] {:<20} dist firma {:.4}  max {:>3}  >{} en {:>7} px ({:.4} %)  media {:.4}",
-                st.name,
-                st.distance,
-                st.cpu.max,
-                PARITY_TOLERANCE,
-                st.cpu.outliers,
-                st.cpu.outlier_fraction() * 100.0,
-                st.cpu.mean
-            );
+            if let Some((dist, diff)) = &st.reference {
+                println!(
+                    "[{tag}] {:<20} firma {:.4} (golden {:.4})  max {:>3}  >{} en {:>7} px ({:.4} %)  media {:.4}",
+                    st.name,
+                    dist,
+                    st.distance,
+                    diff.max,
+                    PARITY_TOLERANCE,
+                    diff.outliers,
+                    diff.outlier_fraction() * 100.0,
+                    diff.mean
+                );
+            }
             all.push(st);
         }
         all
@@ -4520,65 +4303,27 @@ mod gpu_scenes {
         println!("[{tag}] {:?} {:?}", gpu.kind, gpu.feature_level);
         let mut r = GpuRenderer::new(gpu).unwrap();
         for st in measure(&mut r, tag) {
+            assert!(
+                st.distance <= SIGNATURE_TOLERANCE,
+                "{}: firma frente a signatures.bin",
+                st.name
+            );
             if let Some((dist, diff)) = &st.reference {
                 diff.assert_within(*dist, "(referencia PNG)", st.name);
             }
-            st.cpu.assert_within(st.distance, "(CPU)", st.name);
         }
     }
 
     #[test]
-    fn test_gpu_scenes_match_cpu_reference() {
+    fn test_gpu_scenes_match_reference() {
         let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
         assert_scenes_match(gpu, "warp");
     }
 
     #[test]
-    fn test_gpu_scenes_match_cpu_reference_at_feature_level_10_0() {
+    fn test_gpu_scenes_match_reference_at_feature_level_10_0() {
         let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
         assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
         assert_scenes_match(gpu, "warp-fl10_0");
-    }
-
-    /// Manual (no forma parte de la suite): `cargo test preview_gpu_vs_cpu -- --ignored --nocapture`. Deja en
-    /// `%TEMP%/axon-gpu-parity` el PNG de la CPU, el de la GPU y su diferencia absoluta x16 (saturada).
-    #[test]
-    #[ignore]
-    fn preview_gpu_vs_cpu() {
-        let out = std::env::temp_dir().join("axon-gpu-parity");
-        std::fs::create_dir_all(&out).unwrap();
-        let gpu = GpuDevice::new(None).unwrap();
-        println!("dispositivo: {:?} {:?}", gpu.kind, gpu.feature_level);
-        let mut r = GpuRenderer::new(gpu).unwrap();
-        // Mismas cifras que el test, ahora sobre el dispositivo real si lo hay
-        measure(&mut r, "preview");
-        let rgb = |px: &[u32], f: &dyn Fn(usize) -> [u8; 3]| -> Vec<u8> {
-            (0..px.len()).flat_map(f).collect()
-        };
-        for (name, canvas) in super::build_recorded_scenes(W, H) {
-            if !["terminal-vertical", "ajustes", "visor"].contains(&name) {
-                continue;
-            }
-            let cpu = canvas.snapshot();
-            let (gpu, _, _) = r.render_to_pixels(canvas.scene()).unwrap();
-            let unpack = |p: u32| [(p >> 16) as u8, (p >> 8) as u8, p as u8];
-            let save = |suffix: &str, data: Vec<u8>| {
-                let path = out.join(format!("{name}-{suffix}.png"));
-                image::RgbImage::from_raw(W as u32, H as u32, data)
-                    .unwrap()
-                    .save(&path)
-                    .unwrap();
-                println!("{}", path.display());
-            };
-            save("cpu", rgb(&cpu, &|i| unpack(cpu[i])));
-            save("gpu", rgb(&gpu, &|i| unpack(gpu[i])));
-            save(
-                "diff",
-                rgb(&cpu, &|i| {
-                    let (c, g) = (unpack(cpu[i]), unpack(gpu[i]));
-                    std::array::from_fn(|k| c[k].abs_diff(g[k]).saturating_mul(16))
-                }),
-            );
-        }
     }
 }

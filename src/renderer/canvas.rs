@@ -48,13 +48,11 @@ impl Canvas {
         &self.scene
     }
 
-    /// Rasteriza lo grabado hasta ahora sobre un búfer a cero (los tests comprueban lo dibujado
+    /// Dibuja lo grabado hasta ahora en la GPU (WARP) sobre negro (los tests comprueban lo dibujado
     /// sin soltar el lienzo).
     #[cfg(test)]
     pub(crate) fn snapshot(&self) -> Vec<u32> {
-        let mut buf = vec![0u32; self.scene.w as usize * self.scene.h as usize];
-        super::rasterize(&self.scene, &mut buf);
-        buf
+        super::test_support::render_scene(&self.scene)
     }
 
     /// Tamaño local: el del fotograma, o el declarado por el `with_offset` en curso.

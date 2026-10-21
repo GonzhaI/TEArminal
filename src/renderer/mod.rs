@@ -11,6 +11,7 @@ mod blocks;
 mod canvas;
 mod context_menu;
 #[cfg(test)]
+#[allow(dead_code)] // solo hasta que se borre el render por software
 pub mod d3d11;
 mod draw;
 mod explorer_panel;
@@ -34,8 +35,10 @@ mod tokens;
 mod top_bar;
 
 #[cfg(test)]
+#[allow(unused_imports)]
 use draw::blit_glyph;
 #[cfg(test)]
+#[allow(unused_imports)]
 use draw::fill_rect;
 use draw::Clip;
 use glyphs::{
@@ -46,11 +49,13 @@ use glyphs::{
 pub use blocks::BlockCardButton;
 pub use canvas::Canvas;
 #[cfg(test)]
+#[allow(unused_imports)]
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};
 pub use gpu::{GpuSurface, Presented};
 #[cfg(test)]
+#[allow(unused_imports)]
 pub use raster_cpu::rasterize;
 pub use scene::ImageRef;
 pub use state::*;

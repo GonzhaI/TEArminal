@@ -1,9 +1,12 @@
-//! Soporte de los tests de regresión visual (`test_golden_scene_hashes`): hash de fotogramas, modo `AXON_BLESS`,
-//! fase fija del spinner y un árbol de archivos fijo que sustituye al directorio de trabajo real.
+//! Soporte de los tests de regresión visual: dibujo de una `Scene` en la GPU (WARP), referencias PNG y firmas,
+//! modo `AXON_BLESS`, fase fija del spinner y un árbol de archivos fijo que sustituye al directorio de trabajo real.
 
+use super::gpu::{DriverKind, GpuDevice, GpuRenderer};
+use super::scene::Scene;
 use super::Canvas;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_10_0;
 
 thread_local! {
     /// Fase fija del spinner de pestañas para las escenas (`None` = reloj real, como en la app).
@@ -18,21 +21,13 @@ pub(super) fn spinner_phase_override() -> Option<usize> {
     SPINNER_PHASE.with(|c| c.get())
 }
 
-/// FNV-1a de 64 bits sobre los bytes (little-endian) de cada `u32` del framebuffer, en orden.
-pub(super) fn frame_hash(buf: &[u32]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut hash = OFFSET;
-    for px in buf {
-        for byte in px.to_le_bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(PRIME);
-        }
-    }
-    hash
-}
-
-/// `AXON_BLESS=1`: el test de hashes reescribe `golden/hashes.txt` en vez de compararlo.
+/// `AXON_BLESS=1`: los tests de referencias REESCRIBEN los PNG (y `signatures.bin`) con lo que dibuja la GPU en vez
+/// de compararlos.
+///
+/// **Bendecir congela lo que salga como correcto.** Hazlo solo tras mirar las imágenes (`preview_ui_scenes` las
+/// vuelca a `%TEMP%`; abre los PNG de `golden/`) y siempre con `-- --test-threads=1`, porque los tests de escenas
+/// escriben los mismos archivos. Una referencia que "necesita" cambiar sin un cambio de diseño deliberado es un
+/// fallo del dibujo, no de la referencia.
 pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
 }
@@ -91,12 +86,12 @@ pub(super) fn read_reference(path: &std::path::Path) -> (Vec<u32>, usize, usize)
     (px, w, h)
 }
 
-/// Diferencia máxima por canal (0-255) que admiten los tests de paridad GPU/CPU: la CPU mezcla con
-/// aritmética entera truncada y la GPU en coma flotante con redondeo, así que ±1 es normal. Una
-/// diferencia mayor se corrige en el shader o en la codificación, nunca subiendo este valor.
+/// Diferencia máxima por canal (0-255) que admiten las comparaciones con las referencias PNG: las referencias se
+/// congelaron con la mezcla entera truncada de la antigua CPU y la GPU mezcla en coma flotante con redondeo, así
+/// que ±1 es normal. Una diferencia mayor se corrige en el shader o en la codificación, nunca subiendo este valor.
 pub(super) const PARITY_TOLERANCE: u8 = 2;
 
-/// Tolerancia de escenas COMPLETAS GPU/CPU (mediciones en el documento base, "Etapa 2"). `PARITY_TOLERANCE` solo
+/// Tolerancia de escenas COMPLETAS GPU/referencia (mediciones en el documento base, "Etapa 2"). `PARITY_TOLERANCE` solo
 /// vale para primitivas con <= 2 capas translúcidas apiladas (el redondeo de la GPU frente al truncado de la CPU
 /// suma ~1 por capa), así que en una escena entera el criterio es estadístico: firma, fracción de atípicos y tope.
 /// Medido en WARP (FL 11_1 y 10_0), 10 escenas de 1440x900: distancia de firma <= 0,0164; diferencia máxima por
@@ -176,7 +171,44 @@ pub(super) fn new_canvas(w: usize, h: usize) -> Canvas {
     canvas
 }
 
-/// Dibuja sobre un lienzo `w` x `h` inicialmente en cero y devuelve los píxeles rasterizados.
+thread_local! {
+    /// Un `GpuRenderer` WARP por hilo de test: crear el dispositivo y compilar el pipeline en cada llamada es lento.
+    static GPU: RefCell<Option<GpuRenderer>> = const { RefCell::new(None) };
+}
+
+/// Dibuja `scene` en la GPU (WARP, FL 10_0 como mínimo) sobre negro y devuelve `0x00RRGGBB` por píxel. El tamaño
+/// es el de la escena (si la textura máxima lo recortara, el test debe usar `GpuRenderer::render_to_pixels`).
+pub(super) fn render_scene(scene: &Scene) -> Vec<u32> {
+    render(scene, None)
+}
+
+/// Como `render_scene`, pero sobre `base` (`scene.w * scene.h` píxeles `0x00RRGGBB`) en vez de sobre negro.
+pub(super) fn render_scene_over(scene: &Scene, base: &[u32]) -> Vec<u32> {
+    render(scene, Some(base))
+}
+
+fn render(scene: &Scene, base: Option<&[u32]>) -> Vec<u32> {
+    GPU.with(|g| {
+        let mut g = g.borrow_mut();
+        let r = g.get_or_insert_with(|| {
+            let dev = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
+            GpuRenderer::new(dev).unwrap()
+        });
+        let (px, w, h) = match base {
+            Some(b) => r.render_to_pixels_over(scene, b),
+            None => r.render_to_pixels(scene),
+        }
+        .unwrap();
+        assert_eq!(
+            (w, h),
+            (scene.w, scene.h),
+            "la escena supera la textura máxima"
+        );
+        px
+    })
+}
+
+/// Dibuja sobre un lienzo `w` x `h` inicialmente en negro y devuelve los píxeles que pinta la GPU.
 pub(super) fn with_canvas(w: usize, h: usize, f: impl FnOnce(&mut Canvas)) -> Vec<u32> {
     let mut canvas = new_canvas(w, h);
     f(&mut canvas);

@@ -7,6 +7,7 @@ pub(super) type Clip = (usize, usize, usize, usize);
 
 /// Referencia del relleno antiguo: los tests la comparan con `Canvas::fill_rect`.
 #[cfg(test)]
+#[allow(dead_code)] // solo hasta que se borre el render por software
 pub(super) fn fill_rect(
     buffer: &mut [u32],
     buf_w: usize,
@@ -30,6 +31,7 @@ pub(super) fn fill_rect(
 /// Mezcla un glifo (mapa de cobertura 8-bit) sobre el framebuffer recortado. Único punto de
 /// composición de texto: terminal, UI Inter e iconos Lucide pasan por aquí.
 #[cfg(test)]
+#[allow(dead_code)] // solo hasta que se borre el render por software
 pub(super) fn blit_glyph(
     buffer: &mut [u32],
     buf_w: usize,
