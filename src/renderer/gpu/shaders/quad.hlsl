@@ -105,8 +105,8 @@ float4 ps_main(VsOut i) : SV_Target
         uint c8 = uint(cov * 255.0 + 0.5);
         if (c8 == 0u)
             discard; // blit_glyph: cobertura 0 no toca el destino
-        // 255 sobrescribe (alfa 1 con SrcAlpha/InvSrcAlpha); el resto mezcla
-        return float4(rgb, float(c8) / 255.0 * float(ca) / 255.0);
+        // blit_glyph ignora el alfa del color: solo manda la cobertura (255 sobrescribe, el resto mezcla)
+        return float4(rgb, float(c8) / 255.0);
     }
     else if (kind == KIND_IMAGE)
     {
