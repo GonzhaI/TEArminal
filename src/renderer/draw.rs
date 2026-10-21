@@ -189,13 +189,13 @@ impl TerminalRenderer {
                         .unwrap_or(inter_regular)
                 };
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
-                let glyph = CachedGlyph {
+                let glyph = Rc::new(CachedGlyph {
                     width: metrics.width,
                     height: metrics.height,
                     x_offset: metrics.xmin,
                     y_offset: metrics.ymin,
                     bitmap,
-                };
+                });
                 (glyph, metrics.advance_width)
             });
 
@@ -276,13 +276,13 @@ impl TerminalRenderer {
             let (glyph, advance) = cache.entry((c, size_bits, bold)).or_insert_with(|| {
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
                 (
-                    CachedGlyph {
+                    Rc::new(CachedGlyph {
                         width: metrics.width,
                         height: metrics.height,
                         x_offset: metrics.xmin,
                         y_offset: metrics.ymin,
                         bitmap,
-                    },
+                    }),
                     metrics.advance_width,
                 )
             });
@@ -359,13 +359,13 @@ impl TerminalRenderer {
             .entry((c, size_bits))
             .or_insert_with(|| {
                 let (metrics, bitmap) = lucide_ref.rasterize(c, effective_size);
-                CachedGlyph {
+                Rc::new(CachedGlyph {
                     width: metrics.width,
                     height: metrics.height,
                     x_offset: metrics.xmin,
                     y_offset: metrics.ymin,
                     bitmap,
-                }
+                })
             });
 
         let glyph_x = (center_x as i32) - (glyph.width as i32 / 2);

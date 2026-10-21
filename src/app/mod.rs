@@ -106,6 +106,8 @@ pub struct AxonApp {
     context: Option<softbuffer::Context<Arc<Window>>>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     pub(super) d3d11_presenter: Option<D3D11Presenter>,
+    /// Escena del fotograma: se graba cada vez (memoria reutilizada) y `rasterize` la vuelca al presentador.
+    canvas: crate::renderer::Canvas,
     clipboard: Option<arboard::Clipboard>,
     modifiers: ModifiersState,
     drag_start: Option<(usize, usize)>,
@@ -347,6 +349,7 @@ impl AxonApp {
             context: None,
             surface: None,
             d3d11_presenter: None,
+            canvas: crate::renderer::Canvas::new(),
             clipboard,
             modifiers: ModifiersState::default(),
             drag_start: None,

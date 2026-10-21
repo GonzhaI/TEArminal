@@ -25,20 +25,29 @@ mod bench {
             term.process_bytes(line.clone().as_bytes());
         }
         let mut buf = vec![0u32; w * h];
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = Canvas::new();
+        canvas.begin(w as u32, h as u32);
         r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
         let n = if cfg!(debug_assertions) { 4 } else { 200 };
         let t = Instant::now();
         for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
             r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
+            rasterize(canvas.scene(), &mut buf);
         }
         let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let t = Instant::now();
+        for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
+            r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
+        }
+        let record = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
         let t = Instant::now();
         for _ in 0..n {
             buf.fill(theme.background.to_u32_xrgb());
         }
         let fill = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
-        println!("render_pane {w}x{h} ({cols}x{rows} celdas): {per:.2} ms/frame; buffer.fill: {fill:.2} ms");
+        println!("render_pane {w}x{h} ({cols}x{rows} celdas): {per:.2} ms/frame (grabar+rasterizar; solo grabar: {record:.2} ms); buffer.fill: {fill:.2} ms");
     }
 
     #[test]
@@ -106,7 +115,8 @@ mod bench {
             .file_viewer
             .unwrap();
 
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = Canvas::new();
+        canvas.begin(w as u32, h as u32);
         r.render_file_viewer(
             &mut canvas,
             190,
@@ -121,6 +131,7 @@ mod bench {
         let n = if cfg!(debug_assertions) { 3 } else { 100 };
         let t_rs = Instant::now();
         for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
             r.render_file_viewer(
                 &mut canvas,
                 190,
@@ -132,6 +143,7 @@ mod bench {
                 &fv_rs,
                 &theme,
             );
+            rasterize(canvas.scene(), &mut buf);
         }
         let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
@@ -148,6 +160,7 @@ mod bench {
         );
         let t_md = Instant::now();
         for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
             r.render_file_viewer(
                 &mut canvas,
                 190,
@@ -159,6 +172,7 @@ mod bench {
                 &fv_md,
                 &theme,
             );
+            rasterize(canvas.scene(), &mut buf);
         }
         let md_ms = t_md.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
@@ -190,7 +204,8 @@ mod bench {
         let settings_state = SettingsPageState::default();
 
         // Warm up
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = Canvas::new();
+        canvas.begin(w as u32, h as u32);
         r.render_sidebar(
             &mut canvas,
             190,
@@ -237,6 +252,7 @@ mod bench {
         let n = if cfg!(debug_assertions) { 3 } else { 120 };
         let t_chrome = Instant::now();
         for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
             r.render_sidebar(
                 &mut canvas,
                 190,
@@ -278,12 +294,15 @@ mod bench {
                 true,
                 &theme,
             );
+            rasterize(canvas.scene(), &mut buf);
         }
         let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
         let t_settings = Instant::now();
         for _ in 0..n {
+            canvas.begin(w as u32, h as u32);
             r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
+            rasterize(canvas.scene(), &mut buf);
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("bench_render_ui_chrome: sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
@@ -336,8 +355,8 @@ fn test_nerd_font_icons_and_color_rendering() {
     let colored_seq = b"\x1b[38;2;81;226;122m\xee\x82\xa0 Axon\x1b[0m";
     terminal.process_bytes(colored_seq);
 
-    let mut buffer = vec![0u32; 800 * 600];
-    let mut canvas = Canvas::over(&mut buffer, 800, 600);
+    let mut canvas = Canvas::new();
+    canvas.begin(800, 600);
     renderer.render(
         &mut canvas,
         0,
@@ -347,6 +366,7 @@ fn test_nerd_font_icons_and_color_rendering() {
         false,
         false,
     );
+    let buffer = canvas.snapshot();
 
     // Comprobar que en el buffer hay píxeles coloreados con verde (canal G alto, canal R y B bajos)
     let mut has_green_pixels = false;
@@ -398,7 +418,6 @@ fn test_sidebar_rendering_and_layout() {
     );
 
     // 2. Probar renderizado de la barra lateral en el buffer
-    let mut buffer = vec![0u32; 1000 * 600];
     let tabs = vec![
         SidebarTabItem {
             index: 1,
@@ -427,7 +446,8 @@ fn test_sidebar_rendering_and_layout() {
     ];
 
     let default_theme = crate::theme::Theme::default();
-    let mut canvas = Canvas::over(&mut buffer, 1000, 600);
+    let mut canvas = Canvas::new();
+    canvas.begin(1000, 600);
     renderer.render_sidebar(
         &mut canvas,
         190,
@@ -447,17 +467,17 @@ fn test_sidebar_rendering_and_layout() {
     let border_pixel = default_theme.border_color().to_u32_xrgb();
 
     assert_eq!(
-        canvas.pixels()[50 * 1000 + SidebarRects::RAIL_W + 4],
+        canvas.snapshot()[50 * 1000 + SidebarRects::RAIL_W + 4],
         sidebar_bg_pixel,
         "El fondo de la columna de sesiones debe coincidir con sidebar_bg"
     );
     assert_eq!(
-        canvas.pixels()[50 * 1000 + SidebarRects::RAIL_W - 2],
+        canvas.snapshot()[50 * 1000 + SidebarRects::RAIL_W - 2],
         default_theme.background.to_u32_xrgb(),
         "El riel usa el fondo del lienzo"
     );
     assert_eq!(
-        canvas.pixels()[50 * 1000 + 189],
+        canvas.snapshot()[50 * 1000 + 189],
         border_pixel,
         "El borde del sidebar debe coincidir con border_color"
     );
@@ -473,7 +493,7 @@ fn test_sidebar_rendering_and_layout() {
 
     let term_bg_pixel = term.theme.background.to_u32_xrgb();
     assert_eq!(
-        canvas.pixels()[50 * 1000 + 195],
+        canvas.snapshot()[50 * 1000 + 195],
         term_bg_pixel,
         "El área de terminal después del offset debe tener fondo del tema"
     );
@@ -483,7 +503,7 @@ fn test_sidebar_rendering_and_layout() {
     let float_btn_bg = default_theme.surface_hover().to_u32_xrgb();
     let float_y = 600 - 30 - 8 + 5;
     assert_eq!(
-        canvas.pixels()[float_y * 1000 + 10],
+        canvas.snapshot()[float_y * 1000 + 10],
         float_btn_bg,
         "El botón flotante debe renderizarse correctamente"
     );
@@ -576,10 +596,10 @@ fn test_ai_agent_detection_and_status_bar() {
     let config = AxonConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let theme = crate::theme::Theme::default();
-    let mut buffer = vec![0xCAFEBABE; 1000 * 600];
-
     let sidebar_offset = 180;
-    let mut canvas = Canvas::over(&mut buffer, 1000, 600);
+    let mut canvas = Canvas::new();
+    canvas.begin(1000, 600);
+    canvas.clear(Color::from_u32_xrgb(0xCAFEBABE)); // valor centinela: lo no dibujado se nota
     renderer.render_status_bar(
         &mut canvas,
         sidebar_offset,
@@ -594,6 +614,7 @@ fn test_ai_agent_detection_and_status_bar() {
     );
 
     // El status bar cubre todo el ancho inferior (0..width), por encima del cual reposa el sidebar
+    let buffer = canvas.snapshot();
     let status_bg = theme.bar_bg().to_u32_xrgb();
     assert_eq!(
         buffer[(600 - 28) * 1000 + 5],
@@ -672,7 +693,8 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let mut buffer = vec![0u32; width * height];
 
     // Warm up
-    let mut canvas = Canvas::over(&mut buffer, width, height);
+    let mut canvas = Canvas::new();
+    canvas.begin(width as u32, height as u32);
     renderer.render_pane(
         &mut canvas,
         0,
@@ -689,6 +711,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let frames = 60;
     let start = std::time::Instant::now();
     for _ in 0..frames {
+        canvas.begin(width as u32, height as u32);
         renderer.render_pane(
             &mut canvas,
             0,
@@ -701,6 +724,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
             true,
             false,
         );
+        rasterize(canvas.scene(), &mut buffer);
     }
     let total_elapsed = start.elapsed();
     let avg_frame_ms = total_elapsed.as_secs_f64() * 1000.0 / frames as f64;
@@ -758,14 +782,14 @@ fn test_settings_page_scrolls_only_the_content() {
     let mut renderer = TerminalRenderer::new(&config, 1.0);
     let (w, h, status) = (1000usize, 300usize, 26usize);
     let mut render = |scroll: usize| {
-        let mut buf = vec![0u32; w * h];
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = Canvas::new();
+        canvas.begin(w as u32, h as u32);
         let state = SettingsPageState {
             scroll_y: scroll,
             ..SettingsPageState::default()
         };
         renderer.render_settings_page(&mut canvas, 190, 0, 0, status, &config, &state, &theme);
-        buf
+        canvas.snapshot()
     };
     let (top, scrolled) = (render(0), render(120));
     assert_ne!(top, scrolled, "el contenido debe moverse con el scroll");
@@ -876,15 +900,15 @@ fn test_render_pane_with_and_without_ligatures() {
 
     // Con ligaduras activas
     r.ligatures = true;
-    let mut buf_with = vec![0u32; w * h];
-    let mut canvas_0 = Canvas::over(&mut buf_with, w, h);
+    let mut canvas_0 = test_support::new_canvas(w, h);
     r.render_pane(&mut canvas_0, 0, 0, w, h, &term, &theme, true, true, false);
+    let buf_with = canvas_0.snapshot();
 
     // Sin ligaduras
     r.ligatures = false;
-    let mut buf_without = vec![0u32; w * h];
-    let mut canvas_1 = Canvas::over(&mut buf_without, w, h);
+    let mut canvas_1 = test_support::new_canvas(w, h);
     r.render_pane(&mut canvas_1, 0, 0, w, h, &term, &theme, true, true, false);
+    let buf_without = canvas_1.snapshot();
 
     // Los dos framebuffers deben diferir porque la flecha `->` y `!=` cambian de píxeles
     let diffs = buf_with
@@ -1057,8 +1081,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     term.process_bytes(script.as_bytes());
 
     // 1. Terminal con barra lateral y título de ventana
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1116,12 +1139,11 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "terminal-vertical");
+    push_scene(&canvas.snapshot(), "terminal-vertical");
 
     // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
     r.render_top_tab_bar(
@@ -1196,7 +1218,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "tabs-superiores");
+    push_scene(&canvas.snapshot(), "tabs-superiores");
 
     // 3. Explorador acoplado sobre el terminal
     let mut explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
@@ -1206,8 +1228,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         header_exp.list_end,
     ));
     let explorer_w = 0;
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1264,15 +1285,14 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    push_scene(&buf, "explorador-acoplado");
+    push_scene(&canvas.snapshot(), "explorador-acoplado");
 
     // 4. Ajustes
     let settings = SettingsPageState {
         section: crate::renderer::SettingsSection::Appearance,
         ..Default::default()
     };
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1326,14 +1346,13 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "ajustes");
+    push_scene(&canvas.snapshot(), "ajustes");
 
     // 5. Visor de archivos
     let path = fixture.join("src/renderer/pane.rs");
     let tab = crate::app::TerminalTab::new_file_viewer(90, path);
     let viewer = tab.file_viewer.as_ref().unwrap();
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1388,15 +1407,14 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "visor");
+    push_scene(&canvas.snapshot(), "visor");
 
     // 6. Panel a la derecha: se dibuja en un búfer propio del ancho del panel y se copia a su sitio
     let header_right = crate::renderer::SidebarHeader {
         on_right: true,
         ..header_exp.clone()
     };
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1477,7 +1495,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    push_scene(&buf, "panel-derecha");
+    push_scene(&canvas.snapshot(), "panel-derecha");
 
     // 7. WP1 · modo vertical: marca, píldora centrada y barra de estado del bosquejo
     let wp1_meters = [
@@ -1490,8 +1508,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             percent: 18.0,
         },
     ];
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
@@ -1547,7 +1564,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "wp1-vertical");
+    push_scene(&canvas.snapshot(), "wp1-vertical");
 
     // 8. WP1 · modo superior: pestañas con icono de tipo, spinner en la que corre y acciones a la derecha
     let wp1_tabs = vec![
@@ -1588,8 +1605,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             is_preview: false,
         },
     ];
-    let mut buf = vec![0u32; w * h];
-    let mut canvas = Canvas::over(&mut buf, w, h);
+    let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
     let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
     r.render_top_tab_bar(
@@ -1648,7 +1664,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&buf, "wp1-superior");
+    push_scene(&canvas.snapshot(), "wp1-superior");
     // 7. Paneles divididos con cabecera (WP3): agente a la izquierda, shell y SSH a la derecha
     {
         use crate::ui::LucideIcon;
@@ -1706,8 +1722,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             .as_bytes(),
         );
 
-        let mut buf = vec![0u32; w * h];
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = test_support::new_canvas(w, h);
         canvas.clear(theme.background);
         r.render_top_title_bar(
             &mut canvas,
@@ -1841,7 +1856,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
             &theme,
         );
-        push_scene(&buf, "paneles-divididos");
+        push_scene(&canvas.snapshot(), "paneles-divididos");
     }
 
     // 9. WP4 · bloques OSC 133 como tarjetas con franja de contexto (mock v2-superior-izquierda)
@@ -1888,8 +1903,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
                 Some(std::time::Instant::now() - std::time::Duration::from_millis(254_500));
         }
 
-        let mut buf = vec![0u32; w * h];
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = test_support::new_canvas(w, h);
         canvas.clear(theme.background);
         let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
         r.render_top_tab_bar(
@@ -1965,7 +1979,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
             &theme,
         );
-        push_scene(&buf, "bloques-osc133");
+        push_scene(&canvas.snapshot(), "bloques-osc133");
     }
 
     scenes
@@ -2044,8 +2058,8 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     let theme = crate::theme::Theme::default();
     let (w, h) = (1200usize, 300usize);
     let mut draw = |meters: &[StatusMeter]| {
-        let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
-        let mut canvas = Canvas::over(&mut buf, w, h);
+        let mut canvas = test_support::new_canvas(w, h);
+        canvas.clear(theme.background);
         r.render_status_bar_with_ai(
             &mut canvas,
             0,
@@ -2061,7 +2075,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
             false,
             &theme,
         );
-        buf
+        canvas.snapshot()
     };
     let without = draw(&[]);
     let with = draw(&[StatusMeter {
@@ -2070,16 +2084,17 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     }]);
     assert_ne!(without, with, "los medidores deben dibujar algo");
     // Sin sitio (ventana estrecha) no se dibujan: no pisan la ruta ni la rama
-    let mut narrow = vec![theme.background.to_u32_xrgb(); 400 * h];
-    let mut narrow_with = narrow.clone();
+    let mut narrow = test_support::new_canvas(400, h);
+    narrow.clear(theme.background);
+    let mut narrow_with = test_support::new_canvas(400, h);
+    narrow_with.clear(theme.background);
     let meter = [StatusMeter {
         label: "5 h".into(),
         percent: 42.0,
     }];
-    for (buf, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
-        let mut canvas = Canvas::over(buf, 400, h);
+    for (canvas, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
         r.render_status_bar_with_ai(
-            &mut canvas,
+            canvas,
             0,
             Some("~/dev"),
             Some("main"),
@@ -2094,7 +2109,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
             &theme,
         );
     }
-    assert_eq!(narrow, narrow_with);
+    assert_eq!(narrow.snapshot(), narrow_with.snapshot());
 }
 
 /// Previsualización manual del panel superior (marco, selección en «Cambios») y del visor en diff:
@@ -2126,8 +2141,8 @@ fn preview_panel_card() {
             .unwrap();
     };
 
-    let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
-    let mut canvas_0 = Canvas::over(&mut buf, w, h);
+    let mut canvas_0 = test_support::new_canvas(w, h);
+    canvas_0.clear(theme.background);
     r.render_files_panel(&mut canvas_0, SIDEBAR_WIDTH, status_h, false, &theme);
     let mut explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
@@ -2136,7 +2151,6 @@ fn preview_panel_card() {
         h - status_h,
     ));
     r.scrollbars_awake = true;
-    let mut changes_buf = canvas_0.pixels().to_vec();
     r.render_file_explorer(
         &mut canvas_0,
         SidebarRects::TOP,
@@ -2146,7 +2160,9 @@ fn preview_panel_card() {
     );
     explorer.toggle_changes_only();
     explorer.hovered_tab = Some(true);
-    let mut canvas_1 = Canvas::over(&mut changes_buf, w, h);
+    let mut canvas_1 = test_support::new_canvas(w, h);
+    canvas_1.clear(theme.background);
+    r.render_files_panel(&mut canvas_1, SIDEBAR_WIDTH, status_h, false, &theme);
     r.render_file_explorer(
         &mut canvas_1,
         SidebarRects::TOP,
@@ -2160,19 +2176,16 @@ fn preview_panel_card() {
         SIDEBAR_WIDTH,
         h - status_h - SidebarRects::TOP,
     );
-    for frame in [&mut buf, &mut changes_buf] {
-        crate::ui::frame_card(
-            frame,
-            w,
-            h,
+    for canvas in [&mut canvas_0, &mut canvas_1] {
+        canvas.card(
             region,
             SidebarRects::CARD_INSET,
             SidebarRects::CARD_RADIUS,
             theme.bar_bg(),
         );
     }
-    save(&changes_buf, "panel-changes.png");
-    save(&buf, "panel-card.png");
+    save(&canvas_1.snapshot(), "panel-changes.png");
+    save(&canvas_0.snapshot(), "panel-card.png");
 
     // Visor en modo «Cambios» (diff) de un archivo modificado del repositorio
     {
@@ -2182,10 +2195,10 @@ fn preview_panel_card() {
             .unwrap();
         viewer.git_base = crate::explorer::git_head_lines(&path);
         viewer.toggle_diff();
-        let mut diff_buf = vec![theme.background.to_u32_xrgb(); w * h];
-        let mut canvas = Canvas::over(&mut diff_buf, w, h);
+        let mut canvas = test_support::new_canvas(w, h);
+        canvas.clear(theme.background);
         r.render_file_viewer(&mut canvas, 0, 0, w, h - status_h, 0, true, &viewer, &theme);
-        save(&diff_buf, "viewer-diff.png");
+        save(&canvas.snapshot(), "viewer-diff.png");
     }
     println!("PNG en {}", out.display());
 }
@@ -2286,31 +2299,37 @@ fn test_canvas_matches_legacy_primitives() {
         .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
         .collect();
     let pair = || (base.clone(), base.clone());
+    // Graba con `Canvas` y rasteriza sobre `buf` tal cual está (el degradado, no un búfer a cero)
+    let draw = |buf: &mut Vec<u32>, f: &dyn Fn(&mut Canvas)| {
+        let mut cv = test_support::new_canvas(W, H);
+        f(&mut cv);
+        rasterize(cv.scene(), buf);
+    };
     let clip: Clip = (5, 4, 30, 22);
     let col = Color::from_rgb(200, 90, 30);
 
     // Relleno con recorte por dos lados
     let (mut a, mut b) = pair();
-    Canvas::over(&mut a, W, H).fill_rect(clip, 0, 0, 20, 15, col);
+    draw(&mut a, &|c| c.fill_rect(clip, 0, 0, 20, 15, col));
     fill_rect(&mut b, W, clip, 0, 0, 20, 15, col.to_u32_xrgb());
     assert_eq!(a, b, "fill_rect");
 
     // clear
     let (mut a, mut b) = pair();
-    Canvas::over(&mut a, W, H).clear(col);
+    draw(&mut a, &|c| c.clear(col));
     b.fill(col.to_u32_xrgb());
     assert_eq!(a, b, "clear");
 
     // Glifo con alfa parcial pegado al borde del recorte
-    let glyph = CachedGlyph {
+    let glyph = Rc::new(CachedGlyph {
         width: 4,
         height: 3,
         x_offset: 0,
         y_offset: 0,
         bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
-    };
+    });
     let (mut a, mut b) = pair();
-    Canvas::over(&mut a, W, H).glyph(clip, &glyph, 3, 20, col);
+    draw(&mut a, &|c| c.glyph(clip, &glyph, 3, 20, col));
     blit_glyph(&mut b, W, clip, &glyph, 3, 20, col);
     assert_eq!(a, b, "glyph");
     assert_ne!(a, base, "el glifo debe dibujar algo");
@@ -2318,9 +2337,10 @@ fn test_canvas_matches_legacy_primitives() {
     // Redondeado y trazo, incluido un rectángulo que sale del búfer
     for (x, y, w, h) in [(4, 3, 20, 14), (30, 22, 20, 14)] {
         let (mut a, mut b) = pair();
-        let mut cv = Canvas::over(&mut a, W, H);
-        cv.rounded_fill(x, y, w, h, 5, col);
-        cv.rounded_stroke(x, y, w, h, 5, Color::from_rgb(10, 220, 240));
+        draw(&mut a, &|cv| {
+            cv.rounded_fill(x, y, w, h, 5, col);
+            cv.rounded_stroke(x, y, w, h, 5, Color::from_rgb(10, 220, 240));
+        });
         crate::ui::draw_rounded_rect(&mut b, W, H, x, y, w, h, 5, col);
         crate::ui::stroke_rounded_rect(&mut b, W, H, x, y, w, h, 5, Color::from_rgb(10, 220, 240));
         assert_eq!(a, b, "rounded {x},{y}");
@@ -2335,39 +2355,43 @@ fn test_canvas_matches_legacy_primitives() {
     ];
     let (mut a, mut b) = pair();
     let dst = (-3, 2, 16, 12);
-    Canvas::over(&mut a, W, H).image(
-        clip,
-        ImageRef {
-            rgba: &rgba,
-            width: 2,
-            height: 2,
-        },
-        dst,
-    );
+    draw(&mut a, &|c| {
+        c.image(
+            clip,
+            ImageRef {
+                rgba: &rgba,
+                width: 2,
+                height: 2,
+            },
+            dst,
+        )
+    });
     legacy_image(&mut b, W, clip, &rgba, (2, 2), dst);
     assert_eq!(a, b, "image");
     assert_ne!(a, base, "la imagen debe dibujar algo");
 
     // rgba truncada: no entra en pánico y no dibuja nada (el bucle antiguo leería a medias)
     let (mut a, _) = pair();
-    Canvas::over(&mut a, W, H).image(
-        clip,
-        ImageRef {
-            rgba: &rgba[..15],
-            width: 2,
-            height: 2,
-        },
-        dst,
-    );
+    draw(&mut a, &|c| {
+        c.image(
+            clip,
+            ImageRef {
+                rgba: &rgba[..15],
+                width: 2,
+                height: 2,
+            },
+            dst,
+        )
+    });
     assert_eq!(a, base, "image truncada");
 
     // Tarjeta
     let (mut a, mut b) = pair();
-    Canvas::over(&mut a, W, H).card((2, 2, 30, 24), 3, 4, col);
+    draw(&mut a, &|c| c.card((2, 2, 30, 24), 3, 4, col));
     crate::ui::frame_card(&mut b, W, H, (2, 2, 30, 24), 3, 4, col);
     assert_eq!(a, b, "card");
 
-    assert_eq!(Canvas::over(&mut a, W, H).size(), (W, H));
+    assert_eq!(test_support::new_canvas(W, H).size(), (W, H));
 }
 
 #[test]
@@ -2414,13 +2438,13 @@ fn test_with_offset_equals_offscreen_copy() {
     let clip: Clip = (10, 8, 50, 40);
     let bg = Color::from_rgb(30, 31, 40);
     let col = Color::from_rgb(200, 90, 30);
-    let glyph = CachedGlyph {
+    let glyph = Rc::new(CachedGlyph {
         width: 4,
         height: 3,
         x_offset: 0,
         y_offset: 0,
         bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
-    };
+    });
     let rgba: Vec<u8> = vec![
         255, 0, 0, 255, //
         0, 255, 0, 128, //
@@ -2456,7 +2480,9 @@ fn test_with_offset_equals_offscreen_copy() {
     // Método antiguo: búfer local prerrellenado, mismo dibujo y copia de la ventana
     let mut old = base.clone();
     let mut scratch = vec![bg.to_u32_xrgb(); LW * LH];
-    ops(&mut Canvas::over(&mut scratch, LW, LH));
+    let mut local = test_support::new_canvas(LW, LH);
+    ops(&mut local);
+    rasterize(local.scene(), &mut scratch);
     for ry in clip.1..clip.3 {
         for rx in clip.0..clip.2 {
             let (lx, ly) = (rx as i32 - dx, ry as i32 - dy);
@@ -2469,7 +2495,7 @@ fn test_with_offset_equals_offscreen_copy() {
     // Método nuevo: fondo explícito en la ventana y dibujo desplazado y recortado
     let mut new = base.clone();
     {
-        let mut c = Canvas::over(&mut new, W, H);
+        let mut c = test_support::new_canvas(W, H);
         c.fill_rect(
             (0, 0, W, H),
             clip.0,
@@ -2480,7 +2506,177 @@ fn test_with_offset_equals_offscreen_copy() {
         );
         c.with_offset(dx, dy, (LW, LH), clip, ops);
         assert_eq!(c.size(), (W, H), "with_offset restaura el estado");
+        rasterize(c.scene(), &mut new);
     }
     assert_ne!(new, base, "el dibujo debe cambiar algo");
     assert_eq!(old, new);
+}
+
+fn test_glyph() -> Rc<CachedGlyph> {
+    Rc::new(CachedGlyph {
+        width: 4,
+        height: 3,
+        x_offset: 0,
+        y_offset: 0,
+        bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
+    })
+}
+
+#[test]
+fn test_scene_records_ops_in_order() {
+    use scene::Op;
+    let col = Color::from_rgb(200, 90, 30);
+    let glyph = test_glyph();
+    let mut c = test_support::new_canvas(60, 50);
+    c.fill_rect((5, 4, 30, 22), 2, 3, 10, 6, col);
+    // Dentro de with_offset: coordenadas trasladadas y recorte intersecado con la ventana local
+    c.with_offset(10, 20, (30, 20), (0, 0, 60, 50), |c| {
+        c.rounded_fill(1, 2, 8, 6, 3, col);
+        c.glyph((0, 0, 30, 20), &glyph, 4, 5, col);
+    });
+
+    let s = c.scene();
+    assert_eq!((s.w, s.h), (60, 50));
+    assert_eq!(s.ops.len(), 3, "una operación grabada por llamada");
+    assert_eq!(
+        s.ops[0],
+        Op::Fill {
+            clip: (5, 4, 30, 22),
+            x: 2,
+            y: 3,
+            w: 10,
+            h: 6,
+            color: col
+        }
+    );
+    assert!(
+        matches!(
+            s.ops[1],
+            Op::Rounded {
+                clip: (10, 20, 40, 40),
+                x: 11,
+                y: 22,
+                w: 8,
+                h: 6,
+                radius: 3,
+                stroke: false,
+                ..
+            }
+        ),
+        "{:?}",
+        s.ops[1]
+    );
+    let Op::Glyph {
+        clip,
+        glyph: id,
+        x,
+        y,
+        ..
+    } = s.ops[2]
+    else {
+        panic!("la tercera operación debe ser un glifo: {:?}", s.ops[2]);
+    };
+    assert_eq!((clip, x, y), ((10, 20, 40, 40), 14, 25));
+    assert_eq!(s.glyph(id).bitmap, glyph.bitmap);
+    assert_eq!(c.size(), (60, 50), "with_offset restaura el estado");
+}
+
+#[test]
+fn test_scene_dedups_glyphs_by_identity() {
+    use scene::Op;
+    let col = Color::from_rgb(10, 200, 30);
+    let (a, b) = (test_glyph(), test_glyph()); // mismo contenido, identidad distinta
+    let mut c = test_support::new_canvas(60, 50);
+    let clip = (0, 0, 60, 50);
+    c.glyph(clip, &a, 1, 1, col);
+    c.glyph(clip, &b, 10, 1, col);
+    c.glyph(clip, &a, 20, 1, col);
+    c.glyph(clip, &a, 30, 1, col);
+    let s = c.scene();
+    assert_eq!(s.glyph_count(), 2, "una entrada por Rc distinto");
+    let ids: Vec<_> = s
+        .ops
+        .iter()
+        .map(|op| match op {
+            Op::Glyph { glyph, .. } => *glyph,
+            other => panic!("solo glifos: {other:?}"),
+        })
+        .collect();
+    assert_eq!(ids[0], ids[2]);
+    assert_eq!(ids[0], ids[3]);
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(
+        Rc::strong_count(&a),
+        2,
+        "la escena guarda una sola referencia"
+    );
+}
+
+#[test]
+fn test_scene_image_table_copies_rgba_and_skips_invalid() {
+    use scene::Op;
+    let rgba: Vec<u8> = (0..16).collect(); // 2x2
+    let mut c = test_support::new_canvas(40, 30);
+    let clip = (0, 0, 40, 30);
+    fn img(rgba: &[u8], width: u32, height: u32) -> ImageRef<'_> {
+        ImageRef {
+            rgba,
+            width,
+            height,
+        }
+    }
+    c.image(clip, img(&rgba[..15], 2, 2), (0, 0, 8, 8)); // truncada
+    c.image(clip, img(&rgba, 0, 2), (0, 0, 8, 8)); // sin ancho
+    c.image(clip, img(&rgba, 2, 2), (3, 4, 0, 8)); // destino vacío
+    assert!(c.scene().ops.is_empty(), "nada que dibujar, nada grabado");
+    c.image(clip, img(&rgba, 2, 2), (3, 4, 8, 6));
+    let s = c.scene();
+    let Op::Image {
+        image, x, y, w, h, ..
+    } = s.ops[0]
+    else {
+        panic!("se esperaba una imagen: {:?}", s.ops[0]);
+    };
+    assert_eq!((x, y, w, h), (3, 4, 8, 6));
+    let got = s.image(image);
+    assert_eq!((got.width, got.height), (2, 2));
+    assert_eq!(got.rgba, &rgba[..]);
+}
+
+#[test]
+fn test_canvas_begin_reuses_capacity_and_clears_state() {
+    use scene::Op;
+    let col = Color::from_rgb(1, 2, 3);
+    let glyph = test_glyph();
+    let mut c = test_support::new_canvas(100, 80);
+    for i in 0..200 {
+        c.fill_rect((0, 0, 100, 80), i % 50, 0, 5, 5, col);
+    }
+    c.glyph((0, 0, 100, 80), &glyph, 1, 1, col);
+    c.with_offset(5, 5, (50, 50), (0, 0, 100, 80), |c| {
+        c.fill_rect((0, 0, 50, 50), 0, 0, 3, 3, col)
+    });
+    assert_eq!(c.scene().ops.len(), 202);
+    assert_eq!(Rc::strong_count(&glyph), 2);
+    let cap = c.scene().ops.capacity();
+
+    c.begin(64, 48);
+    let s = c.scene();
+    assert!(s.ops.is_empty());
+    assert_eq!((s.w, s.h), (64, 48));
+    assert_eq!(s.glyph_count(), 0);
+    assert_eq!(
+        s.ops.capacity(),
+        cap,
+        "begin conserva la memoria de la escena"
+    );
+    assert_eq!(
+        Rc::strong_count(&glyph),
+        1,
+        "begin suelta los glifos de la escena"
+    );
+    assert_eq!(c.size(), (64, 48));
+    // El recorte vuelve a ser la ventana completa: `clear` es un Clear y no un relleno recortado
+    c.clear(col);
+    assert_eq!(c.scene().ops, [Op::Clear(col)]);
 }

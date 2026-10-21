@@ -1,7 +1,7 @@
 //! Repintado de un fotograma completo.
 
 use super::*;
-use crate::renderer::{Canvas, SidebarRects};
+use crate::renderer::{rasterize, Canvas, SidebarRects};
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
@@ -149,8 +149,9 @@ impl AxonApp {
         if let Some(d3d11) = &mut self.d3d11_presenter {
             let _ = d3d11.resize(size.width, size.height); // no-op si ya coincide
             let buffer = d3d11.buffer_mut();
+            self.canvas.begin(size.width, size.height);
             draw_full_scene(
-                buffer,
+                &mut self.canvas,
                 renderer,
                 &mut self.tabs,
                 &self.theme,
@@ -164,6 +165,7 @@ impl AxonApp {
                 size.height as usize,
                 is_maximized,
             );
+            rasterize(self.canvas.scene(), buffer);
             let _ = d3d11.present();
             return;
         }
@@ -171,8 +173,9 @@ impl AxonApp {
         // 2. Si no, utilizar la superficie de software (`softbuffer`) como fallback
         if let Some(surface) = &mut self.surface {
             if let Ok(mut buffer) = surface.buffer_mut() {
+                self.canvas.begin(size.width, size.height);
                 draw_full_scene(
-                    &mut buffer,
+                    &mut self.canvas,
                     renderer,
                     &mut self.tabs,
                     &self.theme,
@@ -186,6 +189,7 @@ impl AxonApp {
                     size.height as usize,
                     is_maximized,
                 );
+                rasterize(self.canvas.scene(), &mut buffer);
                 buffer.present().ok();
             }
         }
@@ -194,7 +198,7 @@ impl AxonApp {
 
 #[allow(clippy::too_many_arguments)]
 fn draw_full_scene(
-    buffer: &mut [u32],
+    canvas: &mut Canvas,
     renderer: &mut TerminalRenderer,
     tabs: &mut [TerminalTab],
     theme: &Theme,
@@ -208,8 +212,6 @@ fn draw_full_scene(
     height: usize,
     is_maximized: bool,
 ) {
-    let mut canvas = Canvas::over(buffer, width, height);
-    let canvas = &mut canvas;
     canvas.clear(theme.background);
 
     let active_tab = &mut tabs[p.active_idx];

@@ -19,6 +19,8 @@ mod geometry;
 mod glyphs;
 mod md_preview;
 mod pane;
+mod raster_cpu;
+mod scene;
 mod settings_page;
 mod sidebar;
 mod state;
@@ -37,10 +39,12 @@ use glyphs::{
 };
 
 pub use blocks::BlockCardButton;
-pub use canvas::{Canvas, ImageRef};
+pub use canvas::Canvas;
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};
+pub use raster_cpu::rasterize;
+pub use scene::ImageRef;
 pub use state::*;
 
 use crate::config::AxonConfig;
@@ -49,6 +53,7 @@ use crate::theme::{Color, Theme};
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 
 pub struct TerminalRenderer {
     regular_font: fontdue::Font,
@@ -68,14 +73,14 @@ pub struct TerminalRenderer {
     pub char_width: usize,
     pub row_height: usize,
     pub baseline_y: usize,
-    glyph_cache: FastMap<(char, bool), CachedGlyph>,
-    ascii_cache: Box<[Option<CachedGlyph>; 512]>,
-    ui_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
+    glyph_cache: FastMap<(char, bool), Rc<CachedGlyph>>,
+    ascii_cache: Box<[Option<Rc<CachedGlyph>>; 512]>,
+    ui_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
     /// Valores de máquina (rutas, ramas, atajos): JetBrains Mono con su propia caché.
-    mono_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>,
+    mono_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>,
     mono_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>,
-    icon_glyph_cache: FastMap<(char, u32), CachedGlyph>, // (c, size_bits) -> glyph
+    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>, // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
@@ -83,13 +88,9 @@ pub struct TerminalRenderer {
     pub ligatures: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
-    ligature_cache: FastMap<(u16, bool), CachedGlyph>,
+    ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
     shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
-    md_blocks_cache: Option<(
-        std::path::PathBuf,
-        u64,
-        std::rc::Rc<Vec<md_preview::MdBlock>>,
-    )>,
+    md_blocks_cache: Option<(std::path::PathBuf, u64, Rc<Vec<md_preview::MdBlock>>)>,
 }
 
 impl TerminalRenderer {

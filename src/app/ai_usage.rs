@@ -936,7 +936,6 @@ mod tests {
         let theme = Theme::default();
         let mut renderer = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (900, 600);
-        let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
 
         let mut state = AiUsageState::default();
         let usage = |kind, model: &str, plan: Option<&str>, tokens| AiAgentUsage {
@@ -986,7 +985,9 @@ mod tests {
             height_of(AiAgentStatus::Gemini) + 18
         );
 
-        let mut canvas = crate::renderer::Canvas::over(&mut buf, w, h);
+        let mut canvas = crate::renderer::Canvas::new();
+        canvas.begin(w as u32, h as u32);
+        canvas.clear(theme.background);
         renderer.render_status_bar_with_ai(
             &mut canvas,
             0,
@@ -1002,10 +1003,11 @@ mod tests {
             false,
             &theme,
         );
-        let before_popup = canvas.pixels().to_vec();
+        let before_popup = canvas.snapshot();
         renderer.render_ai_usage_popup(&mut canvas, &state.snapshot, &theme);
         assert_ne!(
-            buf, before_popup,
+            canvas.snapshot(),
+            before_popup,
             "El menú flotante de consumo de IA debe modificar el framebuffer al renderizarse"
         );
 

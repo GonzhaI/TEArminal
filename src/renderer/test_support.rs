@@ -37,11 +37,18 @@ pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
 }
 
-/// Dibuja sobre un lienzo `w` x `h` inicialmente en cero y devuelve los píxeles resultantes.
+/// Lienzo `w` x `h` listo para grabar (el fotograma parte de un búfer a cero).
+pub(super) fn new_canvas(w: usize, h: usize) -> Canvas {
+    let mut canvas = Canvas::new();
+    canvas.begin(w as u32, h as u32);
+    canvas
+}
+
+/// Dibuja sobre un lienzo `w` x `h` inicialmente en cero y devuelve los píxeles rasterizados.
 pub(super) fn with_canvas(w: usize, h: usize, f: impl FnOnce(&mut Canvas)) -> Vec<u32> {
-    let mut buf = vec![0u32; w * h];
-    f(&mut Canvas::over(&mut buf, w, h));
-    buf
+    let mut canvas = new_canvas(w, h);
+    f(&mut canvas);
+    canvas.snapshot()
 }
 
 const PANE_RS: &str = "\
