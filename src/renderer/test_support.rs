@@ -37,6 +37,11 @@ pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
 }
 
+/// Diferencia máxima por canal (0-255) que admiten los tests de paridad GPU/CPU: la CPU mezcla con
+/// aritmética entera truncada y la GPU en coma flotante con redondeo, así que ±1 es normal. Una
+/// diferencia mayor se corrige en el shader o en la codificación, nunca subiendo este valor.
+pub(super) const PARITY_TOLERANCE: u8 = 2;
+
 /// Lado (px) de los bloques de la firma.
 const SIGNATURE_BLOCK: usize = 48;
 

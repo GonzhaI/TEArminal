@@ -2672,6 +2672,10 @@ fn test_scene_dedups_glyphs_by_identity() {
     assert_ne!(ids[0], ids[1]);
     assert!(Rc::ptr_eq(s.glyph_rc(ids[0]), &a));
     assert!(Rc::ptr_eq(s.glyph_rc(ids[1]), &b));
+    assert!(
+        Rc::ptr_eq(s.glyph_rc(ids[0]), s.glyph_rc(ids[3])),
+        "mismo glifo, mismo Rc"
+    );
     assert_eq!(
         Rc::strong_count(&a),
         2,
@@ -3100,5 +3104,997 @@ mod gpu_pipeline {
         let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
         assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
         Pipeline::new(&gpu).expect("los shaders SM 4.0 deben valer en FL 10_0");
+    }
+}
+
+mod gpu_renderer {
+    use crate::renderer::gpu::{
+        encode, AtlasError, AtlasRect, Batch, DriverKind, EncodeStop, GpuDevice, GpuRenderer,
+        Instance, Kind,
+    };
+    use crate::renderer::scene::{Op, Scene};
+    use crate::renderer::test_support::{self, PARITY_TOLERANCE};
+    use crate::renderer::{rasterize, CachedGlyph, ImageRef};
+    use crate::theme::Color;
+    use std::rc::Rc;
+    use windows::Win32::Graphics::Direct3D::*;
+
+    /// (tamaño del búfer, región, inset, radio) de una tarjeta
+    type CardCase = ((usize, usize), (usize, usize, usize, usize), usize, usize);
+
+    fn warp() -> GpuDevice {
+        GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap()
+    }
+
+    fn renderer() -> GpuRenderer {
+        GpuRenderer::new(warp()).unwrap()
+    }
+
+    fn glyph(w: usize, h: usize, fill: impl Fn(usize) -> u8) -> Rc<CachedGlyph> {
+        Rc::new(CachedGlyph {
+            width: w,
+            height: h,
+            x_offset: 0,
+            y_offset: 0,
+            bitmap: (0..w * h).map(fill).collect(),
+        })
+    }
+
+    /// Rampa de cobertura 0..=255 con los extremos exactos (0 y 255 cubren las dos ramas de `blit_glyph`).
+    fn ramp_glyph(w: usize, h: usize) -> Rc<CachedGlyph> {
+        let n = (w * h).max(2) - 1;
+        glyph(w, h, move |i| (i * 255 / n) as u8)
+    }
+
+    /// Fondo no trivial `0x00RRGGBB`: cambia en las tres componentes y en ambos ejes.
+    fn gradient(w: usize, h: usize) -> Vec<u32> {
+        (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let r = (x * 255 / w.max(1)) as u32;
+                let g = (y * 255 / h.max(1)) as u32;
+                let b = ((x * 5 + y * 3) % 256) as u32;
+                r << 16 | g << 8 | b
+            })
+            .collect()
+    }
+
+    fn rgba_pattern(w: usize, h: usize, alphas: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(w * h * 4);
+        for i in 0..w * h {
+            let a = alphas[i % alphas.len()];
+            v.extend_from_slice(&[
+                (i * 37 % 256) as u8,
+                (255 - i * 11 % 256) as u8,
+                (i * 91 % 256) as u8,
+                a,
+            ]);
+        }
+        v
+    }
+
+    /// Dibuja `scene` con la CPU y con la GPU sobre la misma base y exige diferencia por canal
+    /// <= `PARITY_TOLERANCE`. Devuelve la diferencia máxima medida.
+    fn assert_parity(name: &str, r: &mut GpuRenderer, scene: &Scene, base: Option<&[u32]>) -> u8 {
+        let (w, h) = (scene.w as usize, scene.h as usize);
+        let mut cpu = base.map_or_else(|| vec![0u32; w * h], |b| b.to_vec());
+        rasterize(scene, &mut cpu);
+        let (gpu, gw, gh) = match base {
+            Some(b) => r.render_to_pixels_over(scene, b),
+            None => r.render_to_pixels(scene),
+        }
+        .unwrap();
+        assert_eq!((gw as usize, gh as usize), (w, h), "{name}: tamaño");
+        let mut max = 0u8;
+        let mut first_bad = None;
+        let mut differing = 0usize;
+        for (i, (&c, &g)) in cpu.iter().zip(&gpu).enumerate() {
+            let d = (0..3)
+                .map(|s| ((c >> (8 * s)) & 255).abs_diff((g >> (8 * s)) & 255) as u8)
+                .max()
+                .unwrap();
+            differing += (d > 0) as usize;
+            max = max.max(d);
+            if d > PARITY_TOLERANCE && first_bad.is_none() {
+                first_bad = Some((i % w, i / w, c, g));
+            }
+        }
+        println!(
+            "paridad {name}: diferencia máxima {max}, {differing} píxeles distintos de {}",
+            w * h
+        );
+        if let Some((x, y, c, g)) = first_bad {
+            panic!("{name}: primer píxel fuera de tolerancia en ({x}, {y}): CPU {c:#08x} GPU {g:#08x} (máx {max})");
+        }
+        max
+    }
+
+    fn kind_of(i: &Instance) -> u32 {
+        i.kind_radius & 15
+    }
+
+    /// `rect_for` falso: el glifo ocupa un rect de su tamaño en (5, 6).
+    fn fake_rect(sc: &Scene, id: crate::renderer::scene::GlyphId) -> Result<AtlasRect, AtlasError> {
+        let g = sc.glyph(id);
+        Ok(AtlasRect {
+            x: 5,
+            y: 6,
+            w: g.width as u16,
+            h: g.height as u16,
+        })
+    }
+
+    fn encode_all(scene: &Scene, target: (u32, u32)) -> (Vec<Instance>, Vec<Batch>) {
+        let (mut out, mut batches) = (Vec::new(), Vec::new());
+        let stop = encode(scene, 0, target, &mut out, &mut batches, &mut fake_rect).unwrap();
+        assert_eq!(stop, EncodeStop::Done);
+        (out, batches)
+    }
+
+    // ---- codificación pura -------------------------------------------------------------------
+
+    #[test]
+    fn test_encode_preserves_op_order() {
+        let (w, h) = (60usize, 40usize);
+        let mut c = test_support::new_canvas(w, h);
+        let clip = (0, 0, w, h);
+        let col = Color::from_rgba(200, 100, 50, 180);
+        let g = ramp_glyph(4, 5);
+        let rgba = rgba_pattern(2, 2, &[255]);
+        c.clear(Color::from_rgb(1, 2, 3));
+        c.fill_rect(clip, 1, 2, 10, 10, col);
+        c.rounded_fill(5, 5, 20, 12, 4, col);
+        c.rounded_stroke(6, 6, 20, 12, 4, col);
+        c.glyph(clip, &g, 3, 3, col);
+        let img = ImageRef {
+            rgba: &rgba,
+            width: 2,
+            height: 2,
+        };
+        c.image(clip, img, (10, 10, 8, 8));
+        c.card((0, 0, w, h), 2, 4, Color::from_rgb(9, 9, 9));
+        let (out, batches) = encode_all(c.scene(), (w as u32, h as u32));
+        let expect = [
+            Kind::Solid,
+            Kind::Solid,
+            Kind::RoundedFill,
+            Kind::RoundedStroke,
+            Kind::Glyph,
+            Kind::Image,
+            Kind::Solid,
+            Kind::Solid,
+            Kind::Solid,
+            Kind::Solid,
+            Kind::CardCorner,
+            Kind::CardCorner,
+            Kind::CardCorner,
+            Kind::CardCorner,
+        ];
+        let got: Vec<u32> = out.iter().map(kind_of).collect();
+        assert_eq!(got, expect.map(|k| k as u32));
+        assert_eq!(
+            out[0].rect,
+            [0, 0, w as i16, h as i16],
+            "Clear = destino entero"
+        );
+        assert_eq!(
+            out[4].rect,
+            [3, 3, 4, 5],
+            "glifo en su sitio, tamaño del bitmap"
+        );
+        assert_eq!(out[4].uv, [5, 6]);
+        assert_eq!(out[5].rect, [10, 10, 8, 8]);
+        // La imagen rompe el lote: [sólidos y glifos] [imagen] [tarjeta]
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches.iter().map(|b| b.count).sum::<u32>(), 14);
+        assert!(batches[1].image.is_some() && batches[0].image.is_none());
+    }
+
+    #[test]
+    fn test_encode_card_emits_corners_and_margins() {
+        let outer = Color::from_rgb(10, 20, 30);
+        const SENTINEL: u32 = 0x00FF_FFFF;
+        // (tamaño del búfer, región, inset, radio)
+        let cases: [CardCase; 7] = [
+            ((60, 50), (0, 0, 60, 50), 6, 10),
+            ((100, 80), (60, 40, 100, 80), 6, 10), // media tarjeta fuera del búfer
+            ((100, 80), (95, 70, 50, 50), 3, 8),   // casi toda fuera
+            ((60, 50), (0, 0, 60, 50), 0, 8),      // sin margen: solo esquinas
+            ((60, 50), (0, 0, 60, 50), 6, 0),      // sin esquinas
+            ((60, 50), (10, 10, 12, 12), 6, 4),    // w <= 2·inset: no hace nada
+            ((60, 50), (80, 80, 20, 20), 2, 4),    // fuera por completo
+        ];
+        for (n, ((bw, bh), region, inset, radius)) in cases.into_iter().enumerate() {
+            let mut c = test_support::new_canvas(bw, bh);
+            c.card(region, inset, radius, outer);
+            let mut cpu = vec![SENTINEL; bw * bh];
+            rasterize(c.scene(), &mut cpu);
+            let (out, _) = encode_all(c.scene(), (bw as u32, bh as u32));
+
+            let mut solid = vec![0u8; bw * bh];
+            let mut corner = vec![false; bw * bh];
+            let mut corners = 0;
+            for i in &out {
+                let [x, y, w, h] = i.rect;
+                let (x, y, w, h) = (x as i32, y as i32, w as i32, h as i32);
+                let is_solid = kind_of(i) == Kind::Solid as u32;
+                if !is_solid {
+                    assert_eq!(kind_of(i), Kind::CardCorner as u32, "caso {n}");
+                    corners += 1;
+                }
+                for py in y..y + h {
+                    for px in x..x + w {
+                        if px < 0 || py < 0 || px >= bw as i32 || py >= bh as i32 {
+                            assert!(!is_solid, "caso {n}: sólido fuera del búfer ({px}, {py})");
+                            continue;
+                        }
+                        let p = py as usize * bw + px as usize;
+                        if is_solid {
+                            solid[p] += 1;
+                        } else {
+                            corner[p] = true;
+                        }
+                    }
+                }
+            }
+            for p in 0..bw * bh {
+                if corner[p] {
+                    assert_eq!(solid[p], 0, "caso {n}: esquina y margen se pisan en {p}");
+                    continue;
+                }
+                let changed = cpu[p] != SENTINEL;
+                assert_eq!(
+                    solid[p],
+                    changed as u8,
+                    "caso {n}: píxel {p} ({}, {})",
+                    p % bw,
+                    p / bw
+                );
+            }
+            let tiny = region.2 <= inset * 2 || region.3 <= inset * 2;
+            let outside = region.0 >= bw || region.1 >= bh;
+            if tiny || outside {
+                assert!(out.is_empty(), "caso {n}: tarjeta que no se pinta");
+            }
+            if n == 0 {
+                assert_eq!(corners, 4);
+                let corner_rects: Vec<_> = out
+                    .iter()
+                    .filter(|i| kind_of(i) == Kind::CardCorner as u32)
+                    .map(|i| {
+                        (
+                            i.rect,
+                            (i.kind_radius >> 16) & 3,
+                            (i.kind_radius >> 8) & 255,
+                            i.color,
+                        )
+                    })
+                    .collect();
+                let col = 0xFF00_0000 | (10 << 16) | (20 << 8) | 30;
+                assert_eq!(
+                    corner_rects,
+                    [
+                        ([6, 6, 10, 10], 0, 10, col),
+                        ([44, 6, 10, 10], 1, 10, col),
+                        ([6, 34, 10, 10], 2, 10, col),
+                        ([44, 34, 10, 10], 3, 10, col),
+                    ]
+                );
+            }
+            if radius == 0 {
+                assert_eq!(corners, 0, "caso {n}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_encode_skips_zero_sized_ops() {
+        let mut s = Scene::default();
+        s.reset(50, 50);
+        let col = Color::from_rgba(1, 2, 3, 200);
+        let clip = (0, 0, 50, 50);
+        let empty = glyph(0, 0, |_| 0);
+        let off = ramp_glyph(3, 3);
+        let eid = s.intern_glyph(&empty);
+        let oid = s.intern_glyph(&off);
+        let img = rgba_pattern(1, 1, &[255]);
+        let iid = s.push_image(&ImageRef {
+            rgba: &img,
+            width: 1,
+            height: 1,
+        });
+        s.ops.extend([
+            Op::Fill {
+                clip,
+                x: 1,
+                y: 1,
+                w: 0,
+                h: 5,
+                color: col,
+            },
+            Op::Fill {
+                clip,
+                x: 1,
+                y: 1,
+                w: 5,
+                h: 0,
+                color: col,
+            },
+            Op::Fill {
+                clip: (10, 10, 10, 20),
+                x: 0,
+                y: 0,
+                w: 40,
+                h: 40,
+                color: col,
+            }, // recorte vacío
+            Op::Fill {
+                clip,
+                x: -20,
+                y: 0,
+                w: 10,
+                h: 10,
+                color: col,
+            }, // fuera
+            Op::Rounded {
+                clip,
+                x: 1,
+                y: 1,
+                w: 0,
+                h: 9,
+                radius: 2,
+                color: col,
+                stroke: false,
+            },
+            Op::Rounded {
+                clip,
+                x: 1,
+                y: 1,
+                w: 9,
+                h: 9,
+                radius: 2,
+                color: Color::from_rgba(1, 2, 3, 0),
+                stroke: true,
+            },
+            Op::Glyph {
+                clip,
+                glyph: eid,
+                x: 5,
+                y: 5,
+                color: col,
+            },
+            Op::Glyph {
+                clip,
+                glyph: oid,
+                x: 60,
+                y: 5,
+                color: col,
+            }, // fuera del recorte: ni se sube
+            Op::Image {
+                clip,
+                image: iid,
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 4,
+            },
+            Op::Image {
+                clip,
+                image: iid,
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 0,
+            },
+        ]);
+        let mut calls = 0;
+        let (mut out, mut batches) = (Vec::new(), Vec::new());
+        let stop = encode(&s, 0, (50, 50), &mut out, &mut batches, &mut |sc, id| {
+            calls += 1;
+            fake_rect(sc, id)
+        })
+        .unwrap();
+        assert_eq!(stop, EncodeStop::Done);
+        assert!(out.is_empty(), "{out:?}");
+        assert!(batches.is_empty());
+        assert_eq!(
+            calls, 0,
+            "ni siquiera se pide hueco para glifos invisibles o vacíos"
+        );
+        // Un glifo cuyo rect del atlas es vacío tampoco dibuja
+        s.ops.clear();
+        s.ops.push(Op::Glyph {
+            clip,
+            glyph: oid,
+            x: 5,
+            y: 5,
+            color: col,
+        });
+        let mut none = |_: &Scene, _| Ok(AtlasRect::default());
+        let stop = encode(&s, 0, (50, 50), &mut out, &mut batches, &mut none).unwrap();
+        assert_eq!(stop, EncodeStop::Done);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_encode_groups_batches_by_texture() {
+        let mut s = Scene::default();
+        s.reset(80, 80);
+        let col = Color::from_rgb(9, 9, 9);
+        let clip = (0, 0, 80, 80);
+        let g = ramp_glyph(3, 3);
+        let gid = s.intern_glyph(&g);
+        let px = rgba_pattern(2, 2, &[255]);
+        let img = ImageRef {
+            rgba: &px,
+            width: 2,
+            height: 2,
+        };
+        let (a, b) = (s.push_image(&img), s.push_image(&img));
+        let fill = Op::Fill {
+            clip,
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 5,
+            color: col,
+        };
+        let glyph_op = Op::Glyph {
+            clip,
+            glyph: gid,
+            x: 1,
+            y: 1,
+            color: col,
+        };
+        let im = |image| Op::Image {
+            clip,
+            image,
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 4,
+        };
+        s.ops.extend([
+            fill,
+            glyph_op,
+            fill, // 3 sin imagen (el atlas no rompe el lote)
+            im(a),
+            im(a),    // 2 de la misma imagen
+            fill,     // 1
+            im(b),    // 1 de otra imagen
+            glyph_op, // 1
+        ]);
+        let (out, batches) = encode_all(&s, (80, 80));
+        assert_eq!(out.len(), 8);
+        let summary: Vec<_> = batches
+            .iter()
+            .map(|b| (b.first, b.count, b.image))
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (0, 3, None),
+                (3, 2, Some(a)),
+                (5, 1, None),
+                (6, 1, Some(b)),
+                (7, 1, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_encode_stops_on_atlas_full_and_resumes() {
+        let (w, h) = (80usize, 20usize);
+        let mut c = test_support::new_canvas(w, h);
+        let clip = (0, 0, w, h);
+        let col = Color::from_rgb(1, 2, 3);
+        let (ga, gb, gc) = (ramp_glyph(3, 3), ramp_glyph(4, 3), ramp_glyph(5, 3));
+        c.fill_rect(clip, 0, 0, 5, 5, col);
+        c.glyph(clip, &ga, 10, 1, col);
+        c.fill_rect(clip, 20, 0, 5, 5, col);
+        c.glyph(clip, &gb, 30, 1, col); // operación 3: el atlas «se llena» aquí
+        c.glyph(clip, &gc, 40, 1, col);
+        let s = c.scene();
+
+        let (whole, _) = encode_all(s, (w as u32, h as u32));
+        assert_eq!(whole.len(), 5);
+
+        let mut full_once = true;
+        let mut rect = |sc: &Scene, id| {
+            if full_once && Rc::ptr_eq(sc.glyph_rc(id), &gb) {
+                full_once = false;
+                return Err(AtlasError::Full);
+            }
+            fake_rect(sc, id)
+        };
+        let (mut out, mut batches) = (Vec::new(), Vec::new());
+        let stop = encode(
+            s,
+            0,
+            (w as u32, h as u32),
+            &mut out,
+            &mut batches,
+            &mut rect,
+        )
+        .unwrap();
+        assert_eq!(stop, EncodeStop::AtlasFull { at_op: 3 });
+        assert_eq!(
+            out.len(),
+            3,
+            "lo anterior a la operación 3 ya está codificado"
+        );
+        // El llamador vuelca `out`, vacía el atlas y sigue por la misma operación
+        let (mut out2, mut batches2) = (Vec::new(), Vec::new());
+        let stop = encode(
+            s,
+            3,
+            (w as u32, h as u32),
+            &mut out2,
+            &mut batches2,
+            &mut rect,
+        )
+        .unwrap();
+        assert_eq!(stop, EncodeStop::Done);
+        assert_eq!(out2.len(), 2);
+        out.extend(out2);
+        assert_eq!(
+            format!("{out:?}"),
+            format!("{whole:?}"),
+            "sin perder ni repetir nada"
+        );
+    }
+
+    // ---- paridad GPU / CPU (WARP) -----------------------------------------------------------------
+
+    #[test]
+    fn test_gpu_parity_fill_with_clip() {
+        let (w, h) = (96usize, 64usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        c.fill_rect(full, 3, 4, 30, 20, Color::from_rgb(200, 10, 90));
+        // El alfa del color no importa: fill_rect escribe XRGB opaco
+        c.fill_rect(full, 20, 10, 40, 30, Color::from_rgba(10, 220, 40, 90));
+        c.fill_rect(
+            (10, 10, 50, 30),
+            0,
+            0,
+            90,
+            60,
+            Color::from_rgba(5, 5, 250, 0),
+        );
+        c.with_offset(-7, -5, (60, 40), (0, 0, 60, 40), |c| {
+            c.fill_rect((0, 0, 60, 40), 0, 0, 40, 30, Color::from_rgb(250, 250, 10));
+            c.fill_rect((5, 5, 20, 20), 0, 0, 60, 40, Color::from_rgb(1, 2, 3));
+        });
+        c.fill_rect(full, 90, 60, 20, 20, Color::from_rgb(77, 88, 99)); // sale por la esquina
+        c.fill_rect(full, 5, 5, 0, 7, Color::from_rgb(255, 0, 0)); // sin ancho
+        assert_parity("fill+clip", &mut r, c.scene(), Some(&base));
+
+        // Clear primero y sin base
+        let mut c = test_support::new_canvas(w, h);
+        c.clear(Color::from_rgb(12, 34, 56));
+        c.fill_rect(full, 1, 1, 10, 10, Color::from_rgb(200, 100, 50));
+        assert_parity("clear+fill", &mut r, c.scene(), None);
+    }
+
+    #[test]
+    fn test_gpu_parity_glyph_coverage() {
+        let (w, h) = (96usize, 64usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        let (a, b, d) = (ramp_glyph(9, 7), ramp_glyph(1, 1), ramp_glyph(16, 20));
+        let solid = glyph(5, 5, |_| 255);
+        let faint = glyph(6, 4, |i| (i % 4) as u8);
+        for (i, &(alpha, x, y)) in [(255u8, 2, 3), (128, 15, 3), (40, 28, 3), (0, 41, 3)]
+            .iter()
+            .enumerate()
+        {
+            let col = Color::from_rgba(240 - i as u8 * 50, 30 + i as u8 * 60, 200, alpha);
+            c.glyph(full, &a, x, y, col);
+            c.glyph(full, &b, x, y + 12, col);
+            c.glyph(full, &solid, x, y + 20, col);
+            c.glyph(full, &faint, x, y + 28, col);
+        }
+        // Recorte parcial y origen negativo / fuera por la derecha
+        c.glyph(
+            (60, 30, 75, 45),
+            &d,
+            58,
+            28,
+            Color::from_rgba(250, 250, 20, 200),
+        );
+        c.glyph(full, &d, -6, -8, Color::from_rgba(20, 250, 250, 255));
+        c.glyph(full, &d, 88, 50, Color::from_rgba(250, 20, 250, 77));
+        c.with_offset(30, 40, (30, 20), (0, 0, 30, 20), |c| {
+            c.glyph((0, 0, 30, 20), &a, 25, 15, Color::from_rgba(1, 1, 1, 255));
+            c.glyph(
+                (2, 2, 12, 12),
+                &a,
+                -2,
+                0,
+                Color::from_rgba(255, 255, 255, 128),
+            );
+        });
+        // Mismo glifo apilado: la mezcla en orden importa
+        c.glyph(full, &a, 70, 3, Color::from_rgba(255, 0, 0, 100));
+        c.glyph(full, &a, 72, 4, Color::from_rgba(0, 255, 0, 100));
+        assert_parity("glyph", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_parity_rounded_fill_and_stroke() {
+        let (w, h) = (120usize, 80usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let shapes: &[(usize, usize, usize, usize, usize)] = &[
+            (3, 3, 30, 20, 6),
+            (40, 3, 31, 21, 0), // radio 0
+            (80, 3, 7, 5, 2),   // impares
+            (95, 3, 1, 1, 3),
+            (100, 3, 2, 2, 5),
+            (3, 30, 40, 40, 255), // el radio se acota a la mitad
+            (50, 30, 25, 9, 4),
+            (80, 30, 33, 33, 16),
+            (3, 72, 17, 3, 1),
+        ];
+        let cols = [
+            Color::from_rgba(250, 20, 20, 255),
+            Color::from_rgba(20, 250, 20, 128),
+            Color::from_rgba(20, 20, 250, 60),
+            Color::from_rgba(250, 250, 20, 5),
+        ];
+        for (i, &(x, y, sw, sh, rad)) in shapes.iter().enumerate() {
+            c.rounded_fill(x, y, sw, sh, rad, cols[i % cols.len()]);
+            c.rounded_stroke(x, y, sw, sh, rad, cols[(i + 1) % cols.len()]);
+        }
+        c.rounded_fill(10, 10, 10, 10, 3, Color::from_rgba(1, 2, 3, 0)); // invisible
+        c.rounded_stroke(10, 10, 10, 10, 3, Color::from_rgba(1, 2, 3, 0));
+        // Parcialmente fuera del destino y con recorte
+        c.with_offset(-9, -7, (80, 50), (0, 0, 80, 50), |c| {
+            c.rounded_fill(0, 0, 30, 20, 8, Color::from_rgba(200, 100, 50, 255));
+            c.rounded_stroke(0, 0, 30, 20, 8, Color::from_rgba(10, 100, 250, 255));
+        });
+        c.with_offset(100, 60, (60, 40), (0, 0, 60, 40), |c| {
+            c.rounded_fill(0, 0, 30, 30, 10, Color::from_rgba(200, 100, 250, 200));
+            c.rounded_stroke(0, 0, 30, 30, 10, Color::from_rgba(250, 250, 250, 255));
+        });
+        c.with_offset(60, 50, (30, 20), (0, 0, 20, 12), |c| {
+            c.rounded_fill(0, 0, 40, 30, 9, Color::from_rgba(30, 130, 30, 220));
+        });
+        assert_parity("rounded", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_parity_image_nearest_with_alpha() {
+        let (w, h) = (100usize, 70usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        let small = rgba_pattern(4, 3, &[0, 128, 255, 255, 200, 1]);
+        let big = rgba_pattern(40, 30, &[255, 128, 0, 255, 255, 77]);
+        let opaque = rgba_pattern(5, 5, &[255]);
+        fn im(rgba: &[u8], width: u32, height: u32) -> ImageRef<'_> {
+            ImageRef {
+                rgba,
+                width,
+                height,
+            }
+        }
+        c.image(full, im(&small, 4, 3), (2, 2, 17, 11)); // ampliada
+        c.image(full, im(&big, 40, 30), (30, 2, 7, 5)); // reducida
+        c.image(full, im(&big, 40, 30), (40, 2, 40, 30)); // 1:1
+        c.image((5, 20, 30, 40), im(&small, 4, 3), (-6, 15, 33, 25)); // recortada y con origen negativo
+        c.image(full, im(&opaque, 5, 5), (90, 60, 30, 30)); // sale por la esquina
+        c.image(full, im(&opaque, 5, 5), (10, 40, 1, 1));
+        c.image(full, im(&small, 4, 3), (50, 40, 3, 20)); // anisótropa
+        c.with_offset(60, 45, (40, 25), (0, 0, 40, 25), |c| {
+            c.image((0, 0, 40, 25), im(&small, 4, 3), (-3, -2, 20, 14));
+        });
+        assert_parity("image", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_parity_card() {
+        let mut r = renderer();
+        let outer = Color::from_rgb(10, 20, 30);
+        let cases: [CardCase; 6] = [
+            ((60, 50), (0, 0, 60, 50), 6, 10),
+            ((100, 80), (60, 40, 100, 80), 6, 10),
+            ((100, 80), (5, 5, 90, 70), 4, 14),
+            ((60, 50), (0, 0, 60, 50), 0, 8),
+            ((60, 50), (0, 0, 60, 50), 6, 0),
+            ((60, 50), (10, 10, 12, 12), 6, 4),
+        ];
+        for (n, ((bw, bh), region, inset, radius)) in cases.into_iter().enumerate() {
+            let base = gradient(bw, bh);
+            let mut c = test_support::new_canvas(bw, bh);
+            c.fill_rect(
+                (0, 0, bw, bh),
+                0,
+                0,
+                bw / 2,
+                bh,
+                Color::from_rgb(200, 180, 20),
+            );
+            c.card(region, inset, radius, outer);
+            assert_parity(&format!("card {n}"), &mut r, c.scene(), Some(&base));
+        }
+        // Salida translúcida: la CPU ignora el alfa de `outer`
+        let base = gradient(60, 50);
+        let mut c = test_support::new_canvas(60, 50);
+        c.card((0, 0, 60, 50), 6, 10, Color::from_rgba(200, 40, 40, 90));
+        assert_parity("card translúcida", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_parity_ops_over_a_gradient_base() {
+        let (w, h) = (128usize, 96usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        let g = ramp_glyph(12, 14);
+        let small = ramp_glyph(7, 9);
+        let px = rgba_pattern(6, 6, &[255, 160, 90, 0, 255, 30]);
+        fn img(rgba: &[u8]) -> ImageRef<'_> {
+            ImageRef {
+                rgba,
+                width: 6,
+                height: 6,
+            }
+        }
+        // Formas translúcidas solapadas de dos en dos (cada píxel recibe como mucho 2 capas parciales):
+        // el resultado depende del orden. La CPU trunca en cada capa y la GPU redondea, así que con
+        // 3 o más capas la diferencia pasa de `PARITY_TOLERANCE` aunque no haya ningún error (ver el
+        // informe de la tarea 16). Este test busca un orden o una mezcla equivocados, que dan
+        // diferencias de decenas.
+        for i in 0..4usize {
+            let o = i * 31;
+            // fila A: relleno translúcido y glifo encima
+            c.rounded_fill(
+                3 + o,
+                5,
+                28,
+                36,
+                9,
+                Color::from_rgba(250 - i as u8 * 40, 40 * i as u8, 120, 110),
+            );
+            c.glyph(
+                full,
+                &g,
+                11 + o as i32,
+                14,
+                Color::from_rgba(255, 255, 255, 255 - i as u8 * 30),
+            );
+            // fila B: imagen translúcida y contorno encima
+            c.image(full, img(&px), (3 + o as i32, 46, 26, 26));
+            c.rounded_stroke(5 + o, 48, 22, 22, 6, Color::from_rgba(255, 220, 0, 200));
+            // fila C: dos rellenos que se pisan en 9 px, con glifos fuera del solape
+            c.rounded_fill(
+                3 + o,
+                78,
+                40,
+                12,
+                4,
+                Color::from_rgba(30 * i as u8, 60, 90, 120),
+            );
+            c.glyph(
+                full,
+                &small,
+                5 + o as i32,
+                79,
+                Color::from_rgba(0, 0, 0, 140),
+            );
+        }
+        c.fill_rect(full, 60, 42, 8, 3, Color::from_rgb(30, 60, 90));
+        c.card((0, 0, w, h), 3, 6, Color::from_rgb(8, 8, 12));
+        assert_parity("orden sobre degradado", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_atlas_full_splits_batch_without_dropping_glyphs() {
+        let (w, h) = (240usize, 120usize);
+        // Atlas de 64x64: cabe un puñado de glifos de 9x9 y la escena usa 200 distintos
+        let mut r = GpuRenderer::with_atlas_limits(warp(), 32, 64).unwrap();
+        let base = gradient(w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        let glyphs: Vec<_> = (0..200usize)
+            .map(|n| glyph(9, 9, move |i| ((i * 29 + n * 53) % 256) as u8))
+            .collect();
+        for (n, g) in glyphs.iter().enumerate() {
+            let (x, y) = ((n % 20) as i32 * 11 + 3, (n / 20) as i32 * 11 + 3);
+            c.glyph(
+                full,
+                g,
+                x,
+                y,
+                Color::from_rgba(255 - n as u8, n as u8, 128, 255),
+            );
+        }
+        // Reutiliza los primeros al final: tras varios vaciados vuelven a subirse
+        for (n, g) in glyphs.iter().take(20).enumerate() {
+            c.glyph(
+                full,
+                g,
+                n as i32 * 11 + 3,
+                115 - 9,
+                Color::from_rgba(255, 255, 255, 200),
+            );
+        }
+        assert!(c.scene().glyph_count() >= 200);
+        assert_parity("atlas lleno", &mut r, c.scene(), Some(&base));
+    }
+
+    #[test]
+    fn test_gpu_instance_buffer_grows_past_its_initial_capacity() {
+        let (w, h) = (200usize, 100usize);
+        let mut r = renderer();
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        // Más de 4096 instancias (la capacidad inicial del buffer)
+        for n in 0..9000usize {
+            let (x, y) = (n % w, (n / w) % h);
+            let col = Color::from_rgb((n * 7) as u8, (n * 13) as u8, (n * 29) as u8);
+            c.fill_rect(full, x, y, 1, 1, col);
+        }
+        assert!(c.scene().ops.len() > 4096);
+        assert_parity("buffer de instancias", &mut r, c.scene(), None);
+    }
+
+    #[test]
+    fn test_gpu_glyph_larger_than_atlas_is_skipped_not_looped() {
+        let (w, h) = (60usize, 40usize);
+        let mut r = GpuRenderer::with_atlas_limits(warp(), 16, 16).unwrap();
+        let base = gradient(w, h);
+        let full = (0, 0, w, h);
+        let (small_a, small_b) = (ramp_glyph(5, 5), ramp_glyph(6, 4));
+        let huge = ramp_glyph(20, 20); // >= tope del atlas: no cabe nunca
+        let col = Color::from_rgb(250, 250, 10);
+        let mut c = test_support::new_canvas(w, h);
+        c.glyph(full, &small_a, 2, 2, col);
+        c.glyph(full, &huge, 10, 5, col);
+        c.glyph(full, &small_b, 40, 2, col);
+        c.glyph(full, &huge, 20, 15, col);
+        c.glyph(full, &small_a, 2, 30, col);
+        let (gpu, ..) = r.render_to_pixels_over(c.scene(), &base).unwrap(); // si bucla, el test no termina
+                                                                            // Lo mismo sin los glifos enormes
+        let mut c2 = test_support::new_canvas(w, h);
+        c2.glyph(full, &small_a, 2, 2, col);
+        c2.glyph(full, &small_b, 40, 2, col);
+        c2.glyph(full, &small_a, 2, 30, col);
+        let mut cpu = base.clone();
+        rasterize(c2.scene(), &mut cpu);
+        let max = cpu
+            .iter()
+            .zip(&gpu)
+            .map(|(a, b)| {
+                (0..3)
+                    .map(|s| ((a >> (8 * s)) & 255).abs_diff((b >> (8 * s)) & 255))
+                    .max()
+                    .unwrap()
+            })
+            .max()
+            .unwrap();
+        assert!(
+            max <= PARITY_TOLERANCE as u32,
+            "los glifos pequeños deben dibujarse (máx {max})"
+        );
+    }
+
+    #[test]
+    fn test_gpu_oversized_scene_is_clamped_not_panicking() {
+        let dev = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
+        assert_eq!(dev.max_texture_dim(), 8192);
+        let mut r = GpuRenderer::new(dev).unwrap();
+        let (w, h) = (9000usize, 4usize);
+        let mut c = test_support::new_canvas(w, h);
+        let full = (0, 0, w, h);
+        c.clear(Color::from_rgb(10, 20, 30));
+        c.fill_rect(full, 8000, 0, 500, 4, Color::from_rgb(200, 100, 50)); // cruza el límite
+        c.fill_rect(full, 8300, 0, 300, 4, Color::from_rgb(1, 2, 3)); // fuera del límite
+        c.rounded_fill(8100, 0, 200, 4, 2, Color::from_rgba(250, 250, 250, 128));
+        let (px, gw, gh) = r.render_to_pixels(c.scene()).unwrap();
+        assert_eq!((gw, gh), (8192, 4));
+        assert_eq!(px.len(), 8192 * 4);
+        let mut cpu = vec![0u32; w * h];
+        rasterize(c.scene(), &mut cpu);
+        for y in 0..h {
+            for x in 0..8192 {
+                let (a, b) = (cpu[y * w + x], px[y * 8192 + x]);
+                let d = (0..3)
+                    .map(|s| ((a >> (8 * s)) & 255).abs_diff((b >> (8 * s)) & 255))
+                    .max()
+                    .unwrap();
+                assert!(
+                    d <= PARITY_TOLERANCE as u32,
+                    "({x}, {y}): CPU {a:#08x} GPU {b:#08x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_gpu_truncated_image_is_skipped() {
+        let (w, h) = (40usize, 30usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let full = (0, 0, w, h);
+        let mut c = test_support::new_canvas(w, h);
+        let rgba = rgba_pattern(4, 4, &[255]);
+        // Truncada y vacía: el lienzo ni las graba
+        c.image(
+            full,
+            ImageRef {
+                rgba: &rgba[..20],
+                width: 4,
+                height: 4,
+            },
+            (2, 2, 10, 10),
+        );
+        c.image(
+            full,
+            ImageRef {
+                rgba: &rgba,
+                width: 0,
+                height: 4,
+            },
+            (2, 2, 10, 10),
+        );
+        assert!(c.scene().ops.is_empty());
+        let (px, ..) = r.render_to_pixels_over(c.scene(), &base).unwrap();
+        assert_eq!(px, base, "no dibuja nada");
+
+        // Más ancha que la textura máxima (8192 con FL 10_0): la GPU la descarta sin fallar
+        let dev = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
+        let mut r = GpuRenderer::new(dev).unwrap();
+        let wide = vec![255u8; 8193 * 4];
+        let mut c = test_support::new_canvas(w, h);
+        c.image(
+            full,
+            ImageRef {
+                rgba: &wide,
+                width: 8193,
+                height: 1,
+            },
+            (2, 2, 20, 4),
+        );
+        c.fill_rect(full, 0, 20, 5, 5, Color::from_rgb(9, 9, 9));
+        assert_eq!(c.scene().ops.len(), 2);
+        let (px, ..) = r.render_to_pixels_over(c.scene(), &base).unwrap();
+        let mut expect = base.clone();
+        for y in 20..25 {
+            expect[y * w..y * w + 5].fill(0x0009_0909);
+        }
+        assert_eq!(px, expect, "la imagen descartada no pinta y lo demás sí");
+    }
+
+    #[test]
+    fn test_gpu_empty_and_truncated_glyphs_draw_nothing() {
+        let (w, h) = (30usize, 20usize);
+        let mut r = renderer();
+        let base = gradient(w, h);
+        let full = (0, 0, w, h);
+        let empty = glyph(0, 0, |_| 0);
+        let wide_empty = glyph(5, 0, |_| 0);
+        let truncated = Rc::new(CachedGlyph {
+            width: 6,
+            height: 6,
+            x_offset: 0,
+            y_offset: 0,
+            bitmap: vec![255; 10],
+        });
+        let mut c = test_support::new_canvas(w, h);
+        for g in [&empty, &wide_empty, &truncated] {
+            c.glyph(full, g, 3, 3, Color::from_rgb(255, 255, 255));
+        }
+        let (px, ..) = r.render_to_pixels_over(c.scene(), &base).unwrap();
+        assert_eq!(px, base);
     }
 }

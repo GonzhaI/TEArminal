@@ -6,9 +6,11 @@
 mod atlas;
 mod device;
 mod pipeline;
+mod renderer;
 
 pub use atlas::{AtlasError, AtlasRect, GlyphAtlas, ImageTexture, ShelfPacker};
 pub use device::{
     max_texture_dim_for, requested_driver, requested_driver_from, DriverKind, GpuDevice,
 };
 pub use pipeline::{Instance, Kind, Pipeline};
+pub use renderer::{encode, Batch, EncodeStop, GpuRenderer};
