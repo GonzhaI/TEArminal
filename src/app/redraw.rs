@@ -1,7 +1,7 @@
 //! Repintado de un fotograma completo.
 
 use super::*;
-use crate::renderer::SidebarRects;
+use crate::renderer::{Canvas, SidebarRects};
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
@@ -344,9 +344,7 @@ fn draw_full_scene(
                         .filter(|(pane_id, _)| *pane_id == rect.pane_id)
                         .map(|(_, button)| button);
                     renderer.render_pane_header(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         (rect.x, rect.slot_y, rect.width),
                         &pane.header_title(&tab_title),
                         pane.header_subtitle().as_deref(),
@@ -359,9 +357,7 @@ fn draw_full_scene(
                     );
                 }
                 renderer.render_pane(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     rect.x,
                     rect.y,
                     rect.width,
@@ -382,9 +378,7 @@ fn draw_full_scene(
         } in dividers
         {
             TerminalRenderer::render_pane_divider(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 dx,
                 dy,
                 dw,

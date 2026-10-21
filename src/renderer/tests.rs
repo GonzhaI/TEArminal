@@ -25,11 +25,33 @@ mod bench {
             term.process_bytes(line.clone().as_bytes());
         }
         let mut buf = vec![0u32; w * h];
-        r.render_pane(&mut buf, w, h, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
+        r.render_pane(
+            &mut Canvas::over(&mut buf, w, h),
+            0,
+            0,
+            w,
+            h,
+            &term,
+            &theme,
+            true,
+            true,
+            false,
+        ); // calienta cachés
         let n = if cfg!(debug_assertions) { 4 } else { 200 };
         let t = Instant::now();
         for _ in 0..n {
-            r.render_pane(&mut buf, w, h, 0, 0, w, h, &term, &theme, true, true, false);
+            r.render_pane(
+                &mut Canvas::over(&mut buf, w, h),
+                0,
+                0,
+                w,
+                h,
+                &term,
+                &theme,
+                true,
+                true,
+                false,
+            );
         }
         let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
         let t = Instant::now();
@@ -329,9 +351,7 @@ fn test_nerd_font_icons_and_color_rendering() {
 
     let mut buffer = vec![0u32; 800 * 600];
     renderer.render(
-        &mut buffer,
-        800,
-        600,
+        &mut Canvas::over(&mut buffer, 800, 600),
         0,
         &terminal,
         &terminal.theme,
@@ -463,9 +483,7 @@ fn test_sidebar_rendering_and_layout() {
         default_theme.clone(),
     );
     renderer.render(
-        &mut buffer,
-        1000,
-        600,
+        &mut Canvas::over(&mut buffer, 1000, 600),
         190,
         &term,
         &term.theme,
@@ -679,9 +697,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
 
     // Warm up
     renderer.render_pane(
-        &mut buffer,
-        width,
-        height,
+        &mut Canvas::over(&mut buffer, width, height),
         0,
         0,
         width,
@@ -697,9 +713,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let start = std::time::Instant::now();
     for _ in 0..frames {
         renderer.render_pane(
-            &mut buffer,
-            width,
-            height,
+            &mut Canvas::over(&mut buffer, width, height),
             0,
             0,
             width,
@@ -886,9 +900,7 @@ fn test_render_pane_with_and_without_ligatures() {
     r.ligatures = true;
     let mut buf_with = vec![0u32; w * h];
     r.render_pane(
-        &mut buf_with,
-        w,
-        h,
+        &mut Canvas::over(&mut buf_with, w, h),
         0,
         0,
         w,
@@ -904,9 +916,7 @@ fn test_render_pane_with_and_without_ligatures() {
     r.ligatures = false;
     let mut buf_without = vec![0u32; w * h];
     r.render_pane(
-        &mut buf_without,
-        w,
-        h,
+        &mut Canvas::over(&mut buf_without, w, h),
         0,
         0,
         w,
@@ -1125,9 +1135,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let pane_w = w - SIDEBAR_WIDTH;
     let pane_h = h - top_h - status_h;
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         top_h,
         pane_w,
@@ -1185,9 +1193,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let er = crate::renderer::FilesPanelRects::explorer_rect(usable_h);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         top_tabs.bar_h,
         w - SIDEBAR_WIDTH,
@@ -1277,9 +1283,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH - explorer_w,
@@ -1487,9 +1491,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).3,
     ));
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -1565,9 +1567,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -1660,9 +1660,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         wp1_rects.bar_h,
         w - SIDEBAR_WIDTH,
@@ -1838,9 +1836,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
                 theme.text_secondary()
             };
             r.render_pane_header(
-                &mut buf,
-                w,
-                h,
+                &mut Canvas::over(&mut buf, w, h),
                 (x, y, pw),
                 title,
                 Some(subtitle),
@@ -1852,9 +1848,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
                 &theme,
             );
             r.render_pane(
-                &mut buf,
-                w,
-                h,
+                &mut Canvas::over(&mut buf, w, h),
                 x,
                 y + header_offset,
                 pw,
@@ -1872,7 +1866,14 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             (right_x - 2, top_h, 2, content_h),
             (right_x, top_h + top_pane_h - 2, right_w, 2),
         ] {
-            TerminalRenderer::render_pane_divider(&mut buf, w, h, dx, dy, dw, dh, divider_color);
+            TerminalRenderer::render_pane_divider(
+                &mut Canvas::over(&mut buf, w, h),
+                dx,
+                dy,
+                dw,
+                dh,
+                divider_color,
+            );
         }
 
         r.render_status_bar_with_ai(
@@ -1967,9 +1968,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         let pane_w = w - SIDEBAR_WIDTH;
         let pane_h = h - wp4_rects.bar_h - status_h;
         r.render_pane_header(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             (pane_x, pane_y, pane_w),
             "axon",
             Some("cargo test"),
@@ -1982,9 +1981,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         );
         let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
         r.render_pane(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             pane_x,
             pane_y + header_offset,
             pane_w,
@@ -2303,7 +2300,7 @@ fn test_scrollbar_geometry_is_shared_by_every_list() {
     }
 }
 
-/// Referencia del bucle de imagen que sigue inline en `pane.rs` (Tarea 4 lo sustituye por `Canvas::image`).
+/// Copia del bucle de imagen que había inline en `pane.rs` (sustituido por `Canvas::image`), como referencia.
 fn legacy_image(
     buf: &mut [u32],
     w: usize,

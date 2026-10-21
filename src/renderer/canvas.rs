@@ -66,7 +66,7 @@ impl<'a> Canvas<'a> {
     }
 
     /// Copia `img` escalada (vecino más próximo) a `dst = (x, y, ancho, alto)`, recortada a `clip`.
-    /// Duplica por ahora el bucle inline de `pane.rs`; la tarea 4 lo sustituye por esta llamada.
+    /// Sustituye al bucle inline que tenía `pane.rs` (misma salida salvo con `rgba` truncado, donde no dibuja nada).
     pub fn image(&mut self, clip: Clip, img: ImageRef<'_>, dst: (i32, i32, usize, usize)) {
         let (iw, ih) = (img.width as usize, img.height as usize);
         if iw == 0 || ih == 0 || img.rgba.len() < iw * ih * 4 {
