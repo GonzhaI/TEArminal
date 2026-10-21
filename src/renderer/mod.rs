@@ -22,6 +22,8 @@ mod settings_page;
 mod sidebar;
 mod state;
 mod status_bar;
+#[cfg(test)]
+mod test_support;
 mod tokens;
 mod top_bar;
 

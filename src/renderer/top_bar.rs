@@ -198,6 +198,10 @@ impl TerminalRenderer {
 
     /// Fase del spinner en pasos de 110 ms.
     fn spinner_phase() -> usize {
+        #[cfg(test)]
+        if let Some(phase) = super::test_support::spinner_phase_override() {
+            return phase;
+        }
         use std::time::{SystemTime, UNIX_EPOCH};
         let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)

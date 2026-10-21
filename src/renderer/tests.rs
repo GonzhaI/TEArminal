@@ -997,11 +997,9 @@ fn test_d3d11_presenter_lifecycle() {
     }
 }
 
-/// Previsualización manual de la interfaz (no forma parte de la suite):
-/// `cargo test preview_ui_scenes -- --ignored --nocapture` deja PPM en `%TEMP%/axon-preview`.
-#[test]
-#[ignore]
-fn preview_ui_scenes() {
+/// Escenas de referencia de la interfaz, en orden fijo: `(nombre, framebuffer XRGB de w x h)`.
+/// Las usa `preview_ui_scenes` (PPM y PNG) y el test de hashes `test_golden_scene_hashes`.
+pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> {
     use crate::app::SIDEBAR_WIDTH;
     use crate::renderer::{SettingsPageState, SidebarTabItem};
     use crate::theme::Theme;
@@ -1009,23 +1007,15 @@ fn preview_ui_scenes() {
     let cfg = AxonConfig::default();
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
-    let (w, h) = (1440usize, 900usize);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
     let top_h = crate::renderer::TopTitleBarRects::compute(w).bar_h;
-    let out = std::env::var_os("AXON_PREVIEW_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
-    std::fs::create_dir_all(&out).unwrap();
 
-    let write_ppm = |buf: &[u32], name: &str| {
-        let mut data = format!("P6\n{} {}\n255\n", w, h).into_bytes();
-        for px in buf {
-            data.push(((px >> 16) & 0xFF) as u8);
-            data.push(((px >> 8) & 0xFF) as u8);
-            data.push((px & 0xFF) as u8);
-        }
-        std::fs::write(out.join(name), data).unwrap();
-    };
+    // Escenas deterministas: fase fija del spinner y árbol de archivos fijo en vez del directorio de trabajo.
+    super::test_support::set_spinner_phase(Some(0));
+    let fixture = super::test_support::fixture_root();
+
+    let mut scenes: Vec<(&'static str, Vec<u32>)> = Vec::new();
+    let mut push_scene = |buf: &[u32], name: &'static str| scenes.push((name, buf.to_vec()));
 
     let tabs: Vec<SidebarTabItem> = vec![
         SidebarTabItem {
@@ -1165,7 +1155,7 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "terminal.ppm");
+    push_scene(&buf, "terminal-vertical");
 
     // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
@@ -1191,8 +1181,7 @@ fn preview_ui_scenes() {
         buf[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
             .copy_from_slice(&panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH]);
     }
-    let mut h_explorer =
-        crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
+    let mut h_explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
     let er = crate::renderer::FilesPanelRects::explorer_rect(usable_h);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
     r.render_pane(
@@ -1244,11 +1233,10 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "horizontal.ppm");
+    push_scene(&buf, "tabs-superiores");
 
     // 3. Explorador acoplado sobre el terminal
-    let mut explorer =
-        crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
+    let mut explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
     explorer.is_focused = true;
     explorer.dock = Some(crate::renderer::SidebarRects::explorer_rect_after(
         h - status_h,
@@ -1320,7 +1308,7 @@ fn preview_ui_scenes() {
         true,
         &theme,
     );
-    write_ppm(&buf, "explorer.ppm");
+    push_scene(&buf, "explorador-acoplado");
 
     // 4. Ajustes
     let settings = SettingsPageState {
@@ -1377,12 +1365,10 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "settings.ppm");
+    push_scene(&buf, "ajustes");
 
     // 5. Visor de archivos
-    let path = std::env::current_dir()
-        .unwrap()
-        .join("src/renderer/pane.rs");
+    let path = fixture.join("src/renderer/pane.rs");
     let tab = crate::app::TerminalTab::new_file_viewer(90, path);
     let viewer = tab.file_viewer.as_ref().unwrap();
     let mut buf = vec![0u32; w * h];
@@ -1448,7 +1434,7 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "viewer.ppm");
+    push_scene(&buf, "visor");
 
     // 6. Panel a la derecha: se dibuja en un búfer propio del ancho del panel y se copia a su sitio
     let header_right = crate::renderer::SidebarHeader {
@@ -1532,7 +1518,7 @@ fn preview_ui_scenes() {
         true,
         &theme,
     );
-    write_ppm(&buf, "right.ppm");
+    push_scene(&buf, "panel-derecha");
 
     // 7. WP1 · modo vertical: marca, píldora centrada y barra de estado del bosquejo
     let wp1_meters = [
@@ -1609,7 +1595,7 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "wp1-vertical.ppm");
+    push_scene(&buf, "wp1-vertical");
 
     // 8. WP1 · modo superior: pestañas con icono de tipo, spinner en la que corre y acciones a la derecha
     let wp1_tabs = vec![
@@ -1704,7 +1690,7 @@ fn preview_ui_scenes() {
         false,
         &theme,
     );
-    write_ppm(&buf, "wp1-superior.ppm");
+    push_scene(&buf, "wp1-superior");
     // 7. Paneles divididos con cabecera (WP3): agente a la izquierda, shell y SSH a la derecha
     {
         use crate::ui::LucideIcon;
@@ -1906,21 +1892,7 @@ fn preview_ui_scenes() {
             false,
             &theme,
         );
-        write_ppm(&buf, "panes.ppm");
-        let rgb: Vec<u8> = buf
-            .iter()
-            .flat_map(|px| {
-                [
-                    ((px >> 16) & 0xFF) as u8,
-                    ((px >> 8) & 0xFF) as u8,
-                    (px & 0xFF) as u8,
-                ]
-            })
-            .collect();
-        image::RgbImage::from_raw(w as u32, h as u32, rgb)
-            .unwrap()
-            .save(out.join("panes.png"))
-            .unwrap();
+        push_scene(&buf, "paneles-divididos");
     }
 
     // 9. WP4 · bloques OSC 133 como tarjetas con franja de contexto (mock v2-superior-izquierda)
@@ -1963,7 +1935,8 @@ fn preview_ui_scenes() {
             block.finished = block.started.map(|s| s + duration);
         }
         if let Some(running) = cards_term.active_block.as_mut() {
-            running.started = Some(std::time::Instant::now() - std::time::Duration::from_secs(254));
+            running.started =
+                Some(std::time::Instant::now() - std::time::Duration::from_millis(254_500));
         }
 
         let mut buf = vec![0u32; w * h];
@@ -2039,7 +2012,31 @@ fn preview_ui_scenes() {
             false,
             &theme,
         );
-        write_ppm(&buf, "wp4-bloques.ppm");
+        push_scene(&buf, "bloques-osc133");
+    }
+
+    scenes
+}
+
+/// Previsualización manual de la interfaz (no forma parte de la suite):
+/// `cargo test preview_ui_scenes -- --ignored --nocapture` deja PPM y PNG por escena en `%TEMP%/axon-preview`.
+#[test]
+#[ignore]
+fn preview_ui_scenes() {
+    let out = std::env::var_os("AXON_PREVIEW_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
+    std::fs::create_dir_all(&out).unwrap();
+    let (w, h) = (1440usize, 900usize);
+
+    for (name, buf) in build_scenes(w, h) {
+        let mut data = format!("P6\n{} {}\n255\n", w, h).into_bytes();
+        for px in &buf {
+            data.push(((px >> 16) & 0xFF) as u8);
+            data.push(((px >> 8) & 0xFF) as u8);
+            data.push((px & 0xFF) as u8);
+        }
+        std::fs::write(out.join(format!("{name}.ppm")), data).unwrap();
         let rgb: Vec<u8> = buf
             .iter()
             .flat_map(|px| {
@@ -2052,11 +2049,37 @@ fn preview_ui_scenes() {
             .collect();
         image::RgbImage::from_raw(w as u32, h as u32, rgb)
             .unwrap()
-            .save(out.join("wp4-bloques.png"))
+            .save(out.join(format!("{name}.png")))
             .unwrap();
     }
-
     println!("previews in {}", out.display());
+}
+
+/// Regresión visual: el hash de cada escena de referencia debe coincidir con `golden/hashes.txt`.
+/// Con `AXON_BLESS=1` reescribe ese archivo en lugar de comparar (ver `test_support`).
+#[test]
+fn test_golden_scene_hashes() {
+    use super::test_support::{bless_requested, frame_hash};
+    const GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/renderer/golden/hashes.txt"
+    );
+
+    let mut actual = String::new();
+    for (name, buf) in build_scenes(1440, 900) {
+        actual.push_str(&format!("{name}={:016x}\n", frame_hash(&buf)));
+    }
+
+    if bless_requested() {
+        std::fs::write(GOLDEN, &actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read_to_string(GOLDEN)
+        .expect("falta golden/hashes.txt: generarlo con AXON_BLESS=1");
+    assert_eq!(
+        actual, expected,
+        "hashes de escenas distintos (si el cambio es intencional, AXON_BLESS=1)"
+    );
 }
 
 #[test]
