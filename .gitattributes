@@ -9,6 +9,10 @@
 
 *.ttf binary
 *.ico binary
+*.bin binary
 *.png binary
 *.exe binary
 *.txt text eol=lf
+*.cso binary
+*.hlsl text eol=lf
+*.sha256 text eol=lf

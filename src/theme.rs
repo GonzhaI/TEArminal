@@ -48,6 +48,12 @@ impl Color {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
+    /// Inversa de `to_u32_xrgb`: color opaco desde un píxel XRGB.
+    #[inline(always)]
+    pub const fn from_u32_xrgb(v: u32) -> Self {
+        Self::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+    }
+
     /// Mezcla alpha de un color de primer plano sobre este color de fondo
     #[inline(always)]
     pub fn blend_over(&self, fg: Color, alpha: u8) -> u32 {
@@ -375,6 +381,13 @@ mod tests {
         assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
         assert_eq!(Theme::names().count(), lines);
         assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
+    }
+
+    #[test]
+    fn test_color_xrgb_roundtrip() {
+        let c = Color::from_rgb(0x12, 0x34, 0x56);
+        assert_eq!(Color::from_u32_xrgb(c.to_u32_xrgb()), c);
+        assert_eq!(Color::from_u32_xrgb(0xFF12_3456).to_u32_xrgb(), 0x12_3456);
     }
 
     #[test]

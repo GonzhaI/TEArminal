@@ -63,9 +63,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_pane_header_button(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect: (usize, usize, usize, usize),
         icon: crate::ui::LucideIcon,
         hovered: bool,
@@ -73,24 +71,14 @@ impl TerminalRenderer {
     ) {
         let (x, y, w, h) = rect;
         if hovered {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x,
-                y,
-                w,
-                h,
-                4,
-                theme.surface_hover(),
-            );
+            canvas.rounded_fill(x, y, w, h, 4, theme.surface_hover());
         }
         let fg = if hovered {
             theme.foreground
         } else {
             theme.text_secondary()
         };
-        self.draw_lucide_icon(buffer, width, height, icon, x + w / 2, y + h / 2, 14.0, fg);
+        self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, 14.0, fg);
     }
 
     /// Cabecera de un panel dividido (38 px): icono, título, subtítulo atenuado, acciones
@@ -98,9 +86,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render_pane_header(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         slot: (usize, usize, usize),
         title: &str,
         subtitle: Option<&str>,
@@ -111,6 +97,7 @@ impl TerminalRenderer {
         hovered: Option<PaneHeaderButton>,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         let (x, y, w) = slot;
         if w < 120 || width == 0 || height == 0 || y >= height {
             return;
@@ -122,45 +109,30 @@ impl TerminalRenderer {
             (x + w).min(width),
             (y + PaneHeaderRects::CONTENT_OFFSET).min(height),
         );
-        fill_rect(
-            buffer,
-            width,
-            clip,
-            x,
-            y,
-            w,
-            PaneHeaderRects::HEIGHT,
-            theme.chrome_bg().to_u32_xrgb(),
-        );
+        canvas.fill_rect(clip, x, y, w, PaneHeaderRects::HEIGHT, theme.chrome_bg());
         // Línea que separa la cabecera del terminal y acento del panel enfocado sobre ella
-        fill_rect(
-            buffer,
-            width,
+        canvas.fill_rect(
             clip,
             x,
             y + PaneHeaderRects::HEIGHT,
             w,
             PaneHeaderRects::BORDER,
-            theme.chrome_line().to_u32_xrgb(),
+            theme.chrome_line(),
         );
         if focused {
-            fill_rect(
-                buffer,
-                width,
+            canvas.fill_rect(
                 clip,
                 x,
                 y + PaneHeaderRects::HEIGHT - 2,
                 w,
                 2,
-                theme.accent_color().to_u32_xrgb(),
+                theme.accent_color(),
             );
         }
 
         let cy = y + PaneHeaderRects::HEIGHT / 2;
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             icon,
             x + PaneHeaderRects::ICON_X,
             cy,
@@ -177,9 +149,7 @@ impl TerminalRenderer {
         let text_max = buttons_left.saturating_sub(12);
         let baseline = cy + 4;
         let title_end = self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             title,
             x + PaneHeaderRects::TEXT_X,
             baseline,
@@ -192,9 +162,7 @@ impl TerminalRenderer {
             let sx = title_end + 10;
             if sx < text_max {
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     subtitle,
                     sx,
                     baseline,
@@ -208,18 +176,14 @@ impl TerminalRenderer {
 
         if focused {
             self.draw_pane_header_button(
-                buffer,
-                width,
-                height,
+                canvas,
                 rects.split_btn,
                 crate::ui::LucideIcon::Columns2,
                 hovered == Some(PaneHeaderButton::Split),
                 theme,
             );
             self.draw_pane_header_button(
-                buffer,
-                width,
-                height,
+                canvas,
                 rects.zoom_btn,
                 if zoomed {
                     crate::ui::LucideIcon::Minimize2
@@ -231,9 +195,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_pane_header_button(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.close_btn,
             crate::ui::LucideIcon::X,
             hovered == Some(PaneHeaderButton::Close),
@@ -246,9 +208,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render_pane(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect_x: usize,
         rect_y: usize,
         rect_w: usize,
@@ -259,20 +219,18 @@ impl TerminalRenderer {
         is_active_pane: bool,
         _has_multiple_panes: bool,
     ) {
+        let (width, height) = canvas.size();
         if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
             return;
         }
 
-        let bg_color = theme.background.to_u32_xrgb();
         let baseline_y = self.baseline_y;
 
         // 1. Limpieza del área del panel con el fondo del tema
         let max_y = (rect_y + rect_h).min(height);
         let max_x = (rect_x + rect_w).min(width);
         let clip: Clip = (rect_x, rect_y, max_x, max_y);
-        fill_rect(
-            buffer, width, clip, rect_x, rect_y, rect_w, rect_h, bg_color,
-        );
+        canvas.fill_rect(clip, rect_x, rect_y, rect_w, rect_h, theme.background);
 
         let base_x = rect_x + self.margin_x;
         let base_y = rect_y + self.margin_y;
@@ -284,9 +242,7 @@ impl TerminalRenderer {
 
         // Tarjetas de bloque (OSC 133): fondo antes que las celdas, cabecera después.
         let hidden_headers = self.block_header_lines(rect_x, rect_y, rect_w, rect_h, terminal);
-        self.draw_block_card_frames(
-            buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, theme,
-        );
+        self.draw_block_card_frames(canvas, rect_x, rect_y, rect_w, rect_h, terminal, theme);
 
         // 2. Renderizar filas y celdas
         for (row_idx, row) in visible_rows.iter().enumerate() {
@@ -374,15 +330,13 @@ impl TerminalRenderer {
 
                 if cell_bg_u32 != run_color {
                     if let Some(c_u32) = run_color {
-                        fill_rect(
-                            buffer,
-                            width,
+                        canvas.fill_rect(
                             clip,
                             base_x + run_start * self.char_width,
                             cell_y,
                             (col_idx - run_start) * self.char_width,
                             self.row_height,
-                            c_u32,
+                            Color::from_u32_xrgb(c_u32),
                         );
                     }
                     run_start = col_idx;
@@ -390,15 +344,13 @@ impl TerminalRenderer {
                 }
             }
             if let Some(c_u32) = run_color {
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     base_x + run_start * self.char_width,
                     cell_y,
                     (cols_in_row - run_start) * self.char_width,
                     self.row_height,
-                    c_u32,
+                    Color::from_u32_xrgb(c_u32),
                 );
             }
 
@@ -429,29 +381,11 @@ impl TerminalRenderer {
                 // Subrayado (SGR 4) y tachado (SGR 9)
                 if cell.underline() {
                     let line_y = cell_y + self.row_height - 2;
-                    fill_rect(
-                        buffer,
-                        width,
-                        clip,
-                        cell_x,
-                        line_y,
-                        self.char_width,
-                        1,
-                        fg_color.to_u32_xrgb(),
-                    );
+                    canvas.fill_rect(clip, cell_x, line_y, self.char_width, 1, fg_color);
                 }
                 if cell.strikethrough() {
                     let line_y = cell_y + (self.row_height / 2);
-                    fill_rect(
-                        buffer,
-                        width,
-                        clip,
-                        cell_x,
-                        line_y,
-                        self.char_width,
-                        1,
-                        fg_color.to_u32_xrgb(),
-                    );
+                    canvas.fill_rect(clip, cell_x, line_y, self.char_width, 1, fg_color);
                 }
 
                 if cell.c == ' ' {
@@ -467,7 +401,7 @@ impl TerminalRenderer {
                             let glyph_x = cell_x as i32 + glyph.x_offset;
                             let glyph_y =
                                 (cell_y + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
-                            blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                            canvas.glyph(clip, glyph, glyph_x, glyph_y, fg_color);
                         }
                     }
                     col_idx += 1;
@@ -518,28 +452,24 @@ impl TerminalRenderer {
                             if k > 0 {
                                 if cur_cell.underline() {
                                     let line_y = cell_y + self.row_height - 2;
-                                    fill_rect(
-                                        buffer,
-                                        width,
+                                    canvas.fill_rect(
                                         clip,
                                         cur_cell_x,
                                         line_y,
                                         self.char_width,
                                         1,
-                                        fg_color.to_u32_xrgb(),
+                                        fg_color,
                                     );
                                 }
                                 if cur_cell.strikethrough() {
                                     let line_y = cell_y + (self.row_height / 2);
-                                    fill_rect(
-                                        buffer,
-                                        width,
+                                    canvas.fill_rect(
                                         clip,
                                         cur_cell_x,
                                         line_y,
                                         self.char_width,
                                         1,
-                                        fg_color.to_u32_xrgb(),
+                                        fg_color,
                                     );
                                 }
                             }
@@ -551,7 +481,7 @@ impl TerminalRenderer {
                                 let glyph_y = (cell_y + baseline_y) as i32
                                     - glyph.y_offset
                                     - glyph.height as i32;
-                                blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                                canvas.glyph(clip, glyph, glyph_x, glyph_y, fg_color);
                             }
                         }
                         col_idx += run_len;
@@ -562,15 +492,13 @@ impl TerminalRenderer {
                 let glyph = self.get_glyph(cell.c, cell.bold());
                 let glyph_x = cell_x as i32 + glyph.x_offset;
                 let glyph_y = (cell_y + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, clip, glyph, glyph_x, glyph_y, fg_color);
+                canvas.glyph(clip, glyph, glyph_x, glyph_y, fg_color);
                 col_idx += 1;
             }
         }
 
         // 3. Canal de bloques de comando (OSC 133): tarjetas con cabecera, estado y acciones.
-        self.draw_block_card_chrome(
-            buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, theme,
-        );
+        self.draw_block_card_chrome(canvas, rect_x, rect_y, rect_w, rect_h, terminal, theme);
 
         // 4. Renderizar cursor sólido
         if terminal.scroll_offset == 0
@@ -607,16 +535,7 @@ impl TerminalRenderer {
             };
 
             if is_active_pane {
-                fill_rect(
-                    buffer,
-                    width,
-                    clip,
-                    cx,
-                    cy,
-                    c_width,
-                    self.row_height,
-                    theme.cursor.to_u32_xrgb(),
-                );
+                canvas.fill_rect(clip, cx, cy, c_width, self.row_height, theme.cursor);
 
                 // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
                 if let Some(cell) = cell_under {
@@ -629,15 +548,7 @@ impl TerminalRenderer {
                                     let glyph_y = (cy + baseline_y) as i32
                                         - glyph.y_offset
                                         - glyph.height as i32;
-                                    blit_glyph(
-                                        buffer,
-                                        width,
-                                        clip,
-                                        glyph,
-                                        glyph_x,
-                                        glyph_y,
-                                        theme.background,
-                                    );
+                                    canvas.glyph(clip, glyph, glyph_x, glyph_y, theme.background);
                                 }
                             }
                         } else {
@@ -645,26 +556,18 @@ impl TerminalRenderer {
                             let glyph_x = cx as i32 + glyph.x_offset;
                             let glyph_y =
                                 (cy + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
-                            blit_glyph(
-                                buffer,
-                                width,
-                                clip,
-                                glyph,
-                                glyph_x,
-                                glyph_y,
-                                theme.background,
-                            );
+                            canvas.glyph(clip, glyph, glyph_x, glyph_y, theme.background);
                         }
                     }
                 }
             } else {
                 // Cursor hueco para terminal inactiva en split
-                let border_c = theme.ansi[8].to_u32_xrgb();
+                let border_c = theme.ansi[8];
                 let rh = self.row_height;
-                fill_rect(buffer, width, clip, cx, cy, c_width, 1, border_c);
-                fill_rect(buffer, width, clip, cx, cy + rh - 1, c_width, 1, border_c);
-                fill_rect(buffer, width, clip, cx, cy, 1, rh, border_c);
-                fill_rect(buffer, width, clip, cx + c_width - 1, cy, 1, rh, border_c);
+                canvas.fill_rect(clip, cx, cy, c_width, 1, border_c);
+                canvas.fill_rect(clip, cx, cy + rh - 1, c_width, 1, border_c);
+                canvas.fill_rect(clip, cx, cy, 1, rh, border_c);
+                canvas.fill_rect(clip, cx + c_width - 1, cy, 1, rh, border_c);
             }
         }
 
@@ -678,42 +581,15 @@ impl TerminalRenderer {
                 let target_w = img.width_cols * self.char_width;
                 let target_h = img.height_rows * self.row_height;
 
-                for dy in 0..target_h {
-                    let py = iy + dy as i32;
-                    if py < rect_y as i32 || py >= max_y as i32 {
-                        continue;
-                    }
-                    let src_y = (dy * img.height_px as usize) / target_h;
-
-                    for dx in 0..target_w {
-                        let px = ix + dx as i32;
-                        if px < rect_x as i32 || px >= max_x as i32 {
-                            continue;
-                        }
-                        let src_x = (dx * img.width_px as usize) / target_w;
-
-                        let src_idx = (src_y * img.width_px as usize + src_x) * 4;
-                        if src_idx + 3 < img.rgba_data.len() {
-                            let r = img.rgba_data[src_idx];
-                            let g = img.rgba_data[src_idx + 1];
-                            let b = img.rgba_data[src_idx + 2];
-                            let a = img.rgba_data[src_idx + 3];
-
-                            let buf_idx = (py as usize) * width + (px as usize);
-                            if a == 255 {
-                                buffer[buf_idx] =
-                                    ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-                            } else if a > 0 {
-                                let bg = Color::from_rgb(
-                                    ((buffer[buf_idx] >> 16) & 0xFF) as u8,
-                                    ((buffer[buf_idx] >> 8) & 0xFF) as u8,
-                                    (buffer[buf_idx] & 0xFF) as u8,
-                                );
-                                buffer[buf_idx] = bg.blend_over(Color::from_rgb(r, g, b), a);
-                            }
-                        }
-                    }
-                }
+                canvas.image(
+                    clip,
+                    ImageRef {
+                        rgba: &img.rgba_data,
+                        width: img.width_px,
+                        height: img.height_px,
+                    },
+                    (ix, iy, target_w, target_h),
+                );
             }
         }
 
@@ -726,9 +602,7 @@ impl TerminalRenderer {
                 let track_h = rect_h.saturating_sub(self.margin_y * 2);
 
                 Self::draw_scrollbar(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     thumb_x,
                     track_y,
                     thumb_w,
@@ -762,24 +636,10 @@ impl TerminalRenderer {
                     theme.text_secondary()
                 };
 
-                crate::ui::draw_rounded_rect(
-                    buffer, width, height, btn_x, btn_y, btn_w, btn_h, 4, bg_color,
-                );
-                crate::ui::stroke_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    btn_x,
-                    btn_y,
-                    btn_w,
-                    btn_h,
-                    4,
-                    border_color,
-                );
+                canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 4, bg_color);
+                canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 4, border_color);
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     crate::ui::LucideIcon::ChevronDown,
                     btn_x + btn_w / 2,
                     btn_y + btn_h / 2,
@@ -792,25 +652,21 @@ impl TerminalRenderer {
 
     /// Renderiza un divisor entre paneles de terminal
     pub fn render_pane_divider(
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         x: usize,
         y: usize,
         w: usize,
         h: usize,
         divider_color: Color,
     ) {
-        Self::draw_rect(buffer, width, height, x, y, w, h, divider_color);
+        Self::draw_rect(canvas, x, y, w, h, divider_color);
     }
 
     /// Renderiza directamente la cuadrícula del terminal al framebuffer de píxeles 32-bit de Windows
     #[cfg(test)]
     pub fn render(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         sidebar_offset: usize,
         terminal: &TerminalState,
         theme: &Theme,
@@ -818,11 +674,10 @@ impl TerminalRenderer {
         _scrollbar_visible: bool,
         _scrollbar_hovered: bool,
     ) {
+        let (width, height) = canvas.size();
         let pane_w = width.saturating_sub(sidebar_offset);
         self.render_pane(
-            buffer,
-            width,
-            height,
+            canvas,
             sidebar_offset,
             0,
             pane_w,

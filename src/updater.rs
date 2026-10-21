@@ -95,7 +95,7 @@ fn expected_hash(sums: &str, file_name: &str) -> Option<String> {
 }
 
 /// SHA-256 de un archivo con `certutil` (viene con Windows)
-fn sha256_hex(path: &Path) -> Option<String> {
+pub(crate) fn sha256_hex(path: &Path) -> Option<String> {
     let out = hide_console(&mut Command::new("certutil"))
         .args(["-hashfile"])
         .arg(path)

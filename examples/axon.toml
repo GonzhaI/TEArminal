@@ -26,6 +26,6 @@ copy_on_select = false
 restore_session = true
 osc52 = false                    # permite que los programas de la terminal escriban en el portapapeles (OSC 52, máx. 100 KB)
 ligatures = true                 # activa ligaduras de programación tipográficas (->, !=, ==, =>...)
-gpu = true                       # aceleración de presentación por GPU nativa en Windows (Direct3D 11 DirectFlip)
+gpu = true                       # sin efecto: el render por GPU (Direct3D 11, con WARP de respaldo) es el único; se conserva por compatibilidad
 auto_check_updates = true        # comprueba automáticamente si hay nuevas versiones al iniciar
 ai_limits = true                 # cuotas de Claude: usa la sesión de ~/.claude/.credentials.json (solo lectura) para pedirlas a api.anthropic.com; false = no se lee ni se llama

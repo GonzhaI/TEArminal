@@ -8,9 +8,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render_sidebar(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         sidebar_width: usize,
         status_bar_h: usize,
         header: &SidebarHeader,
@@ -23,6 +21,7 @@ impl TerminalRenderer {
         is_scrollbar_hovered: bool,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if sidebar_width == 0 || width == 0 || height == 0 {
             return;
         }
@@ -34,20 +33,9 @@ impl TerminalRenderer {
         let body_h = usable_h.saturating_sub(top);
 
         // 1. Riel (fondo del lienzo) y columna de sesiones (superficie de chrome).
+        Self::draw_rect(canvas, 0, top, rail_w, body_h, theme.background);
         Self::draw_rect(
-            buffer,
-            width,
-            height,
-            0,
-            top,
-            rail_w,
-            body_h,
-            theme.background,
-        );
-        Self::draw_rect(
-            buffer,
-            width,
-            height,
+            canvas,
             rail_w,
             top,
             sidebar_width.saturating_sub(rail_w),
@@ -59,7 +47,7 @@ impl TerminalRenderer {
         } else {
             sidebar_width - 1
         };
-        Self::draw_rect(buffer, width, height, edge_x, top, 1, body_h, line);
+        Self::draw_rect(canvas, edge_x, top, 1, body_h, line);
 
         // 2. Cabecera: título, rama y carpeta de la sesión a la vista. El botón «+» abre una sesión nueva.
         let col_x = rail_w + 14;
@@ -75,9 +63,7 @@ impl TerminalRenderer {
             .as_ref()
             .map_or(plus.0.saturating_sub(8), |(_, x, _)| x.saturating_sub(8));
         let _ = self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             &header.title,
             col_x,
             top + 26,
@@ -87,21 +73,9 @@ impl TerminalRenderer {
             true,
         );
         if let Some((branch, chip_x, chip_w)) = &chip {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                *chip_x,
-                top + 10,
-                *chip_w,
-                22,
-                11,
-                theme.surface_bg(),
-            );
+            canvas.rounded_fill(*chip_x, top + 10, *chip_w, 22, 11, theme.surface_bg());
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                canvas,
                 crate::ui::LucideIcon::GitBranch,
                 chip_x + 11,
                 top + 21,
@@ -109,9 +83,7 @@ impl TerminalRenderer {
                 theme.accent_color(),
             );
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 branch,
                 chip_x + 22,
                 top + 25,
@@ -123,9 +95,7 @@ impl TerminalRenderer {
         }
         if let Some(path) = &header.path {
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 path,
                 col_x,
                 top + 49,
@@ -136,22 +106,10 @@ impl TerminalRenderer {
             );
         }
         if hovered_new_tab {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                plus.0,
-                plus.1,
-                plus.2,
-                plus.3,
-                6,
-                theme.surface_hover(),
-            );
+            canvas.rounded_fill(plus.0, plus.1, plus.2, plus.3, 6, theme.surface_hover());
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             crate::ui::LucideIcon::Plus,
             plus.0 + plus.2 / 2,
             plus.1 + plus.3 / 2,
@@ -179,40 +137,10 @@ impl TerminalRenderer {
             let row = (tab_x, tab_y, tab_w, tab_item_h);
 
             if tab.is_active {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    row.0,
-                    row.1,
-                    row.2,
-                    row.3,
-                    10,
-                    theme.background,
-                );
-                crate::ui::stroke_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    row.0,
-                    row.1,
-                    row.2,
-                    row.3,
-                    10,
-                    theme.chrome_line_strong(),
-                );
+                canvas.rounded_fill(row.0, row.1, row.2, row.3, 10, theme.background);
+                canvas.rounded_stroke(row.0, row.1, row.2, row.3, 10, theme.chrome_line_strong());
             } else if is_hovered {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    row.0,
-                    row.1,
-                    row.2,
-                    row.3,
-                    10,
-                    theme.surface_hover(),
-                );
+                canvas.rounded_fill(row.0, row.1, row.2, row.3, 10, theme.surface_hover());
             }
 
             let item_cy = tab_y + tab_item_h / 2;
@@ -227,34 +155,14 @@ impl TerminalRenderer {
             // Indicador: anillo en curso, punto lleno terminado/falló/en espera; icono en Ajustes y visores.
             if let Some(status) = tab.status {
                 match status {
-                    SessionStatus::Running => crate::ui::stroke_rounded_rect(
-                        buffer,
-                        width,
-                        height,
-                        tab_x + 13,
-                        tab_y + 12,
-                        10,
-                        10,
-                        5,
-                        status_color,
-                    ),
-                    _ => crate::ui::draw_rounded_rect(
-                        buffer,
-                        width,
-                        height,
-                        tab_x + 14,
-                        tab_y + 13,
-                        8,
-                        8,
-                        4,
-                        status_color,
-                    ),
+                    SessionStatus::Running => {
+                        canvas.rounded_stroke(tab_x + 13, tab_y + 12, 10, 10, 5, status_color)
+                    }
+                    _ => canvas.rounded_fill(tab_x + 14, tab_y + 13, 8, 8, 4, status_color),
                 }
             } else {
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     tab_icon(tab),
                     tab_x + 18,
                     tab_y + 17,
@@ -277,9 +185,7 @@ impl TerminalRenderer {
                 let w = self.measure_ui_text(label, tokens::DETAIL, false);
                 let x = right_edge.saturating_sub(w);
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     label,
                     x,
                     tab_y + 22,
@@ -302,9 +208,7 @@ impl TerminalRenderer {
             let has_detail = tab.detail.is_some();
             let title_base = if has_detail { tab_y + 22 } else { item_cy + 4 };
             let title_end = self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 &tab.title,
                 title_x,
                 title_base,
@@ -315,9 +219,7 @@ impl TerminalRenderer {
             );
             if tab.is_preview {
                 Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     title_x,
                     title_base + 2,
                     title_end.saturating_sub(title_x),
@@ -327,9 +229,7 @@ impl TerminalRenderer {
             }
             if let Some(detail) = &tab.detail {
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     detail,
                     title_x,
                     tab_y + 39,
@@ -344,22 +244,10 @@ impl TerminalRenderer {
                 let close = SidebarRects::close_btn_rect(row);
                 let is_close_hovered = hovered_close == Some(idx);
                 if is_close_hovered {
-                    crate::ui::draw_rounded_rect(
-                        buffer,
-                        width,
-                        height,
-                        close.0,
-                        close.1,
-                        close.2,
-                        close.3,
-                        6,
-                        theme.surface_bg(),
-                    );
+                    canvas.rounded_fill(close.0, close.1, close.2, close.3, 6, theme.surface_bg());
                 }
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     crate::ui::LucideIcon::X,
                     close.0 + close.2 / 2,
                     close.1 + close.3 / 2,
@@ -381,9 +269,7 @@ impl TerminalRenderer {
             scroll_offset,
         ) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                canvas,
                 track,
                 thumb,
                 is_scrollbar_hovered,
@@ -395,22 +281,10 @@ impl TerminalRenderer {
         // 4. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
         let btn = SidebarRects::settings_btn_rect(usable_h);
         if hovered_toggle_btn {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                btn.0,
-                btn.1,
-                btn.2,
-                btn.3,
-                6,
-                theme.surface_hover(),
-            );
+            canvas.rounded_fill(btn.0, btn.1, btn.2, btn.3, 6, theme.surface_hover());
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             crate::ui::LucideIcon::Sliders,
             btn.0 + btn.2 / 2,
             btn.1 + btn.3 / 2,
@@ -426,9 +300,7 @@ impl TerminalRenderer {
     /// Resalte de una fila de lista del panel (Archivos y Cambios): inset de 8 px, esquinas redondeadas
     /// y, si está seleccionada, una marca de acento (gris cuando la lista no tiene el foco).
     pub(crate) fn draw_list_row_highlight(
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         row: Rect,
         selected: bool,
         focused: bool,
@@ -440,48 +312,27 @@ impl TerminalRenderer {
         } else {
             theme.surface_hover()
         };
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            x + 8,
-            y,
-            w.saturating_sub(16),
-            h,
-            6,
-            fill,
-        );
+        canvas.rounded_fill(x + 8, y, w.saturating_sub(16), h, 6, fill);
         if selected {
             let bar = if focused {
                 theme.accent_color()
             } else {
                 theme.chrome_line_strong()
             };
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x + 12,
-                y + 6,
-                2,
-                h.saturating_sub(12),
-                1,
-                bar,
-            );
+            canvas.rounded_fill(x + 12, y + 6, 2, h.saturating_sub(12), 1, bar);
         }
     }
 
     /// Botón flotante para recuperar la barra lateral cuando está oculta.
     pub fn render_floating_sidebar_toggle(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         status_bar_h: usize,
         hovered_toggle: bool,
         on_right: bool,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if width == 0 || height == 0 {
             return;
         }
@@ -498,22 +349,10 @@ impl TerminalRenderer {
         } else {
             theme.chrome_bg_elevated()
         };
-        crate::ui::draw_rounded_rect(buffer, width, height, btn_x, btn_y, btn_w, btn_h, 4, bg);
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            btn_x,
-            btn_y,
-            btn_w,
-            btn_h,
-            4,
-            theme.chrome_line(),
-        );
+        canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 4, bg);
+        canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 4, theme.chrome_line());
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             if on_right {
                 crate::ui::LucideIcon::PanelRight
             } else {

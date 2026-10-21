@@ -7,9 +7,7 @@ impl TerminalRenderer {
     /// Renderiza el visor de archivos/código en el área del terminal sin procesos ConPTY
     pub fn render_file_viewer(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         x: usize,
         y: usize,
         w: usize,
@@ -19,6 +17,7 @@ impl TerminalRenderer {
         viewer: &FileViewerState,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if w == 0 || h == 0 || width == 0 || height == 0 {
             return;
         }
@@ -30,42 +29,15 @@ impl TerminalRenderer {
         let clip: Clip = (x, y, (x + full_w).min(width), (y + h).min(height));
 
         // 1. Fondo completo del área de trabajo
-        fill_rect(
-            buffer,
-            width,
-            clip,
-            x,
-            y,
-            full_w,
-            h,
-            theme.background.to_u32_xrgb(),
-        );
+        canvas.fill_rect(clip, x, y, full_w, h, theme.background);
 
         // 2. Barra de encabezado superior (38 px), plana y con hairline inferior.
         let header_h = crate::renderer::geometry::FileViewerLayout::HEADER_H;
         let header_bg = theme.chrome_bg();
-        fill_rect(
-            buffer,
-            width,
-            clip,
-            x,
-            y,
-            full_w,
-            header_h,
-            header_bg.to_u32_xrgb(),
-        );
+        canvas.fill_rect(clip, x, y, full_w, header_h, header_bg);
 
         // Línea divisoria inferior del encabezado
-        fill_rect(
-            buffer,
-            width,
-            clip,
-            x,
-            y + header_h - 1,
-            full_w,
-            1,
-            theme.chrome_line().to_u32_xrgb(),
-        );
+        canvas.fill_rect(clip, x, y + header_h - 1, full_w, 1, theme.chrome_line());
 
         // Icono representativo del tipo de archivo
         let ext = viewer
@@ -87,9 +59,7 @@ impl TerminalRenderer {
         let header_base = header_center_y + 4;
 
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             file_icon,
             x + 18,
             header_center_y,
@@ -128,17 +98,7 @@ impl TerminalRenderer {
                     if hov { theme.surface_hover() } else { chip_bg },
                 )
             };
-            self.draw_header_button(
-                buffer,
-                width,
-                height,
-                rect,
-                icon,
-                label,
-                fg,
-                bg,
-                header_base,
-            );
+            self.draw_header_button(canvas, rect, icon, label, fg, bg, header_base);
         }
 
         if let Some(rect) = header_rects.diff_btn {
@@ -153,9 +113,7 @@ impl TerminalRenderer {
                 theme.ansi[8]
             };
             self.draw_header_button(
-                buffer,
-                width,
-                height,
+                canvas,
                 rect,
                 crate::ui::LucideIcon::GitBranch,
                 "Cambios",
@@ -186,9 +144,7 @@ impl TerminalRenderer {
             )
         };
         self.draw_header_button(
-            buffer,
-            width,
-            height,
+            canvas,
             header_rects.mode_btn,
             icon,
             label,
@@ -266,9 +222,7 @@ impl TerminalRenderer {
                 break;
             }
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 text,
                 chip_x,
                 header_base,
@@ -278,16 +232,7 @@ impl TerminalRenderer {
                 false,
             );
             right_x = chip_x.saturating_sub(9);
-            Self::draw_rect(
-                buffer,
-                width,
-                height,
-                right_x,
-                y + 13,
-                1,
-                12,
-                theme.chrome_line(),
-            );
+            Self::draw_rect(canvas, right_x, y + 13, 1, 12, theme.chrome_line());
             right_x = right_x.saturating_sub(9);
         }
 
@@ -300,20 +245,9 @@ impl TerminalRenderer {
         if let Some(folder) = folder_label.as_deref() {
             let folder_x = name_end_x + 14;
             if folder_x + 24 < right_x {
-                Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
-                    name_end_x + 7,
-                    y + 13,
-                    1,
-                    12,
-                    theme.chrome_line(),
-                );
+                Self::draw_rect(canvas, name_end_x + 7, y + 13, 1, 12, theme.chrome_line());
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     folder,
                     folder_x,
                     header_base,
@@ -327,9 +261,7 @@ impl TerminalRenderer {
 
         // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             &viewer.file_name,
             name_start_x,
             header_base,
@@ -358,10 +290,7 @@ impl TerminalRenderer {
             let card_x = x + (w.saturating_sub(card_w)) / 2;
             let card_y = content_y + (content_h.saturating_sub(card_h)) / 3;
 
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
+            canvas.rounded_fill(
                 card_x,
                 card_y,
                 card_w,
@@ -369,22 +298,10 @@ impl TerminalRenderer {
                 6,
                 theme.chrome_bg_elevated(),
             );
-            crate::ui::stroke_rounded_rect(
-                buffer,
-                width,
-                height,
-                card_x,
-                card_y,
-                card_w,
-                card_h,
-                6,
-                theme.chrome_line(),
-            );
+            canvas.rounded_stroke(card_x, card_y, card_w, card_h, 6, theme.chrome_line());
 
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                canvas,
                 crate::ui::LucideIcon::Info,
                 card_x + 36,
                 card_y + 50,
@@ -393,9 +310,7 @@ impl TerminalRenderer {
             );
 
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 "Vista previa no disponible",
                 card_x + 64,
                 card_y + 42,
@@ -406,9 +321,7 @@ impl TerminalRenderer {
             );
 
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 msg,
                 card_x + 64,
                 card_y + 64,
@@ -436,30 +349,17 @@ impl TerminalRenderer {
         let scroll_x = viewer.scroll_offset_x.min(max_scroll_x);
 
         // Fondo sutil del gutter
-        fill_rect(
-            buffer,
-            width,
+        canvas.fill_rect(
             clip,
             x,
             content_y,
             gutter_w,
             content_h,
-            theme
-                .mix(theme.background, theme.foreground, 0.03)
-                .to_u32_xrgb(),
+            theme.mix(theme.background, theme.foreground, 0.03),
         );
 
         // Línea vertical separadora del gutter
-        fill_rect(
-            buffer,
-            width,
-            clip,
-            sep_x,
-            content_y,
-            1,
-            content_h,
-            theme.chrome_line().to_u32_xrgb(),
-        );
+        canvas.fill_rect(clip, sep_x, content_y, 1, content_h, theme.chrome_line());
 
         let baseline_offset = ((row_h as f32 * 0.76) as usize).max(char_w);
 
@@ -488,7 +388,7 @@ impl TerminalRenderer {
         let selection = viewer.selection_ordered().filter(|(a, b)| a != b);
         let accent = theme.accent_color();
         let sel_bg = Color::from_rgba(accent.r(), accent.g(), accent.b(), 70);
-        let mark_color = theme.text_muted().to_u32_xrgb();
+        let mark_color = theme.text_muted();
         let tab_adv = (char_w * 4) as i32;
 
         for (row_idx, row) in rows
@@ -511,17 +411,13 @@ impl TerminalRenderer {
 
             // Línea actual: banda de 3 % de tinta, apenas perceptible sobre el lienzo.
             if is_cursor_line {
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     x,
                     row_y,
                     text_max_x.saturating_sub(x),
                     row_h,
-                    theme
-                        .mix(theme.background, theme.foreground, 0.035)
-                        .to_u32_xrgb(),
+                    theme.mix(theme.background, theme.foreground, 0.035),
                 );
             }
 
@@ -533,26 +429,15 @@ impl TerminalRenderer {
                     crate::app::GitLineStatus::Deleted => theme.ansi[1], // Rojo
                 };
                 if git_status == crate::app::GitLineStatus::Deleted {
-                    fill_rect(
-                        buffer,
-                        width,
-                        gutter_clip,
-                        sep_x.saturating_sub(4),
-                        row_y,
-                        4,
-                        3,
-                        git_color.to_u32_xrgb(),
-                    );
+                    canvas.fill_rect(gutter_clip, sep_x.saturating_sub(4), row_y, 4, 3, git_color);
                 } else {
-                    fill_rect(
-                        buffer,
-                        width,
+                    canvas.fill_rect(
                         gutter_clip,
                         sep_x.saturating_sub(3),
                         row_y,
                         3,
                         row_h,
-                        git_color.to_u32_xrgb(),
+                        git_color,
                     );
                 }
             }
@@ -579,7 +464,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(b as char, false);
                     let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, gutter_clip, glyph, gx, gy, num_fg);
+                    canvas.glyph(gutter_clip, glyph, gx, gy, num_fg);
                 }
 
                 let folded = viewer.folded.contains(&line_idx);
@@ -592,16 +477,7 @@ impl TerminalRenderer {
                         crate::ui::LucideIcon::ChevronDown
                     };
                     let color = if folded { accent } else { theme.text_muted() };
-                    self.draw_lucide_icon(
-                        buffer,
-                        width,
-                        height,
-                        icon,
-                        x + 10,
-                        row_y + row_h / 2,
-                        11.0,
-                        color,
-                    );
+                    self.draw_lucide_icon(canvas, icon, x + 10, row_y + row_h / 2, 11.0, color);
                 }
             }
 
@@ -614,29 +490,18 @@ impl TerminalRenderer {
                     _ => None,
                 };
                 if let Some(c) = tone {
-                    fill_rect(
-                        buffer,
-                        width,
+                    canvas.fill_rect(
                         clip,
                         sep_x + 1,
                         row_y,
                         text_max_x.saturating_sub(sep_x + 1),
                         row_h,
                         // `fill_rect` es opaco: el tinte se mezcla con el lienzo, no se pasa con alfa
-                        theme.background.blend_over(c, 34),
+                        Color::from_u32_xrgb(theme.background.blend_over(c, 34)),
                     );
                     // Marca sólida en el borde de las líneas añadidas y quitadas
                     if c != accent {
-                        fill_rect(
-                            buffer,
-                            width,
-                            clip,
-                            sep_x + 1,
-                            row_y,
-                            3,
-                            row_h,
-                            c.to_u32_xrgb(),
-                        );
+                        canvas.fill_rect(clip, sep_x + 1, row_y, 3, row_h, c);
                     }
                 }
             }
@@ -678,10 +543,7 @@ impl TerminalRenderer {
                         let draw_sx = sx.max(text_clip.0 as i32) as usize;
                         let draw_ex = ex.min(text_clip.2 as i32).max(draw_sx as i32) as usize;
                         if draw_ex > draw_sx {
-                            crate::ui::draw_rounded_rect(
-                                buffer,
-                                width,
-                                height,
+                            canvas.rounded_fill(
                                 draw_sx,
                                 row_y,
                                 draw_ex - draw_sx,
@@ -696,12 +558,11 @@ impl TerminalRenderer {
 
             match md_blocks.as_ref().and_then(|b| b.get(line_idx)) {
                 Some(block) => self.render_md_line(
-                    buffer, width, text_clip, seg, block, cur_x, row_y, row_h, baseline_y,
-                    text_max_x, char_w, theme,
+                    canvas, text_clip, seg, block, cur_x, row_y, row_h, baseline_y, text_max_x,
+                    char_w, theme,
                 ),
                 None => self.render_highlighted_line(
-                    buffer,
-                    width,
+                    canvas,
                     text_clip,
                     seg,
                     cur_x,
@@ -716,9 +577,7 @@ impl TerminalRenderer {
             for (mx, is_tab) in marks {
                 let mid = row_y + row_h / 2;
                 if is_tab {
-                    fill_rect(
-                        buffer,
-                        width,
+                    canvas.fill_rect(
                         text_clip,
                         (mx + 4).max(0) as usize,
                         mid,
@@ -727,16 +586,7 @@ impl TerminalRenderer {
                         mark_color,
                     );
                 } else if mx > 0 {
-                    fill_rect(
-                        buffer,
-                        width,
-                        text_clip,
-                        mx as usize - 1,
-                        mid - 1,
-                        2,
-                        2,
-                        mark_color,
-                    );
+                    canvas.fill_rect(text_clip, mx as usize - 1, mid - 1, 2, 2, mark_color);
                 }
             }
 
@@ -751,10 +601,7 @@ impl TerminalRenderer {
                     let chip_w = self.measure_ui_text(&label, 10.5, false) + 14;
                     let chip_x = (cur_x + text_w + char_w as i32).max(text_clip.0 as i32) as usize;
                     if chip_x + chip_w < text_max_x {
-                        crate::ui::draw_rounded_rect(
-                            buffer,
-                            width,
-                            height,
+                        canvas.rounded_fill(
                             chip_x,
                             row_y + 2,
                             chip_w,
@@ -763,9 +610,7 @@ impl TerminalRenderer {
                             theme.accent_soft(28),
                         );
                         self.draw_ui_text(
-                            buffer,
-                            width,
-                            height,
+                            canvas,
                             &label,
                             chip_x + 7,
                             baseline_y,
@@ -801,15 +646,13 @@ impl TerminalRenderer {
                 let cursor_x = cur_x + offset;
                 if cursor_x >= (sep_x + 1) as i32 && cursor_x < text_max_x as i32 {
                     let cursor_h = (row_h as f32 * 0.85).round() as usize;
-                    fill_rect(
-                        buffer,
-                        width,
+                    canvas.fill_rect(
                         text_clip,
                         cursor_x as usize,
                         row_y + (row_h.saturating_sub(cursor_h)) / 2,
                         2,
                         cursor_h,
-                        accent.to_u32_xrgb(),
+                        accent,
                     );
                 }
             }
@@ -820,9 +663,7 @@ impl TerminalRenderer {
             Self::file_viewer_scrollbar_geometry(x, y, w, h, viewer, self.row_height)
         {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                canvas,
                 track,
                 thumb,
                 viewer.hovered_scrollbar,
@@ -834,9 +675,7 @@ impl TerminalRenderer {
         // 6. Barra de desplazamiento horizontal (solo si alguna línea excede el ancho visible)
         if let Some((track, thumb)) = lay.hscrollbar(max_scroll_x, scroll_x) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                canvas,
                 track,
                 thumb,
                 viewer.hovered_hscrollbar,
@@ -850,9 +689,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_header_button(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect: Rect,
         icon: crate::ui::LucideIcon,
         label: &str,
@@ -860,21 +697,10 @@ impl TerminalRenderer {
         bg: Color,
         baseline: usize,
     ) {
-        crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 4, bg);
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            icon,
-            rect.0 + 13,
-            rect.1 + rect.3 / 2,
-            11.5,
-            fg,
-        );
+        canvas.rounded_fill(rect.0, rect.1, rect.2, rect.3, 4, bg);
+        self.draw_lucide_icon(canvas, icon, rect.0 + 13, rect.1 + rect.3 / 2, 11.5, fg);
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             label,
             rect.0 + 24,
             baseline - 1,
@@ -915,8 +741,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_highlighted_line(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         line: &str,
         mut cur_x: i32,
@@ -957,7 +782,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(ch, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, clip, glyph, gx, gy, comment_fg);
+                    canvas.glyph(clip, glyph, gx, gy, comment_fg);
                 }
                 cur_x += if ch == '\t' { tab_adv_i32 } else { char_w_i32 };
             }
@@ -1021,7 +846,7 @@ impl TerminalRenderer {
                         let glyph = self.get_glyph(c, false);
                         let gx = cur_x + glyph.x_offset;
                         let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                        blit_glyph(buffer, width, clip, glyph, gx, gy, comment_fg);
+                        canvas.glyph(clip, glyph, gx, gy, comment_fg);
                     }
                     cur_x += if c == '\t' { tab_adv_i32 } else { char_w_i32 };
                 }
@@ -1035,7 +860,7 @@ impl TerminalRenderer {
                 let glyph = self.get_glyph(ch, false);
                 let gx = cur_x + glyph.x_offset;
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, clip, glyph, gx, gy, str_fg);
+                canvas.glyph(clip, glyph, gx, gy, str_fg);
                 cur_x += char_w_i32;
                 i = next_i;
 
@@ -1045,7 +870,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, clip, glyph, gx, gy, str_fg);
+                    canvas.glyph(clip, glyph, gx, gy, str_fg);
                     cur_x += char_w_i32;
                     i = ni;
                     if c == quote && !escaped {
@@ -1073,7 +898,7 @@ impl TerminalRenderer {
                 let glyph = self.get_glyph(ch, false);
                 let gx = cur_x + glyph.x_offset;
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, clip, glyph, gx, gy, decorator_fg);
+                canvas.glyph(clip, glyph, gx, gy, decorator_fg);
                 cur_x += char_w_i32;
                 i = next_i;
 
@@ -1088,7 +913,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, clip, glyph, gx, gy, decorator_fg);
+                    canvas.glyph(clip, glyph, gx, gy, decorator_fg);
                     cur_x += char_w_i32;
                     i = ni;
                 }
@@ -1176,7 +1001,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(wc, is_bold);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, clip, glyph, gx, gy, token_fg);
+                    canvas.glyph(clip, glyph, gx, gy, token_fg);
                     cur_x += char_w_i32;
                 }
                 continue;
@@ -1197,7 +1022,7 @@ impl TerminalRenderer {
                     let glyph = self.get_glyph(c, false);
                     let gx = cur_x + glyph.x_offset;
                     let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                    blit_glyph(buffer, width, clip, glyph, gx, gy, num_fg);
+                    canvas.glyph(clip, glyph, gx, gy, num_fg);
                     cur_x += char_w_i32;
                     i += 1;
                 }
@@ -1233,7 +1058,7 @@ impl TerminalRenderer {
                         if glyph.width > 0 {
                             let gx = cur_x + glyph.x_offset;
                             let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                            blit_glyph(buffer, width, clip, glyph, gx, gy, symbol_fg);
+                            canvas.glyph(clip, glyph, gx, gy, symbol_fg);
                         }
                         cur_x += char_w_i32;
                     }
@@ -1272,7 +1097,7 @@ impl TerminalRenderer {
             let glyph = self.get_glyph(ch, false);
             let gx = cur_x + glyph.x_offset;
             let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-            blit_glyph(buffer, width, clip, glyph, gx, gy, symbol_fg);
+            canvas.glyph(clip, glyph, gx, gy, symbol_fg);
             cur_x += char_w_i32;
             i = next_i;
         }

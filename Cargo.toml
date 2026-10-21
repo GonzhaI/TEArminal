@@ -15,9 +15,8 @@ publish = false
 portable-pty = "0.8"
 vte = "0.14"
 
-# Ventana nativa y renderizado de alto rendimiento sin capas de GUI
+# Ventana nativa sin capas de GUI
 winit = "0.30"
-softbuffer = "0.4"
 fontdue = "0.9"
 rustybuzz = "0.18"
 

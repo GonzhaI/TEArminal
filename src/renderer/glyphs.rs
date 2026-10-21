@@ -47,6 +47,14 @@ impl Hasher for FastHasher {
         self.add(i as u64);
     }
     #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+    #[inline]
     fn finish(&self) -> u64 {
         self.0
     }
@@ -203,12 +211,12 @@ impl TerminalRenderer {
 
     /// Obtiene o rasteriza un glifo; tabla plana O(1) para ASCII + Latin-1 y caché rápida para el resto
     #[inline]
-    pub fn get_glyph(&mut self, c: char, bold: bool) -> &CachedGlyph {
+    pub fn get_glyph(&mut self, c: char, bold: bool) -> &Rc<CachedGlyph> {
         let code = c as u32;
         if code < 256 {
             let idx = code as usize + if bold { 256 } else { 0 };
             if self.ascii_cache[idx].is_none() {
-                self.ascii_cache[idx] = Some(self.rasterize_glyph(c, bold));
+                self.ascii_cache[idx] = Some(Rc::new(self.rasterize_glyph(c, bold)));
             }
             return self.ascii_cache[idx].as_ref().unwrap();
         }
@@ -219,7 +227,7 @@ impl TerminalRenderer {
                 self.glyph_cache.clear();
             }
             let glyph = self.rasterize_glyph(c, bold);
-            self.glyph_cache.insert((c, bold), glyph);
+            self.glyph_cache.insert((c, bold), Rc::new(glyph));
         }
         &self.glyph_cache[&(c, bold)]
     }
@@ -238,7 +246,7 @@ impl TerminalRenderer {
     }
 
     /// Obtiene o rasteriza un glifo de ligadura por su GID de OpenType
-    pub fn get_ligature_glyph(&mut self, gid: u16, bold: bool) -> &CachedGlyph {
+    pub fn get_ligature_glyph(&mut self, gid: u16, bold: bool) -> &Rc<CachedGlyph> {
         if !self.ligature_cache.contains_key(&(gid, bold)) {
             let font = if bold {
                 self.bold_font()
@@ -253,7 +261,7 @@ impl TerminalRenderer {
                 y_offset: metrics.ymin,
                 bitmap,
             };
-            self.ligature_cache.insert((gid, bold), glyph);
+            self.ligature_cache.insert((gid, bold), Rc::new(glyph));
         }
         &self.ligature_cache[&(gid, bold)]
     }

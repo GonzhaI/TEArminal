@@ -168,8 +168,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_md_line(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         line: &str,
         block: &MdBlock,
@@ -181,18 +180,16 @@ impl TerminalRenderer {
         char_w: usize,
         theme: &Theme,
     ) {
-        let height = buffer.len() / width.max(1);
         let cw = char_w as i32;
         let max_x_i32 = max_x as i32;
-        let band = theme.surface_bg().to_u32_xrgb();
+        let band = theme.surface_bg();
         let band_w = clip.2.saturating_sub(clip.0);
 
         match block {
             MdBlock::Code(lang) => {
-                fill_rect(buffer, width, clip, clip.0, row_y, band_w, row_h, band);
+                canvas.fill_rect(clip, clip.0, row_y, band_w, row_h, band);
                 self.render_highlighted_line(
-                    buffer,
-                    width,
+                    canvas,
                     clip,
                     line,
                     cur_x,
@@ -205,11 +202,9 @@ impl TerminalRenderer {
                 return;
             }
             MdBlock::FenceOpen(lang) => {
-                fill_rect(buffer, width, clip, clip.0, row_y, band_w, row_h, band);
+                canvas.fill_rect(clip, clip.0, row_y, band_w, row_h, band);
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     LucideIcon::Code,
                     clip.0 + 16,
                     row_y + row_h / 2,
@@ -218,9 +213,7 @@ impl TerminalRenderer {
                 );
                 if !lang.is_empty() {
                     self.draw_ui_text(
-                        buffer,
-                        width,
-                        height,
+                        canvas,
                         lang,
                         clip.0 + 28,
                         baseline_y,
@@ -233,7 +226,7 @@ impl TerminalRenderer {
                 return;
             }
             MdBlock::FenceClose => {
-                fill_rect(buffer, width, clip, clip.0, row_y, band_w, row_h, band);
+                canvas.fill_rect(clip, clip.0, row_y, band_w, row_h, band);
                 return;
             }
             MdBlock::Text | MdBlock::Table { .. } => {}
@@ -272,22 +265,11 @@ impl TerminalRenderer {
                 5 => theme.ansi[5],
                 _ => theme.ansi[3],
             };
-            self.draw_md_inline(
-                buffer, width, clip, title, x, baseline_y, ctx, theme, color, true,
-            );
+            self.draw_md_inline(canvas, clip, title, x, baseline_y, ctx, theme, color, true);
             if level <= 2 && x < max_x_i32 {
                 let ux = x.max(clip.0 as i32) as usize;
                 let uw = (max_x_i32 - x).max(0) as usize;
-                fill_rect(
-                    buffer,
-                    width,
-                    clip,
-                    ux,
-                    row_y + row_h - 2,
-                    uw,
-                    1,
-                    theme.border_color().to_u32_xrgb(),
-                );
+                canvas.fill_rect(clip, ux, row_y + row_h - 2, uw, 1, theme.border_color());
             }
             return;
         }
@@ -296,16 +278,7 @@ impl TerminalRenderer {
         if matches!(trimmed, "---" | "***" | "___") {
             let ux = x.max(clip.0 as i32) as usize;
             let uw = (max_x_i32 - x).max(0) as usize;
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                ux,
-                row_y + row_h / 2,
-                uw,
-                1,
-                theme.border_color().to_u32_xrgb(),
-            );
+            canvas.fill_rect(clip, ux, row_y + row_h / 2, uw, 1, theme.border_color());
             return;
         }
 
@@ -314,22 +287,19 @@ impl TerminalRenderer {
             let mut rest = trimmed;
             let mut qx = x;
             while let Some(r) = rest.strip_prefix('>') {
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     qx.max(0) as usize,
                     row_y + 2,
                     3,
                     row_h.saturating_sub(4),
-                    theme.ansi[4].to_u32_xrgb(),
+                    theme.ansi[4],
                 );
                 qx += 12;
                 rest = r.trim_start();
             }
             self.draw_md_inline(
-                buffer,
-                width,
+                canvas,
                 clip,
                 rest,
                 qx,
@@ -347,16 +317,7 @@ impl TerminalRenderer {
             if trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
                 let ux = x.max(clip.0 as i32) as usize;
                 let uw = (max_x_i32 - x).max(0) as usize;
-                fill_rect(
-                    buffer,
-                    width,
-                    clip,
-                    ux,
-                    row_y + row_h / 2,
-                    uw,
-                    1,
-                    theme.border_color().to_u32_xrgb(),
-                );
+                canvas.fill_rect(clip, ux, row_y + row_h / 2, uw, 1, theme.border_color());
                 return;
             }
             let (widths, header) = match block {
@@ -364,47 +325,36 @@ impl TerminalRenderer {
                 _ => (None, false),
             };
             for (c, cell) in table_cells(trimmed).enumerate() {
-                self.draw_md_bar(buffer, width, clip, x, row_y, row_h, theme);
+                self.draw_md_bar(canvas, clip, x, row_y, row_h, theme);
                 let col_w = widths.as_ref().and_then(|w| w.get(c).copied());
                 x += cw;
-                let end = self.draw_md_inline(
-                    buffer, width, clip, cell, x, baseline_y, ctx, theme, fg, header,
-                );
+                let end =
+                    self.draw_md_inline(canvas, clip, cell, x, baseline_y, ctx, theme, fg, header);
                 // Con anchos conocidos todas las filas alinean sus columnas
                 x = match col_w {
                     Some(w) => x + (w as i32 + 1) * cw,
                     None => end.max(x) + cw,
                 };
             }
-            self.draw_md_bar(buffer, width, clip, x, row_y, row_h, theme);
+            self.draw_md_bar(canvas, clip, x, row_y, row_h, theme);
             return;
         }
 
         // Listas: tareas, viñetas y numeradas
         let icon_cy = row_y + row_h / 2;
         let list_item = |this: &mut Self,
-                         buffer: &mut [u32],
+                         canvas: &mut Canvas,
                          icon: Option<(LucideIcon, Color)>,
                          rest: &str,
                          x: i32| {
             if let Some((icon, color)) = icon {
                 let cx = x + cw / 2;
                 if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
-                    this.draw_lucide_icon(
-                        buffer,
-                        width,
-                        height,
-                        icon,
-                        cx as usize,
-                        icon_cy,
-                        12.0,
-                        color,
-                    );
+                    this.draw_lucide_icon(canvas, icon, cx as usize, icon_cy, 12.0, color);
                 }
             }
             this.draw_md_inline(
-                buffer,
-                width,
+                canvas,
                 clip,
                 rest,
                 x + cw * 2,
@@ -423,7 +373,7 @@ impl TerminalRenderer {
                 {
                     list_item(
                         self,
-                        buffer,
+                        canvas,
                         Some((LucideIcon::CheckSquare, theme.ansi[2])),
                         done,
                         x,
@@ -431,7 +381,7 @@ impl TerminalRenderer {
                 } else if let Some(todo) = rest.strip_prefix("[ ] ") {
                     list_item(
                         self,
-                        buffer,
+                        canvas,
                         Some((LucideIcon::Square, theme.ansi[8])),
                         todo,
                         x,
@@ -439,7 +389,7 @@ impl TerminalRenderer {
                 } else {
                     list_item(
                         self,
-                        buffer,
+                        canvas,
                         Some((LucideIcon::Dot, theme.accent_color())),
                         rest,
                         x,
@@ -451,8 +401,7 @@ impl TerminalRenderer {
         let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
         if digits > 0 && trimmed[digits..].starts_with(". ") {
             let nx = self.draw_md_inline(
-                buffer,
-                width,
+                canvas,
                 clip,
                 &trimmed[..digits + 1],
                 x,
@@ -463,8 +412,7 @@ impl TerminalRenderer {
                 true,
             );
             self.draw_md_inline(
-                buffer,
-                width,
+                canvas,
                 clip,
                 &trimmed[digits + 2..],
                 nx + cw,
@@ -477,17 +425,14 @@ impl TerminalRenderer {
             return;
         }
 
-        self.draw_md_inline(
-            buffer, width, clip, trimmed, x, baseline_y, ctx, theme, fg, false,
-        );
+        self.draw_md_inline(canvas, clip, trimmed, x, baseline_y, ctx, theme, fg, false);
     }
 
     /// Separador vertical fino de las tablas
     #[allow(clippy::too_many_arguments)]
     fn draw_md_bar(
         &self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         x: i32,
         row_y: usize,
@@ -495,16 +440,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         if x >= clip.0 as i32 {
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                x as usize,
-                row_y,
-                1,
-                row_h,
-                theme.border_color().to_u32_xrgb(),
-            );
+            canvas.fill_rect(clip, x as usize, row_y, 1, row_h, theme.border_color());
         }
     }
 
@@ -512,8 +448,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_md_span(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         text: &str,
         mut x: i32,
@@ -531,22 +466,13 @@ impl TerminalRenderer {
             if c != ' ' {
                 let glyph = self.get_glyph(c, false);
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, clip, glyph, x + glyph.x_offset, gy, color);
+                canvas.glyph(clip, glyph, x + glyph.x_offset, gy, color);
             }
             x += cw;
         }
         if underline && start >= 0 && x > start {
             let w = (x.min(max_x) - start).max(0) as usize;
-            fill_rect(
-                buffer,
-                width,
-                clip,
-                start as usize,
-                baseline_y + 2,
-                w,
-                1,
-                color.to_u32_xrgb(),
-            );
+            canvas.fill_rect(clip, start as usize, baseline_y + 2, w, 1, color);
         }
         x
     }
@@ -555,8 +481,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_md_image(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         alt: &str,
         x: i32,
@@ -565,13 +490,10 @@ impl TerminalRenderer {
         theme: &Theme,
     ) -> i32 {
         let (_, cw) = ctx;
-        let height = buffer.len() / width.max(1);
         let cx = x + cw / 2;
         if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                canvas,
                 LucideIcon::Image,
                 cx as usize,
                 baseline_y.saturating_sub(4),
@@ -581,8 +503,7 @@ impl TerminalRenderer {
         }
         let alt = if alt.is_empty() { "imagen" } else { alt };
         self.draw_md_span(
-            buffer,
-            width,
+            canvas,
             clip,
             alt,
             x + cw * 2,
@@ -598,8 +519,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_md_inline(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
+        canvas: &mut Canvas,
         clip: Clip,
         text: &str,
         mut x: i32,
@@ -614,7 +534,7 @@ impl TerminalRenderer {
         let (mut i, mut code, mut bold, mut italic, mut strike) =
             (0, false, base_bold, false, false);
         let link_color = theme.ansi[4];
-        let code_bg = theme.surface_hover().to_u32_xrgb();
+        let code_bg = theme.surface_hover();
 
         while i < chars.len() && x < max_x {
             let ch = chars[i];
@@ -628,11 +548,10 @@ impl TerminalRenderer {
                 if let Some((close, end)) = link {
                     let label: String = chars[open + 1..close].iter().collect();
                     if is_img {
-                        x = self
-                            .draw_md_image(buffer, width, clip, &label, x, baseline_y, ctx, theme);
+                        x = self.draw_md_image(canvas, clip, &label, x, baseline_y, ctx, theme);
                     } else {
                         x = self.draw_md_span(
-                            buffer, width, clip, &label, x, baseline_y, ctx, link_color, true,
+                            canvas, clip, &label, x, baseline_y, ctx, link_color, true,
                         );
                     }
                     i = end + 1;
@@ -650,9 +569,8 @@ impl TerminalRenderer {
                         "code" | "kbd" => code = on,
                         "s" | "del" => strike = on,
                         "img" => {
-                            x = self.draw_md_image(
-                                buffer, width, clip, &tag.alt, x, baseline_y, ctx, theme,
-                            );
+                            x = self
+                                .draw_md_image(canvas, clip, &tag.alt, x, baseline_y, ctx, theme);
                         }
                         _ => {}
                     }
@@ -672,9 +590,7 @@ impl TerminalRenderer {
                     .position(|c| c.is_whitespace() || matches!(c, ')' | '>' | '"'))
                     .map_or(chars.len(), |p| i + p);
                 let url: String = chars[i..end].iter().collect();
-                x = self.draw_md_span(
-                    buffer, width, clip, &url, x, baseline_y, ctx, link_color, true,
-                );
+                x = self.draw_md_span(canvas, clip, &url, x, baseline_y, ctx, link_color, true);
                 i = end;
                 continue;
             }
@@ -712,9 +628,7 @@ impl TerminalRenderer {
             if code {
                 // Fondo del código en línea
                 let top = baseline_y.saturating_sub((cw * 3 / 2) as usize);
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     x.max(0) as usize,
                     top,
@@ -733,18 +647,16 @@ impl TerminalRenderer {
                 };
                 let glyph = self.get_glyph(ch, is_bold);
                 let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-                blit_glyph(buffer, width, clip, glyph, x + glyph.x_offset, gy, fg);
+                canvas.glyph(clip, glyph, x + glyph.x_offset, gy, fg);
             }
             if strike && x >= 0 {
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     x as usize,
                     baseline_y.saturating_sub(4),
                     adv as usize,
                     1,
-                    base_fg.to_u32_xrgb(),
+                    base_fg,
                 );
             }
             x += adv;

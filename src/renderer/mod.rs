@@ -1,40 +1,45 @@
-//! Renderizado por software (CPU) de la terminal y de toda la interfaz sobre un framebuffer `u32` (XRGB).
-//!
-//! Un fotograma completo cuesta ~1 ms a 1080p (ver `AGENTS.md`, sección de rendimiento), por eso no hay GPU.
+//! Renderizado de la terminal y de toda la interfaz: la CPU graba cada fotograma en una `Scene` (`Canvas`) y
+//! `gpu/` la dibuja con Direct3D 11 (GPU o el rasterizador por software WARP), ver `AGENTS.md`.
 //! `TerminalRenderer` es el único dueño de las fuentes y cachés; cada pantalla vive en su archivo.
 
-// Las funciones de dibujo reciben el framebuffer y la geometría explícitos (coordenadas, tamaños, estado de
+// Las funciones de dibujo reciben el `Canvas` y la geometría explícitos (coordenadas, tamaños, estado de
 // hover): son primitivas planas, y agruparlas en structs solo trasladaría el ruido a cada llamada.
 #![allow(clippy::too_many_arguments)]
 
 mod blocks;
+mod canvas;
 mod context_menu;
-pub mod d3d11;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
 mod files_panel;
 mod geometry;
 mod glyphs;
+mod gpu;
 mod md_preview;
 mod pane;
+mod scene;
 mod settings_page;
 mod sidebar;
 mod state;
 mod status_bar;
+#[cfg(test)]
+mod test_support;
 mod tokens;
 mod top_bar;
 
-use draw::{blit_glyph, fill_rect, Clip};
+use draw::Clip;
 use glyphs::{
     font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
     EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
 };
 
 pub use blocks::BlockCardButton;
-pub use d3d11::D3D11Presenter;
+pub use canvas::Canvas;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};
+pub use gpu::{GpuSurface, Presented};
+pub use scene::ImageRef;
 pub use state::*;
 
 use crate::config::AxonConfig;
@@ -43,6 +48,7 @@ use crate::theme::{Color, Theme};
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::rc::Rc;
 
 pub struct TerminalRenderer {
     regular_font: fontdue::Font,
@@ -62,31 +68,24 @@ pub struct TerminalRenderer {
     pub char_width: usize,
     pub row_height: usize,
     pub baseline_y: usize,
-    glyph_cache: FastMap<(char, bool), CachedGlyph>,
-    ascii_cache: Box<[Option<CachedGlyph>; 512]>,
-    ui_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
+    glyph_cache: FastMap<(char, bool), Rc<CachedGlyph>>,
+    ascii_cache: Box<[Option<Rc<CachedGlyph>>; 512]>,
+    ui_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
     /// Valores de máquina (rutas, ramas, atajos): JetBrains Mono con su propia caché.
-    mono_glyph_cache: FastMap<(char, u32, bool), (CachedGlyph, f32)>,
+    mono_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>,
     mono_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>,
-    icon_glyph_cache: FastMap<(char, u32), CachedGlyph>, // (c, size_bits) -> glyph
+    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>, // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
-    /// Búfer del panel lateral cuando va a la derecha: se dibuja aparte y se copia a su sitio.
-    pub panel_buf: Vec<u32>,
     pub ligatures: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
-    ligature_cache: FastMap<(u16, bool), CachedGlyph>,
+    ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
     shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
-    pub(super) settings_scratch: Vec<u32>,
-    md_blocks_cache: Option<(
-        std::path::PathBuf,
-        u64,
-        std::rc::Rc<Vec<md_preview::MdBlock>>,
-    )>,
+    md_blocks_cache: Option<(std::path::PathBuf, u64, Rc<Vec<md_preview::MdBlock>>)>,
 }
 
 impl TerminalRenderer {
@@ -132,13 +131,11 @@ impl TerminalRenderer {
             margin_x: 0,
             margin_y: 0,
             scrollbars_awake: false,
-            panel_buf: Vec::new(),
             ligatures: config.terminal.ligatures,
             regular_face,
             bold_face_rb: OnceCell::new(),
             ligature_cache: FastMap::default(),
             shaped_ligatures: FastMap::default(),
-            settings_scratch: Vec::new(),
             md_blocks_cache: None,
         };
         renderer.update_scale(config, scale_factor);

@@ -236,9 +236,7 @@ impl TerminalRenderer {
     /// Fondos y bordes de las tarjetas. Va antes de dibujar las celdas para que la salida quede encima.
     pub(super) fn draw_block_card_frames(
         &self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect_x: usize,
         rect_y: usize,
         rect_w: usize,
@@ -253,22 +251,20 @@ impl TerminalRenderer {
             } else {
                 theme.surface_bg()
             };
-            crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, CARD_RADIUS, bg);
+            canvas.rounded_fill(x, y, w, h, CARD_RADIUS, bg);
             let border = if card.failed {
                 theme.mix(theme.background, theme.ansi[1], 0.55)
             } else {
                 theme.chrome_line()
             };
-            crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, CARD_RADIUS, border);
+            canvas.rounded_stroke(x, y, w, h, CARD_RADIUS, border);
         }
     }
 
     /// Cabeceras, metadatos y acciones de las tarjetas. Va después de las celdas.
     pub(super) fn draw_block_card_chrome(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect_x: usize,
         rect_y: usize,
         rect_w: usize,
@@ -300,12 +296,10 @@ impl TerminalRenderer {
                 None => theme.accent_color(),
             };
             let icon_x = card.card.0 + 20;
-            crate::ui::draw_rounded_rect(buffer, width, height, icon_x, cy - 7, 14, 14, 7, status);
+            canvas.rounded_fill(icon_x, cy - 7, 14, 14, 7, status);
             match block.exit_code {
                 Some(0) => self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     crate::ui::LucideIcon::Check,
                     icon_x + 7,
                     cy,
@@ -313,9 +307,7 @@ impl TerminalRenderer {
                     theme.background,
                 ),
                 Some(_) => self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     crate::ui::LucideIcon::X,
                     icon_x + 7,
                     cy,
@@ -323,37 +315,24 @@ impl TerminalRenderer {
                     theme.background,
                 ),
                 None => {
-                    crate::ui::draw_rounded_rect(
-                        buffer,
-                        width,
-                        height,
-                        icon_x + 4,
-                        cy - 3,
-                        6,
-                        6,
-                        3,
-                        theme.background,
-                    );
+                    canvas.rounded_fill(icon_x + 4, cy - 3, 6, 6, 3, theme.background);
                 }
             }
 
             let mut right = card.card.0 + card.card.2 - 12;
             // Botones copiar / repetir (solo bloques terminados).
             if let Some(btn) = card.repeat_btn {
-                self.draw_block_action(buffer, width, height, btn, LucideIcon::RefreshCw, theme);
+                self.draw_block_action(canvas, btn, LucideIcon::RefreshCw, theme);
             }
             if let Some(btn) = card.copy_btn {
-                self.draw_block_action(buffer, width, height, btn, LucideIcon::Copy, theme);
+                self.draw_block_action(canvas, btn, LucideIcon::Copy, theme);
             }
             if let Some(copy) = card.copy_btn {
                 right = copy.0.saturating_sub(10);
             }
             // Tarjeta de error: [✧ Explicar] [Ignorar] en la misma fila.
             if let (Some(explain), Some(ignore)) = (card.explain_btn, card.ignore_btn) {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
+                canvas.rounded_fill(
                     explain.0,
                     explain.1,
                     explain.2,
@@ -362,9 +341,7 @@ impl TerminalRenderer {
                     theme.accent_soft(56),
                 );
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     LucideIcon::Sparkles,
                     explain.0 + 14,
                     explain.1 + explain.3 / 2,
@@ -372,9 +349,7 @@ impl TerminalRenderer {
                     theme.accent_color(),
                 );
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     "Explicar",
                     explain.0 + 26,
                     baseline,
@@ -383,10 +358,7 @@ impl TerminalRenderer {
                     tokens::BODY,
                     true,
                 );
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
+                canvas.rounded_fill(
                     ignore.0,
                     ignore.1,
                     ignore.2,
@@ -395,9 +367,7 @@ impl TerminalRenderer {
                     theme.chrome_bg_elevated(),
                 );
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     "Ignorar",
                     ignore.0 + 12,
                     baseline,
@@ -414,9 +384,7 @@ impl TerminalRenderer {
                 let w = self.measure_mono_text(&label, tokens::DETAIL, false);
                 let x = right.saturating_sub(w);
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     &label,
                     x,
                     baseline,
@@ -432,9 +400,7 @@ impl TerminalRenderer {
                 let w = self.measure_mono_text(&label, tokens::DETAIL, false);
                 let x = right.saturating_sub(w);
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     &label,
                     x,
                     baseline,
@@ -450,9 +416,7 @@ impl TerminalRenderer {
             let text_x = icon_x + 22;
             let command = block.command.as_deref().unwrap_or("comando");
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                canvas,
                 command,
                 text_x,
                 baseline,
@@ -466,20 +430,16 @@ impl TerminalRenderer {
 
     fn draw_block_action(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect: (usize, usize, usize, usize),
         icon: LucideIcon,
         theme: &Theme,
     ) {
         let (x, y, w, h) = rect;
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 5, theme.chrome_bg());
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 5, theme.chrome_line());
+        canvas.rounded_fill(x, y, w, h, 5, theme.chrome_bg());
+        canvas.rounded_stroke(x, y, w, h, 5, theme.chrome_line());
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             icon,
             x + w / 2,
             y + h / 2,

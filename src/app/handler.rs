@@ -145,37 +145,27 @@ impl AxonApp {
         let init_win_w = 1080;
         let init_win_h = 680;
 
-        // Intentar inicializar aceleración por GPU nativa en Windows (Direct3D 11 DirectFlip)
-        let mut d3d11_presenter = None;
-        if self.config.terminal.gpu {
+        // Direct3D 11 (hardware o WARP) es el único renderer: si ni WARP arranca, error nativo y salida.
+        let hwnd = {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(handle) = window.window_handle() {
-                if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                    let hwnd = windows::Win32::Foundation::HWND(win32.hwnd.get() as _);
-                    if let Ok(presenter) = D3D11Presenter::new(hwnd, init_win_w, init_win_h) {
-                        d3d11_presenter = Some(presenter);
-                    }
+            match window.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(win32)) => {
+                    windows::Win32::Foundation::HWND(win32.hwnd.get() as _)
                 }
+                _ => platform::fatal_gpu_error(&"no se pudo obtener el HWND de la ventana"),
             }
-        }
-
-        let context = softbuffer::Context::new(window.clone())
-            .expect("Error al inicializar contexto de aceleración gráfica de pantalla");
-        let mut surface = softbuffer::Surface::new(&context, window.clone())
-            .expect("Error al inicializar superficie de renderizado nativo");
+        };
+        let mut gpu_surface = crate::renderer::GpuSurface::new(hwnd, init_win_w, init_win_h)
+            .unwrap_or_else(|e| platform::fatal_gpu_error(&e));
+        crate::logger::log(&format!("GPU: renderer {:?}", gpu_surface.driver_kind()));
 
         let scale_factor = window.scale_factor();
         let renderer = TerminalRenderer::new(&self.config, scale_factor);
 
         let _ = window.request_inner_size(PhysicalSize::new(init_win_w, init_win_h));
         let initial_size = window.inner_size();
-        if let Some(d3d11) = &mut d3d11_presenter {
-            let _ = d3d11.resize(initial_size.width, initial_size.height);
-        } else if let (Some(w), Some(h)) = (
-            NonZeroU32::new(initial_size.width),
-            NonZeroU32::new(initial_size.height),
-        ) {
-            let _ = surface.resize(w, h);
+        if let Err(e) = gpu_surface.resize(initial_size.width, initial_size.height) {
+            crate::logger::log(&format!("GPU: no se pudo ajustar el tamaño inicial: {e}"));
         }
 
         let offset = self.sidebar_offset();
@@ -198,9 +188,7 @@ impl AxonApp {
         }
 
         self.window = Some(window);
-        self.context = Some(context);
-        self.surface = Some(surface);
-        self.d3d11_presenter = d3d11_presenter;
+        self.gpu_surface = Some(gpu_surface);
         self.renderer = Some(renderer);
 
         // Pre-renderizar el primer fotograma completo antes de hacer visible la ventana
@@ -240,13 +228,9 @@ impl AxonApp {
             WindowEvent::Resized(size) => {
                 crate::logger::log(&format!("RESIZED: {}x{}", size.width, size.height));
                 self.last_window_move = Instant::now();
-                if let Some(d3d11) = &mut self.d3d11_presenter {
-                    let _ = d3d11.resize(size.width, size.height);
-                } else if let Some(surface) = &mut self.surface {
-                    if let (Some(w), Some(h)) =
-                        (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-                    {
-                        let _ = surface.resize(w, h);
+                if let Some(gpu) = &mut self.gpu_surface {
+                    if let Err(e) = gpu.resize(size.width, size.height) {
+                        crate::logger::log(&format!("GPU: error al redimensionar: {e}"));
                     }
                 }
                 self.clamp_sidebar_scroll();

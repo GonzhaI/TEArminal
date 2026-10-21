@@ -827,14 +827,13 @@ fn test_file_viewer_read_only_and_modes() {
 fn test_status_bar_ssh_with_cwd_and_branch() {
     let config = crate::config::AxonConfig::default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
-    let mut buffer = vec![0u32; 1000 * 600];
     let theme = crate::theme::Theme::default();
 
     // Renderizar barra de estado con SSH Host, CWD y rama Git simultáneamente
+    let mut canvas = crate::renderer::Canvas::new();
+    canvas.begin(1000, 600);
     renderer.render_status_bar(
-        &mut buffer,
-        1000,
-        600,
+        &mut canvas,
         0,
         Some("/home/django"),
         Some("qa"),
@@ -847,7 +846,7 @@ fn test_status_bar_ssh_with_cwd_and_branch() {
     );
 
     // Debe renderizar sin panics y pintar la barra
-    let bar_pixel = buffer[599 * 1000 + 50];
+    let bar_pixel = canvas.snapshot()[599 * 1000 + 50];
     assert_ne!(bar_pixel, 0);
 }
 
@@ -2323,4 +2322,11 @@ fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
     assert_eq!(app.file_explorer.root_dir, a);
 
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn test_gpu_error_message_mentions_warp_and_requirements() {
+    let m = platform::gpu_error_message(&"HRESULT 0x887A0004");
+    assert!(m.contains("WARP") && m.contains("AXON_RENDERER=warp"));
+    assert!(m.contains("1809") && m.contains("0x887A0004"));
 }

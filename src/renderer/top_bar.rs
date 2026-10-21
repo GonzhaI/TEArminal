@@ -4,19 +4,10 @@ use super::*;
 
 impl TerminalRenderer {
     /// Marca de Axon: el prompt `>_` en acento y el wordmark. Sin decoración fuera de la marca.
-    fn draw_brand(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        bar_h: usize,
-        theme: &Theme,
-    ) {
+    fn draw_brand(&mut self, canvas: &mut Canvas, bar_h: usize, theme: &Theme) {
         let cy = bar_h / 2;
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            canvas,
             ">_",
             16,
             cy + 4,
@@ -26,9 +17,7 @@ impl TerminalRenderer {
             true,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             "Axon",
             42,
             cy + 5,
@@ -40,22 +29,12 @@ impl TerminalRenderer {
     }
 
     /// Píldora de búsqueda centrada del modo vertical: icono, invitación y atajo Ctrl K.
-    fn draw_search_pill(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        rect: Rect,
-        theme: &Theme,
-    ) {
+    fn draw_search_pill(&mut self, canvas: &mut Canvas, rect: Rect, theme: &Theme) {
         let (x, y, w, h) = rect;
         if w < 40 || h == 0 {
             return;
         }
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
+        canvas.rounded_fill(
             x,
             y,
             w,
@@ -63,11 +42,9 @@ impl TerminalRenderer {
             9,
             theme.mix(theme.bar_bg(), theme.background, 0.4),
         );
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 9, theme.chrome_bg());
+        canvas.rounded_stroke(x, y, w, h, 9, theme.chrome_bg());
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             crate::ui::LucideIcon::Search,
             x + 16,
             y + h / 2,
@@ -78,11 +55,9 @@ impl TerminalRenderer {
         let keycap_w = self.measure_mono_text(keycap, tokens::MICRO, false) + 12;
         let keycap_x = x + w - 8 - keycap_w;
         let keycap_y = y + (h.saturating_sub(tokens::KEYCAP_H)) / 2;
-        self.draw_keycap(buffer, width, height, keycap_x, keycap_y, keycap, theme);
+        self.draw_keycap(canvas, keycap_x, keycap_y, keycap, theme);
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            canvas,
             "Buscar sesiones, archivos y comandos",
             x + 30,
             y + h / 2 + 4,
@@ -96,9 +71,7 @@ impl TerminalRenderer {
     /// Botón de icono del chrome: 32×32, radio 8, relleno solo con hover o estado activo.
     fn draw_chrome_action(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         rect: Rect,
         icon: crate::ui::LucideIcon,
         active: bool,
@@ -116,7 +89,7 @@ impl TerminalRenderer {
             } else {
                 theme.surface_hover()
             };
-            crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 8, bg);
+            canvas.rounded_fill(x, y, w, h, 8, bg);
         }
         let fg = if active {
             theme.accent_color()
@@ -125,34 +98,17 @@ impl TerminalRenderer {
         } else {
             theme.text_secondary()
         };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            icon,
-            x + w / 2,
-            y + h / 2,
-            icon_size,
-            fg,
-        );
+        self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, icon_size, fg);
     }
 
     /// Pestaña activa: superficie del lienzo con esquinas superiores redondeadas.
-    fn draw_active_tab_surface(
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        r: Rect,
-        theme: &Theme,
-    ) {
+    fn draw_active_tab_surface(canvas: &mut Canvas, r: Rect, theme: &Theme) {
         let y = 5;
         let h = r.3.saturating_sub(y);
-        crate::ui::draw_rounded_rect(buffer, width, height, r.0, y, r.2, h, 6, theme.background);
+        canvas.rounded_fill(r.0, y, r.2, h, 6, theme.background);
         // Base cuadrada: la pestaña se funde con el lienzo en el borde inferior.
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            canvas,
             r.0,
             y + 6,
             r.2,
@@ -162,15 +118,7 @@ impl TerminalRenderer {
     }
 
     /// Spinner de ocho segmentos con estela: la pestaña que ejecuta un comando.
-    fn draw_tab_spinner(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        cx: usize,
-        cy: usize,
-        color: Color,
-    ) {
+    fn draw_tab_spinner(&mut self, canvas: &mut Canvas, cx: usize, cy: usize, color: Color) {
         const SEGMENTS: usize = 8;
         const ALPHA: [u8; SEGMENTS] = [255, 205, 158, 116, 82, 56, 36, 22];
         let phase = Self::spinner_phase();
@@ -182,10 +130,7 @@ impl TerminalRenderer {
             let py = cy as f32 + angle.sin() * radius;
             let step = (i + SEGMENTS - phase % SEGMENTS) % SEGMENTS;
             let dot = Color::from_rgba(color.r, color.g, color.b, ALPHA[step]);
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
+            canvas.rounded_fill(
                 (px - 1.0).round().max(0.0) as usize,
                 (py - 1.0).round().max(0.0) as usize,
                 2,
@@ -198,6 +143,10 @@ impl TerminalRenderer {
 
     /// Fase del spinner en pasos de 110 ms.
     fn spinner_phase() -> usize {
+        #[cfg(test)]
+        if let Some(phase) = super::test_support::spinner_phase_override() {
+            return phase;
+        }
         use std::time::{SystemTime, UNIX_EPOCH};
         let ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -209,9 +158,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render_top_tab_bar(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         tabs: &[SidebarTabItem],
         hovered_tab: Option<usize>,
         hovered_close: Option<usize>,
@@ -225,6 +172,7 @@ impl TerminalRenderer {
         explorer_visible: bool,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if width == 0 || height == 0 {
             return;
         }
@@ -233,10 +181,10 @@ impl TerminalRenderer {
         let bar_h = rects.bar_h;
 
         // 1. Franja superior
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
+        Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
 
         // 2. Marca
-        self.draw_brand(buffer, width, height, bar_h, theme);
+        self.draw_brand(canvas, bar_h, theme);
 
         // 3. Pestañas
         for (pos, tab) in tabs.iter().enumerate() {
@@ -248,35 +196,15 @@ impl TerminalRenderer {
             let is_hovered = hovered_tab == Some(idx);
 
             if tab.is_active {
-                Self::draw_active_tab_surface(buffer, width, height, r, theme);
+                Self::draw_active_tab_surface(canvas, r, theme);
             } else if is_hovered {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    r.0,
-                    5,
-                    r.2,
-                    r.3.saturating_sub(5),
-                    6,
-                    theme.surface_hover(),
-                );
+                canvas.rounded_fill(r.0, 5, r.2, r.3.saturating_sub(5), 6, theme.surface_hover());
             }
 
             let compact = rects.tab_w < 110;
             let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 18 };
             if tab.has_unread && !tab.is_active {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    r.0 + 7,
-                    r.1 + (r.3 / 2) - 2,
-                    4,
-                    4,
-                    2,
-                    theme.ansi[6],
-                );
+                canvas.rounded_fill(r.0 + 7, r.1 + (r.3 / 2) - 2, 4, 4, 2, theme.ansi[6]);
                 icon_x += 5;
             }
 
@@ -288,13 +216,11 @@ impl TerminalRenderer {
                 } else {
                     theme.text_secondary()
                 };
-                self.draw_tab_spinner(buffer, width, height, icon_x, r.1 + (r.3 / 2), color);
+                self.draw_tab_spinner(canvas, icon_x, r.1 + (r.3 / 2), color);
             } else {
                 let icon_color = tab_icon_color(tab, tab.is_active, is_hovered, theme);
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     tab_icon(tab),
                     icon_x,
                     r.1 + (r.3 / 2),
@@ -322,9 +248,7 @@ impl TerminalRenderer {
                     None => tab.title.as_str(),
                 };
                 let title_end = self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     title,
                     title_x,
                     r.1 + (r.3 / 2) + 4,
@@ -335,9 +259,7 @@ impl TerminalRenderer {
                 );
                 if tab.is_preview {
                     Self::draw_rect(
-                        buffer,
-                        width,
-                        height,
+                        canvas,
                         title_x,
                         r.1 + (r.3 / 2) + 7,
                         title_end.saturating_sub(title_x),
@@ -348,9 +270,7 @@ impl TerminalRenderer {
                 if tab.pane_count > 1 {
                     let badge = format!("×{}", tab.pane_count);
                     self.draw_mono_text(
-                        buffer,
-                        width,
-                        height,
+                        canvas,
                         &badge,
                         title_end + 7,
                         r.1 + (r.3 / 2) + 4,
@@ -366,10 +286,7 @@ impl TerminalRenderer {
                 let close_r = rects.close_btn_rect(pos);
                 let is_close_hovered = hovered_close == Some(idx);
                 if is_close_hovered {
-                    crate::ui::draw_rounded_rect(
-                        buffer,
-                        width,
-                        height,
+                    canvas.rounded_fill(
                         close_r.0,
                         close_r.1,
                         close_r.2,
@@ -379,9 +296,7 @@ impl TerminalRenderer {
                     );
                 }
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    canvas,
                     crate::ui::LucideIcon::X,
                     close_r.0 + close_r.2 / 2,
                     close_r.1 + close_r.3 / 2,
@@ -397,9 +312,7 @@ impl TerminalRenderer {
 
         // 4. Nueva pestaña
         self.draw_chrome_action(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.plus_btn,
             crate::ui::LucideIcon::Plus,
             false,
@@ -410,9 +323,7 @@ impl TerminalRenderer {
 
         // 5. Acciones de la derecha: buscar · panel · ajustes
         self.draw_chrome_action(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.search_btn,
             crate::ui::LucideIcon::Search,
             false,
@@ -421,9 +332,7 @@ impl TerminalRenderer {
             theme,
         );
         self.draw_chrome_action(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.files_btn,
             crate::ui::LucideIcon::PanelLeft,
             explorer_visible,
@@ -432,9 +341,7 @@ impl TerminalRenderer {
             theme,
         );
         self.draw_chrome_action(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.settings_btn,
             crate::ui::LucideIcon::Sliders,
             false,
@@ -445,9 +352,7 @@ impl TerminalRenderer {
 
         // 6. Controles de ventana
         self.draw_window_controls(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.win_min_btn,
             rects.win_max_btn,
             rects.win_close_btn,
@@ -463,9 +368,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_window_controls(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         min_btn: (usize, usize, usize, usize),
         max_btn: (usize, usize, usize, usize),
         close_btn: (usize, usize, usize, usize),
@@ -479,14 +382,10 @@ impl TerminalRenderer {
         let fg = theme.text_secondary();
 
         if hovered_min {
-            Self::draw_rect(
-                buffer, width, height, min_btn.0, min_btn.1, min_btn.2, min_btn.3, hover_bg,
-            );
+            Self::draw_rect(canvas, min_btn.0, min_btn.1, min_btn.2, min_btn.3, hover_bg);
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             crate::ui::LucideIcon::Minus,
             min_btn.0 + (min_btn.2 / 2),
             min_btn.1 + (min_btn.3 / 2),
@@ -495,9 +394,7 @@ impl TerminalRenderer {
         );
 
         if hovered_max {
-            Self::draw_rect(
-                buffer, width, height, max_btn.0, max_btn.1, max_btn.2, max_btn.3, hover_bg,
-            );
+            Self::draw_rect(canvas, max_btn.0, max_btn.1, max_btn.2, max_btn.3, hover_bg);
         }
         let max_fg = if hovered_max { theme.foreground } else { fg };
         let (cx, cy) = (max_btn.0 + max_btn.2 / 2, max_btn.1 + max_btn.3 / 2);
@@ -510,28 +407,17 @@ impl TerminalRenderer {
                 theme.bar_bg()
             };
             let (x, y) = (cx.saturating_sub(5), cy.saturating_sub(4));
-            crate::ui::stroke_rounded_rect(buffer, width, height, x + 3, y, 8, 8, 2, max_fg);
-            crate::ui::draw_rounded_rect(buffer, width, height, x, y + 3, 8, 8, 2, bg);
-            crate::ui::stroke_rounded_rect(buffer, width, height, x, y + 3, 8, 8, 2, max_fg);
+            canvas.rounded_stroke(x + 3, y, 8, 8, 2, max_fg);
+            canvas.rounded_fill(x, y + 3, 8, 8, 2, bg);
+            canvas.rounded_stroke(x, y + 3, 8, 8, 2, max_fg);
         } else {
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                crate::ui::LucideIcon::Square,
-                cx,
-                cy,
-                12.0,
-                max_fg,
-            );
+            self.draw_lucide_icon(canvas, crate::ui::LucideIcon::Square, cx, cy, 12.0, max_fg);
         }
 
         // Cerrar: el único estado rojo del chrome, como en Windows.
         if hovered_close {
             Self::draw_rect(
-                buffer,
-                width,
-                height,
+                canvas,
                 close_btn.0,
                 close_btn.1,
                 close_btn.2,
@@ -540,9 +426,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            canvas,
             crate::ui::LucideIcon::X,
             close_btn.0 + (close_btn.2 / 2),
             close_btn.1 + (close_btn.3 / 2),
@@ -560,9 +444,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render_top_title_bar(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         _title: &str,
         _git_branch: Option<&str>,
         _hovered_files: bool,
@@ -574,19 +456,18 @@ impl TerminalRenderer {
         _explorer_visible: bool,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if width == 0 || height == 0 {
             return;
         }
         let rects = TopTitleBarRects::compute(width);
         let bar_h = rects.bar_h;
 
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
-        self.draw_brand(buffer, width, height, bar_h, theme);
-        self.draw_search_pill(buffer, width, height, rects.search_box, theme);
+        Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
+        self.draw_brand(canvas, bar_h, theme);
+        self.draw_search_pill(canvas, rects.search_box, theme);
         self.draw_window_controls(
-            buffer,
-            width,
-            height,
+            canvas,
             rects.win_min_btn,
             rects.win_max_btn,
             rects.win_close_btn,
