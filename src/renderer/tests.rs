@@ -2790,6 +2790,14 @@ mod gpu_device {
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_0), 16384);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_1), 16384);
     }
+
+    #[test]
+    fn test_gpu_device_can_be_capped_to_feature_level_10_0() {
+        let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0)
+            .expect("WARP debe aceptar 10_0");
+        assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
+        assert_eq!(gpu.max_texture_dim(), 8192);
+    }
 }
 
 mod gpu_atlas {
@@ -3039,5 +3047,58 @@ mod gpu_atlas {
         let (bytes, w, h) = readback(&gpu, img.srv(), 4);
         assert_eq!((w, h), (2, 1));
         assert_eq!(bytes, [0, 0, 255, 255, 0, 255, 0, 128]);
+    }
+}
+
+mod gpu_pipeline {
+    use crate::renderer::gpu::{DriverKind, GpuDevice, Instance, Kind, Pipeline};
+    use windows::Win32::Graphics::Direct3D::*;
+
+    #[test]
+    fn test_instance_is_32_bytes() {
+        assert_eq!(std::mem::size_of::<Instance>(), 32);
+    }
+
+    #[test]
+    fn test_instance_packs_kind_radius_and_extra() {
+        let i = Instance::new(
+            Kind::CardCorner,
+            [-3, 4, 5, 6],
+            [0, 0, 10, 10],
+            0xFF11_2233,
+            [7, 8],
+            9,
+            2,
+        );
+        assert_eq!(i.kind_radius, 5 | (9 << 8) | (2 << 16));
+        assert_eq!(i.rect, [-3, 4, 5, 6]);
+        assert_eq!(i.color, 0xFF11_2233);
+        assert_eq!(i.uv, [7, 8]);
+        let g = Instance::new(Kind::Glyph, [0; 4], [0; 4], 0, [0; 2], 0, 0);
+        assert_eq!(g.kind_radius, 3);
+    }
+
+    #[test]
+    fn test_embedded_shaders_match_hlsl_hash() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/renderer/gpu/shaders");
+        let hlsl = std::fs::read_to_string(format!("{dir}/quad.hlsl")).unwrap();
+        // Mismo criterio que tools/compile-shaders.ps1: finales de línea normalizados a LF
+        let tmp = std::env::temp_dir().join(format!("axon-hlsl-{}.txt", std::process::id()));
+        std::fs::write(&tmp, hlsl.replace("\r\n", "\n")).unwrap();
+        let actual = crate::updater::sha256_hex(&tmp).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        let expected = std::fs::read_to_string(format!("{dir}/quad.hlsl.sha256")).unwrap();
+        assert_eq!(
+            actual,
+            expected.trim(),
+            "quad.hlsl cambió: ejecuta `pwsh tools/compile-shaders.ps1`"
+        );
+    }
+
+    #[test]
+    fn test_pipeline_creates_on_warp_at_feature_level_10_0() {
+        let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
+        assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
+        Pipeline::new(&gpu).expect("los shaders SM 4.0 deben valer en FL 10_0");
     }
 }

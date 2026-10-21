@@ -22,6 +22,7 @@ pub struct GpuDevice {
 
 /// Nivel mínimo que Axon acepta: los shaders son SM 4.0
 const MIN_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_10_0;
+const MAX_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_11_1;
 
 /// `AXON_RENDERER=warp` fuerza WARP (diagnóstico y CI).
 pub fn requested_driver() -> Option<DriverKind> {
@@ -48,20 +49,27 @@ impl GpuDevice {
     pub fn new(hwnd: Option<HWND>) -> Result<GpuDevice> {
         if requested_driver() != Some(DriverKind::Warp) {
             let adapter = hwnd.and_then(adapter_for_window);
-            if let Ok(gpu) = Self::create(adapter.as_ref(), DriverKind::Hardware, MIN_LEVEL) {
+            if let Ok(gpu) =
+                Self::create(adapter.as_ref(), DriverKind::Hardware, MIN_LEVEL, MAX_LEVEL)
+            {
                 return Ok(gpu);
             }
         }
-        Self::create(None, DriverKind::Warp, MIN_LEVEL)
+        Self::create(None, DriverKind::Warp, MIN_LEVEL, MAX_LEVEL)
     }
 
     /// Fuerza un tipo de dispositivo (`None` = como `new` sin ventana). Para tests.
     pub fn new_with(kind: Option<DriverKind>, min_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
         match kind {
-            Some(kind) => Self::create(None, kind, min_level),
-            None => Self::create(None, DriverKind::Hardware, min_level)
-                .or_else(|_| Self::create(None, DriverKind::Warp, min_level)),
+            Some(kind) => Self::create(None, kind, min_level, MAX_LEVEL),
+            None => Self::create(None, DriverKind::Hardware, min_level, MAX_LEVEL)
+                .or_else(|_| Self::create(None, DriverKind::Warp, min_level, MAX_LEVEL)),
         }
+    }
+
+    /// Dispositivo de `kind` limitado a `max_level` como mucho (probar FL 10_x en una máquina con 11_x).
+    pub fn new_at_most(kind: DriverKind, max_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
+        Self::create(None, kind, MIN_LEVEL, max_level)
     }
 
     pub fn max_texture_dim(&self) -> u32 {
@@ -72,6 +80,7 @@ impl GpuDevice {
         adapter: Option<&IDXGIAdapter>,
         kind: DriverKind,
         min_level: D3D_FEATURE_LEVEL,
+        max_level: D3D_FEATURE_LEVEL,
     ) -> Result<GpuDevice> {
         let driver_type = match (kind, adapter) {
             (DriverKind::Warp, _) => D3D_DRIVER_TYPE_WARP,
@@ -85,7 +94,7 @@ impl GpuDevice {
             D3D_FEATURE_LEVEL_10_0,
         ]
         .into_iter()
-        .filter(|l| l.0 >= min_level.0)
+        .filter(|l| (min_level.0..=max_level.0).contains(&l.0))
         .collect();
         let adapter = if driver_type == D3D_DRIVER_TYPE_UNKNOWN {
             adapter
