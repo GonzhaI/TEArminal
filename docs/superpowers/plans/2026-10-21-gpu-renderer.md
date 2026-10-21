@@ -72,7 +72,7 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
   ```rust
   pub struct Canvas<'a> { /* buf, w, h */ }
   impl<'a> Canvas<'a> {
-      pub fn over(buf: &'a mut [u32], w: usize, h: usize) -> Self;   // envoltorio inmediato; desaparece en la tarea 10
+      pub fn over(buf: &'a mut [u32], w: usize, h: usize) -> Self;   // envoltorio inmediato; desaparece en la tarea 11
       pub fn size(&self) -> (usize, usize);
       pub fn clear(&mut self, color: Color);
       pub fn fill_rect(&mut self, clip: Clip, x: usize, y: usize, w: usize, h: usize, color: Color);
@@ -97,7 +97,7 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
 **Files:**
 - Modify: `src/renderer/draw.rs`, `src/ui/paint.rs`, `src/ui/mod.rs`
 
-**Regla de portado (vale para las tareas 3–9):** cada función que recibe `buffer: &mut [u32]` + `buf_width` (+ `buf_height`) pasa a recibir `canvas: &mut Canvas` (el ancho y alto salen de `canvas.size()`); toda escritura directa a `buffer[...]` se sustituye por un método de `Canvas`. La lógica, el orden de las operaciones y las coordenadas no cambian. Los métodos públicos de `TerminalRenderer` conservan su nombre.
+**Regla de portado (vale para las tareas 3–9):** cada función que recibe `buffer: &mut [u32]` + `buf_width` (+ `buf_height`) pasa a recibir `canvas: &mut Canvas` (el ancho y alto salen de `canvas.size()`); toda escritura directa a `buffer[...]` se sustituye por un método de `Canvas`. La lógica, el orden de las operaciones y las coordenadas no cambian. Los métodos públicos de `TerminalRenderer` conservan su nombre. Las llamadas de `renderer/tests.rs` y de `build_scenes` a las funciones portadas se actualizan en la misma tarea (en `build_scenes`, un `Canvas::over(&mut buf, w, h)` por escena).
 
 **Interfaces:**
 - Consumes: `Canvas` (tarea 2).
@@ -145,7 +145,7 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
 
 **Files:** Modify `src/renderer/settings_page.rs`
 
-- [ ] **Step 1:** aplicar la regla de portado y eliminar los adaptadores `Canvas::over` de este archivo. El búfer `tmp` de Ajustes se envuelve en su propio `Canvas::over(&mut tmp, width, tmp_h)`; la copia de la ventana visible se mantiene tal cual hasta la tarea 11.
+- [ ] **Step 1:** aplicar la regla de portado y eliminar los adaptadores `Canvas::over` de este archivo. El búfer `tmp` de Ajustes se envuelve en su propio `Canvas::over(&mut tmp, width, tmp_h)`; la copia de la ventana visible se mantiene tal cual hasta la tarea 10.
 - [ ] **Step 2: Gate:** `cargo test` en verde y hashes idénticos a la base.
 - [ ] **Step 3: Commit** `refactor(renderer): Ajustes usa Canvas`.
 
@@ -153,8 +153,8 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
 
 **Files:** Modify `src/app/redraw.rs`, `src/renderer/tests.rs`, `src/renderer/test_support.rs`
 
-- [ ] **Step 1:** `draw_full_scene` y `draw_panel` crean `Canvas::over(buffer, width, height)` una sola vez y lo pasan; `frame_card` pasa a `canvas.card(...)`. El panel derecho conserva su búfer propio y la copia (tarea 11).
-- [ ] **Step 2: Gate de la etapa:** `rg "Canvas::over\(" src` solo debe aparecer en `redraw.rs`, `settings_page.rs` (búfer `tmp`), `test_support.rs` y el propio `canvas.rs`. `cargo test` completo y `test_golden_scene_hashes` **sin `AXON_BLESS`**: hashes idénticos a la base. Cualquier diferencia es un error del portado, no un motivo para regenerar.
+- [ ] **Step 1:** `draw_full_scene` y `draw_panel` crean `Canvas::over(buffer, width, height)` una sola vez y lo pasan; `frame_card` pasa a `canvas.card(...)`. El panel derecho conserva su búfer propio y la copia (tarea 10).
+- [ ] **Step 2: Gate de la etapa:** `git grep -n "Canvas::over(" src` solo debe aparecer en `redraw.rs`, `settings_page.rs` (búfer `tmp`), `test_support.rs` y el propio `canvas.rs`. `cargo test` completo y `test_golden_scene_hashes` **sin `AXON_BLESS`**: hashes idénticos a la base. Cualquier diferencia es un error del portado, no un motivo para regenerar.
 - [ ] **Step 3:** `cargo fmt --check; cargo clippy --all-targets -- -D warnings; cargo build --release`.
 - [ ] **Step 4: Commit** `refactor(renderer): todo el dibujo pasa por Canvas`.
 
@@ -162,7 +162,21 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
 
 ## Etapa 1b — Escena grabada y rasterizador CPU de referencia
 
-### Task 10: `Scene` y `raster_cpu`
+### Task 10: Recorte y desplazamiento en lugar de copias de búfer (sobre el Canvas inmediato)
+
+**Files:** Modify `src/renderer/canvas.rs`, `src/renderer/settings_page.rs`, `src/app/redraw.rs`
+
+**Interfaces:**
+- Las primitivas de `Canvas` (`fill_rect`, `glyph`, `rounded_*`, `image`) aceptan un origen trasladado `(dx, dy)` negativo o positivo y recortan bien un rectángulo que queda parcialmente fuera por arriba o por la izquierda (hoy usan `usize`); el resultado para coordenadas no negativas debe ser idéntico al actual. Esto se implementa dentro de `Canvas`/`ui/paint.rs`, no en las pantallas.
+- Produces: `Canvas::with_offset(&mut self, dx: i32, dy: i32, clip: Clip, f: impl FnOnce(&mut Canvas))`: dentro de `f`, todas las coordenadas se trasladan por `(dx, dy)` al dibujar (inmediato por ahora; en la tarea 11 al grabar) y el recorte efectivo es `clip` (coordenadas absolutas) intersecado con el explícito de cada operación.
+
+- [ ] **Step 1: Test que falla** `test_with_offset_equals_offscreen_copy`: dibuja un conjunto de operaciones (relleno, texto, redondeado que cruza el borde del recorte) con `with_offset` y con el método antiguo (búfer temporal + `copy_from_slice`) y exige búferes iguales.
+- [ ] **Step 2: Implementar `with_offset`.**
+- [ ] **Step 3: Ajustes:** quitar `settings_scratch` y la copia; dibujar `draw_settings_*` con `with_offset(0, page_y + top - scroll_abs, clip_ventana_visible, …)`. **Panel derecho:** quitar `panel_buf` y la copia de `draw_panel`; `render_sidebar`/`render_files_panel` se dibujan con `with_offset(x0, 0, clip_panel, …)` y el fondo del panel se rellena antes con `canvas.fill_rect`.
+- [ ] **Step 4: Gate:** `test_golden_scene_hashes` sin `AXON_BLESS` (escenas `ajustes` y `panel-derecha` incluidas). Si una difiere, la causa probable es un fondo que antes se pintaba en el búfer temporal: pintarlo explícitamente, no regenerar hashes.
+- [ ] **Step 5: Commit** `refactor(renderer): Ajustes y panel derecho con recorte y desplazamiento`.
+
+### Task 11: `Scene` y `raster_cpu`
 
 **Files:**
 - Create: `src/renderer/scene.rs`, `src/renderer/raster_cpu.rs`
@@ -186,7 +200,8 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
   // raster_cpu.rs
   pub fn rasterize(scene: &Scene, buf: &mut [u32]);
   ```
-  `Canvas` deja de envolver un búfer: `Canvas::over` se elimina y pasa a `Canvas::new() -> Canvas` (sin argumentos, sin lifetime), `begin(&mut self, w: u32, h: u32)` (vacía la escena conservando su memoria) y `scene(&self) -> &Scene`. `AxonApp` posee un `Canvas`. En `on_redraw` se llama a `begin`, se graba el fotograma con `draw_full_scene(&mut canvas, …)` y, **hasta la tarea 19**, se rasteriza con `rasterize(canvas.scene(), buffer)` sobre el búfer del presentador actual (`d3d11`/`softbuffer`), de modo que la presentación no cambia. El rasterizador reproduce las operaciones **en el mismo orden** con las funciones de dibujo actuales, generalizadas a origen `i32` (necesario para la tarea 11).
+  `Canvas` deja de envolver un búfer: `Canvas::over` se elimina (tras la tarea 10 ya no queda ningún uso en pantallas, solo en `redraw.rs` y `test_support.rs`, que se migran aquí) y pasa a `Canvas::new() -> Canvas` (sin argumentos, sin lifetime), `begin(&mut self, w: u32, h: u32)` (vacía la escena conservando su memoria) y `scene(&self) -> &Scene`. `AxonApp` posee un `Canvas`. En `on_redraw` se llama a `begin`, se graba el fotograma con `draw_full_scene(&mut canvas, …)` y, **hasta la tarea 19**, se rasteriza con `rasterize(canvas.scene(), buffer)` sobre el búfer del presentador actual (`d3d11`/`softbuffer`), de modo que la presentación no cambia. El rasterizador reproduce las operaciones **en el mismo orden** con las funciones de dibujo actuales, con el origen `i32` y el recorte que `Canvas` ya implementa desde la tarea 10.
+- `Scene` expone `pub fn glyph(&self, id: GlyphId) -> &CachedGlyph` y `pub fn image(&self, id: ImageId) -> ImageRef<'_>`.
 - `GlyphId`/`ImageId` indexan una tabla dentro de la escena que guarda una copia del bitmap (se vacía al reiniciar la escena); sirven para que el backend GPU pueda subirlos al atlas.
 
 - [ ] **Step 1: Tests que fallan:** `test_scene_records_ops_in_order` (tres operaciones → `ops.len() == 3` y orden conservado), `test_rasterize_matches_immediate_canvas` (la misma secuencia de operaciones rasterizada y pintada de forma inmediata produce el mismo búfer).
@@ -194,19 +209,6 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
 - [ ] **Step 3: Implementar** `Scene`, el cambio interno de `Canvas` (graba en lugar de escribir) y `rasterize`. `test_support::with_canvas` devuelve el búfer ya rasterizado.
 - [ ] **Step 4: Gate:** `test_golden_scene_hashes` sin `AXON_BLESS`: hashes idénticos a la base. `cargo test --release bench_ -- --nocapture`: anotar la variación en el documento base (la grabación añade un paso, no debe duplicar el coste).
 - [ ] **Step 5: Commit** `feat(renderer): Scene grabada y rasterizador CPU de referencia`.
-
-### Task 11: Recorte y desplazamiento en lugar de copias de búfer
-
-**Files:** Modify `src/renderer/canvas.rs`, `src/renderer/settings_page.rs`, `src/app/redraw.rs`
-
-**Interfaces:**
-- Produces: `Canvas::with_offset(&mut self, dx: i32, dy: i32, clip: Clip, f: impl FnOnce(&mut Canvas))`: dentro de `f`, todas las coordenadas se trasladan por `(dx, dy)` al grabar y el recorte efectivo es `clip` (coordenadas absolutas) intersecado con el explícito de cada operación.
-
-- [ ] **Step 1: Test que falla** `test_with_offset_equals_offscreen_copy`: dibuja un conjunto de operaciones (relleno, texto, redondeado que cruza el borde del recorte) con `with_offset` y con el método antiguo (búfer temporal + `copy_from_slice`) y exige búferes iguales.
-- [ ] **Step 2: Implementar `with_offset`.**
-- [ ] **Step 3: Ajustes:** quitar `settings_scratch` y la copia; dibujar `draw_settings_*` con `with_offset(0, page_y + top - scroll_abs, clip_ventana_visible, …)`. **Panel derecho:** quitar `panel_buf` y la copia de `draw_panel`; `render_sidebar`/`render_files_panel` se dibujan con `with_offset(x0, 0, clip_panel, …)` y el fondo del panel se rellena antes con `canvas.fill_rect`.
-- [ ] **Step 4: Gate:** `test_golden_scene_hashes` sin `AXON_BLESS` (escenas `ajustes` y `panel-derecha` incluidas). Si una difiere, la causa probable es un fondo que antes se pintaba en el búfer temporal: pintarlo explícitamente, no regenerar hashes.
-- [ ] **Step 5: Commit** `refactor(renderer): Ajustes y panel derecho con recorte y desplazamiento`.
 
 ### Task 12: Firmas de referencia para la etapa 2
 
@@ -327,6 +329,7 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
       pub fn render_to_pixels(&mut self, scene: &Scene) -> Result<Vec<u32>>; // textura sin ventana + staging; solo tests y capturas
   }
   ```
+- `render` llama primero a `atlas.begin_frame()` y obtiene el rect de cada glifo con `atlas.rect_for(dev, id, scene.glyph(id))`.
 - `encode` convierte cada `Op` en una o varias `Instance` conservando el orden (`Card` → 4 `CardCorner` + 4 `Solid` de margen). Todas las instancias se dibujan con una llamada instanciada por grupo consecutivo de misma textura (atlas, imagen, ninguna).
 - Una escena mayor que `max_texture_dim()` se acota a ese tamaño (Review Focus 4). Una imagen con `rgba.len() < width*height*4` no se sube ni se dibuja (Review Focus 5).
 
@@ -355,7 +358,7 @@ Entradas o fallos que la spec implica y que ninguna tarea de «camino feliz» cu
   ```
 - Ante `DXGI_ERROR_DEVICE_REMOVED`/`DEVICE_RESET` (o `GetDeviceRemovedReason() != S_OK`) tras `Present`, `present` recrea `GpuDevice`, `GpuRenderer`, atlas, texturas de imagen y *swap chain*, y devuelve `Recovered`. La escena siguiente se pinta entera (el atlas se rellena a demanda).
 
-- [ ] **Step 1: Tests que fallan** (con una ventana oculta de `winit`, o con una superficie «headless» sobre una textura si el entorno no puede crear la ventana, igual que `test_d3d11_presenter_lifecycle` de hoy): `test_surface_resize_to_zero_clamps_to_one` (Review Focus 1), `test_surface_resize_beyond_limit_is_clamped` (Review Focus 4), `test_surface_recovers_after_device_loss` (pinta una escena, `simulate_device_loss()`, vuelve a presentar: devuelve `Recovered`, y `render_to_pixels` de la misma escena coincide con el de antes; Review Focus 2).
+- [ ] **Step 1: Tests que fallan** (la ventana se crea con `CreateWindowExW` como en `test_d3d11_presenter_lifecycle` de `renderer/tests.rs`, pero **sin** el `if let Ok` que se salta el test en silencio: si no se puede crear la ventana, el test falla): `test_surface_resize_to_zero_clamps_to_one` (Review Focus 1), `test_surface_resize_beyond_limit_is_clamped` (Review Focus 4), `test_surface_recovers_after_device_loss` (pinta una escena, `simulate_device_loss()`, vuelve a presentar: devuelve `Recovered`, y `render_to_pixels` de la misma escena coincide con el de antes; Review Focus 2).
 - [ ] **Step 2: Ejecutarlos: fallan.**
 - [ ] **Step 3: Implementar** reutilizando `DXGI_SWAP_EFFECT_FLIP_DISCARD`, `DXGI_SCALING_NONE`, `BufferCount: 2` y `AlphaMode: IGNORE` de `d3d11.rs`. `present(1, 0)` (VSync).
 - [ ] **Step 4: Ejecutarlos: pasan.**
