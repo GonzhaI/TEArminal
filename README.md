@@ -4,16 +4,16 @@
   <p><em>Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI</em></p>
 </div>
 
-**Axon** es un emulador de terminal en Rust solo para Windows (ConPTY) y optimizado para **PowerShell**. Sin Electron ni WebView: ventana nativa (`winit`), render por software (`softbuffer` + `fontdue`) y emulación VT propia sobre `vte`. Pensada para agentes de CLI (*Claude Code, Gemini CLI, Aider, OpenCode…*) y sesiones SSH.
+**Axon** es un emulador de terminal en Rust solo para Windows (ConPTY) y optimizado para **PowerShell**. Sin Electron ni WebView: ventana nativa (`winit`), dibujo con Direct3D 11 (la GPU, o el rasterizador por software WARP si no hay), texto con `rustybuzz` + `fontdue` y emulación VT propia sobre `vte`. Pensada para agentes de CLI (*Claude Code, Gemini CLI, Aider, OpenCode…*) y sesiones SSH.
 
 | | |
 | :--- | :--- |
-| `axon.exe` (release) | **~4,2 MB** |
-| RAM en reposo | **~47 MB** (privada ~34 MB) |
+| `axon.exe` (release) | **~5,9 MB** |
+| RAM en reposo | **~111 MB** (privada ~126 MB) |
 | CPU en reposo | **< 1 %** |
-| Fotograma 1920×1080 con texto denso | **~1,3 ms** de CPU |
+| Fotograma 1920×1080 con texto denso | **~0,3 ms** de CPU |
 
-> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). El dibujo es por software a propósito: el cuello de botella al volcar salida es ConPTY, no el dibujo. La GPU (Direct3D 11) solo se usa para presentar el fotograma.
+> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). Son ejecuciones únicas en una sola máquina: la RAM y la CPU en reposo, con la sesión restaurada (2 pestañas, un panel dividido y el explorador), tras 8 s de arranque y 30 s sin tocar la ventana (CPU en tres ejecuciones: 0 a 0,7 % de un núcleo); el fotograma es la CPU que cuesta grabar la escena y enviarla a la GPU (`bench_gpu_encode_and_submit_full_frame`), no el tiempo de la GPU. La escena se graba en la CPU y la dibuja Direct3D 11 (hardware, o el rasterizador por software WARP si no hay GPU o falla el controlador); el texto se compone y rasteriza en la CPU (`rustybuzz`, `fontdue`). `AXON_RENDERER=warp` fuerza WARP. El cuello de botella al volcar salida es ConPTY, no el dibujo.
 
 ## Características
 
@@ -24,7 +24,7 @@
 * **Motor VT completo:** TrueColor, pantalla alterna, ratón SGR, *bracketed paste*, imágenes inline (Kitty Graphics Protocol e iTerm2), doble ancho (CJK, emoji) y *grapheme clustering* (UAX #29).
 * **Multi-ventana y desprendimiento de pestañas:** abre nuevas ventanas con `Ctrl+Shift+N` o mueve pestañas a una nueva ventana mediante clic derecho (*«Mover a nueva ventana»*) o arrastrándolas fuera de la barra (*tab tear-off*).
 * **Auto-actualización automática:** comprueba en segundo plano nuevas versiones desde GitHub Releases, avisa en la barra de estado e instala la actualización con 1 clic (solo si el SHA-256 del instalador coincide con el de `SHA256SUMS.txt` de la misma release; si no, abre la página de la versión).
-* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, 817 temas de iTerm2 (por defecto `Catppuccin Frappe` y `Catppuccin Latte`) (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, aceleración opcional por GPU Direct3D 11 (DirectFlip), ligaduras tipográficas y restauración de sesión.
+* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, 817 temas de iTerm2 (por defecto `Catppuccin Frappe` y `Catppuccin Latte`) (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, dibujo por GPU con Direct3D 11 (DirectFlip; WARP de respaldo), ligaduras tipográficas y restauración de sesión.
 * **Teclado correcto en Windows:** `AltGr` sin Ctrl atascado, `Ctrl+Backspace` borra palabra y `Alt+Tab` sin tabuladores fantasma.
 
 ## Atajos

@@ -139,3 +139,43 @@ superior, explorador, dos terminales y barra de estado se dibujan completos en a
 - WARP gasta más CPU en reposo (cada parpadeo del cursor se rasteriza por software en el controlador) y mucha
   menos memoria privada; la base tenía una sola pestaña y estas ejecuciones dos, así que la comparación de
   memoria es orientativa.
+
+## T20 — antes / después (build release final, sin render por software)
+
+Tras borrar el rasterizador de la CPU, `softbuffer` y el presentador D3D11 antiguo (commit
+`refactor(ui)!: eliminar el render por software; solo D3D11 con WARP`). Mismo protocolo y misma máquina que la
+base (`cargo build --release`, `Start-Process` de `targeteleasexon.exe`, 30 s sin interacción tras el arranque;
+fotograma con `cargo test --release bench_gpu_encode_and_submit_full_frame -- --nocapture`).
+
+| Medida | Antes (base, CPU + softbuffer) | Después (D3D11, hardware) |
+|---|---|---|
+| Tamaño de `axon.exe` | 5 983 744 B (5,98 MB) | 5 942 272 B (5,94 MB) |
+| CPU en reposo, 30 s | 93,8 ms (0,31 %) | 0 / 109 / 203 ms (0,00 / 0,36 / 0,68 %), tres ejecuciones |
+| Working set en reposo | 120,4 MB | 111,0-111,3 MB |
+| Memoria privada en reposo | 135,5 MB | 125,0-126,2 MB |
+| Hilos | 45 | 70 (los crea el controlador gráfico) |
+| Coste de CPU de un fotograma 1920x1080 (210x53 celdas, 3 552 ops) | 2,66 ms (`bench_render_pane_full_frame`, grabar + rasterizar, sesión de la base); 0,83-0,85 ms en la sesión de la Etapa 2 | 0,24 / 0,24 / 0,30 ms (grabar 0,08 + encode/envío 0,16-0,22), tres ejecuciones |
+
+Salvedades, sin maquillar:
+
+- **Ejecuciones únicas en una sola máquina**, sin media ni intervalo de confianza. La CPU en reposo varía de 0 a
+  203 ms entre ejecuciones idénticas (el parpadeo del cursor solo se pinta con la ventana enfocada y visible,
+  y Windows no siempre la deja así): la única afirmación sostenible es "por debajo del 1 % de un núcleo".
+  Una cuarta ejecución, con la ventana tapada por otra aplicación, dio 94 ms y no se cuenta como medida de la
+  ventana visible.
+- La base se midió con **una pestaña** y configuración por defecto; las medidas finales, con la **sesión
+  restaurada** (2 pestañas, un panel dividido y el explorador). La memoria y los hilos no son comparables uno a
+  uno. Los 70 hilos son del controlador gráfico (en WARP la tarea 19 midió 24).
+- El fotograma de "antes" es grabar + rasterizar en la CPU; el de "después" es el coste de CPU de grabar +
+  codificar + enviar, **no** el tiempo de GPU (el vaciado de la cola tras 200 fotogramas tardó ~16 ms, unos
+  0,08 ms por fotograma como cota superior). La comparación válida es la de la misma sesión (0,83 frente a
+  0,24-0,30 ms).
+- Las cifras del encabezado de `README.md` (4,2 MB, 47 MB, 1,3 ms) eran anteriores a esta base y no
+  coincidían con ella; se sustituyeron por las de esta tabla.
+- `src/renderer/golden/hashes.txt` y `test_golden_scene_hashes` (mencionados en las notas de arriba) se
+  eliminaron: los hashes exactos de la CPU no pueden cumplirse con la salida de la GPU. Las referencias son ahora
+  los PNG de `src/renderer/golden/{refs,scenes}` y `signatures.bin`, congelados con la CPU y comparados con
+  tolerancia.
+- Pendientes de la tarea 20 que no se han hecho aquí: el empaquetado (`packaging/package.ps1` y
+  `test-installer.ps1` los ejecuta la CI) y la prueba manual en un segundo equipo (GPU Intel antigua, VM o
+  Windows ARM). Sin esa prueba no se declara "compatible con todos los equipos".
