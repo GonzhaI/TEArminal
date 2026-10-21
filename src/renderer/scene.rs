@@ -111,6 +111,13 @@ impl Scene {
         &self.glyphs[id.0 as usize]
     }
 
+    /// El `Rc` del glifo: su dirección es la identidad estable que usa el atlas de la GPU.
+    // Lo usa el backend GPU (tarea 16); hasta entonces solo los tests.
+    #[allow(dead_code)]
+    pub fn glyph_rc(&self, id: GlyphId) -> &Rc<CachedGlyph> {
+        &self.glyphs[id.0 as usize]
+    }
+
     pub fn image(&self, id: ImageId) -> ImageRef<'_> {
         let e = &self.images[id.0 as usize];
         let len = e.width as usize * e.height as usize * 4;

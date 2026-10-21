@@ -2670,6 +2670,8 @@ fn test_scene_dedups_glyphs_by_identity() {
     assert_eq!(ids[0], ids[2]);
     assert_eq!(ids[0], ids[3]);
     assert_ne!(ids[0], ids[1]);
+    assert!(Rc::ptr_eq(s.glyph_rc(ids[0]), &a));
+    assert!(Rc::ptr_eq(s.glyph_rc(ids[1]), &b));
     assert_eq!(
         Rc::strong_count(&a),
         2,
@@ -2787,5 +2789,255 @@ mod gpu_device {
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_10_1), 8192);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_0), 16384);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_1), 16384);
+    }
+}
+
+mod gpu_atlas {
+    use crate::renderer::gpu::{
+        AtlasError, AtlasRect, DriverKind, GlyphAtlas, GpuDevice, ImageTexture, ShelfPacker,
+    };
+    use crate::renderer::CachedGlyph;
+    use std::rc::Rc;
+    use windows::core::ComInterface;
+    use windows::Win32::Graphics::Direct3D::*;
+    use windows::Win32::Graphics::Direct3D11::*;
+
+    fn warp() -> GpuDevice {
+        GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap()
+    }
+
+    fn glyph(w: usize, h: usize, fill: impl Fn(usize) -> u8) -> Rc<CachedGlyph> {
+        Rc::new(CachedGlyph {
+            width: w,
+            height: h,
+            x_offset: 0,
+            y_offset: 0,
+            bitmap: (0..w * h).map(fill).collect(),
+        })
+    }
+
+    /// Copia la textura de `srv` a una staging y devuelve `(bytes sin relleno de fila, ancho, alto)`.
+    fn readback(
+        gpu: &GpuDevice,
+        srv: &ID3D11ShaderResourceView,
+        bpp: usize,
+    ) -> (Vec<u8>, usize, usize) {
+        let res = unsafe { srv.GetResource().unwrap() };
+        let tex: ID3D11Texture2D = res.cast().unwrap();
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { tex.GetDesc(&mut desc) };
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        let mut staging = None;
+        unsafe {
+            gpu.device
+                .CreateTexture2D(&desc, None, Some(&mut staging))
+                .unwrap();
+        }
+        let staging = staging.unwrap();
+        unsafe { gpu.context.CopyResource(&staging, &tex) };
+        let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            gpu.context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut map))
+                .unwrap();
+        }
+        let (w, h) = (desc.Width as usize, desc.Height as usize);
+        let mut out = Vec::with_capacity(w * h * bpp);
+        for row in 0..h {
+            let src = unsafe {
+                std::slice::from_raw_parts(
+                    (map.pData as *const u8).add(row * map.RowPitch as usize),
+                    w * bpp,
+                )
+            };
+            out.extend_from_slice(src);
+        }
+        unsafe { gpu.context.Unmap(&staging, 0) };
+        (out, w, h)
+    }
+
+    /// Bytes R8 de la región `r` del atlas.
+    fn region(gpu: &GpuDevice, atlas: &GlyphAtlas, r: AtlasRect) -> Vec<u8> {
+        let (all, w, _) = readback(gpu, atlas.srv(), 1);
+        let mut out = Vec::new();
+        for y in r.y as usize..(r.y + r.h) as usize {
+            out.extend_from_slice(&all[y * w + r.x as usize..y * w + (r.x + r.w) as usize]);
+        }
+        out
+    }
+
+    #[test]
+    fn test_shelf_packer_fills_row_then_opens_new_shelf() {
+        let mut p = ShelfPacker::new(32, 32);
+        let a = p.alloc(10, 10).unwrap();
+        let b = p.alloc(10, 10).unwrap();
+        let c = p.alloc(10, 10).unwrap();
+        assert_eq!(a.1, b.1, "los dos primeros comparten fila");
+        assert!(b.0 > a.0 + 10, "con 1 px de separación");
+        assert!(c.1 >= a.1 + 10, "el tercero abre un estante debajo");
+    }
+
+    #[test]
+    fn test_shelf_packer_returns_none_when_full() {
+        let mut p = ShelfPacker::new(32, 32);
+        for _ in 0..4 {
+            assert!(p.alloc(15, 15).is_some()); // 2x2 de 16
+        }
+        assert!(p.alloc(15, 15).is_none());
+        assert!(p.alloc(64, 1).is_none(), "más ancho que el atlas");
+    }
+
+    #[test]
+    fn test_shelf_packer_reset_allows_reuse() {
+        let mut p = ShelfPacker::new(16, 16);
+        assert_eq!(p.alloc(15, 15), Some((0, 0)));
+        assert!(p.alloc(15, 15).is_none());
+        p.reset();
+        assert_eq!(p.alloc(15, 15), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_shelf_packer_never_overlaps() {
+        let mut p = ShelfPacker::new(128, 128);
+        let mut rects = Vec::new();
+        for i in 0..400u32 {
+            let (w, h) = (3 + i * 7 % 13, 4 + i * 5 % 17);
+            if let Some((x, y)) = p.alloc(w, h) {
+                assert!(x + w <= 128 && y + h <= 128);
+                rects.push((x, y, w, h));
+            }
+        }
+        assert!(rects.len() > 20);
+        for (i, a) in rects.iter().enumerate() {
+            for b in &rects[i + 1..] {
+                let apart =
+                    a.0 + a.2 <= b.0 || b.0 + b.2 <= a.0 || a.1 + a.3 <= b.1 || b.1 + b.3 <= a.1;
+                assert!(apart, "{a:?} solapa con {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_atlas_uploads_glyph_and_reads_back_coverage() {
+        let gpu = warp();
+        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+        let g = glyph(4, 4, |i| (i * 16) as u8);
+        let r = atlas.rect_for(&gpu, &g).unwrap();
+        assert_eq!((r.w, r.h), (4, 4));
+        assert_eq!(region(&gpu, &atlas, r), g.bitmap);
+    }
+
+    #[test]
+    fn test_atlas_empty_glyph_reserves_nothing() {
+        let gpu = warp();
+        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+        let mut truncated = glyph(3, 3, |_| 1);
+        Rc::get_mut(&mut truncated).unwrap().bitmap.truncate(4);
+        for g in [glyph(0, 5, |_| 1), glyph(5, 0, |_| 1), truncated] {
+            let r = atlas.rect_for(&gpu, &g).unwrap();
+            assert_eq!(r, AtlasRect::default());
+            assert_eq!(Rc::strong_count(&g), 1, "no se retiene");
+        }
+        let first = atlas.rect_for(&gpu, &glyph(4, 4, |_| 9)).unwrap();
+        assert_eq!((first.x, first.y), (0, 0), "no se reservó espacio");
+    }
+
+    #[test]
+    fn test_atlas_retains_glyph_while_entry_exists() {
+        let gpu = warp();
+        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+        let g = glyph(4, 4, |_| 7);
+        atlas.rect_for(&gpu, &g).unwrap();
+        assert_eq!(Rc::strong_count(&g), 2);
+        atlas.reset();
+        assert_eq!(Rc::strong_count(&g), 1);
+    }
+
+    #[test]
+    fn test_atlas_same_glyph_returns_same_rect_without_reupload() {
+        let gpu = warp();
+        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+        let g = glyph(4, 4, |i| i as u8 + 1);
+        let a = atlas.rect_for(&gpu, &g).unwrap();
+        let other = atlas.rect_for(&gpu, &glyph(4, 4, |_| 3)).unwrap();
+        assert_ne!(a, other);
+        assert_eq!(atlas.rect_for(&gpu, &g).unwrap(), a);
+        assert_eq!(Rc::strong_count(&g), 2, "una sola entrada");
+    }
+
+    /// Emula al renderer: ante `Full` vacía el atlas y reintenta una vez. Devuelve los vaciados.
+    fn request_all(gpu: &GpuDevice, atlas: &mut GlyphAtlas, glyphs: &[Rc<CachedGlyph>]) -> u32 {
+        let mut resets = 0;
+        for g in glyphs {
+            let r = match atlas.rect_for(gpu, g) {
+                Ok(r) => r,
+                Err(AtlasError::Full) => {
+                    atlas.reset();
+                    resets += 1;
+                    atlas.rect_for(gpu, g).expect("tras vaciar siempre cabe")
+                }
+                Err(e) => panic!("{e:?}"),
+            };
+            assert!(r.w == 16 && r.h == 16, "rect válido y no vacío");
+        }
+        resets
+    }
+
+    #[test]
+    fn test_atlas_overflow_never_drops_glyphs() {
+        let gpu = warp();
+        let glyphs: Vec<_> = (0..4000).map(|i| glyph(16, 16, |_| i as u8)).collect();
+        // Tope pequeño: fuerza vaciados
+        let mut small = GlyphAtlas::with_limits(&gpu, 64, 128).unwrap();
+        assert!(request_all(&gpu, &mut small, &glyphs) > 0);
+        let last = small.rect_for(&gpu, glyphs.last().unwrap()).unwrap();
+        assert_eq!(region(&gpu, &small, last), glyphs.last().unwrap().bitmap);
+        // Tope real: 4 000 glifos de 16x16 caben creciendo, sin vaciar
+        let mut big = GlyphAtlas::new(&gpu).unwrap();
+        assert_eq!(request_all(&gpu, &mut big, &glyphs), 0);
+        // y tras vaciar sigue aceptando
+        big.reset();
+        assert!(big.rect_for(&gpu, &glyphs[0]).is_ok());
+    }
+
+    #[test]
+    fn test_atlas_grows_and_keeps_old_rects_valid() {
+        let gpu = warp();
+        let mut atlas = GlyphAtlas::with_limits(&gpu, 64, 256).unwrap();
+        let first = glyph(8, 8, |i| i as u8 + 1);
+        let r0 = atlas.rect_for(&gpu, &first).unwrap();
+        assert_eq!(atlas.size(), 64);
+        // 64x64 admite ~49 glifos de 8x8: se piden más para forzar el crecimiento
+        for i in 0..80 {
+            atlas.rect_for(&gpu, &glyph(8, 8, |_| i as u8)).unwrap();
+        }
+        assert!(atlas.size() > 64, "el atlas creció");
+        assert_eq!(atlas.rect_for(&gpu, &first).unwrap(), r0);
+        assert_eq!(region(&gpu, &atlas, r0), first.bitmap);
+    }
+
+    #[test]
+    fn test_image_texture_rejects_truncated_zero_and_oversized() {
+        let gpu = warp();
+        let max = gpu.max_texture_dim();
+        assert!(ImageTexture::new(&gpu, &[0; 8], 2, 2).unwrap().is_none());
+        assert!(ImageTexture::new(&gpu, &[], 0, 5).unwrap().is_none());
+        assert!(ImageTexture::new(&gpu, &[0; 4], max + 1, 1)
+            .unwrap()
+            .is_none());
+        assert!(ImageTexture::new(&gpu, &[0; 4], 1, 1).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_image_texture_uploads_bgra() {
+        let gpu = warp();
+        let rgba = [255, 0, 0, 255, 0, 255, 0, 128];
+        let img = ImageTexture::new(&gpu, &rgba, 2, 1).unwrap().unwrap();
+        assert_eq!(img.size(), (2, 1));
+        let (bytes, w, h) = readback(&gpu, img.srv(), 4);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(bytes, [0, 0, 255, 255, 0, 255, 0, 128]);
     }
 }
