@@ -50,6 +50,123 @@ mod bench {
         println!("render_pane {w}x{h} ({cols}x{rows} celdas): {per:.2} ms/frame (grabar+rasterizar; solo grabar: {record:.2} ms); buffer.fill: {fill:.2} ms");
     }
 
+    /// Coste en CPU de un fotograma por la ruta GPU: grabar (`Canvas`) + `GpuRenderer::render` (encode, subida del
+    /// buffer de instancias y llamadas de dibujo) sobre un destino fuera de pantalla. NO es el tiempo de GPU: al
+    /// final se vacía la cola y se espera con una lectura de 1x1 para que el trabajo pendiente no se acumule.
+    #[test]
+    fn bench_gpu_encode_and_submit_full_frame() {
+        use crate::renderer::gpu::{GpuDevice, GpuRenderer};
+        use windows::Win32::Graphics::Direct3D11::*;
+        use windows::Win32::Graphics::Dxgi::Common::*;
+
+        let cfg = AxonConfig::default();
+        let theme = Theme::from_name(&cfg.appearance.theme);
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let (w, h) = (1920usize, 1080usize);
+        let (cols, rows) = r.compute_pane_grid_size(w, h);
+        let mut term = TerminalState::new(cols, rows, 1000, theme.clone());
+        for i in 0..rows {
+            let line = format!(
+                "\x1b[3{}m{:>4}\x1b[0m  fn render_frame(&mut self, buf: &mut [u32]) -> Result<(), Error> {{ let x = {}; }}\r\n",
+                1 + i % 7, i, i * 37
+            );
+            term.process_bytes(line.as_bytes());
+        }
+        let mut canvas = Canvas::new();
+        let mut record = |canvas: &mut Canvas| {
+            canvas.begin(w as u32, h as u32);
+            r.render_pane(canvas, 0, 0, w, h, &term, &theme, true, true, false);
+        };
+
+        let gpu = GpuDevice::new(None).unwrap();
+        println!("GPU: {:?} {:?}", gpu.kind, gpu.feature_level);
+        let mut g = GpuRenderer::new(gpu).unwrap();
+        let (device, context) = (g.device().device.clone(), g.device().context.clone());
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w as u32,
+            Height: h as u32,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            ..Default::default()
+        };
+        let (tex, rtv) = unsafe {
+            let mut tex = None;
+            device.CreateTexture2D(&desc, None, Some(&mut tex)).unwrap();
+            let tex = tex.unwrap();
+            let mut rtv = None;
+            device
+                .CreateRenderTargetView(&tex, None, Some(&mut rtv))
+                .unwrap();
+            (tex, rtv.unwrap())
+        };
+        // Espera real a la GPU: copia 1x1 a una textura de lectura y la mapea
+        let sync = || unsafe {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: 1,
+                Height: 1,
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                ..desc
+            };
+            let mut staging = None;
+            device
+                .CreateTexture2D(&desc, None, Some(&mut staging))
+                .unwrap();
+            let staging = staging.unwrap();
+            let src = D3D11_BOX {
+                left: 0,
+                top: 0,
+                front: 0,
+                right: 1,
+                bottom: 1,
+                back: 1,
+            };
+            context.CopySubresourceRegion(&staging, 0, 0, 0, 0, &tex, 0, Some(&src));
+            context.Flush();
+            let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+            context
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut map))
+                .unwrap();
+            context.Unmap(&staging, 0);
+        };
+
+        // Calienta: cachés de glifos, atlas y pipeline
+        record(&mut canvas);
+        g.render(canvas.scene(), &rtv, (w as u32, h as u32))
+            .unwrap();
+        sync();
+
+        let n = if cfg!(debug_assertions) { 4 } else { 200 };
+        let t = Instant::now();
+        for _ in 0..n {
+            record(&mut canvas);
+        }
+        let rec = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let t = Instant::now();
+        for _ in 0..n {
+            record(&mut canvas);
+            g.render(canvas.scene(), &rtv, (w as u32, h as u32))
+                .unwrap();
+        }
+        let submit = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let t = Instant::now();
+        sync();
+        let drain = t.elapsed().as_secs_f64() * 1000.0;
+        println!(
+            "GPU {w}x{h} ({cols}x{rows} celdas, {} ops): grabar+render {submit:.2} ms/frame CPU (solo grabar: {rec:.2}; render: {:.2}); vaciar la cola tras {n} fotogramas: {drain:.1} ms",
+            canvas.scene().ops.len(),
+            submit - rec
+        );
+    }
+
     #[test]
     fn bench_sdf_rounded_rect_and_stroke() {
         let (w, h) = (1920usize, 1080usize);
@@ -989,9 +1106,9 @@ fn test_d3d11_presenter_lifecycle() {
     }
 }
 
-/// Escenas de referencia de la interfaz, en orden fijo: `(nombre, framebuffer XRGB de w x h)`.
-/// Las usa `preview_ui_scenes` (PPM y PNG) y el test de hashes `test_golden_scene_hashes`.
-pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> {
+/// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
+/// `build_scenes` las rasteriza con la CPU; los tests de paridad GPU leen `canvas.scene()`.
+pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Canvas)> {
     use crate::app::SIDEBAR_WIDTH;
     use crate::renderer::{SettingsPageState, SidebarTabItem};
     use crate::theme::Theme;
@@ -1006,8 +1123,8 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     super::test_support::set_spinner_phase(Some(0));
     let fixture = super::test_support::fixture_root();
 
-    let mut scenes: Vec<(&'static str, Vec<u32>)> = Vec::new();
-    let mut push_scene = |buf: &[u32], name: &'static str| scenes.push((name, buf.to_vec()));
+    let mut scenes: Vec<(&'static str, Canvas)> = Vec::new();
+    let mut push_scene = |canvas: Canvas, name: &'static str| scenes.push((name, canvas));
 
     let tabs: Vec<SidebarTabItem> = vec![
         SidebarTabItem {
@@ -1139,7 +1256,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "terminal-vertical");
+    push_scene(canvas, "terminal-vertical");
 
     // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
@@ -1218,7 +1335,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "tabs-superiores");
+    push_scene(canvas, "tabs-superiores");
 
     // 3. Explorador acoplado sobre el terminal
     let mut explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
@@ -1285,7 +1402,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "explorador-acoplado");
+    push_scene(canvas, "explorador-acoplado");
 
     // 4. Ajustes
     let settings = SettingsPageState {
@@ -1346,7 +1463,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "ajustes");
+    push_scene(canvas, "ajustes");
 
     // 5. Visor de archivos
     let path = fixture.join("src/renderer/pane.rs");
@@ -1407,7 +1524,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "visor");
+    push_scene(canvas, "visor");
 
     // 6. Panel a la derecha: se dibuja en un búfer propio del ancho del panel y se copia a su sitio
     let header_right = crate::renderer::SidebarHeader {
@@ -1495,7 +1612,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "panel-derecha");
+    push_scene(canvas, "panel-derecha");
 
     // 7. WP1 · modo vertical: marca, píldora centrada y barra de estado del bosquejo
     let wp1_meters = [
@@ -1564,7 +1681,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "wp1-vertical");
+    push_scene(canvas, "wp1-vertical");
 
     // 8. WP1 · modo superior: pestañas con icono de tipo, spinner en la que corre y acciones a la derecha
     let wp1_tabs = vec![
@@ -1664,7 +1781,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
         &theme,
     );
-    push_scene(&canvas.snapshot(), "wp1-superior");
+    push_scene(canvas, "wp1-superior");
     // 7. Paneles divididos con cabecera (WP3): agente a la izquierda, shell y SSH a la derecha
     {
         use crate::ui::LucideIcon;
@@ -1856,7 +1973,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
             &theme,
         );
-        push_scene(&canvas.snapshot(), "paneles-divididos");
+        push_scene(canvas, "paneles-divididos");
     }
 
     // 9. WP4 · bloques OSC 133 como tarjetas con franja de contexto (mock v2-superior-izquierda)
@@ -1979,10 +2096,18 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
             &theme,
         );
-        push_scene(&canvas.snapshot(), "bloques-osc133");
+        push_scene(canvas, "bloques-osc133");
     }
 
     scenes
+}
+
+/// Las mismas escenas rasterizadas por la CPU sobre un búfer a cero.
+pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> {
+    build_recorded_scenes(w, h)
+        .into_iter()
+        .map(|(name, canvas)| (name, canvas.snapshot()))
+        .collect()
 }
 
 /// Previsualización manual de la interfaz (no forma parte de la suite):
@@ -4238,5 +4363,152 @@ mod gpu_surface {
             s.driver_kind(),
             DriverKind::Hardware | DriverKind::Warp
         ));
+    }
+}
+
+/// Paridad de escenas completas GPU/CPU (etapa 2). Criterio estadístico: ver `test_support::SCENE_*`.
+mod gpu_scenes {
+    use crate::renderer::gpu::{DriverKind, GpuDevice, GpuRenderer};
+    use crate::renderer::test_support::{
+        self, signature, signature_distance, PARITY_TOLERANCE, SCENE_MAX_DIFF,
+        SCENE_OUTLIER_FRACTION, SIGNATURE_TOLERANCE,
+    };
+    use windows::Win32::Graphics::Direct3D::*;
+
+    const W: usize = 1440;
+    const H: usize = 900;
+
+    struct SceneStats {
+        name: &'static str,
+        distance: f32,
+        max_diff: u8,
+        outliers: usize,
+        mean_diff: f64,
+    }
+
+    impl SceneStats {
+        fn outlier_fraction(&self) -> f64 {
+            self.outliers as f64 / (W * H) as f64
+        }
+    }
+
+    /// Diferencia por canal GPU/CPU de cada escena: (distancia de firma, máximo, píxeles > `PARITY_TOLERANCE`, media).
+    fn measure(r: &mut GpuRenderer, tag: &str) -> Vec<SceneStats> {
+        let golden = test_support::read_golden_signatures();
+        let recorded = super::build_recorded_scenes(W, H);
+        assert_eq!(recorded.len(), golden.len(), "escenas distintas del golden");
+        let mut all = Vec::new();
+        for ((name, canvas), (gname, gsig)) in recorded.iter().zip(&golden) {
+            assert_eq!(name, gname, "orden de escenas distinto del golden");
+            let cpu = canvas.snapshot();
+            let (gpu, gw, gh) = r.render_to_pixels(canvas.scene()).unwrap();
+            assert_eq!((gw as usize, gh as usize), (W, H), "{name}: tamaño");
+            // La firma CPU es la del golden (si no, el golden está desactualizado y lo dice otro test)
+            let (cpu_sig, gpu_sig) = (signature(&cpu, W, H), signature(&gpu, W, H));
+            assert_eq!(signature_distance(&cpu_sig, gsig), 0.0, "{name}: golden");
+            let (mut max, mut outliers, mut sum) = (0u8, 0usize, 0u64);
+            for (&c, &g) in cpu.iter().zip(&gpu) {
+                let mut d_px = 0u8;
+                for s in [0, 8, 16] {
+                    let d = ((c >> s) & 255).abs_diff((g >> s) & 255) as u8;
+                    sum += d as u64;
+                    d_px = d_px.max(d);
+                }
+                max = max.max(d_px);
+                outliers += (d_px > PARITY_TOLERANCE) as usize;
+            }
+            let st = SceneStats {
+                name,
+                distance: signature_distance(&gpu_sig, gsig),
+                max_diff: max,
+                outliers,
+                mean_diff: sum as f64 / (3 * W * H) as f64,
+            };
+            println!(
+                "[{tag}] {:<20} dist firma {:.4}  max {:>3}  >{} en {:>7} px ({:.4} %)  media {:.4}",
+                st.name,
+                st.distance,
+                st.max_diff,
+                PARITY_TOLERANCE,
+                st.outliers,
+                st.outlier_fraction() * 100.0,
+                st.mean_diff
+            );
+            all.push(st);
+        }
+        all
+    }
+
+    fn assert_scenes_match(gpu: GpuDevice, tag: &str) {
+        println!("[{tag}] {:?} {:?}", gpu.kind, gpu.feature_level);
+        let mut r = GpuRenderer::new(gpu).unwrap();
+        for st in measure(&mut r, tag) {
+            assert!(st.distance <= SIGNATURE_TOLERANCE, "{}: firma", st.name);
+            assert!(
+                st.max_diff <= SCENE_MAX_DIFF,
+                "{}: diferencia máxima",
+                st.name
+            );
+            assert!(
+                st.outlier_fraction() <= SCENE_OUTLIER_FRACTION,
+                "{}: demasiados píxeles fuera de tolerancia",
+                st.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_gpu_scenes_match_cpu_reference() {
+        let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
+        assert_scenes_match(gpu, "warp");
+    }
+
+    #[test]
+    fn test_gpu_scenes_match_cpu_reference_at_feature_level_10_0() {
+        let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
+        assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
+        assert_scenes_match(gpu, "warp-fl10_0");
+    }
+
+    /// Manual (no forma parte de la suite): `cargo test preview_gpu_vs_cpu -- --ignored --nocapture`. Deja en
+    /// `%TEMP%/axon-gpu-parity` el PNG de la CPU, el de la GPU y su diferencia absoluta x16 (saturada).
+    #[test]
+    #[ignore]
+    fn preview_gpu_vs_cpu() {
+        let out = std::env::temp_dir().join("axon-gpu-parity");
+        std::fs::create_dir_all(&out).unwrap();
+        let gpu = GpuDevice::new(None).unwrap();
+        println!("dispositivo: {:?} {:?}", gpu.kind, gpu.feature_level);
+        let mut r = GpuRenderer::new(gpu).unwrap();
+        // Mismas cifras que el test, ahora sobre el dispositivo real si lo hay
+        measure(&mut r, "preview");
+        let rgb = |px: &[u32], f: &dyn Fn(usize) -> [u8; 3]| -> Vec<u8> {
+            (0..px.len()).flat_map(f).collect()
+        };
+        for (name, canvas) in super::build_recorded_scenes(W, H) {
+            if !["terminal-vertical", "ajustes", "visor"].contains(&name) {
+                continue;
+            }
+            let cpu = canvas.snapshot();
+            let (gpu, _, _) = r.render_to_pixels(canvas.scene()).unwrap();
+            let unpack = |p: u32| [(p >> 16) as u8, (p >> 8) as u8, p as u8];
+            let save = |suffix: &str, data: Vec<u8>| {
+                let path = out.join(format!("{name}-{suffix}.png"));
+                image::RgbImage::from_raw(W as u32, H as u32, data)
+                    .unwrap()
+                    .save(&path)
+                    .unwrap();
+                println!("{}", path.display());
+            };
+            save("cpu", rgb(&cpu, &|i| unpack(cpu[i])));
+            save("gpu", rgb(&gpu, &|i| unpack(gpu[i])));
+            save(
+                "diff",
+                rgb(&cpu, &|i| {
+                    let (c, g) = (unpack(cpu[i]), unpack(gpu[i]));
+                    std::array::from_fn(|k| c[k].abs_diff(g[k]).saturating_mul(16))
+                }),
+            );
+        }
     }
 }

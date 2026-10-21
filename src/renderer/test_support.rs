@@ -42,6 +42,38 @@ pub(super) fn bless_requested() -> bool {
 /// diferencia mayor se corrige en el shader o en la codificación, nunca subiendo este valor.
 pub(super) const PARITY_TOLERANCE: u8 = 2;
 
+/// Tolerancia de escenas COMPLETAS GPU/CPU (mediciones en el documento base, "Etapa 2"). `PARITY_TOLERANCE` solo
+/// vale para primitivas con <= 2 capas translúcidas apiladas (el redondeo de la GPU frente al truncado de la CPU
+/// suma ~1 por capa), así que en una escena entera el criterio es estadístico: firma, fracción de atípicos y tope.
+/// Medido en WARP (FL 11_1 y 10_0), 10 escenas de 1440x900: distancia de firma <= 0,0164; diferencia máxima por
+/// canal 2; 0 píxeles por encima de 2; media <= 0,017. Umbrales = medido con margen explícito:
+/// distancia de firma: 0,03 (~2x el peor caso medido).
+pub(super) const SIGNATURE_TOLERANCE: f32 = 0.03;
+/// Fracción máxima de píxeles con diferencia por canal > `PARITY_TOLERANCE`: 0,1 % (medido: 0).
+pub(super) const SCENE_OUTLIER_FRACTION: f64 = 0.001;
+/// Diferencia por canal que ningún píxel puede superar: medido 2, +1 por una capa translúcida más. Más que esto es
+/// un error de shader o de codificación, no de redondeo.
+pub(super) const SCENE_MAX_DIFF: u8 = 3;
+
+/// Firmas de `golden/signatures.bin`: `(nombre de escena, firma)` en el orden del archivo.
+pub(super) fn read_golden_signatures() -> Vec<(String, Vec<u8>)> {
+    let data = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/renderer/golden/signatures.bin"
+    ))
+    .expect("falta golden/signatures.bin: generarlo con AXON_BLESS=1");
+    let (mut pos, mut out) = (0, Vec::new());
+    while pos < data.len() {
+        let n = data[pos] as usize;
+        let name = String::from_utf8(data[pos + 1..pos + 1 + n].to_vec()).unwrap();
+        pos += 1 + n;
+        let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+        out.push((name, data[pos + 4..pos + 4 + len].to_vec()));
+        pos += 4 + len;
+    }
+    out
+}
+
 /// Lado (px) de los bloques de la firma.
 const SIGNATURE_BLOCK: usize = 48;
 

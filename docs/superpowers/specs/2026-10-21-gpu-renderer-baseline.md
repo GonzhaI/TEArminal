@@ -57,3 +57,65 @@ Tamaño de `target\release\axon.exe`: 5 983 744 bytes (5,98 MB).
 - Las escenas de referencia de la UI (hashes en `src/renderer/golden/hashes.txt`, test
   `test_golden_scene_hashes`) son la otra base de comparación: cualquier cambio de píxeles en ellas debe ser
   intencional y re-bendecido con `AXON_BLESS=1`.
+
+## Etapa 2 — GPU frente a CPU
+
+Medido con `cargo test test_gpu_scenes_match -- --nocapture` (dispositivo WARP) sobre las 10 escenas de referencia
+a 1440x900. Cada escena se graba una vez (`build_recorded_scenes`), se rasteriza con la CPU y se dibuja con
+`GpuRenderer::render_to_pixels`; la firma de la CPU coincide exactamente con `golden/signatures.bin`. Se midieron
+dos dispositivos: WARP con el nivel de funciones por defecto (FL 11_1) y WARP limitado a FL 10_0
+(`GpuDevice::new_at_most`). **Los números son idénticos en ambos niveles** y también con el dispositivo de
+hardware de esta máquina (`preview_gpu_vs_cpu`).
+
+| Escena | Distancia de firma | Dif. máx. por canal | Píxeles > 2 | Dif. media por canal |
+|---|---|---|---|---|
+| terminal-vertical | 0,0070 | 2 | 0 (0 %) | 0,0094 |
+| tabs-superiores | 0,0094 | 2 | 0 (0 %) | 0,0083 |
+| explorador-acoplado | 0,0064 | 2 | 0 (0 %) | 0,0100 |
+| ajustes | 0,0111 | 2 | 0 (0 %) | 0,0098 |
+| visor | 0,0076 | 2 | 0 (0 %) | 0,0100 |
+| panel-derecha | 0,0105 | 2 | 0 (0 %) | 0,0100 |
+| wp1-vertical | 0,0082 | 2 | 0 (0 %) | 0,0097 |
+| wp1-superior | 0,0088 | 2 | 0 (0 %) | 0,0098 |
+| paneles-divididos | 0,0164 | 2 | 0 (0 %) | 0,0169 |
+| bloques-osc133 | 0,0123 | 2 | 0 (0 %) | 0,0125 |
+
+Umbrales fijados en `src/renderer/test_support.rs` (`PARITY_TOLERANCE` sigue en 2, sin tocar):
+
+- `SIGNATURE_TOLERANCE = 0,03`: unas 2 veces el peor caso medido (0,0164). Una región de 48x48 px mal pintada
+  subiría la distancia al menos 1-2 órdenes de magnitud por encima.
+- `SCENE_OUTLIER_FRACTION = 0,001` (0,1 %): píxeles con diferencia por canal > `PARITY_TOLERANCE`. Medido: 0.
+- `SCENE_MAX_DIFF = 3`: ningún píxel puede diferir más; medido 2, más 1 por una capa translúcida más (la GPU
+  mezcla en coma flotante con redondeo y la CPU trunca: ~1 por capa apilada, como se midió en la tarea 16). Una
+  diferencia mayor es un error de shader o de codificación, no de redondeo.
+
+Revisión visual (`cargo test preview_gpu_vs_cpu -- --ignored --nocapture`, imágenes en
+`%TEMP%xon-gpu-parity`: `<escena>-cpu.png`, `-gpu.png` y `-diff.png` = diferencia absoluta x16): en
+`terminal-vertical`, `ajustes` y `visor` la diferencia ampliada x16 es casi negra, con trazas de 1-2 niveles
+sobre los bordes de los glifos y los trazos de los bordes redondeados; no hay ninguna región, esquina ni
+tarjeta con error.
+
+### Coste en CPU de un fotograma (`bench_gpu_encode_and_submit_full_frame`)
+
+Mismo fotograma que `bench_render_pane_full_frame` (1920x1080, 210x53 celdas, 3 552 operaciones grabadas). Mide
+el tiempo de CPU de grabar + `GpuRenderer::render` (encode, subida del buffer de instancias y llamadas de
+dibujo) sobre una textura fuera de pantalla, NO el tiempo de GPU. 200 iteraciones tras calentar; al final se
+vacía la cola con `Flush` y la lectura de un píxel.
+
+| Ruta (misma sesión, `cargo test --release bench_`) | ms/fotograma de CPU |
+|---|---|
+| CPU: grabar + rasterizar (`bench_render_pane_full_frame`) | 0,83 / 0,85 / 0,83 |
+| GPU, hardware (D3D 11_1): grabar + encode/envío | 0,29 / 0,21 / 0,25 (grabar 0,08; envío 0,13-0,20) |
+| GPU, WARP (`AXON_RENDERER=warp`): grabar + encode/envío | 0,42 / 0,37 (grabar 0,08) |
+
+Vaciar la cola tras 200 fotogramas tardó 16-19 ms en hardware (unos 0,09 ms de GPU por fotograma como cota
+superior) y 520 ms en WARP (2,6 ms por fotograma: WARP rasteriza por software).
+
+### Salvedades
+
+- Una sola máquina y pocas ejecuciones; las cifras de la tabla de arriba (2,66 ms para el mismo benchmark de CPU)
+  se tomaron en otra sesión con la máquina más cargada, así que **la comparación válida es la de esta tabla,
+  tomada en la misma sesión**: el coste de CPU de la ruta GPU es ~3-4 veces menor que el de la rasterización.
+- Los umbrales de paridad se midieron en WARP; el hardware de esta máquina dio las mismas cifras, pero otros
+  controladores pueden redondear distinto. Los tests de la suite solo usan WARP.
+- El coste de GPU real en hardware no se midió con consultas de temporización; la cifra de vaciado es una cota.
