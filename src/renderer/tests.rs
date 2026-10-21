@@ -3238,7 +3238,7 @@ mod gpu_renderer {
         Instance, Kind,
     };
     use crate::renderer::scene::{Op, Scene};
-    use crate::renderer::test_support::{self, PARITY_TOLERANCE};
+    use crate::renderer::test_support::{self, bless_requested, PARITY_TOLERANCE};
     use crate::renderer::{rasterize, CachedGlyph, ImageRef};
     use crate::theme::Color;
     use std::rc::Rc;
@@ -3298,6 +3298,34 @@ mod gpu_renderer {
         v
     }
 
+    /// Referencia congelada de `golden/refs/<name>.png`. Con `AXON_BLESS=1` la ESCRIBE a partir de `cpu` (la salida
+    /// del rasterizador de la CPU) y no compara; sin él, exige que `gpu` difiera <= `PARITY_TOLERANCE` por canal.
+    ///
+    /// La CPU solo es la fuente mientras exista (Task 20a). Tras eliminarla (Task 20b) bendecir escribirá desde la
+    /// GPU: hacerlo únicamente después de comprobar visualmente el resultado, o un fallo se congela como correcto.
+    fn check_reference(name: &str, cpu: &[u32], gpu: &[u32], w: usize, h: usize) {
+        let path = test_support::reference_path("refs", name);
+        if bless_requested() {
+            test_support::write_reference(&path, w, h, cpu);
+            return;
+        }
+        let (want, rw, rh) = test_support::read_reference(&path);
+        assert_eq!((rw, rh), (w, h), "{name}: tamaño de la referencia");
+        assert_eq!(gpu.len(), want.len(), "{name}: píxeles");
+        for (i, (&r, &g)) in want.iter().zip(gpu).enumerate() {
+            let d = (0..3)
+                .map(|s| ((r >> (8 * s)) & 255).abs_diff((g >> (8 * s)) & 255))
+                .max()
+                .unwrap();
+            assert!(
+                d <= u32::from(PARITY_TOLERANCE),
+                "{name}: referencia PNG, píxel ({}, {}): ref {r:#08x} GPU {g:#08x}",
+                i % w,
+                i / w
+            );
+        }
+    }
+
     /// Dibuja `scene` con la CPU y con la GPU sobre la misma base y exige diferencia por canal
     /// <= `PARITY_TOLERANCE`. Devuelve la diferencia máxima medida.
     fn assert_parity(name: &str, r: &mut GpuRenderer, scene: &Scene, base: Option<&[u32]>) -> u8 {
@@ -3328,6 +3356,7 @@ mod gpu_renderer {
             "paridad {name}: diferencia máxima {max}, {differing} píxeles distintos de {}",
             w * h
         );
+        check_reference(name, &cpu, &gpu, w, h);
         if let Some((x, y, c, g)) = first_bad {
             panic!("{name}: primer píxel fuera de tolerancia en ({x}, {y}): CPU {c:#08x} GPU {g:#08x} (máx {max})");
         }
@@ -4111,6 +4140,7 @@ mod gpu_renderer {
             max <= PARITY_TOLERANCE as u32,
             "los glifos pequeños deben dibujarse (máx {max})"
         );
+        check_reference("glifo mayor que el atlas", &cpu, &gpu, w, h);
     }
 
     #[test]
@@ -4130,6 +4160,12 @@ mod gpu_renderer {
         assert_eq!(px.len(), 8192 * 4);
         let mut cpu = vec![0u32; w * h];
         rasterize(c.scene(), &mut cpu);
+        let clamped: Vec<u32> = cpu
+            .chunks(w)
+            .flat_map(|row| &row[..8192])
+            .copied()
+            .collect();
+        check_reference("escena mayor que la textura", &clamped, &px, 8192, h);
         for y in 0..h {
             for x in 0..8192 {
                 let (a, b) = (cpu[y * w + x], px[y * 8192 + x]);
@@ -4370,7 +4406,7 @@ mod gpu_surface {
 mod gpu_scenes {
     use crate::renderer::gpu::{DriverKind, GpuDevice, GpuRenderer};
     use crate::renderer::test_support::{
-        self, signature, signature_distance, PARITY_TOLERANCE, SCENE_MAX_DIFF,
+        self, bless_requested, signature, signature_distance, PARITY_TOLERANCE, SCENE_MAX_DIFF,
         SCENE_OUTLIER_FRACTION, SIGNATURE_TOLERANCE,
     };
     use windows::Win32::Graphics::Direct3D::*;
@@ -4378,21 +4414,64 @@ mod gpu_scenes {
     const W: usize = 1440;
     const H: usize = 900;
 
-    struct SceneStats {
-        name: &'static str,
-        distance: f32,
-        max_diff: u8,
+    /// Diferencia por canal entre dos fotogramas.
+    struct Diff {
+        max: u8,
         outliers: usize,
-        mean_diff: f64,
+        mean: f64,
     }
 
-    impl SceneStats {
+    impl Diff {
+        fn between(a: &[u32], b: &[u32]) -> Diff {
+            assert_eq!(a.len(), b.len());
+            let (mut max, mut outliers, mut sum) = (0u8, 0usize, 0u64);
+            for (&c, &g) in a.iter().zip(b) {
+                let mut d_px = 0u8;
+                for s in [0, 8, 16] {
+                    let d = ((c >> s) & 255).abs_diff((g >> s) & 255) as u8;
+                    sum += d as u64;
+                    d_px = d_px.max(d);
+                }
+                max = max.max(d_px);
+                outliers += (d_px > PARITY_TOLERANCE) as usize;
+            }
+            Diff {
+                max,
+                outliers,
+                mean: sum as f64 / (3 * a.len()) as f64,
+            }
+        }
+
         fn outlier_fraction(&self) -> f64 {
             self.outliers as f64 / (W * H) as f64
         }
+
+        fn assert_within(&self, distance: f32, what: &str, name: &str) {
+            assert!(distance <= SIGNATURE_TOLERANCE, "{name}: firma {what}");
+            assert!(
+                self.max <= SCENE_MAX_DIFF,
+                "{name}: diferencia máxima {what}"
+            );
+            assert!(
+                self.outlier_fraction() <= SCENE_OUTLIER_FRACTION,
+                "{name}: demasiados píxeles fuera de tolerancia {what}"
+            );
+        }
     }
 
-    /// Diferencia por canal GPU/CPU de cada escena: (distancia de firma, máximo, píxeles > `PARITY_TOLERANCE`, media).
+    struct SceneStats {
+        name: &'static str,
+        /// GPU frente a la firma del golden y a la CPU.
+        distance: f32,
+        cpu: Diff,
+        /// GPU frente a `golden/scenes/<name>.png`: (distancia de firma, diferencias). `None` al bendecir.
+        reference: Option<(f32, Diff)>,
+    }
+
+    /// Diferencia por canal GPU/CPU y GPU/referencia PNG de cada escena. Con `AXON_BLESS=1` escribe
+    /// `golden/scenes/<escena>.png` desde los fotogramas de la CPU (única vez que la CPU es la fuente: tras la
+    /// Task 20b bendecir escribirá desde la GPU, solo tras comprobarlo a ojo) y no compara con ellos. Bendecir con
+    /// `--test-threads=1`: los dos tests de escenas escriben los mismos archivos.
     fn measure(r: &mut GpuRenderer, tag: &str) -> Vec<SceneStats> {
         let golden = test_support::read_golden_signatures();
         let recorded = super::build_recorded_scenes(W, H);
@@ -4406,33 +4485,31 @@ mod gpu_scenes {
             // La firma CPU es la del golden (si no, el golden está desactualizado y lo dice otro test)
             let (cpu_sig, gpu_sig) = (signature(&cpu, W, H), signature(&gpu, W, H));
             assert_eq!(signature_distance(&cpu_sig, gsig), 0.0, "{name}: golden");
-            let (mut max, mut outliers, mut sum) = (0u8, 0usize, 0u64);
-            for (&c, &g) in cpu.iter().zip(&gpu) {
-                let mut d_px = 0u8;
-                for s in [0, 8, 16] {
-                    let d = ((c >> s) & 255).abs_diff((g >> s) & 255) as u8;
-                    sum += d as u64;
-                    d_px = d_px.max(d);
-                }
-                max = max.max(d_px);
-                outliers += (d_px > PARITY_TOLERANCE) as usize;
-            }
+            let path = test_support::reference_path("scenes", name);
+            let reference = if bless_requested() {
+                test_support::write_reference(&path, W, H, &cpu);
+                None
+            } else {
+                let (want, rw, rh) = test_support::read_reference(&path);
+                assert_eq!((rw, rh), (W, H), "{name}: tamaño de la referencia");
+                let dist = signature_distance(&gpu_sig, &signature(&want, W, H));
+                Some((dist, Diff::between(&want, &gpu)))
+            };
             let st = SceneStats {
                 name,
                 distance: signature_distance(&gpu_sig, gsig),
-                max_diff: max,
-                outliers,
-                mean_diff: sum as f64 / (3 * W * H) as f64,
+                cpu: Diff::between(&cpu, &gpu),
+                reference,
             };
             println!(
                 "[{tag}] {:<20} dist firma {:.4}  max {:>3}  >{} en {:>7} px ({:.4} %)  media {:.4}",
                 st.name,
                 st.distance,
-                st.max_diff,
+                st.cpu.max,
                 PARITY_TOLERANCE,
-                st.outliers,
-                st.outlier_fraction() * 100.0,
-                st.mean_diff
+                st.cpu.outliers,
+                st.cpu.outlier_fraction() * 100.0,
+                st.cpu.mean
             );
             all.push(st);
         }
@@ -4443,17 +4520,10 @@ mod gpu_scenes {
         println!("[{tag}] {:?} {:?}", gpu.kind, gpu.feature_level);
         let mut r = GpuRenderer::new(gpu).unwrap();
         for st in measure(&mut r, tag) {
-            assert!(st.distance <= SIGNATURE_TOLERANCE, "{}: firma", st.name);
-            assert!(
-                st.max_diff <= SCENE_MAX_DIFF,
-                "{}: diferencia máxima",
-                st.name
-            );
-            assert!(
-                st.outlier_fraction() <= SCENE_OUTLIER_FRACTION,
-                "{}: demasiados píxeles fuera de tolerancia",
-                st.name
-            );
+            if let Some((dist, diff)) = &st.reference {
+                diff.assert_within(*dist, "(referencia PNG)", st.name);
+            }
+            st.cpu.assert_within(st.distance, "(CPU)", st.name);
         }
     }
 

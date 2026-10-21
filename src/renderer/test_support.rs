@@ -37,6 +37,60 @@ pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
 }
 
+/// Ruta de la referencia PNG de `name` en `golden/<kind>/` (`kind` = `refs` para primitivas, `scenes` para las
+/// escenas completas). El nombre se sanea a `[a-z0-9_-]` (sin acentos) para que sea un nombre de archivo válido.
+pub(super) fn reference_path(kind: &str, name: &str) -> PathBuf {
+    let file: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' => 'a',
+            'é' => 'e',
+            'í' => 'i',
+            'ó' => 'o',
+            'ú' | 'ü' => 'u',
+            'ñ' => 'n',
+            c if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' => c,
+            _ => '_',
+        })
+        .collect();
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src/renderer/golden/"))
+        .join(kind)
+        .join(format!("{file}.png"))
+}
+
+/// Guarda `pixels` (`0x00RRGGBB`, `w` x `h`) como PNG RGB de 8 bits, sin pérdida.
+pub(super) fn write_reference(path: &std::path::Path, w: usize, h: usize, pixels: &[u32]) {
+    assert_eq!(pixels.len(), w * h, "{}: tamaño", path.display());
+    let rgb: Vec<u8> = pixels
+        .iter()
+        .flat_map(|&p| [(p >> 16) as u8, (p >> 8) as u8, p as u8])
+        .collect();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    image::RgbImage::from_raw(w as u32, h as u32, rgb)
+        .unwrap()
+        .save(path)
+        .unwrap();
+}
+
+/// Lee una referencia PNG: `(píxeles 0x00RRGGBB, ancho, alto)`. Entra en pánico si falta.
+pub(super) fn read_reference(path: &std::path::Path) -> (Vec<u32>, usize, usize) {
+    let img = image::open(path)
+        .unwrap_or_else(|e| {
+            panic!(
+                "referencia {} no disponible ({e}): genérala con AXON_BLESS=1 tras revisarla a ojo",
+                path.display()
+            )
+        })
+        .to_rgb8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let px = img
+        .pixels()
+        .map(|p| u32::from(p[0]) << 16 | u32::from(p[1]) << 8 | u32::from(p[2]))
+        .collect();
+    (px, w, h)
+}
+
 /// Diferencia máxima por canal (0-255) que admiten los tests de paridad GPU/CPU: la CPU mezcla con
 /// aritmética entera truncada y la GPU en coma flotante con redondeo, así que ±1 es normal. Una
 /// diferencia mayor se corrige en el shader o en la codificación, nunca subiendo este valor.
