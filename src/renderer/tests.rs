@@ -1386,7 +1386,11 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
     // 5. Visor de archivos
     let path = fixture.join("src/renderer/pane.rs");
-    let tab = crate::app::TerminalTab::new_file_viewer(90, path);
+    let mut tab = crate::app::TerminalTab::new_file_viewer(90, path);
+    // El encabezado del visor muestra la carpeta del archivo: se lee de la carpeta temporal de la máquina, y la
+    // escena no puede depender del usuario ni de dónde esté `%TEMP%` (en CI sale otra ruta). Ruta fija, ya leído el texto.
+    tab.file_viewer.as_mut().unwrap().path =
+        std::path::PathBuf::from("C:/Users/dev/axon/src/renderer/pane.rs");
     let viewer = tab.file_viewer.as_ref().unwrap();
     let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
