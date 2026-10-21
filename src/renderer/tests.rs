@@ -4203,13 +4203,19 @@ mod gpu_scenes {
         max: u8,
         outliers: usize,
         mean: f64,
+        /// Caja (x0, y0, x1, y1) que contiene los píxeles fuera de tolerancia y los primeros, con (a, b)
+        /// para diagnosticar fallos que solo ocurren en otra máquina (CI).
+        bbox: Option<(usize, usize, usize, usize)>,
+        samples: Vec<(usize, usize, u32, u32)>,
     }
 
     impl Diff {
         fn between(a: &[u32], b: &[u32]) -> Diff {
             assert_eq!(a.len(), b.len());
             let (mut max, mut outliers, mut sum) = (0u8, 0usize, 0u64);
-            for (&c, &g) in a.iter().zip(b) {
+            let mut bbox: Option<(usize, usize, usize, usize)> = None;
+            let mut samples = Vec::new();
+            for (i, (&c, &g)) in a.iter().zip(b).enumerate() {
                 let mut d_px = 0u8;
                 for s in [0, 8, 16] {
                     let d = ((c >> s) & 255).abs_diff((g >> s) & 255) as u8;
@@ -4217,12 +4223,24 @@ mod gpu_scenes {
                     d_px = d_px.max(d);
                 }
                 max = max.max(d_px);
-                outliers += (d_px > PARITY_TOLERANCE) as usize;
+                if d_px > PARITY_TOLERANCE {
+                    outliers += 1;
+                    let (x, y) = (i % W, i / W);
+                    bbox = Some(match bbox {
+                        None => (x, y, x, y),
+                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                    });
+                    if samples.len() < 6 {
+                        samples.push((x, y, c, g));
+                    }
+                }
             }
             Diff {
                 max,
                 outliers,
                 mean: sum as f64 / (3 * a.len()) as f64,
+                bbox,
+                samples,
             }
         }
 
@@ -4234,7 +4252,10 @@ mod gpu_scenes {
             assert!(distance <= SIGNATURE_TOLERANCE, "{name}: firma {what}");
             assert!(
                 self.max <= SCENE_MAX_DIFF,
-                "{name}: diferencia máxima {what}"
+                "{name}: diferencia máxima {what}: {} px fuera de tolerancia, caja {:?}, muestras                  (x, y, referencia, GPU) {:06x?}",
+                self.outliers,
+                self.bbox,
+                self.samples
             );
             assert!(
                 self.outlier_fraction() <= SCENE_OUTLIER_FRACTION,
