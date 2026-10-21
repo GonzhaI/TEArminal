@@ -2368,7 +2368,7 @@ fn test_canvas_opaque_ops_are_exact_on_the_gpu() {
 }
 
 /// Una tarjeta (`Canvas::card`) deja el interior intacto, pinta de `outer` el margen y las esquinas redondeadas y
-/// es exacta en lo opaco (análogo del antiguo `frame_card` de la CPU).
+/// es exacta en lo opaco (como la antigua tarjeta de la CPU).
 #[test]
 fn test_card_keeps_the_inside_and_rounds_the_corners_on_the_gpu() {
     let (w, h) = (60usize, 50usize);
@@ -3076,7 +3076,7 @@ mod gpu_renderer {
         })
     }
 
-    /// Rampa de cobertura 0..=255 con los extremos exactos (0 y 255 cubren las dos ramas de `blit_glyph`).
+    /// Rampa de cobertura 0..=255 con los extremos exactos (0 y 255 son los extremos de cobertura: sin efecto y opaco).
     fn ramp_glyph(w: usize, h: usize) -> Rc<CachedGlyph> {
         let n = (w * h).max(2) - 1;
         glyph(w, h, move |i| (i * 255 / n) as u8)

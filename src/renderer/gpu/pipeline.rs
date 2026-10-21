@@ -34,7 +34,7 @@ pub struct Instance {
     pub uv: [u16; 2],
     /// bits 0..3 = `Kind`, 8..15 = radio (px), 16..23 = esquina de `CardCorner`
     /// (0 arriba-izq., 1 arriba-der., 2 abajo-izq., 3 abajo-der.), 0 en el resto.
-    /// El contorno mide siempre 1 px (`stroke_rounded_rect_clipped`): no tiene campo de grosor.
+    /// El contorno mide siempre 1 px (`Canvas::rounded_stroke`): no tiene campo de grosor.
     pub kind_radius: u32,
     /// Relleno hasta 32 bytes (los campos suman 28); el input layout no lo lee. Siempre 0
     pub _reserved: u32,

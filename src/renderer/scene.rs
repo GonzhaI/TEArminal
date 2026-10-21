@@ -1,6 +1,6 @@
 //! `Scene`: lista ordenada de operaciones de dibujo ya resueltas (coordenadas absolutas y recorte
-//! efectivo finales) más las tablas de glifos e imágenes que usan. `Canvas` la graba; el rasterizador
-//! CPU (`raster_cpu`) la reproduce y, más adelante, el backend GPU la subirá como quads.
+//! efectivo finales) más las tablas de glifos e imágenes que usan. `Canvas` la graba y el backend GPU
+//! (`gpu/`) la dibuja como quads.
 
 use super::glyphs::FastMap;
 use super::CachedGlyph;

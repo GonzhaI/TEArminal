@@ -230,7 +230,7 @@ pub fn encode(
     Ok(EncodeStop::Done)
 }
 
-/// Misma geometría que `ui::frame_card`: márgenes sólidos (franja superior, inferior, columnas laterales)
+/// Geometría de `Canvas::card`: márgenes sólidos (franja superior, inferior, columnas laterales)
 /// y un cuarto de círculo de `outer` en cada esquina de la tarjeta.
 fn encode_card(
     sink: &mut Sink<'_>,

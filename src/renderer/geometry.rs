@@ -656,7 +656,7 @@ impl SidebarRects {
     /// Ancho del riel (solo lleva el botón de ajustes); la columna de sesiones ocupa el resto.
     pub const RAIL_W: usize = 60;
     pub const TOP: usize = 38;
-    /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`ui::frame_card`).
+    /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`Canvas::card`).
     pub const CARD_INSET: usize = 6;
     pub const CARD_RADIUS: usize = 10;
     /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire

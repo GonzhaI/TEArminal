@@ -1,6 +1,6 @@
 //! `Canvas`: graba el dibujo en una `Scene` (no escribe píxeles). Traslada las coordenadas locales de
 //! `with_offset`, intersecta el recorte efectivo y guarda cada operación con coordenadas absolutas;
-//! `raster_cpu::rasterize` la reproduce en orden con las primitivas de siempre.
+//! `gpu::GpuRenderer` la dibuja en orden.
 
 use super::scene::{ImageRef, Op, RealClip, Scene};
 use super::{CachedGlyph, Clip};

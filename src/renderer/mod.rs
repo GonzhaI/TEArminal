@@ -1,18 +1,14 @@
-//! Renderizado por software (CPU) de la terminal y de toda la interfaz sobre un framebuffer `u32` (XRGB).
-//!
-//! Un fotograma completo cuesta ~1 ms a 1080p (ver `AGENTS.md`, sección de rendimiento), por eso no hay GPU.
+//! Renderizado de la terminal y de toda la interfaz: la CPU graba cada fotograma en una `Scene` (`Canvas`) y
+//! `gpu/` la dibuja con Direct3D 11 (GPU o el rasterizador por software WARP), ver `AGENTS.md`.
 //! `TerminalRenderer` es el único dueño de las fuentes y cachés; cada pantalla vive en su archivo.
 
-// Las funciones de dibujo reciben el framebuffer y la geometría explícitos (coordenadas, tamaños, estado de
+// Las funciones de dibujo reciben el `Canvas` y la geometría explícitos (coordenadas, tamaños, estado de
 // hover): son primitivas planas, y agruparlas en structs solo trasladaría el ruido a cada llamada.
 #![allow(clippy::too_many_arguments)]
 
 mod blocks;
 mod canvas;
 mod context_menu;
-#[cfg(test)]
-#[allow(dead_code)] // solo hasta que se borre el render por software
-pub mod d3d11;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
@@ -22,8 +18,6 @@ mod glyphs;
 mod gpu;
 mod md_preview;
 mod pane;
-#[cfg(test)]
-mod raster_cpu;
 mod scene;
 mod settings_page;
 mod sidebar;
@@ -34,12 +28,6 @@ mod test_support;
 mod tokens;
 mod top_bar;
 
-#[cfg(test)]
-#[allow(unused_imports)]
-use draw::blit_glyph;
-#[cfg(test)]
-#[allow(unused_imports)]
-use draw::fill_rect;
 use draw::Clip;
 use glyphs::{
     font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
@@ -48,15 +36,9 @@ use glyphs::{
 
 pub use blocks::BlockCardButton;
 pub use canvas::Canvas;
-#[cfg(test)]
-#[allow(unused_imports)]
-pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};
 pub use gpu::{GpuSurface, Presented};
-#[cfg(test)]
-#[allow(unused_imports)]
-pub use raster_cpu::rasterize;
 pub use scene::ImageRef;
 pub use state::*;
 

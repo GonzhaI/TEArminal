@@ -1,6 +1,6 @@
 // Quads instanciados del renderer GPU (Shader Model 4.0: vale desde Feature Level 10_0).
-// Una instancia = un rectángulo en píxeles del destino. Reproduce las primitivas del rasterizador
-// CPU de referencia (src/renderer/raster_cpu.rs); el diseño de `Instance` está en pipeline.rs.
+// Una instancia = un rectángulo en píxeles del destino. Dibuja las operaciones de `Scene` (rellenos,
+// glifos, redondeados, imágenes, tarjetas; las referencias PNG de golden/ fijan su aspecto); el diseño de `Instance` está en pipeline.rs.
 // Tras editar este archivo: `pwsh tools/compile-shaders.ps1` (regenera los .cso y el hash).
 
 cbuffer Frame : register(b0)
@@ -61,7 +61,7 @@ VsOut vs_main(VsIn i)
     return o;
 }
 
-// Distancia con signo al rectángulo redondeado (ui/paint.rs: draw_rounded_rect_clipped).
+// Distancia con signo al rectángulo redondeado (mismo borde que las referencias PNG de golden/).
 float rounded_dist(float2 pc, int4 rect, float radius)
 {
     float2 half_size = float2(rect.zw) * 0.5;
@@ -81,7 +81,7 @@ float4 ps_main(VsOut i) : SV_Target
     uint radius = (i.kr >> 8) & 255u;
     float3 rgb = float3((i.color >> 16) & 255u, (i.color >> 8) & 255u, i.color & 255u) / 255.0;
     uint ca = (i.color >> 24) & 255u;
-    float2 pc = float2(pix) + 0.5; // centro del píxel, como el rasterizador CPU
+    float2 pc = float2(pix) + 0.5; // centro del píxel
     int2 off = pix - i.rect.xy;
 
     if (kind == KIND_SOLID)
@@ -94,7 +94,7 @@ float4 ps_main(VsOut i) : SV_Target
         float dist = rounded_dist(pc, i.rect, float(radius));
         // Relleno: cobertura lineal de 1 px; contorno de 1 px alineado hacia el interior
         float d = (kind == KIND_ROUNDED_FILL) ? dist : abs(dist + 0.5) - 0.5;
-        float a8 = floor(saturate(0.5 - d) * float(ca) + 0.5); // round() de la CPU
+        float a8 = floor(saturate(0.5 - d) * float(ca) + 0.5); // redondeo al entero más cercano
         if (a8 < 1.0)
             discard;
         return float4(rgb, a8 / 255.0);
@@ -104,15 +104,15 @@ float4 ps_main(VsOut i) : SV_Target
         float cov = atlas.Load(int3(int2(i.uv) + off, 0));
         uint c8 = uint(cov * 255.0 + 0.5);
         if (c8 == 0u)
-            discard; // blit_glyph: cobertura 0 no toca el destino
-        // blit_glyph ignora el alfa del color: solo manda la cobertura (255 sobrescribe, el resto mezcla)
+            discard; // cobertura 0 no toca el destino
+        // el alfa del color se ignora: solo manda la cobertura (255 sobrescribe, el resto mezcla)
         return float4(rgb, float(c8) / 255.0);
     }
     else if (kind == KIND_IMAGE)
     {
         uint iw, ih;
         image.GetDimensions(iw, ih);
-        // Vecino más próximo con la misma aritmética entera que la CPU: src = off * src_size / target_size
+        // Vecino más próximo con aritmética entera: src = off * src_size / target_size
         uint2 src = (uint2(off) * uint2(iw, ih)) / uint2(i.rect.zw);
         float4 t = image.Load(int3(int2(src), 0));
         uint a8 = uint(t.a * 255.0 + 0.5);
@@ -122,7 +122,7 @@ float4 ps_main(VsOut i) : SV_Target
     }
     else
     {
-        // CardCorner (ui/paint.rs: frame_card): `color` es `outer`; cuarto de círculo de radio `radius`
+        // CardCorner: `color` es `outer`; cuarto de círculo de radio `radius`
         uint corner = (i.kr >> 16) & 3u;
         float2 centre = float2(i.rect.xy) + float2((corner & 1u) != 0u ? 0.0 : float(radius),
                                                    (corner & 2u) != 0u ? 0.0 : float(radius));

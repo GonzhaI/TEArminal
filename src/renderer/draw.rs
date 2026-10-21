@@ -1,77 +1,9 @@
-//! Primitivas de dibujo sobre el framebuffer: rellenos, texto de terminal, texto de UI (Inter) e iconos.
+//! Primitivas de dibujo sobre el `Canvas`: texto de terminal, texto de UI (Inter), iconos y barras de scroll.
 
 use super::*;
 
 /// Rectángulo de recorte (x0, y0, x1, y1), extremo superior exclusivo
 pub(super) type Clip = (usize, usize, usize, usize);
-
-/// Referencia del relleno antiguo: los tests la comparan con `Canvas::fill_rect`.
-#[cfg(test)]
-#[allow(dead_code)] // solo hasta que se borre el render por software
-pub(super) fn fill_rect(
-    buffer: &mut [u32],
-    buf_w: usize,
-    clip: Clip,
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    color: u32,
-) {
-    let (x0, x1) = (x.max(clip.0), (x + w).min(clip.2));
-    let (y0, y1) = (y.max(clip.1), (y + h).min(clip.3));
-    if x0 >= x1 {
-        return;
-    }
-    for py in y0..y1 {
-        buffer[py * buf_w + x0..py * buf_w + x1].fill(color);
-    }
-}
-
-/// Mezcla un glifo (mapa de cobertura 8-bit) sobre el framebuffer recortado. Único punto de
-/// composición de texto: terminal, UI Inter e iconos Lucide pasan por aquí.
-#[cfg(test)]
-#[allow(dead_code)] // solo hasta que se borre el render por software
-pub(super) fn blit_glyph(
-    buffer: &mut [u32],
-    buf_w: usize,
-    clip: Clip,
-    glyph: &CachedGlyph,
-    gx: i32,
-    gy: i32,
-    fg: Color,
-) {
-    let x0 = gx.max(clip.0 as i32);
-    let x1 = (gx + glyph.width as i32).min(clip.2 as i32);
-    let y0 = gy.max(clip.1 as i32);
-    let y1 = (gy + glyph.height as i32).min(clip.3 as i32);
-    if x0 >= x1 || y0 >= y1 {
-        return;
-    }
-    let n = (x1 - x0) as usize;
-    let fg_u32 = fg.to_u32_xrgb();
-    let (fr, fgc, fb) = (fg.r as u32, fg.g as u32, fg.b as u32);
-    for py in y0..y1 {
-        let src_start = (py - gy) as usize * glyph.width + (x0 - gx) as usize;
-        let dst_start = py as usize * buf_w + x0 as usize;
-        let src = &glyph.bitmap[src_start..src_start + n];
-        let dst = &mut buffer[dst_start..dst_start + n];
-        for (d, &alpha) in dst.iter_mut().zip(src) {
-            match alpha {
-                0 => {}
-                255 => *d = fg_u32,
-                _ => {
-                    let a = alpha as u32;
-                    let inv = 255 - a;
-                    let r = (fr * a + ((*d >> 16) & 0xFF) * inv) / 255;
-                    let g = (fgc * a + ((*d >> 8) & 0xFF) * inv) / 255;
-                    let b = (fb * a + (*d & 0xFF) * inv) / 255;
-                    *d = (r << 16) | (g << 8) | b;
-                }
-            }
-        }
-    }
-}
 
 impl TerminalRenderer {
     /// Rellena un rectángulo de color sólido directamente en el buffer
