@@ -453,8 +453,9 @@ mod tests {
     #[test]
     fn test_powershell_and_harness_kill_word() {
         let pty = PtyManager::new(0, "powershell.exe", true, 120, 30, None, None).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        while pty.try_recv_output().is_some() {}
+        // Esperar al prompt (no a un tiempo fijo): si PowerShell aún arranca, descarta lo que se teclea.
+        let (ready, boot) = read_until(&pty, "]133;B", 40_000);
+        assert!(ready, "el prompt de Axon no apareció: {boot:?}");
 
         // 1. Probar 0x17 (Ctrl+W)
         pty.write_input(b"echo first second");
@@ -483,9 +484,9 @@ mod tests {
         println!("ALT+BACKSPACE (\\x1b\\x7f) PTY OUTPUT: {:?}", del_alt_bs);
 
         // 3. Probar \x1b\r (Shift+Enter / Alt+Enter): salto de línea sin enviar hasta pulsar \r
-        pty.write_input(&[0x03]); // limpiar línea previa
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        while pty.try_recv_output().is_some() {}
+        pty.write_input(&[0x03]); // limpiar línea previa; PSReadLine repinta el prompt al terminar
+        let (ready, cleared) = read_until(&pty, "]133;B", 10_000);
+        assert!(ready, "tras Ctrl+C no volvió el prompt: {cleared:?}");
 
         pty.write_input(b"Write-Output 'LINE_A'\x1b\rWrite-Output 'LINE_B'");
         std::thread::sleep(std::time::Duration::from_millis(300));
