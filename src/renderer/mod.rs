@@ -28,7 +28,9 @@ mod test_support;
 mod tokens;
 mod top_bar;
 
-use draw::{blit_glyph, fill_rect, Clip};
+#[cfg(test)]
+use draw::fill_rect;
+use draw::{blit_glyph, Clip};
 use glyphs::{
     font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
     EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
@@ -78,14 +80,11 @@ pub struct TerminalRenderer {
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
-    /// Búfer del panel lateral cuando va a la derecha: se dibuja aparte y se copia a su sitio.
-    pub panel_buf: Vec<u32>,
     pub ligatures: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
     ligature_cache: FastMap<(u16, bool), CachedGlyph>,
     shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
-    pub(super) settings_scratch: Vec<u32>,
     md_blocks_cache: Option<(
         std::path::PathBuf,
         u64,
@@ -136,13 +135,11 @@ impl TerminalRenderer {
             margin_x: 0,
             margin_y: 0,
             scrollbars_awake: false,
-            panel_buf: Vec::new(),
             ligatures: config.terminal.ligatures,
             regular_face,
             bold_face_rb: OnceCell::new(),
             ligature_cache: FastMap::default(),
             shaped_ligatures: FastMap::default(),
-            settings_scratch: Vec::new(),
             md_blocks_cache: None,
         };
         renderer.update_scale(config, scale_factor);

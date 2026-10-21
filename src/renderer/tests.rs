@@ -1139,14 +1139,23 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
-    let mut pc = Canvas::over(&mut panel, SIDEBAR_WIDTH, h);
-    r.render_files_panel(&mut pc, SIDEBAR_WIDTH, status_h, true, &theme);
     let x0 = w - SIDEBAR_WIDTH;
-    for y in crate::renderer::SidebarRects::TOP..usable_h {
-        canvas.pixels_mut()[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
-            .copy_from_slice(&panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH]);
-    }
+    let sb_top = crate::renderer::SidebarRects::TOP;
+    canvas.fill_rect(
+        (0, 0, w, h),
+        x0,
+        sb_top,
+        SIDEBAR_WIDTH,
+        usable_h - sb_top,
+        theme.background,
+    );
+    canvas.with_offset(
+        x0 as i32,
+        0,
+        (SIDEBAR_WIDTH, h),
+        (x0, sb_top, w, usable_h),
+        |c| r.render_files_panel(c, SIDEBAR_WIDTH, status_h, true, &theme),
+    );
     let mut h_explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
     let er = crate::renderer::FilesPanelRects::explorer_rect(usable_h);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
@@ -1402,27 +1411,38 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         &theme,
     );
-    let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
-    let mut pc = Canvas::over(&mut panel, SIDEBAR_WIDTH, h);
-    r.render_sidebar(
-        &mut pc,
-        SIDEBAR_WIDTH,
-        status_h,
-        &header_right,
-        &tabs,
-        0,
-        None,
-        None,
-        false,
-        false,
-        false,
-        &theme,
-    );
     let x0 = w - SIDEBAR_WIDTH;
-    for y in crate::renderer::SidebarRects::TOP..h - status_h {
-        canvas.pixels_mut()[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
-            .copy_from_slice(&panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH]);
-    }
+    let sb_top = crate::renderer::SidebarRects::TOP;
+    canvas.fill_rect(
+        (0, 0, w, h),
+        x0,
+        sb_top,
+        SIDEBAR_WIDTH,
+        h - status_h - sb_top,
+        theme.background,
+    );
+    canvas.with_offset(
+        x0 as i32,
+        0,
+        (SIDEBAR_WIDTH, h),
+        (x0, sb_top, w, h - status_h),
+        |c| {
+            r.render_sidebar(
+                c,
+                SIDEBAR_WIDTH,
+                status_h,
+                &header_right,
+                &tabs,
+                0,
+                None,
+                None,
+                false,
+                false,
+                false,
+                &theme,
+            )
+        },
+    );
     explorer.dock = Some((
         x0 + crate::renderer::SidebarRects::RAIL_W,
         crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).1,
@@ -2380,4 +2400,87 @@ fn test_draw_helpers_write_through_canvas() {
     };
     assert!(bar(false, false).iter().all(|&p| p == 0));
     assert!(bar(true, false).iter().any(|&p| p != 0));
+}
+
+#[test]
+fn test_with_offset_equals_offscreen_copy() {
+    // Real: 60x50. Local (lo que ven las pantallas): 56x100, con el origen en (-4, -20) reales,
+    // así que parte del contenido empieza en coordenadas reales negativas.
+    const W: usize = 60;
+    const H: usize = 50;
+    const LW: usize = 56;
+    const LH: usize = 100;
+    let (dx, dy) = (-4i32, -20i32);
+    let clip: Clip = (10, 8, 50, 40);
+    let bg = Color::from_rgb(30, 31, 40);
+    let col = Color::from_rgb(200, 90, 30);
+    let glyph = CachedGlyph {
+        width: 4,
+        height: 3,
+        x_offset: 0,
+        y_offset: 0,
+        bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
+    };
+    let rgba: Vec<u8> = vec![
+        255, 0, 0, 255, //
+        0, 255, 0, 128, //
+        0, 0, 255, 0, //
+        255, 255, 255, 40,
+    ];
+    // Local y reales: 28 = borde superior del recorte, 60 = borde inferior; x: 14 = izquierdo, 54 = derecho
+    let ops = |c: &mut Canvas| {
+        assert_eq!(c.size(), (LW, LH));
+        c.fill_rect((0, 0, LW, LH), 0, 0, LW, 12, col); // empieza fuera por arriba y por la izquierda
+        c.fill_rect((0, 26, 30, 40), 6, 24, 40, 8, Color::from_rgb(10, 200, 30));
+        c.rounded_fill(2, 20, 30, 22, 6, Color::from_rgb(80, 120, 220)); // cruza arriba y a la izquierda
+        c.rounded_stroke(2, 20, 30, 22, 6, Color::from_rgb(10, 220, 240));
+        c.rounded_fill(30, 50, 40, 30, 8, Color::from_rgb(220, 60, 120)); // cruza derecha y abajo
+        c.rounded_stroke(30, 50, 40, 30, 8, Color::from_rgb(250, 250, 90));
+        c.rounded_fill(10, 80, 20, 6, 0, Color::from_rgb(1, 2, 3)); // radio 0
+        c.glyph((0, 0, LW, LH), &glyph, 12, 26, col); // cruza el borde superior del recorte
+        c.glyph((0, 0, LW, LH), &glyph, 51, 60, col);
+        c.image(
+            (0, 0, LW, LH),
+            ImageRef {
+                rgba: &rgba,
+                width: 2,
+                height: 2,
+            },
+            (-2, 30, 24, 18),
+        );
+    };
+    let base: Vec<u32> = (0..W * H)
+        .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
+        .collect();
+
+    // Método antiguo: búfer local prerrellenado, mismo dibujo y copia de la ventana
+    let mut old = base.clone();
+    let mut scratch = vec![bg.to_u32_xrgb(); LW * LH];
+    ops(&mut Canvas::over(&mut scratch, LW, LH));
+    for ry in clip.1..clip.3 {
+        for rx in clip.0..clip.2 {
+            let (lx, ly) = (rx as i32 - dx, ry as i32 - dy);
+            if (0..LW as i32).contains(&lx) && (0..LH as i32).contains(&ly) {
+                old[ry * W + rx] = scratch[ly as usize * LW + lx as usize];
+            }
+        }
+    }
+
+    // Método nuevo: fondo explícito en la ventana y dibujo desplazado y recortado
+    let mut new = base.clone();
+    {
+        let mut c = Canvas::over(&mut new, W, H);
+        c.fill_rect(
+            (0, 0, W, H),
+            clip.0,
+            clip.1,
+            clip.2 - clip.0,
+            clip.3 - clip.1,
+            bg,
+        );
+        c.with_offset(dx, dy, (LW, LH), clip, ops);
+        assert_eq!(c.size(), (W, H), "with_offset restaura el estado");
+    }
+    assert_ne!(new, base, "el dibujo debe cambiar algo");
+    assert_eq!(old, new);
 }

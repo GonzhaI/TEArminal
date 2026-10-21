@@ -1,7 +1,7 @@
 //! `Canvas`: envoltorio inmediato sobre un framebuffer XRGB. Cada método delega en las primitivas
 //! existentes (misma salida bit a bit); es la API a la que migra el dibujo y desaparece en la tarea 11.
 
-use super::{blit_glyph, fill_rect, CachedGlyph, Clip};
+use super::{blit_glyph, CachedGlyph, Clip};
 use crate::theme::Color;
 
 /// Imagen RGBA de 8 bits por canal (`width * height * 4` bytes).
@@ -11,25 +11,78 @@ pub struct ImageRef<'a> {
     pub height: u32,
 }
 
+/// Recorte absoluto `(x0, y0, x1, y1)` en el búfer real (límite superior exclusivo).
+type RealClip = (i32, i32, i32, i32);
+
+fn intersect(a: RealClip, b: RealClip) -> RealClip {
+    (a.0.max(b.0), a.1.max(b.1), a.2.min(b.2), a.3.min(b.3))
+}
+
 pub struct Canvas<'a> {
     buf: &'a mut [u32],
     w: usize,
     h: usize,
+    /// Origen local en el búfer real (`with_offset`); (0, 0) fuera de él.
+    ox: i32,
+    oy: i32,
+    /// Tamaño local que ven las pantallas (`size()`); igual al real fuera de `with_offset`.
+    lw: usize,
+    lh: usize,
+    /// Recorte efectivo en coordenadas reales: dentro del búfer y de `with_offset`.
+    clip: RealClip,
 }
 
 impl<'a> Canvas<'a> {
     pub fn over(buf: &'a mut [u32], w: usize, h: usize) -> Self {
-        Self { buf, w, h }
+        Self {
+            buf,
+            w,
+            h,
+            ox: 0,
+            oy: 0,
+            lw: w,
+            lh: h,
+            clip: (0, 0, w as i32, h as i32),
+        }
     }
 
+    /// Tamaño local: el del búfer, o el declarado por el `with_offset` en curso.
     pub fn size(&self) -> (usize, usize) {
-        (self.w, self.h)
+        (self.lw, self.lh)
     }
 
-    /// Píxeles crudos del búfer. Temporal: la copia de Ajustes desde su búfer fuera de pantalla lo
-    /// necesita hasta la tarea 10, que la sustituye.
-    pub(crate) fn pixels_mut(&mut self) -> &mut [u32] {
-        self.buf
+    /// Ejecuta `f` con las coordenadas trasladadas `(dx, dy)` al búfer real, `size()` igual a
+    /// `local_size` y el recorte `clip` (coordenadas reales) intersecado con el recorte vigente, con
+    /// el área local trasladada y con el recorte explícito de cada operación. Sustituye a dibujar
+    /// en un búfer aparte y copiar la ventana visible: una forma que sale de la ventana se recorta
+    /// con la misma cobertura que tendría entera. Restaura el estado al volver.
+    pub fn with_offset(
+        &mut self,
+        dx: i32,
+        dy: i32,
+        local_size: (usize, usize),
+        clip: Clip,
+        f: impl FnOnce(&mut Canvas),
+    ) {
+        let saved = (self.ox, self.oy, self.lw, self.lh, self.clip);
+        let (ox, oy) = (self.ox + dx, self.oy + dy);
+        let local = (ox, oy, ox + local_size.0 as i32, oy + local_size.1 as i32);
+        let abs = (clip.0 as i32, clip.1 as i32, clip.2 as i32, clip.3 as i32);
+        self.clip = intersect(intersect(self.clip, abs), local);
+        (self.ox, self.oy, self.lw, self.lh) = (ox, oy, local_size.0, local_size.1);
+        f(self);
+        (self.ox, self.oy, self.lw, self.lh, self.clip) = saved;
+    }
+
+    /// Recorte explícito local (usize) a coordenadas reales, intersecado con el efectivo.
+    fn real_clip(&self, clip: Clip) -> RealClip {
+        let local = (
+            clip.0 as i32 + self.ox,
+            clip.1 as i32 + self.oy,
+            clip.2 as i32 + self.ox,
+            clip.3 as i32 + self.oy,
+        );
+        intersect(self.clip, local)
     }
 
     /// Píxeles del búfer, solo lectura (los tests comprueban lo dibujado sin soltar el lienzo).
@@ -39,15 +92,56 @@ impl<'a> Canvas<'a> {
     }
 
     pub fn clear(&mut self, color: Color) {
-        self.buf.fill(color.to_u32_xrgb());
+        let c = self.clip;
+        if c == (0, 0, self.w as i32, self.h as i32) {
+            self.buf.fill(color.to_u32_xrgb());
+        } else {
+            self.fill_real(c, c.0, c.1, c.2 - c.0, c.3 - c.1, color);
+        }
+    }
+
+    /// Relleno sólido en coordenadas reales `(x, y)` con origen posiblemente negativo.
+    fn fill_real(&mut self, clip: RealClip, x: i32, y: i32, w: i32, h: i32, color: Color) {
+        let (x0, x1) = (x.max(clip.0), (x + w).min(clip.2));
+        let (y0, y1) = (y.max(clip.1), (y + h).min(clip.3));
+        if x0 >= x1 {
+            return;
+        }
+        let px = color.to_u32_xrgb();
+        for py in y0..y1 {
+            let row = py as usize * self.w;
+            self.buf[row + x0 as usize..row + x1 as usize].fill(px);
+        }
     }
 
     pub fn fill_rect(&mut self, clip: Clip, x: usize, y: usize, w: usize, h: usize, color: Color) {
-        fill_rect(self.buf, self.w, clip, x, y, w, h, color.to_u32_xrgb());
+        let c = self.real_clip(clip);
+        self.fill_real(
+            c,
+            x as i32 + self.ox,
+            y as i32 + self.oy,
+            w as i32,
+            h as i32,
+            color,
+        );
     }
 
     pub fn glyph(&mut self, clip: Clip, glyph: &CachedGlyph, gx: i32, gy: i32, fg: Color) {
-        blit_glyph(self.buf, self.w, clip, glyph, gx, gy, fg);
+        let c = self.real_clip(clip);
+        if c.0 >= c.2 || c.1 >= c.3 {
+            return;
+        }
+        // El recorte efectivo está dentro del búfer: no es negativo
+        let clip = (c.0 as usize, c.1 as usize, c.2 as usize, c.3 as usize);
+        blit_glyph(
+            self.buf,
+            self.w,
+            clip,
+            glyph,
+            gx + self.ox,
+            gy + self.oy,
+            fg,
+        );
     }
 
     pub fn rounded_fill(
@@ -59,7 +153,17 @@ impl<'a> Canvas<'a> {
         radius: usize,
         color: Color,
     ) {
-        crate::ui::draw_rounded_rect(self.buf, self.w, self.h, x, y, w, h, radius, color);
+        crate::ui::draw_rounded_rect_clipped(
+            self.buf,
+            self.w,
+            self.clip,
+            x as i32 + self.ox,
+            y as i32 + self.oy,
+            w,
+            h,
+            radius,
+            color,
+        );
     }
 
     pub fn rounded_stroke(
@@ -71,7 +175,17 @@ impl<'a> Canvas<'a> {
         radius: usize,
         color: Color,
     ) {
-        crate::ui::stroke_rounded_rect(self.buf, self.w, self.h, x, y, w, h, radius, color);
+        crate::ui::stroke_rounded_rect_clipped(
+            self.buf,
+            self.w,
+            self.clip,
+            x as i32 + self.ox,
+            y as i32 + self.oy,
+            w,
+            h,
+            radius,
+            color,
+        );
     }
 
     /// Copia `img` escalada (vecino más próximo) a `dst = (x, y, ancho, alto)`, recortada a `clip`.
@@ -82,9 +196,9 @@ impl<'a> Canvas<'a> {
             return;
         }
         let (ix, iy, tw, th) = dst;
-        // El recorte nunca sale del búfer
-        let (x0, y0) = (clip.0 as i32, clip.1 as i32);
-        let (x1, y1) = (clip.2.min(self.w) as i32, clip.3.min(self.h) as i32);
+        let (ix, iy) = (ix + self.ox, iy + self.oy);
+        // El recorte efectivo nunca sale del búfer
+        let (x0, y0, x1, y1) = self.real_clip(clip);
         for dy in 0..th {
             let py = iy + dy as i32;
             if py < y0 || py >= y1 {
@@ -121,6 +235,10 @@ impl<'a> Canvas<'a> {
         radius: usize,
         outer: Color,
     ) {
+        debug_assert!(
+            (self.ox, self.oy) == (0, 0),
+            "card no admite desplazamiento"
+        );
         crate::ui::frame_card(self.buf, self.w, self.h, region, inset, radius, outer);
     }
 }

@@ -549,16 +549,22 @@ fn draw_panel(
         render!(canvas);
         return;
     }
-    let mut panel = std::mem::take(&mut renderer.panel_buf);
-    panel.clear();
-    panel.resize(SIDEBAR_WIDTH * height, theme.background.to_u32_xrgb());
-    render!(&mut Canvas::over(&mut panel, SIDEBAR_WIDTH, height));
     let x0 = width.saturating_sub(SIDEBAR_WIDTH);
     let usable = height.saturating_sub(p.status_bar_h);
-    let buffer = canvas.pixels_mut();
-    for y in SidebarRects::TOP..usable {
-        let src = &panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH];
-        buffer[y * width + x0..y * width + x0 + SIDEBAR_WIDTH].copy_from_slice(src);
-    }
-    renderer.panel_buf = panel;
+    let top = SidebarRects::TOP;
+    canvas.fill_rect(
+        (0, 0, width, height),
+        x0,
+        top,
+        SIDEBAR_WIDTH,
+        usable.saturating_sub(top),
+        theme.background,
+    );
+    canvas.with_offset(
+        x0 as i32,
+        0,
+        (SIDEBAR_WIDTH, height),
+        (x0, top, x0 + SIDEBAR_WIDTH, usable),
+        |c| render!(c),
+    );
 }

@@ -91,19 +91,42 @@ pub fn draw_rounded_rect(
     radius: usize,
     color: Color,
 ) {
-    if w == 0 || h == 0 || buf_width == 0 || buf_height == 0 || color.a() == 0 {
+    let clip = (0, 0, buf_width as i32, buf_height as i32);
+    draw_rounded_rect_clipped(
+        buffer, buf_width, clip, x as i32, y as i32, w, h, radius, color,
+    );
+}
+
+/// Como `draw_rounded_rect`, con origen `i32` (puede ser negativo) y recorte `(x0, y0, x1, y1)`
+/// (límite superior exclusivo, dentro del búfer). La cobertura de cada píxel solo depende de su
+/// posición respecto a la forma: recortar equivale a dibujarla entera y recortar el resultado.
+pub fn draw_rounded_rect_clipped(
+    buffer: &mut [u32],
+    buf_width: usize,
+    clip: (i32, i32, i32, i32),
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    radius: usize,
+    color: Color,
+) {
+    if w == 0 || h == 0 || buf_width == 0 || color.a() == 0 {
         return;
     }
-    let x_end = (x + w).min(buf_width);
-    let y_end = (y + h).min(buf_height);
-    if x >= x_end || y >= y_end {
+    let x0 = x.max(clip.0);
+    let x_end = (x + w as i32).min(clip.2);
+    let y0 = y.max(clip.1);
+    let y_end = (y + h as i32).min(clip.3);
+    if x0 >= x_end || y0 >= y_end {
         return;
     }
+    let (x0, x_end) = (x0 as usize, x_end as usize);
     if radius == 0 {
         let ca = color.a();
-        for py in y..y_end {
+        for py in y0 as usize..y_end as usize {
             let row_idx = py * buf_width;
-            blend_span_const_alpha(&mut buffer[row_idx + x..row_idx + x_end], color, ca);
+            blend_span_const_alpha(&mut buffer[row_idx + x0..row_idx + x_end], color, ca);
         }
         return;
     }
@@ -118,21 +141,21 @@ pub fn draw_rounded_rect(
     let ca = color.a();
     let ca_f = ca as f32;
 
-    for py in y..y_end {
+    for py in y0 as usize..y_end as usize {
         let py_f = (py as f32 + 0.5) - cy;
         let qy = py_f.abs() - inner_hh;
         let row_idx = py * buf_width;
 
         // Filas centrales fuera de las esquinas: toda la fila tiene dist <= -0.5 (alpha = color.a())
         if qy <= -0.5 {
-            blend_span_const_alpha(&mut buffer[row_idx + x..row_idx + x_end], color, ca);
+            blend_span_const_alpha(&mut buffer[row_idx + x0..row_idx + x_end], color, ca);
             continue;
         }
 
         let ext_y = qy.max(0.0);
         let ext_y_sq = ext_y * ext_y;
 
-        for px in x..x_end {
+        for px in x0..x_end {
             let px_f = (px as f32 + 0.5) - cx;
             let qx = px_f.abs() - inner_hw;
 
@@ -181,14 +204,43 @@ pub fn stroke_rounded_rect(
     radius: usize,
     border_color: Color,
 ) {
-    if w == 0 || h == 0 || buf_width == 0 || buf_height == 0 || border_color.a() == 0 {
+    let clip = (0, 0, buf_width as i32, buf_height as i32);
+    stroke_rounded_rect_clipped(
+        buffer,
+        buf_width,
+        clip,
+        x as i32,
+        y as i32,
+        w,
+        h,
+        radius,
+        border_color,
+    );
+}
+
+/// Como `stroke_rounded_rect`, con origen `i32` y recorte `(x0, y0, x1, y1)` (ver `draw_rounded_rect_clipped`).
+pub fn stroke_rounded_rect_clipped(
+    buffer: &mut [u32],
+    buf_width: usize,
+    clip: (i32, i32, i32, i32),
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    radius: usize,
+    border_color: Color,
+) {
+    if w == 0 || h == 0 || buf_width == 0 || border_color.a() == 0 {
         return;
     }
-    let x_end = (x + w).min(buf_width);
-    let y_end = (y + h).min(buf_height);
-    if x >= x_end || y >= y_end {
+    let x0 = x.max(clip.0);
+    let x_end = (x + w as i32).min(clip.2);
+    let y0 = y.max(clip.1);
+    let y_end = (y + h as i32).min(clip.3);
+    if x0 >= x_end || y0 >= y_end {
         return;
     }
+    let (x0, x_end) = (x0 as usize, x_end as usize);
 
     let hw = w as f32 / 2.0;
     let hh = h as f32 / 2.0;
@@ -201,10 +253,10 @@ pub fn stroke_rounded_rect(
     let ba_f = ba as f32;
 
     // En las filas centrales donde qy - r <= -1.5, el hueco interior tiene |px - cx| < hw - 1.5
-    let skip_x0 = ((cx - (hw - 1.5)).ceil() as usize).max(x);
+    let skip_x0 = ((cx - (hw - 1.5)).ceil() as usize).max(x0);
     let skip_x1 = ((cx + (hw - 1.5)).floor() as usize).min(x_end);
 
-    for py in y..y_end {
+    for py in y0 as usize..y_end as usize {
         let py_f = (py as f32 + 0.5) - cy;
         let qy = py_f.abs() - inner_hh;
         let row_idx = py * buf_width;
@@ -212,9 +264,9 @@ pub fn stroke_rounded_rect(
         let ext_y_sq = ext_y * ext_y;
         let can_skip_interior = qy <= 0.0 && (qy - r) <= -1.5 && skip_x0 < skip_x1;
 
-        let mut px = x;
+        let mut px = x0;
         while px < x_end {
-            if can_skip_interior && px == skip_x0 {
+            if can_skip_interior && (skip_x0..skip_x1).contains(&px) {
                 px = skip_x1;
                 if px >= x_end {
                     break;

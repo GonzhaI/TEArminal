@@ -469,7 +469,8 @@ impl TerminalRenderer {
             theme.chrome_line(),
         );
 
-        // 4. Contenido: se dibuja fuera de pantalla y se copia la ventana visible.
+        // 4. Contenido: se dibuja en coordenadas locales (`width` x `top + content_h`) desplazadas por
+        // el scroll y recortadas a la ventana visible; el fondo se pinta antes en esa ventana.
         let top = SettingsPageRects::CONTENT_TOP;
         let content_h = SettingsPageRects::content_height(state.section);
         let viewport_h = page_h.saturating_sub(top + status_bar_h);
@@ -477,39 +478,37 @@ impl TerminalRenderer {
             .scroll_y
             .min(SettingsPageRects::max_scroll(state.section, viewport_h));
         let tmp_h = top + content_h;
-        let mut tmp = std::mem::take(&mut self.settings_scratch);
-        tmp.resize(width * tmp_h, 0);
-        tmp.fill(theme.background.to_u32_xrgb());
         let v = SettingsPageRects::compute(page_x, 0, page_w, page_h);
-        // La tarea 10 elimina este búfer fuera de pantalla y, con él, este `Canvas::over`.
-        {
-            let tmp_canvas = &mut Canvas::over(&mut tmp, width, tmp_h);
-            match state.section {
-                SettingsSection::Appearance => self.draw_settings_appearance(
-                    tmp_canvas, content_x, card_w, top, config, state, &v, theme,
-                ),
-                SettingsSection::Terminal => self.draw_settings_terminal(
-                    tmp_canvas, content_x, card_w, top, config, state, &v, theme,
-                ),
+        let win_y = page_y + top;
+        let win_end = (win_y + viewport_h.min(content_h - scroll)).min(height);
+        let window = (page_x, win_y, page_x + page_w, win_end);
+        Self::draw_rect(
+            canvas,
+            page_x,
+            win_y,
+            page_w,
+            win_end.saturating_sub(win_y),
+            theme.background,
+        );
+        canvas.with_offset(
+            0,
+            page_y as i32 - scroll as i32,
+            (width, tmp_h),
+            window,
+            |c| match state.section {
+                SettingsSection::Appearance => self
+                    .draw_settings_appearance(c, content_x, card_w, top, config, state, &v, theme),
+                SettingsSection::Terminal => {
+                    self.draw_settings_terminal(c, content_x, card_w, top, config, state, &v, theme)
+                }
                 SettingsSection::Shortcuts => {
-                    self.draw_settings_shortcuts(tmp_canvas, content_x, card_w, top, theme)
+                    self.draw_settings_shortcuts(c, content_x, card_w, top, theme)
                 }
                 SettingsSection::About => {
-                    self.draw_settings_about(tmp_canvas, content_x, card_w, top, state, &v, theme)
+                    self.draw_settings_about(c, content_x, card_w, top, state, &v, theme)
                 }
-            }
-        }
-        let rows = viewport_h.min(content_h - scroll);
-        for row in 0..rows {
-            let dst_y = page_y + top + row;
-            if dst_y >= height {
-                break;
-            }
-            let src = (top + scroll + row) * width + page_x;
-            let dst = dst_y * width + page_x;
-            canvas.pixels_mut()[dst..dst + page_w].copy_from_slice(&tmp[src..src + page_w]);
-        }
-        self.settings_scratch = tmp;
+            },
+        );
 
         if let Some((track, thumb)) = SettingsPageRects::scrollbar(
             state.section,

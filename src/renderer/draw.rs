@@ -5,7 +5,8 @@ use super::*;
 /// Rectángulo de recorte (x0, y0, x1, y1), extremo superior exclusivo
 pub(super) type Clip = (usize, usize, usize, usize);
 
-/// Rellena un rectángulo recortado con un color opaco usando `slice::fill` por fila
+/// Referencia del relleno antiguo: los tests la comparan con `Canvas::fill_rect`.
+#[cfg(test)]
 pub(super) fn fill_rect(
     buffer: &mut [u32],
     buf_w: usize,
