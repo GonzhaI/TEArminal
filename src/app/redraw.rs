@@ -283,9 +283,7 @@ fn draw_full_scene(
         .visible_cols;
 
         renderer.render_file_viewer(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             p.offset,
             p.top_offset,
             term_area_w + p.right_offset,

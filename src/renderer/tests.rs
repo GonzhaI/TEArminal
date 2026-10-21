@@ -128,9 +128,7 @@ mod bench {
             .unwrap();
 
         r.render_file_viewer(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             190,
             0,
             w - 190,
@@ -144,9 +142,7 @@ mod bench {
         let t_rs = Instant::now();
         for _ in 0..n {
             r.render_file_viewer(
-                &mut buf,
-                w,
-                h,
+                &mut Canvas::over(&mut buf, w, h),
                 190,
                 0,
                 w - 190,
@@ -160,9 +156,7 @@ mod bench {
         let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
         r.render_file_viewer(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             190,
             0,
             w - 190,
@@ -175,9 +169,7 @@ mod bench {
         let t_md = Instant::now();
         for _ in 0..n {
             r.render_file_viewer(
-                &mut buf,
-                w,
-                h,
+                &mut Canvas::over(&mut buf, w, h),
                 190,
                 0,
                 w - 190,
@@ -1426,9 +1418,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_file_viewer(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -2247,9 +2237,7 @@ fn preview_panel_card() {
         viewer.toggle_diff();
         let mut diff_buf = vec![theme.background.to_u32_xrgb(); w * h];
         r.render_file_viewer(
-            &mut diff_buf,
-            w,
-            h,
+            &mut Canvas::over(&mut diff_buf, w, h),
             0,
             0,
             w,
