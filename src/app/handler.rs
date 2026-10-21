@@ -478,7 +478,7 @@ impl AxonApp {
             let running = self
                 .tabs
                 .iter()
-                .any(|t| super::projects::session_status(t) == Some(SessionStatus::Running));
+                .any(|t| super::panel::session_status(t) == Some(SessionStatus::Running));
             if running {
                 if self.spinner_timer.elapsed() >= SPINNER {
                     self.spinner_timer = Instant::now();

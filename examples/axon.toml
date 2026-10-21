@@ -17,12 +17,6 @@ panel_side = "left"         # lado del panel de navegación: "left" | "right"
 show_status_bar = true
 show_file_explorer = false
 
-# Proyectos del panel de navegación: carpetas (normalmente repositorios git) que agrupan sesiones.
-# Se agregan desde el panel con «+»; una sesión pertenece al proyecto que contiene su carpeta.
-# [[projects]]
-# name = "axon"
-# path = 'C:\Users\dev\axon'
-
 [terminal]
 default_shell = "powershell.exe"   # por defecto: pwsh.exe 7 (Program Files) si existe, si no powershell.exe
 shell_integration = true              # inyecta el prompt de Axon (OSC 7/133, rama git, ls con iconos, agentes)

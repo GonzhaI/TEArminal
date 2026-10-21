@@ -202,9 +202,7 @@ mod bench {
             h,
             190,
             26,
-            &[],
             &crate::renderer::SidebarHeader::default(),
-            None,
             &tabs,
             0,
             None,
@@ -215,23 +213,8 @@ mod bench {
             &theme,
         );
         r.render_top_tab_bar(
-            &mut buf,
-            w,
-            h,
-            &tabs,
-            &crate::renderer::TopBarProject::default(),
-            false,
-            None,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            &theme,
+            &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
+            true, &theme,
         );
         r.render_status_bar(
             &mut buf,
@@ -258,9 +241,7 @@ mod bench {
                 h,
                 190,
                 26,
-                &[],
                 &crate::renderer::SidebarHeader::default(),
-                None,
                 &tabs,
                 0,
                 None,
@@ -271,23 +252,8 @@ mod bench {
                 &theme,
             );
             r.render_top_tab_bar(
-                &mut buf,
-                w,
-                h,
-                &tabs,
-                &crate::renderer::TopBarProject::default(),
-                false,
-                None,
-                None,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                false,
-                true,
-                &theme,
+                &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
+                true, &theme,
             );
             r.render_status_bar(
                 &mut buf,
@@ -459,9 +425,7 @@ fn test_sidebar_rendering_and_layout() {
         600,
         190,
         26,
-        &[],
         &crate::renderer::SidebarHeader::default(),
-        None,
         &tabs,
         0,
         Some(1),
@@ -483,7 +447,7 @@ fn test_sidebar_rendering_and_layout() {
     assert_eq!(
         buffer[50 * 1000 + SidebarRects::RAIL_W - 2],
         default_theme.background.to_u32_xrgb(),
-        "El riel de proyectos usa el fondo del lienzo"
+        "El riel usa el fondo del lienzo"
     );
     assert_eq!(
         buffer[50 * 1000 + 189],
@@ -660,14 +624,16 @@ fn test_top_tab_bar_geometry_and_layout() {
 
     let rects = TopTabBarRects::compute(1200, 3);
     assert_eq!(rects.bar_h, 38);
-    assert_eq!(rects.tabs_start_x, TopTabBarRects::SWITCHER_W);
+    // Las pestañas empiezan tras la marca
+    let left = TopTabBarRects::BRAND_W;
+    assert_eq!(rects.tabs_start_x, left);
     assert_eq!(rects.tab_w, 177);
 
     let tab0 = rects.tab_rect(0);
-    assert_eq!(tab0, (TopTabBarRects::SWITCHER_W, 0, 177, 38));
+    assert_eq!(tab0, (left, 0, 177, 38));
 
     let close0 = rects.close_btn_rect(0);
-    assert_eq!(close0.0, TopTabBarRects::SWITCHER_W + 177 - 30);
+    assert_eq!(close0.0, left + 177 - 30);
     assert_eq!(close0.1, 7);
     assert_eq!(close0.2, 24);
     assert_eq!(close0.3, 24);
@@ -1100,31 +1066,8 @@ fn preview_ui_scenes() {
         },
     ];
 
-    let projects = vec![
-        crate::renderer::SidebarProject {
-            initial: 'A',
-            color_slot: 4,
-            is_active: true,
-            has_news: false,
-            is_loose: false,
-        },
-        crate::renderer::SidebarProject {
-            initial: 'P',
-            color_slot: 6,
-            is_active: false,
-            has_news: true,
-            is_loose: false,
-        },
-        crate::renderer::SidebarProject {
-            initial: 'D',
-            color_slot: 3,
-            is_active: false,
-            has_news: false,
-            is_loose: false,
-        },
-    ];
     let header = crate::renderer::SidebarHeader {
-        title: "axon".into(),
+        title: "Sesiones".into(),
         branch: Some("main".into()),
         path: Some("C:\\Users\\dev\\axon".into()),
         on_right: false,
@@ -1179,9 +1122,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header,
-        None,
         &tabs,
         0,
         None,
@@ -1226,35 +1167,13 @@ fn preview_ui_scenes() {
     );
     write_ppm(&buf, "terminal.ppm");
 
-    // 2. Pestañas superiores: selector de proyecto, pestañas del proyecto y panel a la derecha
-    let top_project = crate::renderer::TopBarProject {
-        title: "axon".into(),
-        initial: 'A',
-        color_slot: 4,
-        is_loose: false,
-        has_news: true,
-    };
+    // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
     r.render_top_tab_bar(
-        &mut buf,
-        w,
-        h,
-        &tabs,
-        &top_project,
-        false,
-        None,
-        None,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        true,
+        &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false, true,
         &theme,
     );
     let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
@@ -1359,9 +1278,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header_exp,
-        None,
         &tabs,
         0,
         None,
@@ -1421,9 +1338,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header,
-        None,
         &tabs,
         0,
         None,
@@ -1493,9 +1408,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header,
-        None,
         &tabs,
         0,
         None,
@@ -1566,9 +1479,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header_right,
-        None,
         &tabs,
         0,
         None,
@@ -1657,9 +1568,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header,
-        None,
         &tabs,
         0,
         None,
@@ -1745,23 +1654,8 @@ fn preview_ui_scenes() {
     buf.fill(theme.background.to_u32_xrgb());
     let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
     r.render_top_tab_bar(
-        &mut buf,
-        w,
-        h,
-        &wp1_tabs,
-        &top_project,
-        false,
-        None,
-        None,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        true,
-        &theme,
+        &mut buf, w, h, &wp1_tabs, None, None, false, false, false, false, false, false, false,
+        true, &theme,
     );
     r.render_sidebar(
         &mut buf,
@@ -1769,9 +1663,7 @@ fn preview_ui_scenes() {
         h,
         SIDEBAR_WIDTH,
         status_h,
-        &projects,
         &header,
-        None,
         &tabs,
         0,
         None,
@@ -1893,9 +1785,7 @@ fn preview_ui_scenes() {
             h,
             SIDEBAR_WIDTH,
             status_h,
-            &projects,
             &header,
-            None,
             &tabs,
             0,
             None,
@@ -2080,23 +1970,8 @@ fn preview_ui_scenes() {
         buf.fill(theme.background.to_u32_xrgb());
         let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
         r.render_top_tab_bar(
-            &mut buf,
-            w,
-            h,
-            &wp1_tabs,
-            &top_project,
-            false,
-            None,
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            true,
-            &theme,
+            &mut buf, w, h, &wp1_tabs, None, None, false, false, false, false, false, false, false,
+            true, &theme,
         );
         r.render_sidebar(
             &mut buf,
@@ -2104,9 +1979,7 @@ fn preview_ui_scenes() {
             h,
             SIDEBAR_WIDTH,
             status_h,
-            &projects,
             &header,
-            None,
             &tabs,
             0,
             None,
@@ -2135,7 +2008,7 @@ fn preview_ui_scenes() {
             &theme,
         );
         let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
-        r.render_pane_with_context(
+        r.render_pane(
             &mut buf,
             w,
             h,
@@ -2148,10 +2021,6 @@ fn preview_ui_scenes() {
             true,
             true,
             false,
-            crate::renderer::ComposerChips {
-                branch: Some("main"),
-                agent: None,
-            },
         );
         r.render_status_bar_with_ai(
             &mut buf,
@@ -2185,56 +2054,6 @@ fn preview_ui_scenes() {
             .unwrap()
             .save(out.join("wp4-bloques.png"))
             .unwrap();
-    }
-
-    // 10. WP6 · compositor sobre el prompt (mock v2-superior-izquierda, parte inferior)
-    {
-        let mut term = crate::terminal::TerminalState::new(110, 30, 2000, theme.clone());
-        term.current_dir = Some(std::path::PathBuf::from("C:\\Users\\dev\\axon"));
-        term.process_bytes(
-            concat!(
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test\x1b]133;C\x07\r\n",
-                "   Compiling axon v0.9.0\r\n",
-                "\x1b]133;D;0\x07",
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo clippy --all-targets",
-            )
-            .as_bytes(),
-        );
-        let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
-        let (pane_x, pane_y, pane_w, pane_h) = (60, top_h, w - 60, h - top_h - status_h);
-        r.render_pane_with_context(
-            &mut buf,
-            w,
-            h,
-            pane_x,
-            pane_y,
-            pane_w,
-            pane_h,
-            &term,
-            &theme,
-            true,
-            true,
-            false,
-            crate::renderer::ComposerChips {
-                branch: Some("main"),
-                agent: Some((
-                    crate::ui::LucideIcon::Sparkles,
-                    "Claude Sonnet 5.5",
-                    theme.ansi[5],
-                )),
-            },
-        );
-        let layout = r
-            .composer_layout(pane_x, pane_y, pane_w, pane_h, &term)
-            .expect("el panel está en el prompt: debe haber compositor");
-        assert!(layout.chips_row.is_some() && layout.send_btn.is_some());
-        write_ppm(&buf, "wp6-compositor.ppm");
-
-        // En una ejecución (OSC 133;C) o en pantalla alterna no hay compositor.
-        term.process_bytes(b"\x1b]133;C\x07\r\n");
-        assert!(r
-            .composer_layout(pane_x, pane_y, pane_w, pane_h, &term)
-            .is_none());
     }
 
     println!("previews in {}", out.display());
@@ -2304,74 +2123,12 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     assert_eq!(narrow, narrow_with);
 }
 
-/// El compositor solo existe con el panel en el prompt (OSC 133 entre A y C), sin pantalla alterna ni
-/// scroll, y su botón «enviar» solo con la fila de chips libre.
-#[test]
-fn test_composer_only_at_prompt() {
-    use crate::theme::Theme;
-    let theme = Theme::default();
-    let r = TerminalRenderer::new(&AxonConfig::default(), 1.0);
-    let mut term = crate::terminal::TerminalState::new(100, 30, 100, theme);
-    let layout = |t: &crate::terminal::TerminalState| r.composer_layout(0, 0, 900, 600, t);
-
-    assert!(
-        layout(&term).is_none(),
-        "sin OSC 133 no hay prompt conocido"
-    );
-
-    term.process_bytes(b"\x1b]133;A\x07PS> \x1b]133;B\x07ls");
-    let at_prompt = layout(&term).expect("en el prompt hay compositor");
-    assert!(at_prompt.chips_row.is_some() && at_prompt.send_btn.is_some());
-    let (x, y, w, h) = at_prompt.send_btn.unwrap();
-    assert!(at_prompt.send_at(x + w / 2, y + h / 2));
-    assert!(!at_prompt.send_at(x.saturating_sub(40), y));
-
-    let narrow = r.composer_layout(0, 0, 300, 600, &term);
-    assert!(narrow.is_none(), "panel demasiado estrecho");
-
-    term.process_bytes(b"\x1b]133;C\x07\r\n");
-    assert!(
-        layout(&term).is_none(),
-        "ejecutando un comando no hay compositor"
-    );
-
-    term.process_bytes(b"\x1b]133;D;0\x07\x1b]133;A\x07PS> ");
-    assert!(layout(&term).is_some(), "de vuelta en el prompt reaparece");
-    term.process_bytes(b"\x1b[?1049h");
-    assert!(layout(&term).is_none(), "pantalla alterna (TUI): nada");
-}
-
-#[test]
-fn test_dialog_geometry_hit_testing() {
-    use crate::renderer::{DialogButton, DialogRects};
-    let r = DialogRects::compute(1000, 700);
-    let (px, py, pw, ph) = r.panel;
-    assert_eq!((px * 2 + pw, py * 2 + ph), (1000, 700), "centrado");
-    let center = |(x, y, w, h): crate::renderer::Rect| (x + w / 2, y + h / 2);
-    let (ax, ay) = center(r.accept);
-    let (cx, cy) = center(r.cancel);
-    assert_eq!(r.button_at(ax, ay), Some(DialogButton::Accept));
-    assert_eq!(r.button_at(cx, cy), Some(DialogButton::Cancel));
-    assert!(
-        r.cancel.0 + r.cancel.2 < r.accept.0,
-        "los botones no se solapan"
-    );
-    assert_eq!(r.button_at(px + 4, py + 4), None);
-    assert!(r.contains(px + 4, py + 4) && !r.contains(px.saturating_sub(1), py));
-    // En ventanas estrechas el panel se encoge y los botones siguen dentro de él
-    let narrow = DialogRects::compute(300, 400);
-    assert!(
-        narrow.panel.2 <= 268
-            && narrow.accept.0 + narrow.accept.2 <= narrow.panel.0 + narrow.panel.2
-    );
-}
-
-/// Previsualización manual del panel superior (marco, selección en «Cambios») y del modal:
+/// Previsualización manual del panel superior (marco, selección en «Cambios») y del visor en diff:
 /// `cargo test preview_panel_card -- --ignored --nocapture` deja PNG en `%TEMP%/axon-preview`.
 #[test]
 #[ignore]
 fn preview_panel_card() {
-    use crate::app::{Dialog, DialogAction, SIDEBAR_WIDTH};
+    use crate::app::SIDEBAR_WIDTH;
     use crate::renderer::SidebarRects;
     use crate::theme::Theme;
 
@@ -2445,14 +2202,6 @@ fn preview_panel_card() {
     save(&changes_buf, "panel-changes.png");
     save(&buf, "panel-card.png");
 
-    let dialog = Dialog::confirm(
-        "Agregar proyecto",
-        r"Se agregará ~\GitHub\axon a tus proyectos. Las sesiones que abras dentro de esa carpeta se agruparán bajo «axon».".into(),
-        "Agregar",
-        DialogAction::AddProject(std::path::PathBuf::from("axon")),
-    );
-    r.render_dialog(&mut buf, w, h, &dialog, &theme);
-    save(&buf, "dialog.png");
     // Visor en modo «Cambios» (diff) de un archivo modificado del repositorio
     {
         let path = std::env::current_dir().unwrap().join("src/app/click.rs");
@@ -2478,4 +2227,55 @@ fn preview_panel_card() {
         save(&diff_buf, "viewer-diff.png");
     }
     println!("PNG en {}", out.display());
+}
+
+#[test]
+fn test_scrollbar_geometry_is_shared_by_every_list() {
+    use crate::renderer::{ScrollbarRects, SettingsPageRects, SidebarRects};
+
+    // Todo cabe: no hay barra
+    assert!(ScrollbarRects::vertical(500, 40, 300, 10, 10, 0).is_none());
+
+    // Mismo carril (ancho y X) para cualquier contenido que termine en el mismo borde
+    let (track, thumb) = ScrollbarRects::vertical(500, 40, 300, 100, 10, 0).unwrap();
+    assert_eq!(track.2, ScrollbarRects::WIDTH);
+    assert_eq!(track.0 + track.2 + 2 + SidebarRects::CARD_INSET, 500);
+    assert_eq!((thumb.0, thumb.2), (track.0, track.2));
+
+    // El pulgar recorre la pista de arriba abajo y nunca la rebasa
+    assert_eq!(thumb.1, track.1);
+    let (_, end) = ScrollbarRects::vertical(500, 40, 300, 100, 10, 90).unwrap();
+    assert_eq!(end.1 + end.3, track.1 + track.3);
+    let (_, past) = ScrollbarRects::vertical(500, 40, 300, 100, 10, 1_000).unwrap();
+    assert_eq!(past, end, "un desplazamiento de más se recorta");
+
+    // Con listas enormes el pulgar sigue siendo agarrable
+    let (_, tiny) = ScrollbarRects::vertical(500, 40, 300, 1_000_000, 10, 0).unwrap();
+    assert!(tiny.3 >= 18);
+
+    // La zona de clic cubre el carril y el margen hasta el borde, pero no la fila de al lado
+    assert!(ScrollbarRects::hit(track, 500, track.0 + 2, 100));
+    assert!(ScrollbarRects::hit(track, 500, 499, 100));
+    assert!(!ScrollbarRects::hit(
+        track,
+        500,
+        track.0.saturating_sub(20),
+        100
+    ));
+    assert!(!ScrollbarRects::hit(track, 500, track.0, track.1 + track.3));
+
+    // Ajustes usa la misma barra
+    let settings = SettingsPageRects::scrollbar(
+        crate::renderer::SettingsSection::Appearance,
+        38,
+        900,
+        100,
+        0,
+    );
+    if let Some((t, _)) = settings {
+        assert_eq!(
+            (t.0, t.2),
+            (ScrollbarRects::track_x(900), ScrollbarRects::WIDTH)
+        );
+    }
 }

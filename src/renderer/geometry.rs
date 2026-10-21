@@ -43,7 +43,6 @@ pub struct TopTabBarRects {
     pub tabs_start_x: usize,
     pub tab_w: usize,
     pub tab_gap: usize,
-    pub switcher_btn: (usize, usize, usize, usize),
     pub plus_btn: (usize, usize, usize, usize),
     pub files_btn: (usize, usize, usize, usize),
     pub settings_btn: (usize, usize, usize, usize),
@@ -56,10 +55,8 @@ pub struct TopTabBarRects {
 
 impl TopTabBarRects {
     pub const HEIGHT: usize = 38;
-    /// La marca ocupa el extremo izquierdo; las pestañas empiezan después.
+    /// La marca ocupa el extremo izquierdo en ambos modos; las pestañas empiezan después.
     pub const BRAND_W: usize = 88;
-    /// Selector de proyecto de la barra de pestañas; las pestañas empiezan después.
-    pub const SWITCHER_W: usize = 150;
     pub const TAB_GAP: usize = 3;
     pub const CLOSE_W: usize = 24;
     pub const PLUS_W: usize = 28;
@@ -95,7 +92,7 @@ impl TopTabBarRects {
             Self::ACTION,
         );
 
-        let left_reserved = Self::SWITCHER_W;
+        let left_reserved = Self::BRAND_W;
         let right_reserved = ctrl_w * 3 + 112;
         let available_space = width.saturating_sub(left_reserved + right_reserved);
 
@@ -118,7 +115,6 @@ impl TopTabBarRects {
             tabs_start_x,
             tab_w,
             tab_gap: gap,
-            switcher_btn: (12, 3, Self::SWITCHER_W - 26, 32),
             plus_btn,
             files_btn,
             settings_btn,
@@ -307,20 +303,14 @@ impl SettingsPageRects {
         viewport_h: usize,
         scroll: usize,
     ) -> Option<(Rect, Rect)> {
-        let content_h = Self::content_height(section);
-        if content_h <= viewport_h || viewport_h == 0 {
-            return None;
-        }
-        let track = (
-            win_w.saturating_sub(7),
+        ScrollbarRects::vertical(
+            win_w,
             page_y + Self::CONTENT_TOP,
-            4,
             viewport_h,
-        );
-        let thumb_h = (viewport_h * viewport_h / content_h).clamp(18.min(viewport_h), viewport_h);
-        let max_scroll = content_h - viewport_h;
-        let thumb_y = track.1 + scroll.min(max_scroll) * (viewport_h - thumb_h) / max_scroll;
-        Some((track, (track.0, thumb_y, track.2, thumb_h)))
+            Self::content_height(section),
+            viewport_h,
+            scroll,
+        )
     }
 
     pub fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
@@ -653,7 +643,7 @@ impl FileViewerLayout {
     }
 }
 
-/// Geometría de la barra lateral: riel de proyectos y columna de sesiones (una sola fuente para dibujo,
+/// Geometría de la barra lateral: riel de ajustes y columna de sesiones (una sola fuente para dibujo,
 /// clic, hover y arrastre).
 ///
 /// La barra empieza en `TOP` (bajo la barra de título) para no tapar la marca. Las coordenadas de sus
@@ -663,10 +653,8 @@ pub struct SidebarRects;
 
 impl SidebarRects {
     pub const WIDTH: usize = 328;
-    /// Ancho del riel de proyectos; la columna de sesiones ocupa el resto.
+    /// Ancho del riel (solo lleva el botón de ajustes); la columna de sesiones ocupa el resto.
     pub const RAIL_W: usize = 60;
-    pub const RAIL_ITEM: usize = 40;
-    pub const RAIL_STEP: usize = 50;
     pub const TOP: usize = 38;
     /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`ui::frame_card`).
     pub const CARD_INSET: usize = 6;
@@ -674,7 +662,7 @@ impl SidebarRects {
     /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire
     /// dentro de la tarjeta y alinea los bordes de todas las secciones.
     pub const PAD_R: usize = 20;
-    /// Nombre del proyecto, rama y carpeta.
+    /// Título, rama y carpeta.
     pub const HEADER_H: usize = 66;
     /// Y de la primera fila.
     pub const LIST_START_Y: usize = Self::TOP + Self::HEADER_H + 8;
@@ -684,23 +672,6 @@ impl SidebarRects {
     pub const PAD_X: usize = Self::RAIL_W + 8;
     pub const CLOSE_SIZE: usize = 24;
     pub const PLUS_SIZE: usize = 28;
-
-    /// Cuadrado `i` del riel: los proyectos, las sesiones sueltas si las hay y, al final, «Agregar proyecto».
-    #[inline]
-    pub fn rail_item_rect(i: usize) -> Rect {
-        (
-            (Self::RAIL_W - Self::RAIL_ITEM) / 2,
-            Self::TOP + 10 + i * Self::RAIL_STEP,
-            Self::RAIL_ITEM,
-            Self::RAIL_ITEM,
-        )
-    }
-
-    /// Cuadrado del riel bajo el cursor, entre `count` cuadrados.
-    #[inline]
-    pub fn rail_at(mx: usize, my: usize, count: usize) -> Option<usize> {
-        (0..count).find(|&i| Self::inside(mx, my, Self::rail_item_rect(i)))
-    }
 
     #[inline]
     pub fn plus_btn() -> Rect {
@@ -822,6 +793,54 @@ impl SidebarRects {
             && mx < rect.0 + rect.2
             && my >= rect.1
             && my < rect.1 + rect.3
+    }
+}
+
+/// Barra de scroll vertical de toda la interfaz (panel, explorador, terminal, visor y Ajustes): un solo
+/// carril, ancho y posición, para que todas se vean y respondan igual. Dibujo, clic, hover y arrastre
+/// parten de `vertical`.
+pub struct ScrollbarRects;
+
+impl ScrollbarRects {
+    /// Ancho del carril y del pulgar.
+    pub const WIDTH: usize = 8;
+    /// Aire entre el carril y el borde de la tarjeta.
+    const GAP: usize = 2;
+    /// Pulgar mínimo, para que siga siendo agarrable con listas muy largas.
+    const MIN_THUMB: usize = 18;
+
+    /// X del carril de un contenido que termina en `right`: junto al borde de la tarjeta
+    /// (`SidebarRects::CARD_INSET`), que recorta ese margen.
+    #[inline]
+    pub fn track_x(right: usize) -> usize {
+        right.saturating_sub(Self::WIDTH + Self::GAP + SidebarRects::CARD_INSET)
+    }
+
+    /// Carril `(x, y, WIDTH, h)` y pulgar de una vista de `visible` unidades sobre `total`, desplazada
+    /// `offset` unidades desde arriba. `None` si todo cabe.
+    pub fn vertical(
+        right: usize,
+        y: usize,
+        h: usize,
+        total: usize,
+        visible: usize,
+        offset: usize,
+    ) -> Option<(Rect, Rect)> {
+        if h == 0 || visible == 0 || total <= visible {
+            return None;
+        }
+        let x = Self::track_x(right);
+        let thumb_h = (visible * h / total).max(Self::MIN_THUMB).min(h);
+        let max_offset = total - visible;
+        let thumb_y = y + offset.min(max_offset) * (h - thumb_h) / max_offset;
+        Some(((x, y, Self::WIDTH, h), (x, thumb_y, Self::WIDTH, thumb_h)))
+    }
+
+    /// Zona que responde como barra (clic y hover): el carril, 8 px a su izquierda y el margen hasta el
+    /// borde, para no agarrar por error lo que queda detrás.
+    #[inline]
+    pub fn hit(track: Rect, right: usize, mx: usize, my: usize) -> bool {
+        mx + 8 >= track.0 && mx < right && my >= track.1 && my < track.1 + track.3
     }
 }
 
@@ -1077,63 +1096,5 @@ impl ExplorerTabsRects {
         } else {
             None
         }
-    }
-}
-
-/// Botones del diálogo modal (`app::Dialog`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialogButton {
-    Cancel,
-    Accept,
-}
-
-/// Geometría del diálogo modal: panel centrado y sus dos botones. La comparten dibujo, clic y hover.
-#[derive(Debug, Clone, Copy)]
-pub struct DialogRects {
-    pub panel: Rect,
-    pub cancel: Rect,
-    pub accept: Rect,
-}
-
-impl DialogRects {
-    pub const W: usize = 400;
-    pub const H: usize = 176;
-    pub const PAD: usize = 22;
-    pub const BTN_W: usize = 104;
-    pub const BTN_H: usize = 34;
-    const BTN_GAP: usize = 10;
-
-    pub fn compute(win_w: usize, win_h: usize) -> Self {
-        let w = Self::W.min(win_w.saturating_sub(32));
-        let x = win_w.saturating_sub(w) / 2;
-        let y = win_h.saturating_sub(Self::H) / 2;
-        let by = y + Self::H - Self::PAD - Self::BTN_H;
-        let accept_x = (x + w).saturating_sub(Self::PAD + Self::BTN_W);
-        Self {
-            panel: (x, y, w, Self::H),
-            cancel: (
-                accept_x.saturating_sub(Self::BTN_GAP + Self::BTN_W),
-                by,
-                Self::BTN_W,
-                Self::BTN_H,
-            ),
-            accept: (accept_x, by, Self::BTN_W, Self::BTN_H),
-        }
-    }
-
-    pub fn button_at(&self, mx: usize, my: usize) -> Option<DialogButton> {
-        let inside = |r: Rect| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3;
-        if inside(self.accept) {
-            Some(DialogButton::Accept)
-        } else if inside(self.cancel) {
-            Some(DialogButton::Cancel)
-        } else {
-            None
-        }
-    }
-
-    pub fn contains(&self, mx: usize, my: usize) -> bool {
-        let (x, y, w, h) = self.panel;
-        mx >= x && mx < x + w && my >= y && my < y + h
     }
 }

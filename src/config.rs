@@ -6,16 +6,6 @@ use std::path::PathBuf;
 pub struct AxonConfig {
     pub appearance: AppearanceConfig,
     pub terminal: TerminalConfig,
-    /// Proyectos que el usuario agrega al panel de navegación (`[[projects]]`).
-    #[serde(default)]
-    pub projects: Vec<ProjectConfig>,
-}
-
-/// Carpeta (normalmente la raíz de un repositorio git) que agrupa sesiones en el panel de navegación.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct ProjectConfig {
-    pub name: String,
-    pub path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -191,7 +181,6 @@ impl Default for AxonConfig {
                 auto_check_updates: true,
                 ai_limits: true,
             },
-            projects: Vec::new(),
         }
     }
 }

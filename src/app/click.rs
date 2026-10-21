@@ -18,11 +18,6 @@ impl AxonApp {
         let offset = self.sidebar_offset();
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
-        // Diálogo modal abierto: es lo único que atiende el ratón
-        if self.dialog_click(mx, my, (win_w, win_h), state, button) {
-            return;
-        }
-
         // Menú contextual abierto: un clic sobre una opción la ejecuta; cualquier otro clic lo cierra
         if let Some(menu) = &self.context_menu {
             if state != ElementState::Pressed {
@@ -44,11 +39,6 @@ impl AxonApp {
                 return;
             }
             if button != MouseButton::Right {
-                return;
-            }
-            // Clic derecho sobre un proyecto del desplegable: ofrece quitarlo
-            if let Some(MenuAction::PanelRow(i)) = action {
-                self.open_project_row_menu(i, (mx, my), (win_w, win_h));
                 return;
             }
         }
@@ -212,14 +202,7 @@ impl AxonApp {
             if state == ElementState::Pressed
                 && (button == MouseButton::Left || button == MouseButton::Middle)
             {
-                let list = self.panel_tab_indices();
-                let top_rects = TopTabBarRects::compute(win_w, list.len());
-
-                // Clic en el selector de proyecto: abre el desplegable de proyectos
-                if TopTabBarRects::inside(mx, my, top_rects.switcher_btn) {
-                    self.open_project_dropdown((win_w, win_h));
-                    return;
-                }
+                let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
 
                 // Clic en [-] Minimizar
                 if TopTabBarRects::inside(mx, my, top_rects.win_min_btn) {
@@ -270,8 +253,8 @@ impl AxonApp {
                 }
 
                 // Clic en pestañas o en botón cerrar 'x'
-                for (pos, &idx) in list.iter().enumerate() {
-                    let tr = top_rects.tab_rect(pos);
+                for idx in 0..self.tabs.len() {
+                    let tr = top_rects.tab_rect(idx);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         if button == MouseButton::Middle {
                             crate::logger::log(&format!(
@@ -282,7 +265,7 @@ impl AxonApp {
                             return;
                         }
                         if button == MouseButton::Left {
-                            let cr = top_rects.close_btn_rect(pos);
+                            let cr = top_rects.close_btn_rect(idx);
                             if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
                                 crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
                                 self.close_tab(idx);
@@ -408,14 +391,8 @@ impl AxonApp {
                 if state == ElementState::Pressed
                     && (button == MouseButton::Left || button == MouseButton::Middle)
                 {
-                    // Riel de proyectos: abrir uno o agregar el último cuadrado
+                    // El riel solo lleva el botón de ajustes, que atiende `toggle_hit`
                     if mx < crate::renderer::SidebarRects::RAIL_W {
-                        let count = self.panel_rail().len() + 1;
-                        if let Some(i) = crate::renderer::SidebarRects::rail_at(mx, my, count) {
-                            if button == MouseButton::Left {
-                                self.click_rail(i);
-                            }
-                        }
                         return;
                     }
 
@@ -431,15 +408,10 @@ impl AxonApp {
                     if let Some((track, thumb)) = TerminalRenderer::sidebar_scrollbar_geometry(
                         SIDEBAR_WIDTH,
                         list_end,
-                        self.panel_tab_indices().len(),
+                        self.tabs.len(),
                         self.sidebar_scroll_offset,
                     ) {
-                        let hit_x = track.0.saturating_sub(4);
-                        if mx >= hit_x
-                            && mx < SIDEBAR_WIDTH
-                            && my >= track.1
-                            && my < track.1 + track.3
-                        {
+                        if crate::renderer::ScrollbarRects::hit(track, SIDEBAR_WIDTH, mx, my) {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.sidebar_scrollbar_dragging = true;
                                 self.sidebar_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -447,8 +419,7 @@ impl AxonApp {
                             } else {
                                 let visible_items =
                                     crate::renderer::SidebarRects::visible_items(list_end);
-                                let max_offset =
-                                    self.panel_tab_indices().len().saturating_sub(visible_items);
+                                let max_offset = self.tabs.len().saturating_sub(visible_items);
                                 if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
                                     track,
                                     thumb,
@@ -467,9 +438,9 @@ impl AxonApp {
                     }
 
                     // Clic en pestañas o botón cerrar "x" (misma retícula que el dibujo y el hover)
-                    if let Some((pos, tab_idx)) = self.panel_tab_at(my, usable_h) {
+                    if let Some(tab_idx) = self.panel_tab_at(my, usable_h) {
                         let row = crate::renderer::SidebarRects::tab_rect(
-                            pos,
+                            tab_idx,
                             self.sidebar_scroll_offset,
                         );
                         if crate::renderer::SidebarRects::inside(mx, my, row) {
@@ -518,7 +489,8 @@ impl AxonApp {
                 let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
                 // Barra de scroll de Ajustes: arrastrar el pulgar o saltar al punto pulsado
                 if let Some((track, thumb)) = self.settings_scrollbar() {
-                    if mx + 6 >= track.0 && my >= track.1 && my < track.1 + track.3 {
+                    let right = win_w.saturating_sub(self.panel_right_inset());
+                    if crate::renderer::ScrollbarRects::hit(track, right, mx, my) {
                         if my >= thumb.1 && my < thumb.1 + thumb.3 {
                             self.settings_scrollbar_dragging = true;
                             self.settings_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -850,12 +822,7 @@ impl AxonApp {
                         status_bar_h,
                         &self.file_explorer,
                     ) {
-                        if TerminalRenderer::explorer_scrollbar_hit(
-                            track,
-                            panel_x + panel_w,
-                            mx,
-                            my,
-                        ) {
+                        if crate::renderer::ScrollbarRects::hit(track, panel_x + panel_w, mx, my) {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.explorer_scrollbar_dragging = true;
                                 self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -1080,12 +1047,12 @@ impl AxonApp {
                                     offset, top_offset, viewer_w, viewer_h, viewer, row_h,
                                 )
                             {
-                                let hit_x = track.0.saturating_sub(4);
-                                if mx >= hit_x
-                                    && mx < offset + viewer_w
-                                    && my >= track.1
-                                    && my < track.1 + track.3
-                                {
+                                if crate::renderer::ScrollbarRects::hit(
+                                    track,
+                                    offset + viewer_w,
+                                    mx,
+                                    my,
+                                ) {
                                     if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                         self.viewer_scrollbar_dragging = true;
                                         self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -1274,8 +1241,6 @@ impl AxonApp {
 
         if let Some(rect) = clicked_pane_rect {
             self.file_explorer.is_focused = false;
-            // El compositor solo se dibuja en el panel enfocado: el primer clic solo enfoca.
-            let was_active = active_tab.active_pane_id == rect.pane_id;
             // Cambiar foco al panel clickeado si no está activo
             if active_tab.active_pane_id != rect.pane_id {
                 active_tab.active_pane_id = rect.pane_id;
@@ -1351,29 +1316,6 @@ impl AxonApp {
                             }
                         }
                     }
-                }
-
-                // Botón «enviar» del compositor: equivale a pulsar Enter en el prompt.
-                if button == MouseButton::Left
-                    && state == ElementState::Pressed
-                    && was_active
-                    && self.renderer.as_ref().is_some_and(|renderer| {
-                        renderer
-                            .composer_layout(
-                                rect.x,
-                                rect.y,
-                                rect.width,
-                                rect.height,
-                                &pane.terminal,
-                            )
-                            .is_some_and(|c| c.send_at(mx, my))
-                    })
-                {
-                    pane.pty.write_input(b"\r");
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                    return;
                 }
 
                 // Tarjetas de bloque (OSC 133): copiar el comando, repetirlo o atender la tarjeta de error.

@@ -8,10 +8,8 @@
 #![allow(clippy::too_many_arguments)]
 
 mod blocks;
-mod composer;
 mod context_menu;
 pub mod d3d11;
-mod dialog;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
@@ -34,7 +32,6 @@ use glyphs::{
 };
 
 pub use blocks::BlockCardButton;
-pub use composer::ComposerChips;
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};

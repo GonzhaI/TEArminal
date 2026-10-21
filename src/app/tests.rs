@@ -2190,55 +2190,6 @@ fn test_encode_kitty_key_various_combinations() {
 }
 
 #[test]
-fn test_sessions_are_listed_under_the_project_that_contains_their_folder() {
-    use super::projects::Membership;
-
-    let base = std::env::temp_dir().join(format!("axon-proj-{}", std::process::id()));
-    let (a, b) = (base.join("a"), base.join("b"));
-    std::fs::create_dir_all(&a).unwrap();
-    std::fs::create_dir_all(&b).unwrap();
-
-    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
-    app.config.projects.clear();
-    let loose_tab = app.active_tab_index;
-
-    // Agregar un proyecto sin sesiones abre una en su carpeta y lo deja a la vista
-    app.add_project(&a);
-    assert_eq!(app.selected_membership(), Membership::Project(0));
-    assert_eq!(app.panel_tab_indices().len(), 1);
-
-    app.add_project(&b);
-    assert_eq!(app.selected_membership(), Membership::Project(1));
-    assert_eq!(app.tabs.len(), 3);
-    assert_eq!(app.panel_tab_indices().len(), 1);
-
-    // Las sesiones de ningún proyecto quedan sueltas; agregar dos veces no duplica
-    assert_eq!(
-        app.panel_rail(),
-        vec![
-            Membership::Project(0),
-            Membership::Project(1),
-            Membership::Loose
-        ]
-    );
-    app.add_project(&a);
-    assert_eq!(app.config.projects.len(), 2);
-    assert_eq!(app.selected_membership(), Membership::Project(0));
-
-    // Un clic en el riel cambia a la sesión del proyecto
-    app.click_rail(2);
-    assert_eq!(app.selected_membership(), Membership::Loose);
-    assert_eq!(app.active_tab_index, loose_tab);
-
-    // Quitar un proyecto no cierra sus sesiones: pasan a las sueltas
-    app.remove_project(0);
-    assert_eq!(app.tabs.len(), 3);
-    assert_eq!(app.panel_tab_indices().len(), 2);
-
-    let _ = std::fs::remove_dir_all(&base);
-}
-
-#[test]
 fn test_panel_side_reserves_space_and_hosts_the_explorer() {
     use crate::renderer::SidebarRects;
 
@@ -2290,46 +2241,16 @@ fn test_panel_side_reserves_space_and_hosts_the_explorer() {
 }
 
 #[test]
-fn test_top_tabs_show_only_the_sessions_of_the_project_in_view() {
-    use super::projects::Membership;
-
-    let base = std::env::temp_dir().join(format!("axon-top-{}", std::process::id()));
-    let (a, b) = (base.join("a"), base.join("b"));
-    std::fs::create_dir_all(&a).unwrap();
-    std::fs::create_dir_all(&b).unwrap();
-
+fn test_top_tabs_panel_shows_and_hides_the_explorer_with_it() {
     let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
     app.config.appearance.tab_layout = "horizontal".to_string();
-    app.config.projects.clear();
-    app.add_project(&a);
-    app.add_project(&b);
-    assert_eq!(app.tabs.len(), 3);
 
-    // Las pestañas superiores son las del proyecto a la vista; el desplegable lista los proyectos
-    // (el de la vista con marca), un separador y «Agregar proyecto»
-    assert_eq!(app.panel_tab_indices().len(), 1);
-    assert_eq!(app.top_bar_project().title, "b");
-    let items = app.project_dropdown();
-    let labels: Vec<_> = items.iter().map(|i| i.label.as_ref()).collect();
-    assert_eq!(labels, ["a", "b", "Sesiones", "", "Agregar proyecto…"]);
-    assert!(matches!(items[1].icon, Some(crate::ui::LucideIcon::Check)));
-    assert!(matches!(items[0].icon, Some(crate::ui::LucideIcon::Folder)));
-    // Cada fila del desplegable abre su proyecto
-    app.click_panel_row(2);
-    assert_eq!(app.selected_membership(), Membership::Loose);
-    app.click_panel_row(0);
-    assert_eq!(app.selected_membership(), Membership::Project(0));
-    assert_eq!(app.top_bar_project().title, "a");
-
-    // El explorador vive en el panel y se muestra u oculta con él
     app.sidebar_visible = true;
     app.file_explorer.visible = true;
     app.toggle_file_explorer();
     assert!(!app.sidebar_visible && !app.file_explorer.visible);
     app.toggle_sidebar();
     assert!(app.sidebar_visible && app.file_explorer.visible);
-
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 #[test]
@@ -2359,38 +2280,47 @@ fn test_shorten_home_uses_backslashes_for_windows_paths() {
 }
 
 #[test]
-fn test_dialog_escape_cancels_and_enter_adds_the_project() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
-    let dir = std::env::temp_dir().join(format!("axon_dialog_{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let dialog = |d: &std::path::Path| {
-        Dialog::confirm(
-            "Agregar proyecto",
-            "mensaje".into(),
-            "Agregar",
-            DialogAction::AddProject(d.to_path_buf()),
-        )
-    };
-    let (enter, esc) = (Key::Named(NamedKey::Enter), Key::Named(NamedKey::Escape));
-    let before = app.config.projects.len();
+fn test_settings_hides_the_side_panels_with_top_tabs() {
+    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    app.config.appearance.tab_layout = "horizontal".to_string();
+    app.config.appearance.panel_side = "left".to_string();
+    app.sidebar_visible = true;
+    app.file_explorer.visible = true;
+    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
 
-    // Sin diálogo, la tecla sigue su curso
-    assert!(!app.dialog_key(&enter, KeyEventType::Press));
+    // Ajustes es una pantalla aparte: ni panel ni explorador restan espacio, y al volver siguen igual
+    app.open_or_switch_settings_tab();
+    assert!(app.tabs[app.active_tab_index].is_settings);
+    assert_eq!((app.sidebar_offset(), app.file_explorer_offset()), (0, 0));
+    assert!(app.sidebar_visible && app.file_explorer.visible);
+    app.switch_to_tab(0);
+    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
+}
 
-    // Esc cancela sin agregar; el resto de teclas se descartan sin cerrarlo
-    app.dialog = Some(dialog(&dir));
-    assert!(app.dialog_key(&Key::Character("a".into()), KeyEventType::Press));
-    assert!(app.dialog.is_some(), "una tecla cualquiera no lo cierra");
-    assert!(app.dialog_key(&esc, KeyEventType::Press));
-    assert!(app.dialog.is_none());
-    assert_eq!(app.config.projects.len(), before);
+#[test]
+fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
+    let base = std::env::temp_dir().join(format!("axon-focus-{}", std::process::id()));
+    let (a, b) = (base.join("a"), base.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
 
-    // Intro acepta y agrega la carpeta como proyecto
-    app.dialog = Some(dialog(&dir));
-    assert!(app.dialog_key(&enter, KeyEventType::Release));
-    assert!(app.dialog.is_some(), "soltar la tecla no acepta");
-    assert!(app.dialog_key(&enter, KeyEventType::Press));
-    assert!(app.dialog.is_none());
-    assert_eq!(app.config.projects.len(), before + 1);
-    let _ = std::fs::remove_dir_all(&dir);
+    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    app.file_explorer.visible = true;
+    app.file_explorer.is_pinned = false;
+    tab_with_panes(&mut app, 2);
+    let tab = &mut app.tabs[app.active_tab_index];
+    assert_eq!(tab.panes.len(), 2);
+    let (first, second) = (tab.panes[0].id, tab.panes[1].id);
+    tab.find_pane_mut(first).unwrap().terminal.current_dir = Some(a.clone());
+    tab.find_pane_mut(second).unwrap().terminal.current_dir = Some(b.clone());
+
+    // Cada fotograma deja el explorador en la carpeta de la terminal enfocada
+    tab.active_pane_id = second;
+    app.on_redraw();
+    assert_eq!(app.file_explorer.root_dir, b);
+    app.tabs[app.active_tab_index].active_pane_id = first;
+    app.on_redraw();
+    assert_eq!(app.file_explorer.root_dir, a);
+
+    let _ = std::fs::remove_dir_all(&base);
 }

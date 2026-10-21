@@ -8,7 +8,6 @@ mod click;
 mod clipboard;
 mod context_menu;
 mod cursor;
-mod dialog;
 mod fs_watcher;
 mod handler;
 mod host;
@@ -17,7 +16,6 @@ mod keys;
 mod layout;
 mod panel;
 pub(crate) mod platform;
-mod projects;
 mod redraw;
 mod remote_files;
 mod settings;
@@ -30,7 +28,6 @@ mod wheel;
 pub use crate::renderer::D3D11Presenter;
 pub use ai_usage::*;
 pub use context_menu::*;
-pub use dialog::*;
 pub use host::AxonHost;
 pub use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub use layout::*;
@@ -46,9 +43,8 @@ use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, PaneHeaderButton, PaneHeaderRects, SessionStatus,
-    SettingsPageRects, SettingsPageState, SettingsSection, SidebarHeader, SidebarProject,
-    SidebarTabItem, StatusBarRects, TerminalRenderer, TopBarProject, TopTabBarRects,
-    TopTitleBarRects,
+    SettingsPageRects, SettingsPageState, SettingsSection, SidebarHeader, SidebarTabItem,
+    StatusBarRects, TerminalRenderer, TopTabBarRects, TopTitleBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -89,22 +85,19 @@ pub struct AxonApp {
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
     next_tab_id: usize,
+    /// (pestaña, panel) cuya carpeta mostró por última vez el explorador: si el foco pasa a otra terminal
+    /// de la misma pestaña, `on_redraw` reorienta el explorador (`sync_file_explorer_root`).
+    explorer_focus: (usize, usize),
     pub sidebar_visible: bool,
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
-    /// Cuadrado del riel bajo el ratón (el último es «Agregar proyecto»).
-    hovered_project: Option<usize>,
-    /// Ratón sobre el selector de proyecto de la barra de pestañas superiores.
-    hovered_switcher: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
     /// Botón de la cabecera de un panel dividido bajo el ratón
     hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
-    /// Diálogo modal abierto (captura ratón y teclado hasta cerrarse).
-    pub dialog: Option<Dialog>,
     pub file_explorer: crate::explorer::FileExplorer,
     hovered_files_btn: bool,
     pub last_terminal_tab_index: usize,
@@ -340,17 +333,15 @@ impl AxonApp {
             hovered_tab: None,
             hovered_close: None,
             hovered_new_tab: false,
-            hovered_project: None,
-            hovered_switcher: false,
             hovered_settings_btn: false,
             hovered_toggle_btn: false,
             hovered_pane_btn: None,
             settings_page_state: SettingsPageState::default(),
             context_menu: None,
-            dialog: None,
             file_explorer,
             hovered_files_btn: false,
             last_terminal_tab_index: 0,
+            explorer_focus: (usize::MAX, usize::MAX),
             renderer: None,
             window: None,
             context: None,
@@ -563,6 +554,9 @@ impl AxonApp {
     /// Espacio que quitan al contenido por la derecha el explorador acoplado y el panel si va a ese lado.
     /// Con el panel a la vista el explorador va dentro de él y no resta ancho.
     pub fn file_explorer_offset(&self) -> usize {
+        if self.settings_fullscreen() {
+            return 0;
+        }
         if self.panel_shown() {
             return if self.panel_on_right() {
                 SIDEBAR_WIDTH

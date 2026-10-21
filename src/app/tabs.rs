@@ -217,10 +217,9 @@ impl AxonApp {
         }
     }
 
-    /// Sesión nueva: abre en la raíz del proyecto a la vista, si hay uno.
+    /// Sesión nueva en la carpeta por defecto del shell.
     pub fn create_new_tab(&mut self) {
-        let cwd = self.new_tab_cwd();
-        self.create_tab_in(cwd);
+        self.create_tab_in(None);
     }
 
     /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).
@@ -700,17 +699,15 @@ impl AxonApp {
     pub(super) fn tab_slot_at(&self, mx: usize, my: usize) -> Option<usize> {
         let slot = if self.is_horizontal_tabs() {
             let width = self.window.as_ref()?.inner_size().width as usize;
-            let list = self.panel_tab_indices();
-            let rects = TopTabBarRects::compute(width, list.len());
-            let pos = (0..list.len()).find(|&pos| {
-                let r = rects.tab_rect(pos);
+            let rects = TopTabBarRects::compute(width, self.tabs.len());
+            (0..self.tabs.len()).find(|&idx| {
+                let r = rects.tab_rect(idx);
                 mx >= r.0 && mx < r.0 + r.2
-            })?;
-            list[pos]
+            })?
         } else {
             let height = self.window.as_ref()?.inner_size().height as usize;
             let usable_h = height.saturating_sub(self.status_bar_height());
-            self.panel_tab_at(my, usable_h)?.1
+            self.panel_tab_at(my, usable_h)?
         };
         (slot < self.tabs.len()).then_some(slot)
     }

@@ -901,31 +901,14 @@ impl TerminalRenderer {
         let visible_lines = content_h / row_h;
         let total_lines = viewer.rows().len();
 
-        if total_lines <= visible_lines || visible_lines == 0 {
-            return None;
-        }
-
-        let track_w = 4;
-        let track_margin = 4;
-        let track_x = (x + w).saturating_sub(track_w + track_margin);
-        let track_y = content_y + 4;
-        let track_h = content_h.saturating_sub(8);
-        let min_thumb_h = 18;
-
-        let thumb_h = (((visible_lines as f32) / (total_lines as f32)) * track_h as f32)
-            .max(min_thumb_h as f32) as usize;
-        let max_scroll = total_lines.saturating_sub(visible_lines);
-        let travel = track_h.saturating_sub(thumb_h);
-        let thumb_y = if max_scroll > 0 {
-            track_y + ((viewer.scroll_offset as f32 / max_scroll as f32) * travel as f32) as usize
-        } else {
-            track_y
-        };
-
-        Some((
-            (track_x, track_y, track_w, track_h),
-            (track_x, thumb_y, track_w, thumb_h),
-        ))
+        ScrollbarRects::vertical(
+            x + w,
+            content_y + 4,
+            content_h.saturating_sub(8),
+            total_lines,
+            visible_lines,
+            viewer.scroll_offset,
+        )
     }
 
     /// Resaltado sintáctico multilenguaje de tokens ligero y de alto rendimiento

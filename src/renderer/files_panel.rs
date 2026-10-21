@@ -1,5 +1,5 @@
 //! Panel lateral del modo de pestañas superiores: solo el fondo y el borde; el explorador (Archivos ·
-//! Cambios) se dibuja encima. Los proyectos se eligen en el desplegable de la barra superior.
+//! Cambios) se dibuja encima.
 
 use super::*;
 

@@ -5,17 +5,54 @@
 //! y los manejadores del ratón restan `panel_x`.
 
 use super::*;
-use crate::renderer::{FilesPanelRects, Rect, SidebarRects};
+use crate::renderer::{
+    AiAgentStatus, FilesPanelRects, Rect, SessionStatus, SidebarHeader, SidebarRects,
+};
+use std::path::{Path, PathBuf};
+
+/// Estado de la sesión según OSC 133. `None` en Ajustes y visores de archivo.
+pub(super) fn session_status(tab: &TerminalTab) -> Option<SessionStatus> {
+    let terminal = &tab.active_pane()?.terminal;
+    if terminal
+        .active_block
+        .as_ref()
+        .is_some_and(|b| b.output_start.is_some())
+    {
+        return Some(SessionStatus::Running);
+    }
+    Some(
+        match terminal
+            .command_blocks
+            .iter()
+            .rev()
+            .find_map(|b| b.exit_code)
+        {
+            Some(0) => SessionStatus::Done,
+            Some(_) => SessionStatus::Failed,
+            None => SessionStatus::Idle,
+        },
+    )
+}
 
 impl AxonApp {
     pub(super) fn panel_on_right(&self) -> bool {
         self.config.appearance.panel_on_right()
     }
 
-    /// ¿Se ve el panel lateral? Con pestañas verticales lista proyectos y sesiones; con las superiores,
-    /// solo el explorador (los proyectos están en el selector de la barra y las sesiones son las pestañas).
+    /// ¿Se ve el panel lateral? Con pestañas verticales lista las sesiones; con las superiores, solo el
+    /// explorador (las sesiones son las pestañas).
     pub(super) fn panel_shown(&self) -> bool {
-        self.sidebar_visible
+        self.sidebar_visible && !self.settings_fullscreen()
+    }
+
+    /// Con pestañas superiores Ajustes es una pantalla aparte: ni el panel ni el explorador acoplado
+    /// restan espacio mientras está a la vista (`sidebar_visible` y el explorador no cambian).
+    pub(super) fn settings_fullscreen(&self) -> bool {
+        self.is_horizontal_tabs()
+            && self
+                .tabs
+                .get(self.active_tab_index)
+                .is_some_and(|t| t.is_settings)
     }
 
     /// X de la ventana donde empieza el panel.
@@ -66,11 +103,70 @@ impl AxonApp {
     /// Fin (y) de la lista de sesiones del panel vertical: con el explorador visible la lista cede
     /// espacio. Con pestañas superiores el panel no tiene lista.
     pub(super) fn panel_list_end(&self, usable_h: usize) -> usize {
-        SidebarRects::list_end(
-            usable_h,
-            self.panel_tab_indices().len(),
-            self.file_explorer.visible,
-        )
+        SidebarRects::list_end(usable_h, self.tabs.len(), self.file_explorer.visible)
+    }
+
+    /// Pestaña de la fila del panel vertical bajo `my`.
+    pub(super) fn panel_tab_at(&self, my: usize, usable_h: usize) -> Option<usize> {
+        let list_end = self.panel_list_end(usable_h);
+        SidebarRects::tab_at_y(my, list_end, self.sidebar_scroll_offset, self.tabs.len())
+    }
+
+    /// Cabecera de la lista de sesiones: título fijo y, de la sesión a la vista, su rama y su carpeta.
+    pub(super) fn sidebar_header(&mut self, usable_h: usize) -> SidebarHeader {
+        let active = self.active_tab_index;
+        let path = self
+            .tabs
+            .get(active)
+            .and_then(Self::tab_dir)
+            .map(|d| shell_context::shorten_home(&d));
+        SidebarHeader {
+            title: "Sesiones".to_string(),
+            branch: self.tabs.get_mut(active).and_then(|t| t.get_git_branch()),
+            path,
+            on_right: self.panel_on_right(),
+            list_end: self.panel_list_end(usable_h),
+        }
+    }
+
+    /// Carpeta local de la sesión (la del visor de archivos o la del shell); `None` por SSH.
+    fn tab_dir(tab: &TerminalTab) -> Option<PathBuf> {
+        if let Some(viewer) = &tab.file_viewer {
+            return match viewer.remote_destination {
+                Some(_) => None,
+                None => viewer.path.parent().map(Path::to_path_buf),
+            };
+        }
+        let terminal = &tab.active_pane()?.terminal;
+        if terminal.ssh_session.as_ref().is_some_and(|s| s.is_active) {
+            return None;
+        }
+        terminal.current_dir.clone()
+    }
+
+    /// Segunda línea de la fila de sesión: agente, modelo y minutos si corre un agente de IA; si no,
+    /// el contexto real de la pestaña (comando, carpeta o SSH).
+    pub(super) fn session_detail(&self, tab: &TerminalTab) -> Option<String> {
+        if let Some(kind) = super::ai_usage::active_agents(tab).first().copied() {
+            let agent = match kind {
+                AiAgentStatus::Claude => "claude",
+                AiAgentStatus::Agy => "agy",
+                AiAgentStatus::Gemini => "gemini",
+                AiAgentStatus::Aider => "aider",
+                AiAgentStatus::Copilot => "copilot",
+                AiAgentStatus::Ollama => "ollama",
+                AiAgentStatus::None => "",
+            };
+            let mut detail = agent.to_string();
+            if let Some(model) = self.ai_usage.snapshot.model_for(kind) {
+                detail.push_str(", ");
+                detail.push_str(model);
+            }
+            let mins = (tab.started_at.elapsed().as_secs() / 60).max(1);
+            detail.push_str(&format!(", {mins} min"));
+            return Some(detail);
+        }
+        tab.sidebar_detail()
     }
 
     /// Filas de la lista de sesiones y cuántas caben: base del desplazamiento con la rueda. Sin
@@ -80,7 +176,7 @@ impl AxonApp {
             (0, 0)
         } else {
             (
-                self.panel_tab_indices().len(),
+                self.tabs.len(),
                 SidebarRects::visible_items(self.panel_list_end(usable_h)),
             )
         }

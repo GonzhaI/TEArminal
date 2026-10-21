@@ -82,7 +82,7 @@ impl AxonApp {
         if self.sidebar_scrollbar_dragging {
             let status_bar_h = self.status_bar_height();
             let usable_h = win_h.saturating_sub(status_bar_h);
-            let list_len = self.panel_tab_indices().len();
+            let list_len = self.tabs.len();
             let list_end = self.panel_list_end(usable_h);
             if let Some((track, thumb)) = TerminalRenderer::sidebar_scrollbar_geometry(
                 SIDEBAR_WIDTH,
@@ -286,11 +286,6 @@ impl AxonApp {
             }
         }
 
-        // Con un diálogo modal abierto solo se resaltan sus botones
-        if self.dialog_hover(mx, my, (win_w, win_h)) {
-            return;
-        }
-
         // Con el menú contextual abierto solo se resalta su opción bajo el ratón
         if let Some(menu) = &mut self.context_menu {
             let hovered = menu.item_at(mx, my);
@@ -311,9 +306,7 @@ impl AxonApp {
         let mut new_hovered_close_win = false;
 
         if self.is_horizontal_tabs() {
-            let list = self.panel_tab_indices();
-            let top_rects = TopTabBarRects::compute(win_w, list.len());
-            let mut new_hovered_switcher = false;
+            let top_rects = TopTabBarRects::compute(win_w, self.tabs.len());
             let mut new_hovered_tab = None;
             let mut new_hovered_close = None;
             let mut new_hovered_new_tab = false;
@@ -335,10 +328,6 @@ impl AxonApp {
                     is_pointer = true;
                 }
 
-                if TopTabBarRects::inside(mx, my, top_rects.switcher_btn) {
-                    new_hovered_switcher = true;
-                    is_pointer = true;
-                }
                 // Check plus button
                 if mx >= top_rects.plus_btn.0
                     && mx < top_rects.plus_btn.0 + top_rects.plus_btn.2
@@ -367,12 +356,12 @@ impl AxonApp {
                     is_pointer = true;
                 }
                 // Check tabs
-                for (pos, &idx) in list.iter().enumerate() {
-                    let tr = top_rects.tab_rect(pos);
+                for idx in 0..self.tabs.len() {
+                    let tr = top_rects.tab_rect(idx);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         new_hovered_tab = Some(idx);
                         is_pointer = true;
-                        let cr = top_rects.close_btn_rect(pos);
+                        let cr = top_rects.close_btn_rect(idx);
                         if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
                             new_hovered_close = Some(idx);
                         }
@@ -381,10 +370,6 @@ impl AxonApp {
                 }
             }
 
-            if self.hovered_switcher != new_hovered_switcher {
-                self.hovered_switcher = new_hovered_switcher;
-                needs_redraw = true;
-            }
             if self.hovered_tab != new_hovered_tab {
                 self.hovered_tab = new_hovered_tab;
                 needs_redraw = true;
@@ -470,14 +455,12 @@ impl AxonApp {
                     TerminalRenderer::sidebar_scrollbar_geometry(
                         SIDEBAR_WIDTH,
                         list_end,
-                        self.panel_tab_indices().len(),
+                        self.tabs.len(),
                         self.sidebar_scroll_offset,
                     ) {
-                    let lx = local.unwrap_or(usize::MAX);
-                    lx >= track.0
-                        && lx < track.0 + track.2
-                        && my >= track.1
-                        && my < track.1 + track.3
+                    local.is_some_and(|lx| {
+                        crate::renderer::ScrollbarRects::hit(track, SIDEBAR_WIDTH, lx, my)
+                    })
                 } else {
                     false
                 };
@@ -508,27 +491,15 @@ impl AxonApp {
                     needs_redraw = true;
                 }
 
-                // Hover en el riel de proyectos
-                let new_hovered_project = if mx < crate::renderer::SidebarRects::RAIL_W {
-                    crate::renderer::SidebarRects::rail_at(mx, my, self.panel_rail().len() + 1)
-                } else {
-                    None
-                };
-                if new_hovered_project.is_some() {
-                    is_pointer = true;
-                }
-                if self.hovered_project != new_hovered_project {
-                    self.hovered_project = new_hovered_project;
-                    needs_redraw = true;
-                }
-
                 // Hover en pestañas y botón de cerrar "x" (misma retícula que el dibujo y el clic)
                 let mut new_hovered_tab = None;
                 let mut new_hovered_close = None;
 
-                if let Some((pos, tab_idx)) = self.panel_tab_at(my, usable_h) {
-                    let row =
-                        crate::renderer::SidebarRects::tab_rect(pos, self.sidebar_scroll_offset);
+                if let Some(tab_idx) = self.panel_tab_at(my, usable_h) {
+                    let row = crate::renderer::SidebarRects::tab_rect(
+                        tab_idx,
+                        self.sidebar_scroll_offset,
+                    );
                     if crate::renderer::SidebarRects::inside(mx, my, row) {
                         new_hovered_tab = Some(tab_idx);
                         is_pointer = true;
@@ -551,10 +522,6 @@ impl AxonApp {
                     needs_redraw = true;
                 }
             } else if self.sidebar_visible {
-                if self.hovered_project.is_some() {
-                    self.hovered_project = None;
-                    needs_redraw = true;
-                }
                 if self.hovered_tab.is_some() {
                     self.hovered_tab = None;
                     needs_redraw = true;
@@ -575,9 +542,10 @@ impl AxonApp {
             let page_w = win_w.saturating_sub(offset + self.panel_right_inset());
             let page_h = win_h.saturating_sub(top_offset);
             let rects = SettingsPageRects::compute(offset, top_offset, page_w, page_h);
+            let right = win_w.saturating_sub(self.panel_right_inset());
             let over_sb = self
                 .settings_scrollbar()
-                .is_some_and(|(t, _)| mx + 6 >= t.0 && my >= t.1 && my < t.1 + t.3);
+                .is_some_and(|(t, _)| crate::renderer::ScrollbarRects::hit(t, right, mx, my));
             if over_sb {
                 is_pointer = true;
             }
@@ -811,7 +779,7 @@ impl AxonApp {
                         status_bar_h,
                         &self.file_explorer,
                     ) {
-                    TerminalRenderer::explorer_scrollbar_hit(track, panel_x + panel_w, mx, my)
+                    crate::renderer::ScrollbarRects::hit(track, panel_x + panel_w, mx, my)
                 } else {
                     false
                 };
@@ -1152,10 +1120,7 @@ impl AxonApp {
                     TerminalRenderer::file_viewer_scrollbar_geometry(
                         offset, top_offset, viewer_w, viewer_h, viewer, row_h,
                     ) {
-                    mx >= track.0
-                        && mx < track.0 + track.2
-                        && my >= track.1
-                        && my < track.1 + track.3
+                    crate::renderer::ScrollbarRects::hit(track, offset + viewer_w, mx, my)
                 } else {
                     false
                 };

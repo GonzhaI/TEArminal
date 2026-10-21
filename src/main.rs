@@ -5,7 +5,6 @@ mod config;
 pub mod explorer;
 mod json;
 pub mod logger;
-mod projects;
 mod pty;
 mod renderer;
 mod ssh;

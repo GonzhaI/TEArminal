@@ -338,35 +338,20 @@ impl TerminalRenderer {
 
         // 5. Barra de desplazamiento del explorador si la lista excede el área visible
         let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
-        if explorer.items.len() > visible_items && visible_items > 0 {
-            let track_w = Self::EXPLORER_SCROLLBAR_W;
-            let track_x = Self::explorer_scrollbar_x(panel_x, panel_w);
-            let track_y = list_y;
-            let track_h = list_max_y.saturating_sub(list_y);
-
-            let total_items = explorer.items.len();
-            let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(18.0)
-                as usize)
-                .min(track_h);
-            let max_offset = total_items.saturating_sub(visible_items);
-            let travel = track_h.saturating_sub(thumb_h);
-            let thumb_y = if max_offset > 0 {
-                track_y
-                    + ((explorer.scroll_offset as f32 / max_offset as f32) * travel as f32) as usize
-            } else {
-                track_y
-            };
-
-            Self::draw_scrollbar(
+        if let Some((track, thumb)) = ScrollbarRects::vertical(
+            panel_x + panel_w,
+            list_y,
+            list_max_y.saturating_sub(list_y),
+            explorer.items.len(),
+            visible_items,
+            explorer.scroll_offset,
+        ) {
+            Self::draw_scrollbar_rects(
                 buffer,
                 width,
                 height,
-                track_x,
-                track_y,
-                track_w,
-                track_h,
-                thumb_y,
-                thumb_h,
+                track,
+                thumb,
                 explorer.hovered_scrollbar,
                 self.scrollbars_awake,
                 theme,
@@ -384,21 +369,6 @@ impl TerminalRenderer {
             Deleted => theme.ansi[1],
             Renamed => theme.ansi[6],
         }
-    }
-
-    /// Ancho del carril de la barra del explorador.
-    pub const EXPLORER_SCROLLBAR_W: usize = 8;
-
-    /// X del carril: junto al borde de la tarjeta del panel, con 2 px de aire.
-    pub fn explorer_scrollbar_x(panel_x: usize, panel_w: usize) -> usize {
-        (panel_x + panel_w)
-            .saturating_sub(Self::EXPLORER_SCROLLBAR_W + 2 + SidebarRects::CARD_INSET)
-    }
-
-    /// Zona que responde como barra (clic y hover): el carril, 8 px a su izquierda y el margen del
-    /// panel, para no agarrar por error la fila que queda detrás.
-    pub fn explorer_scrollbar_hit(track: Rect, panel_right: usize, mx: usize, my: usize) -> bool {
-        mx + 8 >= track.0 && mx < panel_right && my >= track.1 && my < track.1 + track.3
     }
 
     pub fn explorer_scrollbar_geometry(
@@ -419,31 +389,13 @@ impl TerminalRenderer {
         let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
         let list_max_y = panel_y + panel_h.saturating_sub(8);
 
-        let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
-        let total_items = explorer.items.len();
-        if total_items <= visible_items || visible_items == 0 {
-            return None;
-        }
-
-        let track_w = Self::EXPLORER_SCROLLBAR_W;
-        let track_x = Self::explorer_scrollbar_x(panel_x, panel_w);
-        let track_y = list_y;
-        let track_h = list_max_y.saturating_sub(list_y);
-
-        let thumb_h = (((visible_items as f32 / total_items as f32) * track_h as f32).max(18.0)
-            as usize)
-            .min(track_h);
-        let max_offset = total_items.saturating_sub(visible_items);
-        let travel = track_h.saturating_sub(thumb_h);
-        let thumb_y = if max_offset > 0 {
-            track_y + ((explorer.scroll_offset as f32 / max_offset as f32) * travel as f32) as usize
-        } else {
-            track_y
-        };
-
-        Some((
-            (track_x, track_y, track_w, track_h),
-            (track_x, thumb_y, track_w, thumb_h),
-        ))
+        ScrollbarRects::vertical(
+            panel_x + panel_w,
+            list_y,
+            list_max_y.saturating_sub(list_y),
+            explorer.items.len(),
+            (list_max_y.saturating_sub(list_y)) / item_h,
+            explorer.scroll_offset,
+        )
     }
 }

@@ -28,13 +28,8 @@ struct SceneParams<'a> {
     sidebar_scrollbar_hovered: bool,
     active_idx: usize,
     tab_items: &'a [SidebarTabItem],
-    projects: &'a [SidebarProject],
     header: &'a SidebarHeader,
-    hovered_project: Option<usize>,
     panel_right: bool,
-    top_project: &'a TopBarProject,
-    hovered_switcher: bool,
-    dialog: Option<&'a Dialog>,
 }
 
 impl AxonApp {
@@ -43,13 +38,23 @@ impl AxonApp {
         if self.occluded {
             return;
         }
+        // El explorador sigue a la terminal enfocada: un solo punto cubre clic, atajo, división y cierre
+        // de paneles, que cambian el foco sin pasar por `switch_to_tab`.
+        let focus = self
+            .tabs
+            .get(self.active_tab_index)
+            .map_or((usize::MAX, usize::MAX), |t| (t.id, t.active_pane_id));
+        if focus != self.explorer_focus {
+            self.explorer_focus = focus;
+            self.sync_file_explorer_root();
+        }
         let is_horizontal = self.is_horizontal_tabs();
         let offset = self.sidebar_offset();
         let right_offset = self.file_explorer_offset();
         let explorer_visible = self.file_explorer.visible;
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
-        let sidebar_visible = self.sidebar_visible;
+        let sidebar_visible = self.panel_shown();
         let active_idx = self.active_tab_index;
         let hovered_tab = self.hovered_tab;
         let hovered_close = self.hovered_close;
@@ -59,11 +64,6 @@ impl AxonApp {
         let hovered_toggle_btn = self.hovered_toggle_btn;
         let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
         let panel_right = self.panel_on_right();
-        let top_project = if is_horizontal {
-            self.top_bar_project()
-        } else {
-            TopBarProject::default()
-        };
 
         // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
         for t in &mut self.tabs {
@@ -76,27 +76,23 @@ impl AxonApp {
             }
         }
 
-        // En vertical el panel solo lista las sesiones del proyecto a la vista
-        let panel_indices = self.panel_tab_indices();
         let (win_w, win_h) = self.window.as_ref().map_or((0, 0), |w| {
             let size = w.inner_size();
             (size.width as usize, size.height as usize)
         });
         self.sync_explorer_dock(win_w, win_h);
-        let (projects, header) = if !sidebar_visible {
-            (Vec::new(), SidebarHeader::default())
+        let header = if !sidebar_visible {
+            SidebarHeader::default()
         } else {
-            let usable_h = win_h.saturating_sub(status_bar_h);
-            (self.sidebar_projects(), self.sidebar_header(usable_h))
+            self.sidebar_header(win_h.saturating_sub(status_bar_h))
         };
         let tab_items: Vec<SidebarTabItem> = self
             .tabs
             .iter()
             .enumerate()
-            .filter(|(idx, _)| panel_indices.contains(idx))
             .map(|(idx, t)| SidebarTabItem {
                 index: idx,
-                status: super::projects::session_status(t),
+                status: super::panel::session_status(t),
                 title: t.display_title(),
                 detail: self.session_detail(t),
                 is_active: idx == active_idx,
@@ -145,13 +141,8 @@ impl AxonApp {
             sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
             active_idx,
             tab_items: &tab_items,
-            projects: &projects,
             header: &header,
-            hovered_project: self.hovered_project,
             panel_right,
-            top_project: &top_project,
-            hovered_switcher: self.hovered_switcher,
-            dialog: self.dialog.as_ref(),
         };
 
         // 1. Si la aceleración por hardware GPU (Direct3D 11 DirectFlip) está activa, presentar vía VRAM
@@ -227,8 +218,6 @@ fn draw_full_scene(
             width,
             height,
             p.tab_items,
-            p.top_project,
-            p.hovered_switcher,
             p.hovered_tab,
             p.hovered_close,
             p.hovered_new_tab,
@@ -369,17 +358,7 @@ fn draw_full_scene(
                         theme,
                     );
                 }
-                let branch = pane.get_git_branch();
-                let pane_agent = detect_ai_agent(pane.terminal.window_title.as_deref());
-                let agent_badge = (pane_agent != AiAgentStatus::None).then(|| {
-                    TerminalRenderer::status_bar_badge_info(
-                        pane_agent,
-                        None,
-                        ai_snapshot.model_for(pane_agent),
-                        theme,
-                    )
-                });
-                renderer.render_pane_with_context(
+                renderer.render_pane(
                     buffer,
                     width,
                     height,
@@ -392,12 +371,6 @@ fn draw_full_scene(
                     p.cursor_visible,
                     is_active,
                     has_multiple,
-                    crate::renderer::ComposerChips {
-                        branch: branch.as_deref(),
-                        agent: agent_badge
-                            .as_ref()
-                            .map(|(icon, label, color)| (*icon, label.as_str(), *color)),
-                    },
                 );
             }
         }
@@ -435,6 +408,7 @@ fn draw_full_scene(
 
     // Marco del panel de pestañas superiores: tarjeta con esquinas redondeadas sobre el tono de las
     // barras. Va después del explorador alojado, que pinta hasta el borde del panel.
+    let usable = height.saturating_sub(p.status_bar_h);
     if p.is_horizontal && p.sidebar_visible {
         let x0 = if p.panel_right {
             width.saturating_sub(SIDEBAR_WIDTH)
@@ -442,7 +416,6 @@ fn draw_full_scene(
             0
         };
         let top = SidebarRects::TOP;
-        let usable = height.saturating_sub(p.status_bar_h);
         crate::ui::frame_card(
             buffer,
             width,
@@ -453,6 +426,36 @@ fn draw_full_scene(
             theme.bar_bg(),
         );
     }
+
+    // Tarjeta del contenido (terminales, visor, Ajustes): misma esquina y margen que la del panel. Con el
+    // panel a la vista en horizontal la región se estira bajo el margen de la tarjeta vecina, de modo que
+    // entre las dos queda un solo margen y no dos.
+    let inset = SidebarRects::CARD_INSET;
+    let stretch = if p.is_horizontal && p.sidebar_visible {
+        inset
+    } else {
+        0
+    };
+    let left = if p.offset > 0 {
+        p.offset - stretch.min(p.offset)
+    } else {
+        0
+    };
+    let right = width.saturating_sub(p.right_offset) + if p.right_offset > 0 { stretch } else { 0 };
+    crate::ui::frame_card(
+        buffer,
+        width,
+        height,
+        (
+            left,
+            p.top_offset,
+            right.min(width).saturating_sub(left),
+            usable.saturating_sub(p.top_offset),
+        ),
+        inset,
+        SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+    );
 
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
@@ -535,10 +538,6 @@ fn draw_full_scene(
     if let Some(menu) = context_menu {
         renderer.render_context_menu(buffer, width, height, menu, theme);
     }
-
-    if let Some(dialog) = p.dialog {
-        renderer.render_dialog(buffer, width, height, dialog, theme);
-    }
 }
 
 /// Dibuja el panel lateral. A la izquierda lo hace sobre el fotograma; a la derecha, en un búfer propio
@@ -570,9 +569,7 @@ fn draw_panel(
                     height,
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
-                    p.projects,
                     p.header,
-                    p.hovered_project,
                     p.tab_items,
                     p.sidebar_scroll_offset,
                     p.hovered_tab,

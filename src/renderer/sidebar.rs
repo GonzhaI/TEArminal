@@ -3,8 +3,8 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Renderiza la barra lateral: riel de proyectos a la izquierda y, a su lado, las sesiones del proyecto
-    /// seleccionado. Dibuja en un búfer propio de ancho `sidebar_width`: `app` lo coloca a izquierda o derecha.
+    /// Renderiza la barra lateral: riel de ajustes a la izquierda y, a su lado, la lista de sesiones.
+    /// Dibuja en un búfer propio de ancho `sidebar_width`: `app` lo coloca a izquierda o derecha.
     #[allow(clippy::too_many_arguments)]
     pub fn render_sidebar(
         &mut self,
@@ -13,9 +13,7 @@ impl TerminalRenderer {
         height: usize,
         sidebar_width: usize,
         status_bar_h: usize,
-        projects: &[SidebarProject],
         header: &SidebarHeader,
-        hovered_project: Option<usize>,
         tabs: &[SidebarTabItem],
         scroll_offset: usize,
         hovered_tab: Option<usize>,
@@ -63,51 +61,7 @@ impl TerminalRenderer {
         };
         Self::draw_rect(buffer, width, height, edge_x, top, 1, body_h, line);
 
-        // 2. Riel: un cuadrado por proyecto, sesiones sueltas si las hay y «Agregar proyecto».
-        for (i, project) in projects.iter().enumerate() {
-            self.draw_rail_project(
-                buffer,
-                width,
-                height,
-                i,
-                project,
-                hovered_project == Some(i),
-                theme,
-            );
-        }
-        let add = SidebarRects::rail_item_rect(projects.len());
-        let add_hover = hovered_project == Some(projects.len());
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            add.0,
-            add.1,
-            add.2,
-            add.3,
-            12,
-            if add_hover {
-                theme.accent_color()
-            } else {
-                theme.chrome_line_strong()
-            },
-        );
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::Plus,
-            add.0 + add.2 / 2,
-            add.1 + add.3 / 2,
-            15.0,
-            if add_hover {
-                theme.accent_color()
-            } else {
-                theme.text_muted()
-            },
-        );
-
-        // 3. Cabecera del proyecto: nombre, rama y carpeta. El botón «+» abre una sesión nueva.
+        // 2. Cabecera: título, rama y carpeta de la sesión a la vista. El botón «+» abre una sesión nueva.
         let col_x = rail_w + 14;
         let plus = SidebarRects::plus_btn();
         // La rama va como píldora alineada a la derecha, junto al «+».
@@ -209,7 +163,7 @@ impl TerminalRenderer {
             },
         );
 
-        // 4. Lista de sesiones del proyecto.
+        // 3. Lista de sesiones.
         let tab_item_h = SidebarRects::TAB_ITEM_H;
         let list_max_y = header.list_end;
         let tab_x = SidebarRects::PAD_X;
@@ -438,7 +392,7 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
+        // 4. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
         let btn = SidebarRects::settings_btn_rect(usable_h);
         if hovered_toggle_btn {
             crate::ui::draw_rounded_rect(
@@ -517,98 +471,6 @@ impl TerminalRenderer {
         }
     }
 
-    /// Cuadrado de proyecto del riel: color propio, inicial y marca lateral del activo.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_rail_project(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        i: usize,
-        project: &SidebarProject,
-        hovered: bool,
-        theme: &Theme,
-    ) {
-        let (x, y, w, h) = SidebarRects::rail_item_rect(i);
-        let color = theme.ansi[project.color_slot.min(15)];
-        let fill = if project.is_loose {
-            theme.surface_bg()
-        } else if project.is_active {
-            color
-        } else {
-            theme.mix(theme.background, color, if hovered { 0.8 } else { 0.55 })
-        };
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 12, fill);
-        if project.is_loose {
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                crate::ui::LucideIcon::Terminal,
-                x + w / 2,
-                y + h / 2,
-                17.0,
-                if project.is_active {
-                    theme.foreground
-                } else {
-                    theme.text_secondary()
-                },
-            );
-        } else {
-            let label = project.initial.to_string();
-            let lw = self.measure_ui_text(&label, 15.0, true);
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                &label,
-                x + w.saturating_sub(lw) / 2,
-                y + h / 2 + 5,
-                x + w,
-                theme.background,
-                15.0,
-                true,
-            );
-        }
-        if project.is_active {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                0,
-                y + 10,
-                3,
-                h - 20,
-                1,
-                theme.foreground,
-            );
-        }
-        if project.has_news {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x + w - 9,
-                y - 3,
-                12,
-                12,
-                6,
-                theme.background,
-            );
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x + w - 7,
-                y - 1,
-                8,
-                8,
-                4,
-                theme.ansi[3],
-            );
-        }
-    }
-
     /// Botón flotante para recuperar la barra lateral cuando está oculta.
     pub fn render_floating_sidebar_toggle(
         &mut self,
@@ -675,35 +537,13 @@ impl TerminalRenderer {
         scroll_offset: usize,
     ) -> Option<(Rect, Rect)> {
         let list_start_y = SidebarRects::LIST_START_Y;
-        let list_max_y = list_end;
-        if list_max_y <= list_start_y {
-            return None;
-        }
-        let visible_items = SidebarRects::visible_items(list_end);
-
-        if total_tabs <= visible_items || visible_items == 0 {
-            return None;
-        }
-
-        let track_w = 4;
-        let track_x = sidebar_width.saturating_sub(track_w + 3);
-        let track_y = list_start_y;
-        let track_h = list_max_y.saturating_sub(list_start_y);
-
-        let thumb_h = (((visible_items as f32 / total_tabs as f32) * track_h as f32).max(18.0)
-            as usize)
-            .min(track_h);
-        let max_offset = total_tabs.saturating_sub(visible_items);
-        let travel = track_h.saturating_sub(thumb_h);
-        let thumb_y = if max_offset > 0 {
-            track_y + ((scroll_offset as f32 / max_offset as f32) * travel as f32) as usize
-        } else {
-            track_y
-        };
-
-        Some((
-            (track_x, track_y, track_w, track_h),
-            (track_x, thumb_y, track_w, thumb_h),
-        ))
+        ScrollbarRects::vertical(
+            sidebar_width,
+            list_start_y,
+            list_end.saturating_sub(list_start_y),
+            total_tabs,
+            SidebarRects::visible_items(list_end),
+            scroll_offset,
+        )
     }
 }

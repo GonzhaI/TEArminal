@@ -93,116 +93,6 @@ impl TerminalRenderer {
         );
     }
 
-    /// Selector de proyecto de la barra de pestañas: monograma, nombre y, si otro proyecto tiene novedades,
-    /// un punto. Un clic abre el desplegable de proyectos.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_project_switcher(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        rect: Rect,
-        project: &TopBarProject,
-        hovered: bool,
-        theme: &Theme,
-    ) {
-        let (x, y, w, h) = rect;
-        // El selector es una píldora, no solo el avatar: superficie apenas más clara que la barra y
-        // hairline, como el resto de controles del chrome.
-        let chip_bg = if hovered {
-            theme.surface_hover()
-        } else {
-            theme.mix(theme.bar_bg(), theme.background, 0.4)
-        };
-        crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 8, chip_bg);
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 8, theme.surface_bg());
-
-        let sq = (x + 7, y + (h.saturating_sub(24)) / 2, 24, 24);
-        if project.is_loose {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                sq.0,
-                sq.1,
-                sq.2,
-                sq.3,
-                7,
-                theme.chrome_line_strong(),
-            );
-            self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
-                crate::ui::LucideIcon::Terminal,
-                sq.0 + 12,
-                sq.1 + 12,
-                13.0,
-                theme.foreground,
-            );
-        } else {
-            let color = theme.ansi[project.color_slot.min(15)];
-            crate::ui::draw_rounded_rect(buffer, width, height, sq.0, sq.1, sq.2, sq.3, 7, color);
-            let label = project.initial.to_string();
-            let lw = self.measure_ui_text(&label, 12.0, true);
-            self.draw_ui_text(
-                buffer,
-                width,
-                height,
-                &label,
-                sq.0 + sq.2.saturating_sub(lw) / 2,
-                sq.1 + 17,
-                sq.0 + sq.2,
-                theme.background,
-                12.0,
-                true,
-            );
-        }
-        // El nombre se recorta con «…» antes del chevron, que ocupa los últimos 28 px del chip.
-        let title = self.fit_ui_text(
-            &project.title,
-            w.saturating_sub(37 + 28),
-            tokens::TITLE,
-            true,
-        );
-        self.draw_ui_text(
-            buffer,
-            width,
-            height,
-            &title,
-            x + 37,
-            y + h / 2 + 4,
-            x + w - 24,
-            theme.foreground,
-            tokens::TITLE,
-            true,
-        );
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            crate::ui::LucideIcon::ChevronDown,
-            x + w - 18,
-            y + h / 2,
-            11.0,
-            theme.text_muted(),
-        );
-        if project.has_news {
-            crate::ui::draw_rounded_rect(buffer, width, height, x + w - 8, y, 9, 9, 4, chip_bg);
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
-                x + w - 6,
-                y + 2,
-                5,
-                5,
-                2,
-                theme.ansi[3],
-            );
-        }
-    }
-
     /// Botón de icono del chrome: 32×32, radio 8, relleno solo con hover o estado activo.
     fn draw_chrome_action(
         &mut self,
@@ -323,8 +213,6 @@ impl TerminalRenderer {
         width: usize,
         height: usize,
         tabs: &[SidebarTabItem],
-        project: &TopBarProject,
-        hovered_switcher: bool,
         hovered_tab: Option<usize>,
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
@@ -347,18 +235,10 @@ impl TerminalRenderer {
         // 1. Franja superior
         Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
 
-        // 2. Selector de proyecto
-        self.draw_project_switcher(
-            buffer,
-            width,
-            height,
-            rects.switcher_btn,
-            project,
-            hovered_switcher,
-            theme,
-        );
+        // 2. Marca
+        self.draw_brand(buffer, width, height, bar_h, theme);
 
-        // 3. Pestañas del proyecto (`tab.index` es la posición real; la lista está filtrada)
+        // 3. Pestañas
         for (pos, tab) in tabs.iter().enumerate() {
             let idx = tab.index;
             let r = rects.tab_rect(pos);
@@ -619,21 +499,32 @@ impl TerminalRenderer {
                 buffer, width, height, max_btn.0, max_btn.1, max_btn.2, max_btn.3, hover_bg,
             );
         }
-        let max_icon = if is_maximized {
-            crate::ui::LucideIcon::Copy
+        let max_fg = if hovered_max { theme.foreground } else { fg };
+        let (cx, cy) = (max_btn.0 + max_btn.2 / 2, max_btn.1 + max_btn.3 / 2);
+        if is_maximized {
+            // Restaurar, como en Windows: el cuadrado de adelante abajo a la izquierda y el de atrás
+            // arriba a la derecha (el `Copy` de Lucide está espejado).
+            let bg = if hovered_max {
+                hover_bg
+            } else {
+                theme.bar_bg()
+            };
+            let (x, y) = (cx.saturating_sub(5), cy.saturating_sub(4));
+            crate::ui::stroke_rounded_rect(buffer, width, height, x + 3, y, 8, 8, 2, max_fg);
+            crate::ui::draw_rounded_rect(buffer, width, height, x, y + 3, 8, 8, 2, bg);
+            crate::ui::stroke_rounded_rect(buffer, width, height, x, y + 3, 8, 8, 2, max_fg);
         } else {
-            crate::ui::LucideIcon::Square
-        };
-        self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
-            max_icon,
-            max_btn.0 + (max_btn.2 / 2),
-            max_btn.1 + (max_btn.3 / 2),
-            12.0,
-            if hovered_max { theme.foreground } else { fg },
-        );
+            self.draw_lucide_icon(
+                buffer,
+                width,
+                height,
+                crate::ui::LucideIcon::Square,
+                cx,
+                cy,
+                12.0,
+                max_fg,
+            );
+        }
 
         // Cerrar: el único estado rojo del chrome, como en Windows.
         if hovered_close {

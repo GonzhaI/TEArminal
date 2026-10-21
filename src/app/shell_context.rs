@@ -35,16 +35,6 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
     None
 }
 
-/// Raíz del repositorio git que contiene `start` (sube como mucho 12 niveles; `.git` puede ser
-/// carpeta o archivo, como en los worktrees).
-pub(super) fn git_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
-    start
-        .ancestors()
-        .take(12)
-        .find(|dir| dir.join(".git").exists())
-        .map(std::path::Path::to_path_buf)
-}
-
 pub(super) fn shorten_home(path: &std::path::Path) -> String {
     static HOME: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     let home = HOME.get_or_init(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));

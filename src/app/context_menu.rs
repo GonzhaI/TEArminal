@@ -38,10 +38,6 @@ pub enum MenuAction {
     CloseTab(usize),
     CloseOtherTabs(usize),
     NewTab,
-    AddProject,
-    RemoveProject(usize),
-    /// Fila `i` del desplegable de proyectos (`AxonApp::click_panel_row`).
-    PanelRow(usize),
     NewWindow,
     OpenSettings,
     ToggleExplorer,
@@ -201,14 +197,11 @@ impl AxonApp {
         let right_offset = self.file_explorer_offset();
 
         let items = if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
-            let list = self.panel_tab_indices();
-            let rects = TopTabBarRects::compute(win_w, list.len());
-            let hit = (0..list.len())
-                .find(|&pos| {
-                    let r = rects.tab_rect(pos);
-                    mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
-                })
-                .map(|pos| list[pos]);
+            let rects = TopTabBarRects::compute(win_w, self.tabs.len());
+            let hit = (0..self.tabs.len()).find(|&idx| {
+                let r = rects.tab_rect(idx);
+                mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+            });
             self.tab_or_window_menu(hit)
         } else if let Some(lx) = self.panel_local_x(mx, my, win_w) {
             // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
@@ -216,10 +209,11 @@ impl AxonApp {
                 // Con pestañas superiores el panel es solo el explorador, que tiene su propio menú
                 return false;
             } else if lx < crate::renderer::SidebarRects::RAIL_W {
-                self.rail_menu(lx, my)
+                // El riel solo lleva el botón de ajustes
+                return false;
             } else {
                 let usable_h = win_h.saturating_sub(status_bar_h);
-                let hit = self.panel_tab_at(my, usable_h).map(|(_, tab)| tab);
+                let hit = self.panel_tab_at(my, usable_h);
                 self.tab_or_window_menu(hit)
             }
         } else if self.tabs[self.active_tab_index].is_settings {
@@ -862,9 +856,6 @@ impl AxonApp {
             MenuAction::CloseTab(i) => self.close_tab(i),
             MenuAction::CloseOtherTabs(keep) => self.close_other_tabs(keep),
             MenuAction::NewTab => self.create_new_tab(),
-            MenuAction::AddProject => self.add_project_with_picker(),
-            MenuAction::RemoveProject(i) => self.remove_project(i),
-            MenuAction::PanelRow(i) => self.click_panel_row(i),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),

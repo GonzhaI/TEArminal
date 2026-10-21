@@ -16,11 +16,6 @@ impl AxonApp {
             return;
         }
 
-        // Diálogo modal abierto: Intro acepta, Esc cancela y ninguna tecla llega al shell
-        if self.dialog_key(&logical_key, event_type) {
-            return;
-        }
-
         // En eventos de liberación (Release), solo procesar si Kitty Keyboard Protocol tiene activo el flag 2 (report event types)
         if event_type == KeyEventType::Release {
             if let Some(active) = self.tabs[self.active_tab_index].active_pane() {

@@ -46,23 +46,17 @@ impl TerminalRenderer {
         if terminal.scrollback.is_empty() {
             return None;
         }
-        let track_w = 4;
-        let track_x = (rect_x + rect_width).saturating_sub(track_w + 4);
-        let track_y = rect_y + self.margin_y;
-        let track_h = rect_height.saturating_sub(self.margin_y * 2);
-        if track_h == 0 {
-            return None;
-        }
-
-        let total_history = terminal.scrollback.len() + terminal.rows;
-        let thumb_h = ((terminal.rows as f32 / total_history as f32) * track_h as f32)
-            .max(18.0)
-            .min(track_h as f32) as usize;
-        let available_travel = track_h.saturating_sub(thumb_h);
-        let ratio = 1.0 - (terminal.scroll_offset as f32 / terminal.scrollback.len() as f32);
-        let thumb_y = track_y + (ratio * available_travel as f32) as usize;
-
-        Some((track_x, thumb_y, track_w, thumb_h))
+        let history = terminal.scrollback.len();
+        // El desplazamiento de la terminal cuenta desde abajo; la barra, desde arriba.
+        let (_, (x, y, w, h)) = ScrollbarRects::vertical(
+            rect_x + rect_width,
+            rect_y + self.margin_y,
+            rect_height.saturating_sub(self.margin_y * 2),
+            history + terminal.rows,
+            terminal.rows,
+            history.saturating_sub(terminal.scroll_offset),
+        )?;
+        Some((x, y, w, h))
     }
 
     /// Botón de la cabecera de panel: fondo solo al pasar el ratón, icono atenuado.
@@ -247,8 +241,9 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza un panel de terminal en un rectángulo específico del framebuffer (sin rama: lo usan los tests)
-    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    /// Renderiza un panel de terminal en un rectángulo específico del framebuffer.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_pane(
         &mut self,
         buffer: &mut [u32],
@@ -262,42 +257,7 @@ impl TerminalRenderer {
         theme: &Theme,
         cursor_visible: bool,
         is_active_pane: bool,
-        has_multiple_panes: bool,
-    ) {
-        self.render_pane_with_context(
-            buffer,
-            width,
-            height,
-            rect_x,
-            rect_y,
-            rect_w,
-            rect_h,
-            terminal,
-            theme,
-            cursor_visible,
-            is_active_pane,
-            has_multiple_panes,
-            ComposerChips::default(),
-        );
-    }
-
-    /// Igual que `render_pane`, con el contexto (rama y agente) de la franja de bloques y del compositor.
-    #[allow(clippy::too_many_arguments)]
-    pub fn render_pane_with_context(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        rect_x: usize,
-        rect_y: usize,
-        rect_w: usize,
-        rect_h: usize,
-        terminal: &TerminalState,
-        theme: &Theme,
-        cursor_visible: bool,
-        is_active_pane: bool,
         _has_multiple_panes: bool,
-        chips: ComposerChips<'_>,
     ) {
         if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
             return;
@@ -755,24 +715,6 @@ impl TerminalRenderer {
                     }
                 }
             }
-        }
-
-        // 5b. Franja de contexto sobre el área (carpeta · rama · comandos con error).
-        self.draw_block_context_strip(
-            buffer,
-            width,
-            height,
-            rect_x,
-            rect_y,
-            rect_w,
-            terminal,
-            chips.branch,
-            theme,
-        );
-        if is_active_pane {
-            self.draw_composer(
-                buffer, width, height, rect_x, rect_y, rect_w, rect_h, terminal, chips, theme,
-            );
         }
 
         // 6. Scrollbar del panel si tiene historial

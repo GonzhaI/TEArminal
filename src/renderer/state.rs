@@ -24,19 +24,6 @@ impl SessionStatus {
     }
 }
 
-/// Proyecto del riel de la barra lateral.
-#[derive(Debug, Clone)]
-pub struct SidebarProject {
-    pub initial: char,
-    /// Índice ANSI del color del proyecto.
-    pub color_slot: usize,
-    pub is_active: bool,
-    /// Hay novedades (salida nueva) en una sesión de un proyecto que no está a la vista.
-    pub has_news: bool,
-    /// Sesiones sueltas: las que no pertenecen a ningún proyecto agregado.
-    pub is_loose: bool,
-}
-
 /// Límite real de la cuenta mostrado como medidor en la barra de estado.
 #[derive(Debug, Clone)]
 pub struct StatusMeter {
@@ -45,18 +32,7 @@ pub struct StatusMeter {
     pub percent: f32,
 }
 
-/// Proyecto a la vista en la barra de pestañas superiores.
-#[derive(Debug, Clone, Default)]
-pub struct TopBarProject {
-    pub title: String,
-    pub initial: char,
-    pub color_slot: usize,
-    pub is_loose: bool,
-    /// Otro proyecto tiene novedades.
-    pub has_news: bool,
-}
-
-/// Cabecera de la columna de sesiones: el proyecto seleccionado.
+/// Cabecera de la columna de sesiones: título, rama y carpeta de la sesión a la vista.
 #[derive(Debug, Clone, Default)]
 pub struct SidebarHeader {
     pub title: String,
@@ -70,7 +46,7 @@ pub struct SidebarHeader {
 
 #[derive(Debug, Clone)]
 pub struct SidebarTabItem {
-    /// Posición real de la pestaña en `AxonApp::tabs` (la lista del panel está filtrada por proyecto).
+    /// Posición de la pestaña en `AxonApp::tabs`.
     pub index: usize,
     /// `None` en Ajustes y visores de archivo.
     pub status: Option<SessionStatus>,
