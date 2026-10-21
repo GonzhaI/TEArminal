@@ -22,74 +22,33 @@ impl TerminalRenderer {
         (ContextMenu::PAD * 2 + 36 + content + 14).max(200)
     }
 
-    pub fn render_context_menu(
-        &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-        menu: &ContextMenu,
-        theme: &Theme,
-    ) {
+    pub fn render_context_menu(&mut self, canvas: &mut Canvas, menu: &ContextMenu, theme: &Theme) {
+        let (width, height) = canvas.size();
         let (x, y, w, h) = menu.bounds();
         // Sombra corta, superficie elevada y hairline: un menú, no una isla.
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            x + 1,
-            y + 3,
-            w,
-            h,
-            6,
-            Color::from_rgba(0, 0, 0, 80),
-        );
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            x,
-            y,
-            w,
-            h,
-            6,
-            theme.chrome_bg_elevated(),
-        );
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            x,
-            y,
-            w,
-            h,
-            6,
-            theme.chrome_line_strong(),
-        );
+        canvas.rounded_fill(x + 1, y + 3, w, h, 6, Color::from_rgba(0, 0, 0, 80));
+        canvas.rounded_fill(x, y, w, h, 6, theme.chrome_bg_elevated());
+        canvas.rounded_stroke(x, y, w, h, 6, theme.chrome_line_strong());
 
         let accent = theme.accent_color();
         for (i, item) in menu.items.iter().enumerate() {
             let r = menu.item_rect(i);
             if item.action.is_none() {
                 let clip: Clip = (0, 0, width, height);
-                fill_rect(
-                    buffer,
-                    width,
+                canvas.fill_rect(
                     clip,
                     r.0 + 8,
                     r.1 + r.3 / 2,
                     r.2.saturating_sub(16),
                     1,
-                    theme.chrome_line().to_u32_xrgb(),
+                    theme.chrome_line(),
                 );
                 continue;
             }
 
             let hovered = item.enabled && menu.hovered == Some(i);
             if hovered {
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
+                canvas.rounded_fill(
                     r.0 + 4,
                     r.1,
                     r.2.saturating_sub(8),
@@ -105,17 +64,10 @@ impl TerminalRenderer {
             };
             let cy = r.1 + r.3 / 2;
             if let Some(icon) = item.icon {
-                self.draw_lucide_icon(
-                    &mut Canvas::over(buffer, width, height),
-                    icon,
-                    r.0 + 18,
-                    cy,
-                    12.0,
-                    icon_fg,
-                );
+                self.draw_lucide_icon(canvas, icon, r.0 + 18, cy, 12.0, icon_fg);
             }
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &item.label,
                 r.0 + 36,
                 cy + 4,
@@ -127,7 +79,7 @@ impl TerminalRenderer {
             if !item.shortcut.is_empty() {
                 let sw = self.measure_ui_text(item.shortcut, 10.0, false);
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     item.shortcut,
                     (r.0 + r.2).saturating_sub(sw + 10),
                     cy + 4,

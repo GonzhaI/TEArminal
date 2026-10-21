@@ -302,9 +302,7 @@ fn draw_full_scene(
 
         if file_explorer.visible {
             renderer.render_file_explorer(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 p.top_offset,
                 p.status_bar_h,
                 file_explorer,
@@ -389,9 +387,7 @@ fn draw_full_scene(
 
         if file_explorer.visible {
             renderer.render_file_explorer(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 p.top_offset,
                 p.status_bar_h,
                 file_explorer,
@@ -453,9 +449,7 @@ fn draw_full_scene(
 
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             p.status_bar_h,
             p.hovered_toggle_btn,
             p.panel_right,
@@ -530,7 +524,7 @@ fn draw_full_scene(
     }
 
     if let Some(menu) = context_menu {
-        renderer.render_context_menu(buffer, width, height, menu, theme);
+        renderer.render_context_menu(&mut Canvas::over(buffer, width, height), menu, theme);
     }
 }
 
@@ -548,9 +542,7 @@ fn draw_panel(
         ($buf:expr, $w:expr) => {
             if p.is_horizontal {
                 renderer.render_files_panel(
-                    $buf,
-                    $w,
-                    height,
+                    &mut Canvas::over($buf, $w, height),
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
                     p.header.on_right,
@@ -558,9 +550,7 @@ fn draw_panel(
                 )
             } else {
                 renderer.render_sidebar(
-                    $buf,
-                    $w,
-                    height,
+                    &mut Canvas::over($buf, $w, height),
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
                     p.header,
