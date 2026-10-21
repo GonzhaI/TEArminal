@@ -987,9 +987,7 @@ mod tests {
         );
 
         renderer.render_status_bar_with_ai(
-            &mut buf,
-            w,
-            h,
+            &mut crate::renderer::Canvas::over(&mut buf, w, h),
             0,
             Some("~\\dev\\axon"),
             Some("main"),
@@ -1004,7 +1002,11 @@ mod tests {
             &theme,
         );
         let before_popup = buf.clone();
-        renderer.render_ai_usage_popup(&mut buf, w, h, &state.snapshot, &theme);
+        renderer.render_ai_usage_popup(
+            &mut crate::renderer::Canvas::over(&mut buf, w, h),
+            &state.snapshot,
+            &theme,
+        );
         assert_ne!(
             buf, before_popup,
             "El menú flotante de consumo de IA debe modificar el framebuffer al renderizarse"

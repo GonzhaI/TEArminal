@@ -19,9 +19,7 @@ impl TerminalRenderer {
     #[cfg(test)]
     pub fn render_status_bar(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         sidebar_offset: usize,
         cwd: Option<&str>,
         git_branch: Option<&str>,
@@ -33,9 +31,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         self.render_status_bar_with_ai(
-            buffer,
-            width,
-            height,
+            canvas,
             sidebar_offset,
             cwd,
             git_branch,
@@ -53,9 +49,7 @@ impl TerminalRenderer {
 
     pub fn render_status_bar_with_ai(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         _sidebar_offset: usize,
         cwd: Option<&str>,
         git_branch: Option<&str>,
@@ -69,6 +63,7 @@ impl TerminalRenderer {
         _explorer_visible: bool,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         if width == 0 || height < StatusBarRects::BAR_H {
             return;
         }
@@ -79,14 +74,7 @@ impl TerminalRenderer {
         let baseline = center_y + 4;
 
         // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
-        Self::draw_rect(
-            &mut Canvas::over(buffer, width, height),
-            0,
-            bar_y,
-            width,
-            bar_h,
-            theme.bar_bg(),
-        );
+        Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
 
         // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones de la rejilla.
         let (badge_icon, badge_label, ai_fg) =
@@ -109,7 +97,7 @@ impl TerminalRenderer {
         // Dimensiones como dato, en el extremo derecho.
         let dims_x = width.saturating_sub(StatusBarRects::RIGHT_PAD + dims_w);
         self.draw_mono_text(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             &dims,
             dims_x,
             baseline,
@@ -123,9 +111,7 @@ impl TerminalRenderer {
         // dimensiones: etiqueta, barra y porcentaje. La geometría decide si caben.
         if rects.meters.2 > 0 {
             self.draw_status_meters(
-                buffer,
-                width,
-                height,
+                canvas,
                 meters,
                 rects.meters.0 + rects.meters.2,
                 (bar_y, bar_h),
@@ -146,7 +132,7 @@ impl TerminalRenderer {
 
         if let Some(ssh) = ssh_host {
             self.draw_lucide_icon(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 crate::ui::LucideIcon::Server,
                 cur_x + 5,
                 center_y,
@@ -155,7 +141,7 @@ impl TerminalRenderer {
             );
             cur_x += 15;
             let adv = self.draw_mono_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 ssh,
                 cur_x,
                 baseline,
@@ -169,7 +155,7 @@ impl TerminalRenderer {
 
         if let Some(dir) = cwd {
             self.draw_lucide_icon(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 crate::ui::LucideIcon::Folder,
                 cur_x + 5,
                 center_y,
@@ -178,7 +164,7 @@ impl TerminalRenderer {
             );
             cur_x += 15;
             let adv = self.draw_mono_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 dir,
                 cur_x,
                 baseline,
@@ -192,7 +178,7 @@ impl TerminalRenderer {
 
         if let Some(branch) = git_branch {
             self.draw_lucide_icon(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 crate::ui::LucideIcon::GitBranch,
                 cur_x + 5,
                 center_y,
@@ -201,7 +187,7 @@ impl TerminalRenderer {
             );
             cur_x += 15;
             self.draw_mono_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 branch,
                 cur_x,
                 baseline,
@@ -215,7 +201,7 @@ impl TerminalRenderer {
         // 4. Actualización disponible: icono + texto de acento, sin relleno.
         if let (Some((ub_x, _ub_y, ub_w, _ub_h)), Some(utext)) = (rects.update_badge, update_text) {
             self.draw_lucide_icon(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 crate::ui::LucideIcon::ArrowUp,
                 ub_x + 6,
                 center_y,
@@ -223,7 +209,7 @@ impl TerminalRenderer {
                 theme.accent_color(),
             );
             self.draw_mono_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &utext,
                 ub_x + 15,
                 baseline,
@@ -237,10 +223,7 @@ impl TerminalRenderer {
         // 5. Badge de agente: icono del agente + nombre legible y modelo. El color de marca es solo
         // del icono; el texto es el del chrome (legible), como en el bosquejo.
         if hovered_ai_badge {
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
+            canvas.rounded_fill(
                 bx,
                 by + 3,
                 bw,
@@ -249,21 +232,14 @@ impl TerminalRenderer {
                 theme.accent_soft(26),
             );
         }
-        self.draw_lucide_icon(
-            &mut Canvas::over(buffer, width, height),
-            badge_icon,
-            bx + 8,
-            center_y,
-            10.0,
-            ai_fg,
-        );
+        self.draw_lucide_icon(canvas, badge_icon, bx + 8, center_y, 10.0, ai_fg);
         let label_fg = if ai_status == AiAgentStatus::None {
             ai_fg
         } else {
             theme.foreground
         };
         self.draw_ui_text(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             &badge_label,
             bx + 22,
             baseline,
@@ -279,9 +255,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     fn draw_status_meters(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         meters: &[StatusMeter],
         right_limit: usize,
         (bar_y, bar_h): (usize, usize),
@@ -302,7 +276,7 @@ impl TerminalRenderer {
                 label_w + METER_LABEL_GAP + StatusBarRects::METER_TRACK_W + METER_PCT_GAP + pct_w;
             let start = x.saturating_sub(total);
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &meter.label,
                 start,
                 baseline,
@@ -313,10 +287,7 @@ impl TerminalRenderer {
             );
             let track_x = start + label_w + METER_LABEL_GAP;
             let track_y = bar_y + (bar_h.saturating_sub(StatusBarRects::METER_TRACK_H)) / 2;
-            crate::ui::draw_rounded_rect(
-                buffer,
-                width,
-                height,
+            canvas.rounded_fill(
                 track_x,
                 track_y,
                 StatusBarRects::METER_TRACK_W,
@@ -342,10 +313,7 @@ impl TerminalRenderer {
                 } else {
                     base
                 };
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
+                canvas.rounded_fill(
                     track_x,
                     track_y,
                     fill.max(3),
@@ -355,7 +323,7 @@ impl TerminalRenderer {
                 );
             }
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &pct,
                 track_x + StatusBarRects::METER_TRACK_W + METER_PCT_GAP,
                 baseline,
@@ -501,12 +469,11 @@ impl TerminalRenderer {
     /// color, modelo y ventanas), el total de 24 h y los agentes configurados.
     pub fn render_ai_usage_popup(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         snapshot: &crate::app::AiUsageSnapshot,
         theme: &Theme,
     ) {
+        let (width, height) = canvas.size();
         let popup_h = Self::ai_usage_popup_height(snapshot);
         if width < 220 || height < popup_h + StatusBarRects::BAR_H + 12 {
             return;
@@ -514,39 +481,9 @@ impl TerminalRenderer {
         let (x, y, w, h) = StatusBarRects::popup_rect(width, height, popup_h);
 
         // Sombra corta, superficie elevada y hairline
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            x + 1,
-            y + 3,
-            w,
-            h,
-            6,
-            Color::from_rgba(0, 0, 0, 80),
-        );
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            x,
-            y,
-            w,
-            h,
-            6,
-            theme.chrome_bg_elevated(),
-        );
-        crate::ui::stroke_rounded_rect(
-            buffer,
-            width,
-            height,
-            x,
-            y,
-            w,
-            h,
-            6,
-            theme.chrome_line_strong(),
-        );
+        canvas.rounded_fill(x + 1, y + 3, w, h, 6, Color::from_rgba(0, 0, 0, 80));
+        canvas.rounded_fill(x, y, w, h, 6, theme.chrome_bg_elevated());
+        canvas.rounded_stroke(x, y, w, h, 6, theme.chrome_line_strong());
 
         let pad_x = x + 16;
         let max_x = x + w - 16;
@@ -556,7 +493,7 @@ impl TerminalRenderer {
 
         // Cabecera: icono + título
         self.draw_lucide_icon(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             crate::ui::LucideIcon::Sparkles,
             pad_x + 6,
             cur_y + 5,
@@ -564,7 +501,7 @@ impl TerminalRenderer {
             accent,
         );
         self.draw_ui_text(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             "Consumo de IA",
             pad_x + 18,
             cur_y + 10,
@@ -576,19 +513,12 @@ impl TerminalRenderer {
         cur_y += 20;
 
         cur_y += 8;
-        Self::draw_rect(
-            &mut Canvas::over(buffer, width, height),
-            pad_x,
-            cur_y,
-            divider_w,
-            1,
-            theme.border_color(),
-        );
+        Self::draw_rect(canvas, pad_x, cur_y, divider_w, 1, theme.border_color());
         cur_y += 1 + 10;
 
         if snapshot.usages.is_empty() {
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 "Sin agente de IA activo en esta pestaña",
                 pad_x,
                 cur_y + 10,
@@ -604,9 +534,9 @@ impl TerminalRenderer {
             let (_, name, brand) = Self::status_bar_badge_info(u.kind, None, None, theme);
 
             // Cabecera: barra de color + agente + modelo + plan/modo a la derecha
-            crate::ui::draw_rounded_rect(buffer, width, height, pad_x, cur_y + 3, 2, 14, 1, brand);
+            canvas.rounded_fill(pad_x, cur_y + 3, 2, 14, 1, brand);
             let name_end = self.draw_ui_text_tracked(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &name,
                 pad_x + 10,
                 cur_y + 10,
@@ -621,7 +551,7 @@ impl TerminalRenderer {
                 .as_deref()
                 .map_or(0, |p| self.measure_ui_text(p, 10.0, true) + 20);
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 &u.model,
                 name_end + 8,
                 cur_y + 10,
@@ -633,7 +563,7 @@ impl TerminalRenderer {
             if let Some(plan) = u.plan.as_deref() {
                 let plan_w = self.measure_ui_text(plan, 10.0, false);
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     plan,
                     max_x.saturating_sub(plan_w),
                     cur_y + 10,
@@ -647,7 +577,7 @@ impl TerminalRenderer {
 
             if let Some(note) = Self::ai_limits_note(u.kind) {
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     note,
                     pad_x + 10,
                     cur_y + 10,
@@ -673,7 +603,7 @@ impl TerminalRenderer {
                 let pct = format!("{:.0}% usado", lim.percent);
                 let pct_w = self.measure_ui_text(&pct, 10.5, true);
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &lim.label,
                     bar_x,
                     cur_y + 10,
@@ -683,7 +613,7 @@ impl TerminalRenderer {
                     false,
                 );
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &pct,
                     max_x.saturating_sub(pct_w),
                     cur_y + 10,
@@ -693,30 +623,18 @@ impl TerminalRenderer {
                     true,
                 );
                 let bar_y = cur_y + 15;
-                crate::ui::draw_rounded_rect(
-                    buffer,
-                    width,
-                    height,
-                    bar_x,
-                    bar_y,
-                    bar_w,
-                    3,
-                    1,
-                    theme.chrome_line(),
-                );
+                canvas.rounded_fill(bar_x, bar_y, bar_w, 3, 1, theme.chrome_line());
                 let fill_w = ((bar_w as f32 * lim.percent / 100.0).round() as usize)
                     .clamp(usize::from(lim.percent > 0.2) * 4, bar_w);
                 if fill_w > 0 {
-                    crate::ui::draw_rounded_rect(
-                        buffer, width, height, bar_x, bar_y, fill_w, 3, 1, bar_fg,
-                    );
+                    canvas.rounded_fill(bar_x, bar_y, fill_w, 3, 1, bar_fg);
                 }
                 let reset = lim.resets_in_secs().map_or_else(
                     || "Sin fecha de reinicio".to_string(),
                     |s| format!("Reinicia en {}", crate::app::format_duration(s)),
                 );
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &reset,
                     bar_x,
                     cur_y + 28,
@@ -730,7 +648,7 @@ impl TerminalRenderer {
 
             if !u.has_tokens() {
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     "Sin consumo local registrado",
                     pad_x + 10,
                     cur_y + 10,
@@ -776,7 +694,7 @@ impl TerminalRenderer {
             ];
             for (label, win, value_fg, detail) in rows {
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &label,
                     pad_x + 10,
                     cur_y + 10,
@@ -792,7 +710,7 @@ impl TerminalRenderer {
                 );
                 let value_w = self.measure_ui_text(&value, 11.0, true);
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &value,
                     max_x.saturating_sub(value_w),
                     cur_y + 10,
@@ -803,7 +721,7 @@ impl TerminalRenderer {
                 );
                 cur_y += 16;
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &detail,
                     pad_x + 10,
                     cur_y + 10,
@@ -818,18 +736,11 @@ impl TerminalRenderer {
         }
 
         // Divisor y total de 24 h de todos los agentes
-        Self::draw_rect(
-            &mut Canvas::over(buffer, width, height),
-            pad_x,
-            cur_y,
-            divider_w,
-            1,
-            theme.border_color(),
-        );
+        Self::draw_rect(canvas, pad_x, cur_y, divider_w, 1, theme.border_color());
         cur_y += 1 + 10;
 
         self.draw_ui_text(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             "Últimas 24h · todos los agentes",
             pad_x,
             cur_y + 10,
@@ -845,7 +756,7 @@ impl TerminalRenderer {
         );
         let d24_lw = self.measure_ui_text(&d24_line, 10.5, true);
         self.draw_ui_text(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             &d24_line,
             max_x.saturating_sub(d24_lw),
             cur_y + 10,
@@ -859,18 +770,11 @@ impl TerminalRenderer {
         // Agentes y modelos configurados
         if !snapshot.agents.is_empty() {
             cur_y += 8;
-            Self::draw_rect(
-                &mut Canvas::over(buffer, width, height),
-                pad_x,
-                cur_y,
-                divider_w,
-                1,
-                theme.border_color(),
-            );
+            Self::draw_rect(canvas, pad_x, cur_y, divider_w, 1, theme.border_color());
             cur_y += 1 + 10;
 
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 "AGENTES Y HERRAMIENTAS",
                 pad_x,
                 cur_y + 10,
@@ -889,20 +793,12 @@ impl TerminalRenderer {
                     _ => theme.text_secondary(),
                 };
                 let tag = format!("{}: ", ag.agent);
-                let next_x = self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
-                    &tag,
-                    pad_x,
-                    cur_y + 10,
-                    max_x,
-                    brand_fg,
-                    10.5,
-                    true,
-                );
+                let next_x =
+                    self.draw_ui_text(canvas, &tag, pad_x, cur_y + 10, max_x, brand_fg, 10.5, true);
                 let dw = self.measure_ui_text(&ag.detail, 10.0, false);
                 let model_max_x = max_x.saturating_sub(dw + 8);
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &ag.model,
                     next_x,
                     cur_y + 10,
@@ -912,7 +808,7 @@ impl TerminalRenderer {
                     false,
                 );
                 self.draw_ui_text(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     &ag.detail,
                     max_x.saturating_sub(dw),
                     cur_y + 10,
@@ -928,7 +824,7 @@ impl TerminalRenderer {
         if let Some(ref hint) = snapshot.terminal_hint {
             cur_y += 8;
             self.draw_ui_text(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 hint,
                 pad_x,
                 cur_y + 10,

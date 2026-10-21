@@ -832,9 +832,7 @@ fn test_status_bar_ssh_with_cwd_and_branch() {
 
     // Renderizar barra de estado con SSH Host, CWD y rama Git simultáneamente
     renderer.render_status_bar(
-        &mut buffer,
-        1000,
-        600,
+        &mut crate::renderer::Canvas::over(&mut buffer, 1000, 600),
         0,
         Some("/home/django"),
         Some("qa"),

@@ -233,13 +233,22 @@ mod bench {
             &theme,
         );
         r.render_top_tab_bar(
-            &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
-            true, &theme,
+            &mut Canvas::over(&mut buf, w, h),
+            &tabs,
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &theme,
         );
         r.render_status_bar(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             190,
             Some("~/dev/axon"),
             Some("main"),
@@ -270,13 +279,22 @@ mod bench {
                 &theme,
             );
             r.render_top_tab_bar(
-                &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false,
-                true, &theme,
+                &mut Canvas::over(&mut buf, w, h),
+                &tabs,
+                None,
+                None,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                false,
+                true,
+                &theme,
             );
             r.render_status_bar(
-                &mut buf,
-                w,
-                h,
+                &mut Canvas::over(&mut buf, w, h),
                 190,
                 Some("~/dev/axon"),
                 Some("main"),
@@ -603,9 +621,7 @@ fn test_ai_agent_detection_and_status_bar() {
 
     let sidebar_offset = 180;
     renderer.render_status_bar(
-        &mut buffer,
-        1000,
-        600,
+        &mut Canvas::over(&mut buffer, 1000, 600),
         sidebar_offset,
         Some("C:\\Users\\test"),
         Some("main"),
@@ -1102,9 +1118,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         "axon",
         Some("main"),
         false,
@@ -1145,9 +1159,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         Some("~/dev/axon"),
         Some("main"),
@@ -1169,7 +1181,18 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     buf.fill(theme.background.to_u32_xrgb());
     let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
     r.render_top_tab_bar(
-        &mut buf, w, h, &tabs, None, None, false, false, false, false, false, false, false, true,
+        &mut Canvas::over(&mut buf, w, h),
+        &tabs,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
         &theme,
     );
     let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
@@ -1208,9 +1231,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1246,9 +1267,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         "axon",
         Some("main"),
         false,
@@ -1294,9 +1313,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1320,7 +1337,17 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf, w, h, "Ajustes", None, false, false, false, false, false, false, false, &theme,
+        &mut Canvas::over(&mut buf, w, h),
+        "Ajustes",
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &theme,
     );
     r.render_sidebar(
         &mut Canvas::over(&mut buf, w, h),
@@ -1349,9 +1376,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         Some("Ajustes"),
         None,
@@ -1374,9 +1399,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         "pane.rs",
         Some("main"),
         false,
@@ -1416,9 +1439,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         Some("~/dev/axon/src/renderer"),
         Some("main"),
@@ -1442,9 +1463,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         "axon",
         Some("main"),
         false,
@@ -1502,9 +1521,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1534,9 +1551,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let mut buf = vec![0u32; w * h];
     buf.fill(theme.background.to_u32_xrgb());
     r.render_top_title_bar(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         "axon",
         Some("main"),
         false,
@@ -1575,9 +1590,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         Some("C:\\Users\\dev\\axon"),
         Some("main"),
@@ -1636,8 +1649,19 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     buf.fill(theme.background.to_u32_xrgb());
     let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
     r.render_top_tab_bar(
-        &mut buf, w, h, &wp1_tabs, None, None, false, false, false, false, false, false, false,
-        true, &theme,
+        &mut Canvas::over(&mut buf, w, h),
+        &wp1_tabs,
+        None,
+        None,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        &theme,
     );
     r.render_sidebar(
         &mut Canvas::over(&mut buf, w, h),
@@ -1666,9 +1690,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         Some("C:\\Users\\dev\\axon"),
         Some("main"),
@@ -1743,9 +1765,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         let mut buf = vec![0u32; w * h];
         buf.fill(theme.background.to_u32_xrgb());
         r.render_top_title_bar(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             "axon",
             Some("main"),
             false,
@@ -1869,9 +1889,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         }
 
         r.render_status_bar_with_ai(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             0,
             Some("C:\\Users\\dev\\axon"),
             Some("main"),
@@ -1936,8 +1954,19 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         buf.fill(theme.background.to_u32_xrgb());
         let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
         r.render_top_tab_bar(
-            &mut buf, w, h, &wp1_tabs, None, None, false, false, false, false, false, false, false,
-            true, &theme,
+            &mut Canvas::over(&mut buf, w, h),
+            &wp1_tabs,
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &theme,
         );
         r.render_sidebar(
             &mut Canvas::over(&mut buf, w, h),
@@ -1983,9 +2012,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
         );
         r.render_status_bar_with_ai(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             SIDEBAR_WIDTH,
             Some("C:\\Users\\dev\\axon"),
             Some("main"),
@@ -2080,9 +2107,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     let mut draw = |meters: &[StatusMeter]| {
         let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
         r.render_status_bar_with_ai(
-            &mut buf,
-            w,
-            h,
+            &mut Canvas::over(&mut buf, w, h),
             0,
             Some("~/dev"),
             Some("main"),
@@ -2113,9 +2138,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     }];
     for (buf, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
         r.render_status_bar_with_ai(
-            buf,
-            400,
-            h,
+            &mut Canvas::over(buf, 400, h),
             0,
             Some("~/dev"),
             Some("main"),

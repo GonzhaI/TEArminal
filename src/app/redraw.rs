@@ -214,9 +214,7 @@ fn draw_full_scene(
 
     if p.is_horizontal {
         renderer.render_top_tab_bar(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             p.tab_items,
             p.hovered_tab,
             p.hovered_close,
@@ -234,9 +232,7 @@ fn draw_full_scene(
         let active_title = active_tab.display_title();
         let git_branch = active_tab.get_git_branch();
         renderer.render_top_title_bar(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &active_title,
             git_branch.as_deref(),
             p.hovered_files_btn,
@@ -501,9 +497,7 @@ fn draw_full_scene(
         let active_model = ai_snapshot.model_for(ai_status);
         let meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
         renderer.render_status_bar_with_ai(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             p.offset,
             cwd.as_deref(),
             git_branch.as_deref(),
@@ -519,7 +513,11 @@ fn draw_full_scene(
         );
 
         if p.hovered_ai_badge && context_menu.is_none() {
-            renderer.render_ai_usage_popup(buffer, width, height, ai_snapshot, theme);
+            renderer.render_ai_usage_popup(
+                &mut Canvas::over(buffer, width, height),
+                ai_snapshot,
+                theme,
+            );
         }
     }
 
