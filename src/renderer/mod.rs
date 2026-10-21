@@ -8,6 +8,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod blocks;
+mod canvas;
 mod context_menu;
 pub mod d3d11;
 mod draw;
@@ -34,6 +35,8 @@ use glyphs::{
 };
 
 pub use blocks::BlockCardButton;
+#[allow(unused_imports)] // sin consumidores hasta la tarea 3
+pub use canvas::{Canvas, ImageRef};
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};

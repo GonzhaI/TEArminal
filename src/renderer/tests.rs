@@ -2302,3 +2302,132 @@ fn test_scrollbar_geometry_is_shared_by_every_list() {
         );
     }
 }
+
+/// Referencia del bucle de imagen que sigue inline en `pane.rs` (Tarea 4 lo sustituye por `Canvas::image`).
+fn legacy_image(
+    buf: &mut [u32],
+    w: usize,
+    clip: Clip,
+    rgba: &[u8],
+    (iw, ih): (usize, usize),
+    (ix, iy, tw, th): (i32, i32, usize, usize),
+) {
+    for dy in 0..th {
+        let py = iy + dy as i32;
+        if py < clip.1 as i32 || py >= clip.3 as i32 {
+            continue;
+        }
+        let sy = dy * ih / th;
+        for dx in 0..tw {
+            let px = ix + dx as i32;
+            if px < clip.0 as i32 || px >= clip.2 as i32 {
+                continue;
+            }
+            let i = (sy * iw + dx * iw / tw) * 4;
+            if i + 3 < rgba.len() {
+                let (r, g, b, a) = (rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]);
+                let idx = py as usize * w + px as usize;
+                if a == 255 {
+                    buf[idx] = ((r as u32) << 16) | ((g as u32) << 8) | b as u32;
+                } else if a > 0 {
+                    let d = buf[idx];
+                    let bg = Color::from_rgb((d >> 16) as u8, (d >> 8) as u8, d as u8);
+                    buf[idx] = bg.blend_over(Color::from_rgb(r, g, b), a);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_canvas_matches_legacy_primitives() {
+    const W: usize = 40;
+    const H: usize = 30;
+    // Fondo con degradado para que las mezclas con alfa se noten
+    let base: Vec<u32> = (0..W * H)
+        .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
+        .collect();
+    let pair = || (base.clone(), base.clone());
+    let clip: Clip = (5, 4, 30, 22);
+    let col = Color::from_rgb(200, 90, 30);
+
+    // Relleno con recorte por dos lados
+    let (mut a, mut b) = pair();
+    Canvas::over(&mut a, W, H).fill_rect(clip, 0, 0, 20, 15, col);
+    fill_rect(&mut b, W, clip, 0, 0, 20, 15, col.to_u32_xrgb());
+    assert_eq!(a, b, "fill_rect");
+
+    // clear
+    let (mut a, mut b) = pair();
+    Canvas::over(&mut a, W, H).clear(col);
+    b.fill(col.to_u32_xrgb());
+    assert_eq!(a, b, "clear");
+
+    // Glifo con alfa parcial pegado al borde del recorte
+    let glyph = CachedGlyph {
+        width: 4,
+        height: 3,
+        x_offset: 0,
+        y_offset: 0,
+        bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
+    };
+    let (mut a, mut b) = pair();
+    Canvas::over(&mut a, W, H).glyph(clip, &glyph, 3, 20, col);
+    blit_glyph(&mut b, W, clip, &glyph, 3, 20, col);
+    assert_eq!(a, b, "glyph");
+    assert_ne!(a, base, "el glifo debe dibujar algo");
+
+    // Redondeado y trazo, incluido un rectángulo que sale del búfer
+    for (x, y, w, h) in [(4, 3, 20, 14), (30, 22, 20, 14)] {
+        let (mut a, mut b) = pair();
+        let mut cv = Canvas::over(&mut a, W, H);
+        cv.rounded_fill(x, y, w, h, 5, col);
+        cv.rounded_stroke(x, y, w, h, 5, Color::from_rgb(10, 220, 240));
+        crate::ui::draw_rounded_rect(&mut b, W, H, x, y, w, h, 5, col);
+        crate::ui::stroke_rounded_rect(&mut b, W, H, x, y, w, h, 5, Color::from_rgb(10, 220, 240));
+        assert_eq!(a, b, "rounded {x},{y}");
+    }
+
+    // Imagen 2x2 con alfa 0/128/255 + otro píxel semitransparente, escalada y recortada
+    let rgba: Vec<u8> = vec![
+        255, 0, 0, 255, //
+        0, 255, 0, 128, //
+        0, 0, 255, 0, //
+        255, 255, 255, 40,
+    ];
+    let (mut a, mut b) = pair();
+    let dst = (-3, 2, 16, 12);
+    Canvas::over(&mut a, W, H).image(
+        clip,
+        ImageRef {
+            rgba: &rgba,
+            width: 2,
+            height: 2,
+        },
+        dst,
+    );
+    legacy_image(&mut b, W, clip, &rgba, (2, 2), dst);
+    assert_eq!(a, b, "image");
+    assert_ne!(a, base, "la imagen debe dibujar algo");
+
+    // rgba truncada: no entra en pánico y no dibuja nada (el bucle antiguo leería a medias)
+    let (mut a, _) = pair();
+    Canvas::over(&mut a, W, H).image(
+        clip,
+        ImageRef {
+            rgba: &rgba[..15],
+            width: 2,
+            height: 2,
+        },
+        dst,
+    );
+    assert_eq!(a, base, "image truncada");
+
+    // Tarjeta
+    let (mut a, mut b) = pair();
+    Canvas::over(&mut a, W, H).card((2, 2, 30, 24), 3, 4, col);
+    crate::ui::frame_card(&mut b, W, H, (2, 2, 30, 24), 3, 4, col);
+    assert_eq!(a, b, "card");
+
+    assert_eq!(Canvas::over(&mut a, W, H).size(), (W, H));
+}
