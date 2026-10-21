@@ -2050,6 +2050,71 @@ fn test_golden_scene_hashes() {
 }
 
 #[test]
+fn test_signature_distance_is_zero_for_identical_and_grows_with_difference() {
+    use super::test_support::{signature, signature_distance};
+    let (w, h) = (96usize, 96usize);
+    let base = vec![0u32; w * h];
+    let mut changed = base.clone();
+    for y in 0..48 {
+        changed[y * w..y * w + 48].fill(0x00FF_FFFF);
+    }
+    let (a, b) = (signature(&base, w, h), signature(&changed, w, h));
+    assert_eq!(a.len(), 4 * 3);
+    assert_eq!(signature_distance(&a, &a), 0.0);
+    // Un bloque de 4 difiere en 255 por canal: 3 * 255 / 12 valores.
+    assert_eq!(signature_distance(&a, &b), 63.75);
+}
+
+/// Las firmas de bloques de cada escena deben coincidir con `golden/signatures.bin` (la GPU de la etapa 2
+/// se compara contra ellas con tolerancia). Con `AXON_BLESS=1` reescribe el archivo.
+/// Formato: por escena, `u8` largo del nombre, nombre UTF-8, `u32` LE largo de la firma, firma.
+#[test]
+fn test_golden_scene_signatures_match() {
+    use super::test_support::{bless_requested, signature, signature_distance};
+    const GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/renderer/golden/signatures.bin"
+    );
+
+    let actual: Vec<(&str, Vec<u8>)> = build_scenes(1440, 900)
+        .into_iter()
+        .map(|(name, buf)| (name, signature(&buf, 1440, 900)))
+        .collect();
+
+    if bless_requested() {
+        let mut out = Vec::new();
+        for (name, sig) in &actual {
+            out.push(name.len() as u8);
+            out.extend_from_slice(name.as_bytes());
+            out.extend_from_slice(&(sig.len() as u32).to_le_bytes());
+            out.extend_from_slice(sig);
+        }
+        std::fs::write(GOLDEN, out).unwrap();
+        return;
+    }
+    let data =
+        std::fs::read(GOLDEN).expect("falta golden/signatures.bin: generarlo con AXON_BLESS=1");
+    let mut pos = 0;
+    let mut take = |n: usize| {
+        let s = &data[pos..pos + n];
+        pos += n;
+        s
+    };
+    for (name, sig) in &actual {
+        let name_len = take(1)[0] as usize;
+        assert_eq!(take(name_len), name.as_bytes(), "orden de escenas distinto");
+        let len = u32::from_le_bytes(take(4).try_into().unwrap()) as usize;
+        let expected = take(len);
+        assert_eq!(
+            signature_distance(sig, expected),
+            0.0,
+            "firma de la escena {name} distinta (si es intencional, AXON_BLESS=1)"
+        );
+    }
+    assert_eq!(pos, data.len(), "signatures.bin tiene escenas de más");
+}
+
+#[test]
 fn test_status_bar_draws_limit_meters_only_when_given() {
     use crate::renderer::{AiAgentStatus, StatusMeter};
 

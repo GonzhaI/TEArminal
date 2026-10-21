@@ -37,6 +37,47 @@ pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
 }
 
+/// Lado (px) de los bloques de la firma.
+const SIGNATURE_BLOCK: usize = 48;
+
+/// Firma gruesa del fotograma (`0x00RRGGBB`): media de R, G y B por bloque de 48x48 px, en orden de filas, 3 bytes
+/// por bloque. Los bloques del borde derecho/inferior son más pequeños y se promedian con su número real de
+/// píxeles. La media se redondea al entero más cercano (mitades hacia arriba).
+pub(super) fn signature(buf: &[u32], w: usize, h: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    for by in (0..h).step_by(SIGNATURE_BLOCK) {
+        for bx in (0..w).step_by(SIGNATURE_BLOCK) {
+            let (x1, y1) = ((bx + SIGNATURE_BLOCK).min(w), (by + SIGNATURE_BLOCK).min(h));
+            let mut sum = [0u64; 3];
+            for y in by..y1 {
+                for &p in &buf[y * w + bx..y * w + x1] {
+                    sum[0] += u64::from((p >> 16) & 0xFF);
+                    sum[1] += u64::from((p >> 8) & 0xFF);
+                    sum[2] += u64::from(p & 0xFF);
+                }
+            }
+            let n = ((x1 - bx) * (y1 - by)) as u64;
+            out.extend(sum.iter().map(|&s| ((s + n / 2) / n) as u8));
+        }
+    }
+    out
+}
+
+/// Diferencia media absoluta por canal (0-255) entre dos firmas. Entra en pánico si sus largos difieren:
+/// comparar firmas de tamaños distintos es un error del test, no una diferencia visual.
+pub(super) fn signature_distance(a: &[u8], b: &[u8]) -> f32 {
+    assert_eq!(a.len(), b.len(), "firmas de distinto tamaño");
+    if a.is_empty() {
+        return 0.0;
+    }
+    let sum: u64 = a
+        .iter()
+        .zip(b)
+        .map(|(&x, &y)| u64::from(x.abs_diff(y)))
+        .sum();
+    sum as f32 / a.len() as f32
+}
+
 /// Lienzo `w` x `h` listo para grabar (el fotograma parte de un búfer a cero).
 pub(super) fn new_canvas(w: usize, h: usize) -> Canvas {
     let mut canvas = Canvas::new();
