@@ -2745,3 +2745,47 @@ fn test_canvas_begin_reuses_capacity_and_clears_state() {
     c.clear(col);
     assert_eq!(c.scene().ops, [Op::Clear(col)]);
 }
+
+mod gpu_device {
+    use crate::renderer::gpu::{max_texture_dim_for, requested_driver_from, DriverKind, GpuDevice};
+    use windows::Win32::Graphics::Direct3D::*;
+
+    #[test]
+    fn test_gpu_device_warp_is_always_available() {
+        let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0)
+            .expect("WARP debe existir en Windows 10/11");
+        assert_eq!(gpu.kind, DriverKind::Warp);
+    }
+
+    #[test]
+    fn test_gpu_device_feature_level_10_0_is_accepted() {
+        let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
+        assert!(gpu.feature_level.0 >= D3D_FEATURE_LEVEL_10_0.0);
+        assert!(gpu.max_texture_dim() >= 8192);
+        // Solo informativo (`--nocapture`)
+        println!("WARP: feature level {:#x}", gpu.feature_level.0);
+        match GpuDevice::new(None) {
+            Ok(g) => println!(
+                "new(None): {:?}, feature level {:#x}",
+                g.kind, g.feature_level.0
+            ),
+            Err(e) => println!("new(None): {e}"),
+        }
+    }
+
+    #[test]
+    fn test_requested_driver_reads_env() {
+        assert_eq!(requested_driver_from(Some("warp")), Some(DriverKind::Warp));
+        assert_eq!(requested_driver_from(Some("WARP")), Some(DriverKind::Warp));
+        assert_eq!(requested_driver_from(Some("hardware")), None);
+        assert_eq!(requested_driver_from(None), None);
+    }
+
+    #[test]
+    fn test_max_texture_dim_by_feature_level() {
+        assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_10_0), 8192);
+        assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_10_1), 8192);
+        assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_0), 16384);
+        assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_1), 16384);
+    }
+}

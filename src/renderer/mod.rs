@@ -17,6 +17,7 @@ mod file_viewer;
 mod files_panel;
 mod geometry;
 mod glyphs;
+mod gpu;
 mod md_preview;
 mod pane;
 mod raster_cpu;
