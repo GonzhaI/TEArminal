@@ -208,13 +208,15 @@ fn draw_full_scene(
     height: usize,
     is_maximized: bool,
 ) {
-    buffer.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(buffer, width, height);
+    let canvas = &mut canvas;
+    canvas.clear(theme.background);
 
     let active_tab = &mut tabs[p.active_idx];
 
     if p.is_horizontal {
         renderer.render_top_tab_bar(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             p.tab_items,
             p.hovered_tab,
             p.hovered_close,
@@ -232,7 +234,7 @@ fn draw_full_scene(
         let active_title = active_tab.display_title();
         let git_branch = active_tab.get_git_branch();
         renderer.render_top_title_bar(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             &active_title,
             git_branch.as_deref(),
             p.hovered_files_btn,
@@ -247,12 +249,12 @@ fn draw_full_scene(
     }
 
     if p.sidebar_visible {
-        draw_panel(buffer, renderer, theme, p, width, height);
+        draw_panel(canvas, renderer, theme, p, width, height);
     }
 
     if active_tab.is_settings {
         renderer.render_settings_page(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             p.offset,
             if p.panel_right && p.sidebar_visible {
                 SIDEBAR_WIDTH
@@ -281,7 +283,7 @@ fn draw_full_scene(
         .visible_cols;
 
         renderer.render_file_viewer(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             p.offset,
             p.top_offset,
             term_area_w + p.right_offset,
@@ -294,7 +296,7 @@ fn draw_full_scene(
 
         if file_explorer.visible {
             renderer.render_file_explorer(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 p.top_offset,
                 p.status_bar_h,
                 file_explorer,
@@ -334,7 +336,7 @@ fn draw_full_scene(
                         .filter(|(pane_id, _)| *pane_id == rect.pane_id)
                         .map(|(_, button)| button);
                     renderer.render_pane_header(
-                        &mut Canvas::over(buffer, width, height),
+                        canvas,
                         (rect.x, rect.slot_y, rect.width),
                         &pane.header_title(&tab_title),
                         pane.header_subtitle().as_deref(),
@@ -347,7 +349,7 @@ fn draw_full_scene(
                     );
                 }
                 renderer.render_pane(
-                    &mut Canvas::over(buffer, width, height),
+                    canvas,
                     rect.x,
                     rect.y,
                     rect.width,
@@ -367,19 +369,12 @@ fn draw_full_scene(
             ..
         } in dividers
         {
-            TerminalRenderer::render_pane_divider(
-                &mut Canvas::over(buffer, width, height),
-                dx,
-                dy,
-                dw,
-                dh,
-                divider_color,
-            );
+            TerminalRenderer::render_pane_divider(canvas, dx, dy, dw, dh, divider_color);
         }
 
         if file_explorer.visible {
             renderer.render_file_explorer(
-                &mut Canvas::over(buffer, width, height),
+                canvas,
                 p.top_offset,
                 p.status_bar_h,
                 file_explorer,
@@ -398,10 +393,7 @@ fn draw_full_scene(
             0
         };
         let top = SidebarRects::TOP;
-        crate::ui::frame_card(
-            buffer,
-            width,
-            height,
+        canvas.card(
             (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top)),
             SidebarRects::CARD_INSET,
             SidebarRects::CARD_RADIUS,
@@ -424,10 +416,7 @@ fn draw_full_scene(
         0
     };
     let right = width.saturating_sub(p.right_offset) + if p.right_offset > 0 { stretch } else { 0 };
-    crate::ui::frame_card(
-        buffer,
-        width,
-        height,
+    canvas.card(
         (
             left,
             p.top_offset,
@@ -441,7 +430,7 @@ fn draw_full_scene(
 
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             p.status_bar_h,
             p.hovered_toggle_btn,
             p.panel_right,
@@ -493,7 +482,7 @@ fn draw_full_scene(
         let active_model = ai_snapshot.model_for(ai_status);
         let meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
         renderer.render_status_bar_with_ai(
-            &mut Canvas::over(buffer, width, height),
+            canvas,
             p.offset,
             cwd.as_deref(),
             git_branch.as_deref(),
@@ -509,23 +498,19 @@ fn draw_full_scene(
         );
 
         if p.hovered_ai_badge && context_menu.is_none() {
-            renderer.render_ai_usage_popup(
-                &mut Canvas::over(buffer, width, height),
-                ai_snapshot,
-                theme,
-            );
+            renderer.render_ai_usage_popup(canvas, ai_snapshot, theme);
         }
     }
 
     if let Some(menu) = context_menu {
-        renderer.render_context_menu(&mut Canvas::over(buffer, width, height), menu, theme);
+        renderer.render_context_menu(canvas, menu, theme);
     }
 }
 
 /// Dibuja el panel lateral. A la izquierda lo hace sobre el fotograma; a la derecha, en un búfer propio
 /// del ancho del panel que se copia a su sitio (la geometría del panel es local a él).
 fn draw_panel(
-    buffer: &mut [u32],
+    canvas: &mut Canvas,
     renderer: &mut TerminalRenderer,
     theme: &Theme,
     p: &SceneParams,
@@ -533,10 +518,10 @@ fn draw_panel(
     height: usize,
 ) {
     macro_rules! render {
-        ($buf:expr, $w:expr) => {
+        ($canvas:expr) => {
             if p.is_horizontal {
                 renderer.render_files_panel(
-                    &mut Canvas::over($buf, $w, height),
+                    $canvas,
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
                     p.header.on_right,
@@ -544,7 +529,7 @@ fn draw_panel(
                 )
             } else {
                 renderer.render_sidebar(
-                    &mut Canvas::over($buf, $w, height),
+                    $canvas,
                     SIDEBAR_WIDTH,
                     p.status_bar_h,
                     p.header,
@@ -561,15 +546,16 @@ fn draw_panel(
         };
     }
     if !p.panel_right {
-        render!(buffer, width);
+        render!(canvas);
         return;
     }
     let mut panel = std::mem::take(&mut renderer.panel_buf);
     panel.clear();
     panel.resize(SIDEBAR_WIDTH * height, theme.background.to_u32_xrgb());
-    render!(&mut panel, SIDEBAR_WIDTH);
+    render!(&mut Canvas::over(&mut panel, SIDEBAR_WIDTH, height));
     let x0 = width.saturating_sub(SIDEBAR_WIDTH);
     let usable = height.saturating_sub(p.status_bar_h);
+    let buffer = canvas.pixels_mut();
     for y in SidebarRects::TOP..usable {
         let src = &panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH];
         buffer[y * width + x0..y * width + x0 + SIDEBAR_WIDTH].copy_from_slice(src);

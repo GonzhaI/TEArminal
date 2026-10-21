@@ -25,33 +25,12 @@ mod bench {
             term.process_bytes(line.clone().as_bytes());
         }
         let mut buf = vec![0u32; w * h];
-        r.render_pane(
-            &mut Canvas::over(&mut buf, w, h),
-            0,
-            0,
-            w,
-            h,
-            &term,
-            &theme,
-            true,
-            true,
-            false,
-        ); // calienta cachés
+        let mut canvas = Canvas::over(&mut buf, w, h);
+        r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
         let n = if cfg!(debug_assertions) { 4 } else { 200 };
         let t = Instant::now();
         for _ in 0..n {
-            r.render_pane(
-                &mut Canvas::over(&mut buf, w, h),
-                0,
-                0,
-                w,
-                h,
-                &term,
-                &theme,
-                true,
-                true,
-                false,
-            );
+            r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
         }
         let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
         let t = Instant::now();
@@ -127,8 +106,9 @@ mod bench {
             .file_viewer
             .unwrap();
 
+        let mut canvas = Canvas::over(&mut buf, w, h);
         r.render_file_viewer(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             190,
             0,
             w - 190,
@@ -142,7 +122,7 @@ mod bench {
         let t_rs = Instant::now();
         for _ in 0..n {
             r.render_file_viewer(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 190,
                 0,
                 w - 190,
@@ -156,7 +136,7 @@ mod bench {
         let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
 
         r.render_file_viewer(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             190,
             0,
             w - 190,
@@ -169,7 +149,7 @@ mod bench {
         let t_md = Instant::now();
         for _ in 0..n {
             r.render_file_viewer(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 190,
                 0,
                 w - 190,
@@ -210,8 +190,9 @@ mod bench {
         let settings_state = SettingsPageState::default();
 
         // Warm up
+        let mut canvas = Canvas::over(&mut buf, w, h);
         r.render_sidebar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             190,
             26,
             &crate::renderer::SidebarHeader::default(),
@@ -225,7 +206,7 @@ mod bench {
             &theme,
         );
         r.render_top_tab_bar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             &tabs,
             None,
             None,
@@ -240,7 +221,7 @@ mod bench {
             &theme,
         );
         r.render_status_bar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             190,
             Some("~/dev/axon"),
             Some("main"),
@@ -251,22 +232,13 @@ mod bench {
             true,
             &theme,
         );
-        r.render_settings_page(
-            &mut Canvas::over(&mut buf, w, h),
-            190,
-            0,
-            0,
-            26,
-            &cfg,
-            &settings_state,
-            &theme,
-        );
+        r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
 
         let n = if cfg!(debug_assertions) { 3 } else { 120 };
         let t_chrome = Instant::now();
         for _ in 0..n {
             r.render_sidebar(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 190,
                 26,
                 &crate::renderer::SidebarHeader::default(),
@@ -280,7 +252,7 @@ mod bench {
                 &theme,
             );
             r.render_top_tab_bar(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 &tabs,
                 None,
                 None,
@@ -295,7 +267,7 @@ mod bench {
                 &theme,
             );
             r.render_status_bar(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 190,
                 Some("~/dev/axon"),
                 Some("main"),
@@ -311,16 +283,7 @@ mod bench {
 
         let t_settings = Instant::now();
         for _ in 0..n {
-            r.render_settings_page(
-                &mut Canvas::over(&mut buf, w, h),
-                190,
-                0,
-                0,
-                26,
-                &cfg,
-                &settings_state,
-                &theme,
-            );
+            r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("bench_render_ui_chrome: sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
@@ -374,8 +337,9 @@ fn test_nerd_font_icons_and_color_rendering() {
     terminal.process_bytes(colored_seq);
 
     let mut buffer = vec![0u32; 800 * 600];
+    let mut canvas = Canvas::over(&mut buffer, 800, 600);
     renderer.render(
-        &mut Canvas::over(&mut buffer, 800, 600),
+        &mut canvas,
         0,
         &terminal,
         &terminal.theme,
@@ -463,8 +427,9 @@ fn test_sidebar_rendering_and_layout() {
     ];
 
     let default_theme = crate::theme::Theme::default();
+    let mut canvas = Canvas::over(&mut buffer, 1000, 600);
     renderer.render_sidebar(
-        &mut Canvas::over(&mut buffer, 1000, 600),
+        &mut canvas,
         190,
         26,
         &crate::renderer::SidebarHeader::default(),
@@ -482,17 +447,17 @@ fn test_sidebar_rendering_and_layout() {
     let border_pixel = default_theme.border_color().to_u32_xrgb();
 
     assert_eq!(
-        buffer[50 * 1000 + SidebarRects::RAIL_W + 4],
+        canvas.pixels()[50 * 1000 + SidebarRects::RAIL_W + 4],
         sidebar_bg_pixel,
         "El fondo de la columna de sesiones debe coincidir con sidebar_bg"
     );
     assert_eq!(
-        buffer[50 * 1000 + SidebarRects::RAIL_W - 2],
+        canvas.pixels()[50 * 1000 + SidebarRects::RAIL_W - 2],
         default_theme.background.to_u32_xrgb(),
         "El riel usa el fondo del lienzo"
     );
     assert_eq!(
-        buffer[50 * 1000 + 189],
+        canvas.pixels()[50 * 1000 + 189],
         border_pixel,
         "El borde del sidebar debe coincidir con border_color"
     );
@@ -504,35 +469,21 @@ fn test_sidebar_rendering_and_layout() {
         100,
         default_theme.clone(),
     );
-    renderer.render(
-        &mut Canvas::over(&mut buffer, 1000, 600),
-        190,
-        &term,
-        &term.theme,
-        false,
-        false,
-        false,
-    );
+    renderer.render(&mut canvas, 190, &term, &term.theme, false, false, false);
 
     let term_bg_pixel = term.theme.background.to_u32_xrgb();
     assert_eq!(
-        buffer[50 * 1000 + 195],
+        canvas.pixels()[50 * 1000 + 195],
         term_bg_pixel,
         "El área de terminal después del offset debe tener fondo del tema"
     );
 
     // 4. Probar renderizado del botón flotante expand cuando el sidebar está oculto
-    renderer.render_floating_sidebar_toggle(
-        &mut Canvas::over(&mut buffer, 1000, 600),
-        0,
-        true,
-        false,
-        &default_theme,
-    );
+    renderer.render_floating_sidebar_toggle(&mut canvas, 0, true, false, &default_theme);
     let float_btn_bg = default_theme.surface_hover().to_u32_xrgb();
     let float_y = 600 - 30 - 8 + 5;
     assert_eq!(
-        buffer[float_y * 1000 + 10],
+        canvas.pixels()[float_y * 1000 + 10],
         float_btn_bg,
         "El botón flotante debe renderizarse correctamente"
     );
@@ -540,7 +491,7 @@ fn test_sidebar_rendering_and_layout() {
     // 5. Probar renderizado de la pestaña de Ajustes
     let settings_state = crate::renderer::SettingsPageState::default();
     renderer.render_settings_page(
-        &mut Canvas::over(&mut buffer, 1000, 600),
+        &mut canvas,
         190,
         0,
         0,
@@ -628,8 +579,9 @@ fn test_ai_agent_detection_and_status_bar() {
     let mut buffer = vec![0xCAFEBABE; 1000 * 600];
 
     let sidebar_offset = 180;
+    let mut canvas = Canvas::over(&mut buffer, 1000, 600);
     renderer.render_status_bar(
-        &mut Canvas::over(&mut buffer, 1000, 600),
+        &mut canvas,
         sidebar_offset,
         Some("C:\\Users\\test"),
         Some("main"),
@@ -720,8 +672,9 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let mut buffer = vec![0u32; width * height];
 
     // Warm up
+    let mut canvas = Canvas::over(&mut buffer, width, height);
     renderer.render_pane(
-        &mut Canvas::over(&mut buffer, width, height),
+        &mut canvas,
         0,
         0,
         width,
@@ -737,7 +690,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let start = std::time::Instant::now();
     for _ in 0..frames {
         renderer.render_pane(
-            &mut Canvas::over(&mut buffer, width, height),
+            &mut canvas,
             0,
             0,
             width,
@@ -806,20 +759,12 @@ fn test_settings_page_scrolls_only_the_content() {
     let (w, h, status) = (1000usize, 300usize, 26usize);
     let mut render = |scroll: usize| {
         let mut buf = vec![0u32; w * h];
+        let mut canvas = Canvas::over(&mut buf, w, h);
         let state = SettingsPageState {
             scroll_y: scroll,
             ..SettingsPageState::default()
         };
-        renderer.render_settings_page(
-            &mut Canvas::over(&mut buf, w, h),
-            190,
-            0,
-            0,
-            status,
-            &config,
-            &state,
-            &theme,
-        );
+        renderer.render_settings_page(&mut canvas, 190, 0, 0, status, &config, &state, &theme);
         buf
     };
     let (top, scrolled) = (render(0), render(120));
@@ -932,34 +877,14 @@ fn test_render_pane_with_and_without_ligatures() {
     // Con ligaduras activas
     r.ligatures = true;
     let mut buf_with = vec![0u32; w * h];
-    r.render_pane(
-        &mut Canvas::over(&mut buf_with, w, h),
-        0,
-        0,
-        w,
-        h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
+    let mut canvas_0 = Canvas::over(&mut buf_with, w, h);
+    r.render_pane(&mut canvas_0, 0, 0, w, h, &term, &theme, true, true, false);
 
     // Sin ligaduras
     r.ligatures = false;
     let mut buf_without = vec![0u32; w * h];
-    r.render_pane(
-        &mut Canvas::over(&mut buf_without, w, h),
-        0,
-        0,
-        w,
-        h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
+    let mut canvas_1 = Canvas::over(&mut buf_without, w, h);
+    r.render_pane(&mut canvas_1, 0, 0, w, h, &term, &theme, true, true, false);
 
     // Los dos framebuffers deben diferir porque la flecha `->` y `!=` cambian de píxeles
     let diffs = buf_with
@@ -1133,9 +1058,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
 
     // 1. Terminal con barra lateral y título de ventana
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "axon",
         Some("main"),
         false,
@@ -1148,7 +1074,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header,
@@ -1164,7 +1090,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let pane_w = w - SIDEBAR_WIDTH;
     let pane_h = h - top_h - status_h;
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         top_h,
         pane_w,
@@ -1176,7 +1102,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         Some("~/dev/axon"),
         Some("main"),
@@ -1195,10 +1121,11 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
     r.render_top_tab_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         &tabs,
         None,
         None,
@@ -1213,23 +1140,18 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
-    r.render_files_panel(
-        &mut Canvas::over(&mut panel, SIDEBAR_WIDTH, h),
-        SIDEBAR_WIDTH,
-        status_h,
-        true,
-        &theme,
-    );
+    let mut pc = Canvas::over(&mut panel, SIDEBAR_WIDTH, h);
+    r.render_files_panel(&mut pc, SIDEBAR_WIDTH, status_h, true, &theme);
     let x0 = w - SIDEBAR_WIDTH;
     for y in crate::renderer::SidebarRects::TOP..usable_h {
-        buf[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
+        canvas.pixels_mut()[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
             .copy_from_slice(&panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH]);
     }
     let mut h_explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
     let er = crate::renderer::FilesPanelRects::explorer_rect(usable_h);
     h_explorer.dock = Some((x0 + er.0, er.1, er.2, er.3));
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         top_tabs.bar_h,
         w - SIDEBAR_WIDTH,
@@ -1240,15 +1162,9 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         false,
     );
-    r.render_file_explorer(
-        &mut Canvas::over(&mut buf, w, h),
-        top_tabs.bar_h,
-        status_h,
-        &h_explorer,
-        &theme,
-    );
+    r.render_file_explorer(&mut canvas, top_tabs.bar_h, status_h, &h_explorer, &theme);
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1282,9 +1198,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     ));
     let explorer_w = 0;
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "axon",
         Some("main"),
         false,
@@ -1297,7 +1214,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header_exp,
@@ -1311,7 +1228,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH - explorer_w,
@@ -1322,15 +1239,9 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         false,
     );
-    r.render_file_explorer(
-        &mut Canvas::over(&mut buf, w, h),
-        top_h,
-        status_h,
-        &explorer,
-        &theme,
-    );
+    r.render_file_explorer(&mut canvas, top_h, status_h, &explorer, &theme);
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1352,9 +1263,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         ..Default::default()
     };
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "Ajustes",
         None,
         false,
@@ -1367,7 +1279,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header,
@@ -1381,7 +1293,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_settings_page(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         0,
         top_h,
@@ -1391,7 +1303,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         Some("Ajustes"),
         None,
@@ -1412,9 +1324,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     let tab = crate::app::TerminalTab::new_file_viewer(90, path);
     let viewer = tab.file_viewer.as_ref().unwrap();
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "pane.rs",
         Some("main"),
         false,
@@ -1427,7 +1340,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header,
@@ -1441,7 +1354,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_file_viewer(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -1452,7 +1365,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         Some("~/dev/axon/src/renderer"),
         Some("main"),
@@ -1474,9 +1387,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         ..header_exp.clone()
     };
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "axon",
         Some("main"),
         false,
@@ -1489,8 +1403,9 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     let mut panel = vec![theme.background.to_u32_xrgb(); SIDEBAR_WIDTH * h];
+    let mut pc = Canvas::over(&mut panel, SIDEBAR_WIDTH, h);
     r.render_sidebar(
-        &mut Canvas::over(&mut panel, SIDEBAR_WIDTH, h),
+        &mut pc,
         SIDEBAR_WIDTH,
         status_h,
         &header_right,
@@ -1505,7 +1420,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
     );
     let x0 = w - SIDEBAR_WIDTH;
     for y in crate::renderer::SidebarRects::TOP..h - status_h {
-        buf[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
+        canvas.pixels_mut()[y * w + x0..y * w + x0 + SIDEBAR_WIDTH]
             .copy_from_slice(&panel[y * SIDEBAR_WIDTH..(y + 1) * SIDEBAR_WIDTH]);
     }
     explorer.dock = Some((
@@ -1515,7 +1430,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).3,
     ));
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -1526,15 +1441,9 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         true,
         false,
     );
-    r.render_file_explorer(
-        &mut Canvas::over(&mut buf, w, h),
-        top_h,
-        status_h,
-        &explorer,
-        &theme,
-    );
+    r.render_file_explorer(&mut canvas, top_h, status_h, &explorer, &theme);
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         0,
         Some("~/dev/axon"),
         Some("main"),
@@ -1562,9 +1471,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         },
     ];
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     r.render_top_title_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         "axon",
         Some("main"),
         false,
@@ -1577,7 +1487,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header,
@@ -1591,7 +1501,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         top_h,
         w - SIDEBAR_WIDTH,
@@ -1603,7 +1513,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         Some("C:\\Users\\dev\\axon"),
         Some("main"),
@@ -1659,10 +1569,11 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         },
     ];
     let mut buf = vec![0u32; w * h];
-    buf.fill(theme.background.to_u32_xrgb());
+    let mut canvas = Canvas::over(&mut buf, w, h);
+    canvas.clear(theme.background);
     let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
     r.render_top_tab_bar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         &wp1_tabs,
         None,
         None,
@@ -1677,7 +1588,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_sidebar(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         status_h,
         &header,
@@ -1691,7 +1602,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_pane(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         wp1_rects.bar_h,
         w - SIDEBAR_WIDTH,
@@ -1703,7 +1614,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         false,
     );
     r.render_status_bar_with_ai(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas,
         SIDEBAR_WIDTH,
         Some("C:\\Users\\dev\\axon"),
         Some("main"),
@@ -1776,9 +1687,10 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         );
 
         let mut buf = vec![0u32; w * h];
-        buf.fill(theme.background.to_u32_xrgb());
+        let mut canvas = Canvas::over(&mut buf, w, h);
+        canvas.clear(theme.background);
         r.render_top_title_bar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             "axon",
             Some("main"),
             false,
@@ -1791,7 +1703,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             &theme,
         );
         r.render_sidebar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             SIDEBAR_WIDTH,
             status_h,
             &header,
@@ -1861,7 +1773,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
                 theme.text_secondary()
             };
             r.render_pane_header(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 (x, y, pw),
                 title,
                 Some(subtitle),
@@ -1873,7 +1785,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
                 &theme,
             );
             r.render_pane(
-                &mut Canvas::over(&mut buf, w, h),
+                &mut canvas,
                 x,
                 y + header_offset,
                 pw,
@@ -1891,18 +1803,11 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             (right_x - 2, top_h, 2, content_h),
             (right_x, top_h + top_pane_h - 2, right_w, 2),
         ] {
-            TerminalRenderer::render_pane_divider(
-                &mut Canvas::over(&mut buf, w, h),
-                dx,
-                dy,
-                dw,
-                dh,
-                divider_color,
-            );
+            TerminalRenderer::render_pane_divider(&mut canvas, dx, dy, dw, dh, divider_color);
         }
 
         r.render_status_bar_with_ai(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             0,
             Some("C:\\Users\\dev\\axon"),
             Some("main"),
@@ -1964,10 +1869,11 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         }
 
         let mut buf = vec![0u32; w * h];
-        buf.fill(theme.background.to_u32_xrgb());
+        let mut canvas = Canvas::over(&mut buf, w, h);
+        canvas.clear(theme.background);
         let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
         r.render_top_tab_bar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             &wp1_tabs,
             None,
             None,
@@ -1982,7 +1888,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             &theme,
         );
         r.render_sidebar(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             SIDEBAR_WIDTH,
             status_h,
             &header,
@@ -2000,7 +1906,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         let pane_w = w - SIDEBAR_WIDTH;
         let pane_h = h - wp4_rects.bar_h - status_h;
         r.render_pane_header(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             (pane_x, pane_y, pane_w),
             "axon",
             Some("cargo test"),
@@ -2013,7 +1919,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         );
         let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
         r.render_pane(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             pane_x,
             pane_y + header_offset,
             pane_w,
@@ -2025,7 +1931,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
             false,
         );
         r.render_status_bar_with_ai(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             SIDEBAR_WIDTH,
             Some("C:\\Users\\dev\\axon"),
             Some("main"),
@@ -2119,8 +2025,9 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     let (w, h) = (1200usize, 300usize);
     let mut draw = |meters: &[StatusMeter]| {
         let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
+        let mut canvas = Canvas::over(&mut buf, w, h);
         r.render_status_bar_with_ai(
-            &mut Canvas::over(&mut buf, w, h),
+            &mut canvas,
             0,
             Some("~/dev"),
             Some("main"),
@@ -2150,8 +2057,9 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
         percent: 42.0,
     }];
     for (buf, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
+        let mut canvas = Canvas::over(buf, 400, h);
         r.render_status_bar_with_ai(
-            &mut Canvas::over(buf, 400, h),
+            &mut canvas,
             0,
             Some("~/dev"),
             Some("main"),
@@ -2199,13 +2107,8 @@ fn preview_panel_card() {
     };
 
     let mut buf = vec![theme.background.to_u32_xrgb(); w * h];
-    r.render_files_panel(
-        &mut Canvas::over(&mut buf, w, h),
-        SIDEBAR_WIDTH,
-        status_h,
-        false,
-        &theme,
-    );
+    let mut canvas_0 = Canvas::over(&mut buf, w, h);
+    r.render_files_panel(&mut canvas_0, SIDEBAR_WIDTH, status_h, false, &theme);
     let mut explorer =
         crate::explorer::FileExplorer::new(Some(std::env::current_dir().unwrap()), true);
     explorer.is_focused = true;
@@ -2213,9 +2116,9 @@ fn preview_panel_card() {
         h - status_h,
     ));
     r.scrollbars_awake = true;
-    let mut changes_buf = buf.clone();
+    let mut changes_buf = canvas_0.pixels().to_vec();
     r.render_file_explorer(
-        &mut Canvas::over(&mut buf, w, h),
+        &mut canvas_0,
         SidebarRects::TOP,
         status_h,
         &explorer,
@@ -2223,8 +2126,9 @@ fn preview_panel_card() {
     );
     explorer.toggle_changes_only();
     explorer.hovered_tab = Some(true);
+    let mut canvas_1 = Canvas::over(&mut changes_buf, w, h);
     r.render_file_explorer(
-        &mut Canvas::over(&mut changes_buf, w, h),
+        &mut canvas_1,
         SidebarRects::TOP,
         status_h,
         &explorer,
@@ -2259,17 +2163,8 @@ fn preview_panel_card() {
         viewer.git_base = crate::explorer::git_head_lines(&path);
         viewer.toggle_diff();
         let mut diff_buf = vec![theme.background.to_u32_xrgb(); w * h];
-        r.render_file_viewer(
-            &mut Canvas::over(&mut diff_buf, w, h),
-            0,
-            0,
-            w,
-            h - status_h,
-            0,
-            true,
-            &viewer,
-            &theme,
-        );
+        let mut canvas = Canvas::over(&mut diff_buf, w, h);
+        r.render_file_viewer(&mut canvas, 0, 0, w, h - status_h, 0, true, &viewer, &theme);
         save(&diff_buf, "viewer-diff.png");
     }
     println!("PNG en {}", out.display());

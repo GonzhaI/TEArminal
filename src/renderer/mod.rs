@@ -35,7 +35,6 @@ use glyphs::{
 };
 
 pub use blocks::BlockCardButton;
-#[allow(unused_imports)] // sin consumidores hasta la tarea 3
 pub use canvas::{Canvas, ImageRef};
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;

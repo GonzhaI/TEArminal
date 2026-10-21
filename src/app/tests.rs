@@ -831,8 +831,9 @@ fn test_status_bar_ssh_with_cwd_and_branch() {
     let theme = crate::theme::Theme::default();
 
     // Renderizar barra de estado con SSH Host, CWD y rama Git simultáneamente
+    let mut canvas = crate::renderer::Canvas::over(&mut buffer, 1000, 600);
     renderer.render_status_bar(
-        &mut crate::renderer::Canvas::over(&mut buffer, 1000, 600),
+        &mut canvas,
         0,
         Some("/home/django"),
         Some("qa"),

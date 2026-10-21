@@ -1,9 +1,6 @@
 //! `Canvas`: envoltorio inmediato sobre un framebuffer XRGB. Cada método delega en las primitivas
 //! existentes (misma salida bit a bit); es la API a la que migra el dibujo y desaparece en la tarea 11.
 
-// Aún sin consumidores: las tareas 3-9 migran el dibujo a `Canvas` y este permiso se retira.
-#![allow(dead_code)]
-
 use super::{blit_glyph, fill_rect, CachedGlyph, Clip};
 use crate::theme::Color;
 
@@ -31,7 +28,13 @@ impl<'a> Canvas<'a> {
 
     /// Píxeles crudos del búfer. Temporal: la copia de Ajustes desde su búfer fuera de pantalla lo
     /// necesita hasta la tarea 10, que la sustituye.
-    pub(super) fn pixels_mut(&mut self) -> &mut [u32] {
+    pub(crate) fn pixels_mut(&mut self) -> &mut [u32] {
+        self.buf
+    }
+
+    /// Píxeles del búfer, solo lectura (los tests comprueban lo dibujado sin soltar el lienzo).
+    #[cfg(test)]
+    pub(crate) fn pixels(&self) -> &[u32] {
         self.buf
     }
 
