@@ -29,6 +29,7 @@ pub(super) fn fill_rect(
 
 /// Mezcla un glifo (mapa de cobertura 8-bit) sobre el framebuffer recortado. Único punto de
 /// composición de texto: terminal, UI Inter e iconos Lucide pasan por aquí.
+#[cfg(test)]
 pub(super) fn blit_glyph(
     buffer: &mut [u32],
     buf_w: usize,

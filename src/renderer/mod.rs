@@ -10,6 +10,7 @@
 mod blocks;
 mod canvas;
 mod context_menu;
+#[cfg(test)]
 pub mod d3d11;
 mod draw;
 mod explorer_panel;
@@ -20,6 +21,7 @@ mod glyphs;
 mod gpu;
 mod md_preview;
 mod pane;
+#[cfg(test)]
 mod raster_cpu;
 mod scene;
 mod settings_page;
@@ -32,8 +34,10 @@ mod tokens;
 mod top_bar;
 
 #[cfg(test)]
+use draw::blit_glyph;
+#[cfg(test)]
 use draw::fill_rect;
-use draw::{blit_glyph, Clip};
+use draw::Clip;
 use glyphs::{
     font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
     EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
@@ -41,9 +45,12 @@ use glyphs::{
 
 pub use blocks::BlockCardButton;
 pub use canvas::Canvas;
+#[cfg(test)]
 pub use d3d11::D3D11Presenter;
 pub use geometry::*;
 pub use glyphs::{is_ligature_candidate, CachedGlyph};
+pub use gpu::{GpuSurface, Presented};
+#[cfg(test)]
 pub use raster_cpu::rasterize;
 pub use scene::ImageRef;
 pub use state::*;

@@ -266,7 +266,9 @@ impl GlyphAtlas {
 /// Imagen RGBA subida como textura BGRA propia (una por imagen).
 pub struct ImageTexture {
     srv: ID3D11ShaderResourceView,
+    #[cfg(test)]
     width: u32,
+    #[cfg(test)]
     height: u32,
 }
 
@@ -297,13 +299,20 @@ impl ImageTexture {
             SysMemSlicePitch: 0,
         };
         let (_, srv) = create_texture(dev, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, Some(&init))?;
-        Ok(Some(ImageTexture { srv, width, height }))
+        Ok(Some(ImageTexture {
+            srv,
+            #[cfg(test)]
+            width,
+            #[cfg(test)]
+            height,
+        }))
     }
 
     pub fn srv(&self) -> &ID3D11ShaderResourceView {
         &self.srv
     }
 
+    #[cfg(test)]
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }

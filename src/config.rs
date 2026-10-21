@@ -62,7 +62,8 @@ pub struct TerminalConfig {
     /// Ligaduras tipográficas de programación (->, !=, ==, =>...)
     #[serde(default = "default_true")]
     pub ligatures: bool,
-    /// Aceleración de presentación por GPU nativa en Windows (Direct3D 11 DirectFlip)
+    /// Sin efecto: la GPU (Direct3D 11, con WARP de respaldo) es el único renderer. Se conserva solo
+    /// para que un `axon.toml` antiguo con `gpu = ...` siga cargando. Nada debe leer este campo.
     #[serde(default = "default_true")]
     pub gpu: bool,
     /// Comprobación automática de nuevas versiones al iniciar Axon
@@ -591,5 +592,16 @@ mod tests {
             );
         assert!(!old.contains("osc52"));
         assert!(!toml::from_str::<AxonConfig>(&old).unwrap().terminal.osc52);
+    }
+
+    #[test]
+    fn test_config_gpu_key_is_accepted_and_ignored() {
+        // `terminal.gpu` solo existe para que un axon.toml antiguo siga cargando: ningún código lo lee.
+        let text = toml::to_string_pretty(&AxonConfig::default())
+            .unwrap()
+            .replace("gpu = true", "gpu = false");
+        assert!(text.contains("gpu = false"));
+        let cfg = toml::from_str::<AxonConfig>(&text).unwrap();
+        assert!(!cfg.terminal.gpu);
     }
 }

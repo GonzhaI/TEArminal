@@ -58,6 +58,7 @@ impl GpuDevice {
         Self::create(None, DriverKind::Warp, MIN_LEVEL, MAX_LEVEL)
     }
 
+    #[cfg(test)]
     /// Fuerza un tipo de dispositivo (`None` = como `new` sin ventana). Para tests.
     pub fn new_with(kind: Option<DriverKind>, min_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
         match kind {
@@ -67,6 +68,7 @@ impl GpuDevice {
         }
     }
 
+    #[cfg(test)]
     /// Dispositivo de `kind` limitado a `max_level` como mucho (probar FL 10_x en una máquina con 11_x).
     pub fn new_at_most(kind: DriverKind, max_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
         Self::create(None, kind, MIN_LEVEL, max_level)

@@ -25,7 +25,6 @@ mod tabs;
 mod viewer;
 mod wheel;
 
-pub use crate::renderer::D3D11Presenter;
 pub use ai_usage::*;
 pub use context_menu::*;
 pub use host::AxonHost;
@@ -48,7 +47,6 @@ use crate::renderer::{
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
-use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::application::ApplicationHandler;
@@ -103,10 +101,11 @@ pub struct AxonApp {
     pub last_terminal_tab_index: usize,
     renderer: Option<TerminalRenderer>,
     window: Option<Arc<Window>>,
-    context: Option<softbuffer::Context<Arc<Window>>>,
-    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
-    pub(super) d3d11_presenter: Option<D3D11Presenter>,
-    /// Escena del fotograma: se graba cada vez (memoria reutilizada) y `rasterize` la vuelca al presentador.
+    /// Superficie Direct3D 11 (hardware o WARP) a la que se presenta cada escena.
+    gpu_surface: Option<crate::renderer::GpuSurface>,
+    /// Última vez que se registró un fallo de `present` (como mucho un registro cada 5 s).
+    last_present_error_log: Option<Instant>,
+    /// Escena del fotograma: se graba cada vez (memoria reutilizada) y `GpuSurface::present` la dibuja.
     canvas: crate::renderer::Canvas,
     clipboard: Option<arboard::Clipboard>,
     modifiers: ModifiersState,
@@ -346,9 +345,8 @@ impl AxonApp {
             explorer_focus: (usize::MAX, usize::MAX),
             renderer: None,
             window: None,
-            context: None,
-            surface: None,
-            d3d11_presenter: None,
+            gpu_surface: None,
+            last_present_error_log: None,
             canvas: crate::renderer::Canvas::new(),
             clipboard,
             modifiers: ModifiersState::default(),

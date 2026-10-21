@@ -6,9 +6,12 @@ use super::{AtlasError, AtlasRect, GlyphAtlas, GpuDevice, ImageTexture, Instance
 use crate::renderer::scene::{GlyphId, ImageId, Op, RealClip, Scene};
 use crate::theme::Color;
 use windows::core::{Error, Result};
-use windows::Win32::Foundation::{E_FAIL, E_INVALIDARG};
+use windows::Win32::Foundation::E_FAIL;
+#[cfg(test)]
+use windows::Win32::Foundation::E_INVALIDARG;
 use windows::Win32::Graphics::Direct3D::D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
 use windows::Win32::Graphics::Direct3D11::*;
+#[cfg(test)]
 use windows::Win32::Graphics::Dxgi::Common::*;
 
 /// Instancias consecutivas que comparten enlace de textura: `image == None` es «sin textura o solo atlas».
@@ -328,6 +331,7 @@ impl GpuRenderer {
     }
 
     /// Atlas de tamaño inicial y tope dados (los tests lo llenan con pocos glifos).
+    #[cfg(test)]
     pub fn with_atlas_limits(dev: GpuDevice, initial: u32, max: u32) -> Result<Self> {
         let atlas = GlyphAtlas::with_limits(&dev, initial, max).map_err(into_windows)?;
         Self::build(dev, atlas)
@@ -500,11 +504,13 @@ impl GpuRenderer {
 
     /// Dibuja `scene` en una textura sin ventana que empieza en negro y devuelve `0x00RRGGBB` por píxel
     /// con el tamaño real (acotado a la textura máxima). Solo tests y capturas.
+    #[cfg(test)]
     pub fn render_to_pixels(&mut self, scene: &Scene) -> Result<(Vec<u32>, u32, u32)> {
         self.render_offscreen(scene, None)
     }
 
     /// Como `render_to_pixels`, con `base` (`scene.w * scene.h` píxeles `0x00RRGGBB`) como contenido inicial.
+    #[cfg(test)]
     pub fn render_to_pixels_over(
         &mut self,
         scene: &Scene,
@@ -513,6 +519,7 @@ impl GpuRenderer {
         self.render_offscreen(scene, Some(base))
     }
 
+    #[cfg(test)]
     fn render_offscreen(
         &mut self,
         scene: &Scene,

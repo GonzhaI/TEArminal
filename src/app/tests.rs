@@ -2323,3 +2323,10 @@ fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn test_gpu_error_message_mentions_warp_and_requirements() {
+    let m = platform::gpu_error_message(&"HRESULT 0x887A0004");
+    assert!(m.contains("WARP") && m.contains("AXON_RENDERER=warp"));
+    assert!(m.contains("1809") && m.contains("0x887A0004"));
+}

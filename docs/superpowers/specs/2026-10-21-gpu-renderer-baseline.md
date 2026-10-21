@@ -119,3 +119,23 @@ superior) y 520 ms en WARP (2,6 ms por fotograma: WARP rasteriza por software).
 - Los umbrales de paridad se midieron en WARP; el hardware de esta máquina dio las mismas cifras, pero otros
   controladores pueden redondear distinto. Los tests de la suite solo usan WARP.
 - El coste de GPU real en hardware no se midió con consultas de temporización; la cifra de vaciado es una cota.
+
+## T19 — medidas con GPU por defecto
+
+`targeteleasexon.exe` con la GPU como único renderer (Direct3D 11; `AXON_RENDERER=warp` fuerza WARP). Mismo
+protocolo que la base (`Start-Process`, sesión restaurada con 2 pestañas y un panel dividido, 8 s de arranque y
+30 s sin interacción, ventana visible y enfocada). **Son ejecuciones únicas, sin repeticiones ni media**, y las
+capturas de pantalla (`%TEMP%xon-gpu-run\{default,warp}.png`) solo muestran el primer fotograma: barra
+superior, explorador, dos terminales y barra de estado se dibujan completos en ambos modos.
+
+| Medida | Base (CPU + softbuffer/D3D11 viejo) | GPU por defecto (hardware) | `AXON_RENDERER=warp` |
+|---|---|---|---|
+| CPU en 30 s | 93,8 ms (0,31 %) | 78 ms (0,26 %) | 1 141 ms (3,8 %) |
+| Working set | 120,4 MB | 110,5 MB | 62,5 MB |
+| Memoria privada | 135,5 MB | 125,2 MB | 40,5 MB |
+| Hilos | 45 | 70 | 24 |
+
+- Con hardware el reposo es igual o algo mejor que la base; los 70 hilos son del controlador gráfico.
+- WARP gasta más CPU en reposo (cada parpadeo del cursor se rasteriza por software en el controlador) y mucha
+  menos memoria privada; la base tenía una sola pestaña y estas ejecuciones dos, así que la comparación de
+  memoria es orientativa.

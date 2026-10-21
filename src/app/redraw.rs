@@ -1,7 +1,7 @@
 //! Repintado de un fotograma completo.
 
 use super::*;
-use crate::renderer::{rasterize, Canvas, SidebarRects};
+use crate::renderer::{Canvas, Presented, SidebarRects};
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
@@ -145,52 +145,40 @@ impl AxonApp {
             panel_right,
         };
 
-        // 1. Si la aceleración por hardware GPU (Direct3D 11 DirectFlip) está activa, presentar vía VRAM
-        if let Some(d3d11) = &mut self.d3d11_presenter {
-            let _ = d3d11.resize(size.width, size.height); // no-op si ya coincide
-            let buffer = d3d11.buffer_mut();
-            self.canvas.begin(size.width, size.height);
-            draw_full_scene(
-                &mut self.canvas,
-                renderer,
-                &mut self.tabs,
-                &self.theme,
-                &self.config,
-                &self.file_explorer,
-                &self.settings_page_state,
-                &self.ai_usage.snapshot,
-                &self.context_menu,
-                &params,
-                size.width as usize,
-                size.height as usize,
-                is_maximized,
-            );
-            rasterize(self.canvas.scene(), buffer);
-            let _ = d3d11.present();
+        self.canvas.begin(size.width, size.height);
+        draw_full_scene(
+            &mut self.canvas,
+            renderer,
+            &mut self.tabs,
+            &self.theme,
+            &self.config,
+            &self.file_explorer,
+            &self.settings_page_state,
+            &self.ai_usage.snapshot,
+            &self.context_menu,
+            &params,
+            size.width as usize,
+            size.height as usize,
+            is_maximized,
+        );
+        let Some(gpu) = &mut self.gpu_surface else {
             return;
-        }
-
-        // 2. Si no, utilizar la superficie de software (`softbuffer`) como fallback
-        if let Some(surface) = &mut self.surface {
-            if let Ok(mut buffer) = surface.buffer_mut() {
-                self.canvas.begin(size.width, size.height);
-                draw_full_scene(
-                    &mut self.canvas,
-                    renderer,
-                    &mut self.tabs,
-                    &self.theme,
-                    &self.config,
-                    &self.file_explorer,
-                    &self.settings_page_state,
-                    &self.ai_usage.snapshot,
-                    &self.context_menu,
-                    &params,
-                    size.width as usize,
-                    size.height as usize,
-                    is_maximized,
-                );
-                rasterize(self.canvas.scene(), &mut buffer);
-                buffer.present().ok();
+        };
+        match gpu.present(self.canvas.scene()) {
+            Ok(Presented::Ok) => {}
+            Ok(Presented::Recovered) => {
+                crate::logger::log("GPU: dispositivo recuperado; se repinta la escena");
+                window.request_redraw();
+            }
+            Err(e) => {
+                // Un fallo persistente no debe inundar el registro: una línea cada 5 s.
+                let due = self
+                    .last_present_error_log
+                    .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(5));
+                if due {
+                    self.last_present_error_log = Some(Instant::now());
+                    crate::logger::log(&format!("GPU: error al presentar: {e}"));
+                }
             }
         }
     }
