@@ -87,9 +87,7 @@ impl TerminalRenderer {
         let header_base = header_center_y + 4;
 
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             file_icon,
             x + 18,
             header_center_y,
@@ -266,9 +264,7 @@ impl TerminalRenderer {
                 break;
             }
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 text,
                 chip_x,
                 header_base,
@@ -279,9 +275,7 @@ impl TerminalRenderer {
             );
             right_x = chip_x.saturating_sub(9);
             Self::draw_rect(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 right_x,
                 y + 13,
                 1,
@@ -301,9 +295,7 @@ impl TerminalRenderer {
             let folder_x = name_end_x + 14;
             if folder_x + 24 < right_x {
                 Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     name_end_x + 7,
                     y + 13,
                     1,
@@ -311,9 +303,7 @@ impl TerminalRenderer {
                     theme.chrome_line(),
                 );
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     folder,
                     folder_x,
                     header_base,
@@ -327,9 +317,7 @@ impl TerminalRenderer {
 
         // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &viewer.file_name,
             name_start_x,
             header_base,
@@ -382,9 +370,7 @@ impl TerminalRenderer {
             );
 
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 crate::ui::LucideIcon::Info,
                 card_x + 36,
                 card_y + 50,
@@ -393,9 +379,7 @@ impl TerminalRenderer {
             );
 
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 "Vista previa no disponible",
                 card_x + 64,
                 card_y + 42,
@@ -406,9 +390,7 @@ impl TerminalRenderer {
             );
 
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 msg,
                 card_x + 64,
                 card_y + 64,
@@ -593,9 +575,7 @@ impl TerminalRenderer {
                     };
                     let color = if folded { accent } else { theme.text_muted() };
                     self.draw_lucide_icon(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         icon,
                         x + 10,
                         row_y + row_h / 2,
@@ -763,9 +743,7 @@ impl TerminalRenderer {
                             theme.accent_soft(28),
                         );
                         self.draw_ui_text(
-                            buffer,
-                            width,
-                            height,
+                            &mut Canvas::over(buffer, width, height),
                             &label,
                             chip_x + 7,
                             baseline_y,
@@ -820,9 +798,7 @@ impl TerminalRenderer {
             Self::file_viewer_scrollbar_geometry(x, y, w, h, viewer, self.row_height)
         {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 track,
                 thumb,
                 viewer.hovered_scrollbar,
@@ -834,9 +810,7 @@ impl TerminalRenderer {
         // 6. Barra de desplazamiento horizontal (solo si alguna línea excede el ancho visible)
         if let Some((track, thumb)) = lay.hscrollbar(max_scroll_x, scroll_x) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 track,
                 thumb,
                 viewer.hovered_hscrollbar,
@@ -862,9 +836,7 @@ impl TerminalRenderer {
     ) {
         crate::ui::draw_rounded_rect(buffer, width, height, rect.0, rect.1, rect.2, rect.3, 4, bg);
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             icon,
             rect.0 + 13,
             rect.1 + rect.3 / 2,
@@ -872,9 +844,7 @@ impl TerminalRenderer {
             fg,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             label,
             rect.0 + 24,
             baseline - 1,

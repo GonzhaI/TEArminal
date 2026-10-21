@@ -23,9 +23,7 @@ impl TerminalRenderer {
         let top = SidebarRects::TOP;
         let body_h = height.saturating_sub(status_bar_h).saturating_sub(top);
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             0,
             top,
             panel_w,
@@ -34,9 +32,7 @@ impl TerminalRenderer {
         );
         let edge_x = if on_right { 0 } else { panel_w - 1 };
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             edge_x,
             top,
             1,

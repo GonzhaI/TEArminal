@@ -105,12 +105,17 @@ impl TerminalRenderer {
             };
             let cy = r.1 + r.3 / 2;
             if let Some(icon) = item.icon {
-                self.draw_lucide_icon(buffer, width, height, icon, r.0 + 18, cy, 12.0, icon_fg);
+                self.draw_lucide_icon(
+                    &mut Canvas::over(buffer, width, height),
+                    icon,
+                    r.0 + 18,
+                    cy,
+                    12.0,
+                    icon_fg,
+                );
             }
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 &item.label,
                 r.0 + 36,
                 cy + 4,
@@ -122,9 +127,7 @@ impl TerminalRenderer {
             if !item.shortcut.is_empty() {
                 let sw = self.measure_ui_text(item.shortcut, 10.0, false);
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     item.shortcut,
                     (r.0 + r.2).saturating_sub(sw + 10),
                     cy + 4,

@@ -35,9 +35,7 @@ impl TerminalRenderer {
 
         // 1. Riel (fondo del lienzo) y columna de sesiones (superficie de chrome).
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             0,
             top,
             rail_w,
@@ -45,9 +43,7 @@ impl TerminalRenderer {
             theme.background,
         );
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             rail_w,
             top,
             sidebar_width.saturating_sub(rail_w),
@@ -59,7 +55,14 @@ impl TerminalRenderer {
         } else {
             sidebar_width - 1
         };
-        Self::draw_rect(buffer, width, height, edge_x, top, 1, body_h, line);
+        Self::draw_rect(
+            &mut Canvas::over(buffer, width, height),
+            edge_x,
+            top,
+            1,
+            body_h,
+            line,
+        );
 
         // 2. Cabecera: título, rama y carpeta de la sesión a la vista. El botón «+» abre una sesión nueva.
         let col_x = rail_w + 14;
@@ -75,9 +78,7 @@ impl TerminalRenderer {
             .as_ref()
             .map_or(plus.0.saturating_sub(8), |(_, x, _)| x.saturating_sub(8));
         let _ = self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &header.title,
             col_x,
             top + 26,
@@ -99,9 +100,7 @@ impl TerminalRenderer {
                 theme.surface_bg(),
             );
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 crate::ui::LucideIcon::GitBranch,
                 chip_x + 11,
                 top + 21,
@@ -109,9 +108,7 @@ impl TerminalRenderer {
                 theme.accent_color(),
             );
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 branch,
                 chip_x + 22,
                 top + 25,
@@ -123,9 +120,7 @@ impl TerminalRenderer {
         }
         if let Some(path) = &header.path {
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 path,
                 col_x,
                 top + 49,
@@ -149,9 +144,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::Plus,
             plus.0 + plus.2 / 2,
             plus.1 + plus.3 / 2,
@@ -252,9 +245,7 @@ impl TerminalRenderer {
                 }
             } else {
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     tab_icon(tab),
                     tab_x + 18,
                     tab_y + 17,
@@ -277,9 +268,7 @@ impl TerminalRenderer {
                 let w = self.measure_ui_text(label, tokens::DETAIL, false);
                 let x = right_edge.saturating_sub(w);
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     label,
                     x,
                     tab_y + 22,
@@ -302,9 +291,7 @@ impl TerminalRenderer {
             let has_detail = tab.detail.is_some();
             let title_base = if has_detail { tab_y + 22 } else { item_cy + 4 };
             let title_end = self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 &tab.title,
                 title_x,
                 title_base,
@@ -315,9 +302,7 @@ impl TerminalRenderer {
             );
             if tab.is_preview {
                 Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     title_x,
                     title_base + 2,
                     title_end.saturating_sub(title_x),
@@ -327,9 +312,7 @@ impl TerminalRenderer {
             }
             if let Some(detail) = &tab.detail {
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     detail,
                     title_x,
                     tab_y + 39,
@@ -357,9 +340,7 @@ impl TerminalRenderer {
                     );
                 }
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::X,
                     close.0 + close.2 / 2,
                     close.1 + close.3 / 2,
@@ -381,9 +362,7 @@ impl TerminalRenderer {
             scroll_offset,
         ) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 track,
                 thumb,
                 is_scrollbar_hovered,
@@ -408,9 +387,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::Sliders,
             btn.0 + btn.2 / 2,
             btn.1 + btn.3 / 2,
@@ -511,9 +488,7 @@ impl TerminalRenderer {
             theme.chrome_line(),
         );
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             if on_right {
                 crate::ui::LucideIcon::PanelRight
             } else {

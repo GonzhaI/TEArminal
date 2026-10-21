@@ -1,6 +1,7 @@
 //! Soporte de los tests de regresión visual (`test_golden_scene_hashes`): hash de fotogramas, modo `AXON_BLESS`,
 //! fase fija del spinner y un árbol de archivos fijo que sustituye al directorio de trabajo real.
 
+use super::Canvas;
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -34,6 +35,13 @@ pub(super) fn frame_hash(buf: &[u32]) -> u64 {
 /// `AXON_BLESS=1`: el test de hashes reescribe `golden/hashes.txt` en vez de compararlo.
 pub(super) fn bless_requested() -> bool {
     std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
+}
+
+/// Dibuja sobre un lienzo `w` x `h` inicialmente en cero y devuelve los píxeles resultantes.
+pub(super) fn with_canvas(w: usize, h: usize, f: impl FnOnce(&mut Canvas)) -> Vec<u32> {
+    let mut buf = vec![0u32; w * h];
+    f(&mut Canvas::over(&mut buf, w, h));
+    buf
 }
 
 const PANE_RS: &str = "\

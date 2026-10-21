@@ -207,9 +207,7 @@ impl TerminalRenderer {
             MdBlock::FenceOpen(lang) => {
                 fill_rect(buffer, width, clip, clip.0, row_y, band_w, row_h, band);
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     LucideIcon::Code,
                     clip.0 + 16,
                     row_y + row_h / 2,
@@ -218,9 +216,7 @@ impl TerminalRenderer {
                 );
                 if !lang.is_empty() {
                     self.draw_ui_text(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         lang,
                         clip.0 + 28,
                         baseline_y,
@@ -391,9 +387,7 @@ impl TerminalRenderer {
                 let cx = x + cw / 2;
                 if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
                     this.draw_lucide_icon(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         icon,
                         cx as usize,
                         icon_cy,
@@ -569,9 +563,7 @@ impl TerminalRenderer {
         let cx = x + cw / 2;
         if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 LucideIcon::Image,
                 cx as usize,
                 baseline_y.saturating_sub(4),

@@ -303,9 +303,7 @@ impl TerminalRenderer {
             crate::ui::draw_rounded_rect(buffer, width, height, icon_x, cy - 7, 14, 14, 7, status);
             match block.exit_code {
                 Some(0) => self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::Check,
                     icon_x + 7,
                     cy,
@@ -313,9 +311,7 @@ impl TerminalRenderer {
                     theme.background,
                 ),
                 Some(_) => self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::X,
                     icon_x + 7,
                     cy,
@@ -362,9 +358,7 @@ impl TerminalRenderer {
                     theme.accent_soft(56),
                 );
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     LucideIcon::Sparkles,
                     explain.0 + 14,
                     explain.1 + explain.3 / 2,
@@ -372,9 +366,7 @@ impl TerminalRenderer {
                     theme.accent_color(),
                 );
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     "Explicar",
                     explain.0 + 26,
                     baseline,
@@ -395,9 +387,7 @@ impl TerminalRenderer {
                     theme.chrome_bg_elevated(),
                 );
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     "Ignorar",
                     ignore.0 + 12,
                     baseline,
@@ -414,9 +404,7 @@ impl TerminalRenderer {
                 let w = self.measure_mono_text(&label, tokens::DETAIL, false);
                 let x = right.saturating_sub(w);
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     &label,
                     x,
                     baseline,
@@ -432,9 +420,7 @@ impl TerminalRenderer {
                 let w = self.measure_mono_text(&label, tokens::DETAIL, false);
                 let x = right.saturating_sub(w);
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     &label,
                     x,
                     baseline,
@@ -450,9 +436,7 @@ impl TerminalRenderer {
             let text_x = icon_x + 22;
             let command = block.command.as_deref().unwrap_or("comando");
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 command,
                 text_x,
                 baseline,
@@ -477,9 +461,7 @@ impl TerminalRenderer {
         crate::ui::draw_rounded_rect(buffer, width, height, x, y, w, h, 5, theme.chrome_bg());
         crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 5, theme.chrome_line());
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             icon,
             x + w / 2,
             y + h / 2,

@@ -71,26 +71,9 @@ pub(super) fn blit_glyph(
 
 impl TerminalRenderer {
     /// Rellena un rectángulo de color sólido directamente en el buffer
-    pub fn draw_rect(
-        buffer: &mut [u32],
-        buf_width: usize,
-        buf_height: usize,
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        color: Color,
-    ) {
-        fill_rect(
-            buffer,
-            buf_width,
-            (0, 0, buf_width, buf_height),
-            x,
-            y,
-            w,
-            h,
-            color.to_u32_xrgb(),
-        );
+    pub fn draw_rect(canvas: &mut Canvas, x: usize, y: usize, w: usize, h: usize, color: Color) {
+        let (buf_width, buf_height) = canvas.size();
+        canvas.fill_rect((0, 0, buf_width, buf_height), x, y, w, h, color);
     }
 
     /// Ratio de escalado para la tipografía e iconografía de la UI basado en ui_font_size
@@ -140,9 +123,7 @@ impl TerminalRenderer {
     /// Dibuja texto proporcional moderno utilizando la tipografía Inter
     pub fn draw_ui_text(
         &mut self,
-        buffer: &mut [u32],
-        buf_width: usize,
-        buf_height: usize,
+        canvas: &mut Canvas,
         text: &str,
         start_x: usize,
         baseline_y: usize,
@@ -152,8 +133,7 @@ impl TerminalRenderer {
         semibold: bool,
     ) -> usize {
         self.draw_ui_text_tracked(
-            buffer, buf_width, buf_height, text, start_x, baseline_y, max_x, color, size_px,
-            semibold, 0.0,
+            canvas, text, start_x, baseline_y, max_x, color, size_px, semibold, 0.0,
         )
     }
 
@@ -161,9 +141,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_ui_text_tracked(
         &mut self,
-        buffer: &mut [u32],
-        buf_width: usize,
-        buf_height: usize,
+        canvas: &mut Canvas,
         text: &str,
         start_x: usize,
         baseline_y: usize,
@@ -173,6 +151,7 @@ impl TerminalRenderer {
         semibold: bool,
         tracking: f32,
     ) -> usize {
+        let (buf_width, buf_height) = canvas.size();
         let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
@@ -221,9 +200,7 @@ impl TerminalRenderer {
 
             let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
             let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-            blit_glyph(
-                buffer,
-                buf_width,
+            canvas.glyph(
                 (0, 0, max_x.min(buf_width), buf_height),
                 glyph,
                 glyph_x,
@@ -274,9 +251,7 @@ impl TerminalRenderer {
     /// Es la segunda voz tipográfica del chrome: Inter habla, Mono mide.
     pub fn draw_mono_text(
         &mut self,
-        buffer: &mut [u32],
-        buf_width: usize,
-        buf_height: usize,
+        canvas: &mut Canvas,
         text: &str,
         start_x: usize,
         baseline_y: usize,
@@ -285,6 +260,7 @@ impl TerminalRenderer {
         size_px: f32,
         bold: bool,
     ) -> usize {
+        let (buf_width, buf_height) = canvas.size();
         let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cur_x = start_x as f32;
@@ -312,9 +288,7 @@ impl TerminalRenderer {
 
             let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
             let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-            blit_glyph(
-                buffer,
-                buf_width,
+            canvas.glyph(
                 (0, 0, max_x.min(buf_width), buf_height),
                 glyph,
                 glyph_x,
@@ -332,9 +306,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn draw_keycap(
         &mut self,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         x: usize,
         y: usize,
         label: &str,
@@ -343,10 +315,7 @@ impl TerminalRenderer {
         let h = tokens::KEYCAP_H;
         let text_w = self.measure_mono_text(label, tokens::MICRO, false);
         let w = (text_w + 12).max(20);
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
+        canvas.rounded_fill(
             x,
             y,
             w,
@@ -354,11 +323,9 @@ impl TerminalRenderer {
             3,
             theme.mix(theme.background, theme.foreground, 0.07),
         );
-        crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 3, theme.chrome_line());
+        canvas.rounded_stroke(x, y, w, h, 3, theme.chrome_line());
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            canvas,
             label,
             x + 6,
             y + h / 2 + 3,
@@ -373,15 +340,14 @@ impl TerminalRenderer {
     /// Dibuja un icono Lucide vectorial perfectamente centrado en una caja
     pub fn draw_lucide_icon(
         &mut self,
-        buffer: &mut [u32],
-        buf_width: usize,
-        buf_height: usize,
+        canvas: &mut Canvas,
         icon: crate::ui::LucideIcon,
         center_x: usize,
         center_y: usize,
         size_px: f32,
         color: Color,
     ) {
+        let (buf_width, buf_height) = canvas.size();
         let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let c = icon.as_char();
         let size_bits = effective_size.to_bits();
@@ -403,9 +369,7 @@ impl TerminalRenderer {
 
         let glyph_x = (center_x as i32) - (glyph.width as i32 / 2);
         let glyph_y = (center_y as i32) - (glyph.height as i32 / 2);
-        blit_glyph(
-            buffer,
-            buf_width,
+        canvas.glyph(
             (0, 0, buf_width, buf_height),
             glyph,
             glyph_x,
@@ -416,9 +380,7 @@ impl TerminalRenderer {
 
     /// Dibuja una barra de desplazamiento vertical unificada con pista translúcida y pulgar redondeado
     pub fn draw_scrollbar(
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         track_x: usize,
         track_y: usize,
         track_w: usize,
@@ -430,9 +392,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         Self::draw_scrollbar_rects(
-            buffer,
-            width,
-            height,
+            canvas,
             (track_x, track_y, track_w, track_h),
             (track_x, thumb_y, track_w, thumb_h),
             is_hovered,
@@ -445,9 +405,7 @@ impl TerminalRenderer {
     /// Solo se dibuja con el ratón encima (`is_hovered`) o mientras se hace scroll (`awake`).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_scrollbar_rects(
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
+        canvas: &mut Canvas,
         track: Rect,
         thumb: Rect,
         is_hovered: bool,
@@ -459,24 +417,12 @@ impl TerminalRenderer {
         }
         let hover = theme.surface_hover();
         let track_bg = Color::from_rgba(hover.r(), hover.g(), hover.b(), 100);
-        crate::ui::draw_rounded_rect(
-            buffer, width, height, track.0, track.1, track.2, track.3, 3, track_bg,
-        );
+        canvas.rounded_fill(track.0, track.1, track.2, track.3, 3, track_bg);
         let thumb_color = if is_hovered {
             theme.accent_color()
         } else {
             theme.ansi[8]
         };
-        crate::ui::draw_rounded_rect(
-            buffer,
-            width,
-            height,
-            thumb.0,
-            thumb.1,
-            thumb.2,
-            thumb.3,
-            3,
-            thumb_color,
-        );
+        canvas.rounded_fill(thumb.0, thumb.1, thumb.2, thumb.3, 3, thumb_color);
     }
 }

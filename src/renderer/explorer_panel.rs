@@ -26,9 +26,7 @@ impl TerminalRenderer {
 
         // 1. Superficie acoplada: fondo de chrome opaco y hairline izquierdo. Sin radios ni sombra.
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             panel_x,
             panel_y,
             panel_w,
@@ -41,7 +39,12 @@ impl TerminalRenderer {
             theme.chrome_line()
         };
         Self::draw_rect(
-            buffer, width, height, panel_x, panel_y, 1, panel_h, edge_color,
+            &mut Canvas::over(buffer, width, height),
+            panel_x,
+            panel_y,
+            1,
+            panel_h,
+            edge_color,
         );
 
         // 2. Pestañas «Archivos» · «Cambios»: la activa lleva el acento y una línea de 2 px bajo ella,
@@ -49,9 +52,7 @@ impl TerminalRenderer {
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
         let tabs = ExplorerTabsRects::compute(panel_x, panel_y, panel_w, header_h);
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             panel_x + 8,
             panel_y + header_h - 1,
             panel_w.saturating_sub(16),
@@ -88,9 +89,7 @@ impl TerminalRenderer {
             let x = rect.0 + rect.2.saturating_sub(label_w + count_w) / 2;
             let baseline = rect.1 + (rect.3 - 1) / 2 + 4;
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 label,
                 x,
                 baseline,
@@ -101,9 +100,7 @@ impl TerminalRenderer {
             );
             if let Some(count) = count {
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     &count,
                     x + label_w + 6,
                     baseline,
@@ -115,9 +112,7 @@ impl TerminalRenderer {
             }
             if active {
                 Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     rect.0,
                     rect.1 + rect.3 - 2,
                     rect.2,
@@ -147,9 +142,7 @@ impl TerminalRenderer {
                 ("(Directorio vacío)", theme.ansi[8])
             };
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 msg,
                 panel_x + 24,
                 empty_base,
@@ -208,9 +201,7 @@ impl TerminalRenderer {
                     crate::ui::LucideIcon::ChevronRight
                 };
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     chevron_icon,
                     content_x + 4,
                     item_center_y,
@@ -224,9 +215,7 @@ impl TerminalRenderer {
                     crate::ui::LucideIcon::Folder
                 };
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     folder_icon,
                     content_x + 18,
                     item_center_y,
@@ -250,9 +239,7 @@ impl TerminalRenderer {
                 };
                 let label = item.name.clone();
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     &label,
                     content_x + 28,
                     item_base,
@@ -276,9 +263,7 @@ impl TerminalRenderer {
                 };
 
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     file_icon,
                     content_x + 10,
                     item_center_y,
@@ -296,9 +281,7 @@ impl TerminalRenderer {
                     theme.text_secondary()
                 };
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     &item.name,
                     content_x + 22,
                     item_base,
@@ -322,9 +305,7 @@ impl TerminalRenderer {
                 let bw = self.measure_mono_text(badge_letter, tokens::MICRO, true);
                 let badge_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + bw);
                 self.draw_mono_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     badge_letter,
                     badge_x,
                     item_base,
@@ -347,9 +328,7 @@ impl TerminalRenderer {
             explorer.scroll_offset,
         ) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 track,
                 thumb,
                 explorer.hovered_scrollbar,

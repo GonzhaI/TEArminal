@@ -14,9 +14,7 @@ impl TerminalRenderer {
     ) {
         let cy = bar_h / 2;
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             ">_",
             16,
             cy + 4,
@@ -26,9 +24,7 @@ impl TerminalRenderer {
             true,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Axon",
             42,
             cy + 5,
@@ -65,9 +61,7 @@ impl TerminalRenderer {
         );
         crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 9, theme.chrome_bg());
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::Search,
             x + 16,
             y + h / 2,
@@ -78,11 +72,15 @@ impl TerminalRenderer {
         let keycap_w = self.measure_mono_text(keycap, tokens::MICRO, false) + 12;
         let keycap_x = x + w - 8 - keycap_w;
         let keycap_y = y + (h.saturating_sub(tokens::KEYCAP_H)) / 2;
-        self.draw_keycap(buffer, width, height, keycap_x, keycap_y, keycap, theme);
+        self.draw_keycap(
+            &mut Canvas::over(buffer, width, height),
+            keycap_x,
+            keycap_y,
+            keycap,
+            theme,
+        );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Buscar sesiones, archivos y comandos",
             x + 30,
             y + h / 2 + 4,
@@ -126,9 +124,7 @@ impl TerminalRenderer {
             theme.text_secondary()
         };
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             icon,
             x + w / 2,
             y + h / 2,
@@ -150,9 +146,7 @@ impl TerminalRenderer {
         crate::ui::draw_rounded_rect(buffer, width, height, r.0, y, r.2, h, 6, theme.background);
         // Base cuadrada: la pestaña se funde con el lienzo en el borde inferior.
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             r.0,
             y + 6,
             r.2,
@@ -237,7 +231,14 @@ impl TerminalRenderer {
         let bar_h = rects.bar_h;
 
         // 1. Franja superior
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
+        Self::draw_rect(
+            &mut Canvas::over(buffer, width, height),
+            0,
+            0,
+            width,
+            bar_h,
+            theme.bar_bg(),
+        );
 
         // 2. Marca
         self.draw_brand(buffer, width, height, bar_h, theme);
@@ -296,9 +297,7 @@ impl TerminalRenderer {
             } else {
                 let icon_color = tab_icon_color(tab, tab.is_active, is_hovered, theme);
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     tab_icon(tab),
                     icon_x,
                     r.1 + (r.3 / 2),
@@ -326,9 +325,7 @@ impl TerminalRenderer {
                     None => tab.title.as_str(),
                 };
                 let title_end = self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     title,
                     title_x,
                     r.1 + (r.3 / 2) + 4,
@@ -339,9 +336,7 @@ impl TerminalRenderer {
                 );
                 if tab.is_preview {
                     Self::draw_rect(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         title_x,
                         r.1 + (r.3 / 2) + 7,
                         title_end.saturating_sub(title_x),
@@ -352,9 +347,7 @@ impl TerminalRenderer {
                 if tab.pane_count > 1 {
                     let badge = format!("×{}", tab.pane_count);
                     self.draw_mono_text(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         &badge,
                         title_end + 7,
                         r.1 + (r.3 / 2) + 4,
@@ -383,9 +376,7 @@ impl TerminalRenderer {
                     );
                 }
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::X,
                     close_r.0 + close_r.2 / 2,
                     close_r.1 + close_r.3 / 2,
@@ -484,13 +475,16 @@ impl TerminalRenderer {
 
         if hovered_min {
             Self::draw_rect(
-                buffer, width, height, min_btn.0, min_btn.1, min_btn.2, min_btn.3, hover_bg,
+                &mut Canvas::over(buffer, width, height),
+                min_btn.0,
+                min_btn.1,
+                min_btn.2,
+                min_btn.3,
+                hover_bg,
             );
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::Minus,
             min_btn.0 + (min_btn.2 / 2),
             min_btn.1 + (min_btn.3 / 2),
@@ -500,7 +494,12 @@ impl TerminalRenderer {
 
         if hovered_max {
             Self::draw_rect(
-                buffer, width, height, max_btn.0, max_btn.1, max_btn.2, max_btn.3, hover_bg,
+                &mut Canvas::over(buffer, width, height),
+                max_btn.0,
+                max_btn.1,
+                max_btn.2,
+                max_btn.3,
+                hover_bg,
             );
         }
         let max_fg = if hovered_max { theme.foreground } else { fg };
@@ -519,9 +518,7 @@ impl TerminalRenderer {
             crate::ui::stroke_rounded_rect(buffer, width, height, x, y + 3, 8, 8, 2, max_fg);
         } else {
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 crate::ui::LucideIcon::Square,
                 cx,
                 cy,
@@ -533,9 +530,7 @@ impl TerminalRenderer {
         // Cerrar: el único estado rojo del chrome, como en Windows.
         if hovered_close {
             Self::draw_rect(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 close_btn.0,
                 close_btn.1,
                 close_btn.2,
@@ -544,9 +539,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::X,
             close_btn.0 + (close_btn.2 / 2),
             close_btn.1 + (close_btn.3 / 2),
@@ -584,7 +577,14 @@ impl TerminalRenderer {
         let rects = TopTitleBarRects::compute(width);
         let bar_h = rects.bar_h;
 
-        Self::draw_rect(buffer, width, height, 0, 0, width, bar_h, theme.bar_bg());
+        Self::draw_rect(
+            &mut Canvas::over(buffer, width, height),
+            0,
+            0,
+            width,
+            bar_h,
+            theme.bar_bg(),
+        );
         self.draw_brand(buffer, width, height, bar_h, theme);
         self.draw_search_pill(buffer, width, height, rects.search_box, theme);
         self.draw_window_controls(

@@ -90,7 +90,14 @@ impl TerminalRenderer {
         } else {
             theme.text_secondary()
         };
-        self.draw_lucide_icon(buffer, width, height, icon, x + w / 2, y + h / 2, 14.0, fg);
+        self.draw_lucide_icon(
+            &mut Canvas::over(buffer, width, height),
+            icon,
+            x + w / 2,
+            y + h / 2,
+            14.0,
+            fg,
+        );
     }
 
     /// Cabecera de un panel dividido (38 px): icono, título, subtítulo atenuado, acciones
@@ -158,9 +165,7 @@ impl TerminalRenderer {
 
         let cy = y + PaneHeaderRects::HEIGHT / 2;
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             icon,
             x + PaneHeaderRects::ICON_X,
             cy,
@@ -177,9 +182,7 @@ impl TerminalRenderer {
         let text_max = buttons_left.saturating_sub(12);
         let baseline = cy + 4;
         let title_end = self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             title,
             x + PaneHeaderRects::TEXT_X,
             baseline,
@@ -192,9 +195,7 @@ impl TerminalRenderer {
             let sx = title_end + 10;
             if sx < text_max {
                 self.draw_ui_text(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     subtitle,
                     sx,
                     baseline,
@@ -726,9 +727,7 @@ impl TerminalRenderer {
                 let track_h = rect_h.saturating_sub(self.margin_y * 2);
 
                 Self::draw_scrollbar(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     thumb_x,
                     track_y,
                     thumb_w,
@@ -777,9 +776,7 @@ impl TerminalRenderer {
                     border_color,
                 );
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::ChevronDown,
                     btn_x + btn_w / 2,
                     btn_y + btn_h / 2,
@@ -801,7 +798,14 @@ impl TerminalRenderer {
         h: usize,
         divider_color: Color,
     ) {
-        Self::draw_rect(buffer, width, height, x, y, w, h, divider_color);
+        Self::draw_rect(
+            &mut Canvas::over(buffer, width, height),
+            x,
+            y,
+            w,
+            h,
+            divider_color,
+        );
     }
 
     /// Renderiza directamente la cuadrícula del terminal al framebuffer de píxeles 32-bit de Windows

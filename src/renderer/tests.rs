@@ -2431,3 +2431,35 @@ fn test_canvas_matches_legacy_primitives() {
 
     assert_eq!(Canvas::over(&mut a, W, H).size(), (W, H));
 }
+
+#[test]
+fn test_draw_helpers_write_through_canvas() {
+    const W: usize = 40;
+    const H: usize = 30;
+    let col = Color::from_rgb(10, 200, 30);
+    let px = test_support::with_canvas(W, H, |c| TerminalRenderer::draw_rect(c, 2, 3, 4, 5, col));
+    for y in 0..H {
+        for x in 0..W {
+            let inside = (2..6).contains(&x) && (3..8).contains(&y);
+            let want = if inside { col.to_u32_xrgb() } else { 0 };
+            assert_eq!(px[y * W + x], want, "({x},{y})");
+        }
+    }
+
+    // La barra solo se dibuja con el ratón encima o con scroll activo
+    let theme = Theme::default();
+    let bar = |hovered, awake| {
+        test_support::with_canvas(W, H, |c| {
+            TerminalRenderer::draw_scrollbar_rects(
+                c,
+                (30, 2, 6, 26),
+                (30, 4, 6, 8),
+                hovered,
+                awake,
+                &theme,
+            )
+        })
+    };
+    assert!(bar(false, false).iter().all(|&p| p == 0));
+    assert!(bar(true, false).iter().any(|&p| p != 0));
+}

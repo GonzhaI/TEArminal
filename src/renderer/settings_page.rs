@@ -43,9 +43,7 @@ impl TerminalRenderer {
         let tx = bx + (bw.saturating_sub(text_w) / 2);
         let baseline = by + (bh / 2) + 4;
         self.draw_ui_text(
-            buffer,
-            buf_width,
-            buf_height,
+            &mut Canvas::over(buffer, buf_width, buf_height),
             text,
             tx,
             baseline,
@@ -99,11 +97,16 @@ impl TerminalRenderer {
         let content_w = 14 + 6 + text_w;
         let start = bx + (bw.saturating_sub(content_w) / 2);
         let cy = by + bh / 2;
-        self.draw_lucide_icon(buffer, buf_width, buf_height, icon, start + 7, cy, 13.0, fg);
+        self.draw_lucide_icon(
+            &mut Canvas::over(buffer, buf_width, buf_height),
+            icon,
+            start + 7,
+            cy,
+            13.0,
+            fg,
+        );
         self.draw_ui_text(
-            buffer,
-            buf_width,
-            buf_height,
+            &mut Canvas::over(buffer, buf_width, buf_height),
             text,
             start + 20,
             cy + 4,
@@ -167,9 +170,7 @@ impl TerminalRenderer {
             theme.accent_color()
         };
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &disp_text,
             tx,
             baseline,
@@ -192,9 +193,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         self.draw_ui_text(
-            buffer,
-            buf_width,
-            buf_height,
+            &mut Canvas::over(buffer, buf_width, buf_height),
             label,
             x,
             y + 18,
@@ -218,9 +217,7 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         self.draw_ui_text_tracked(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             label,
             x,
             baseline,
@@ -248,11 +245,16 @@ impl TerminalRenderer {
         crate::ui::stroke_rounded_rect(buffer, width, height, x, y, w, h, 6, theme.chrome_line());
 
         // Cabecera editorial de la tarjeta: 40 px, micro-etiqueta con tracking.
-        Self::draw_rect(buffer, width, height, x, y + 40, w, 1, theme.chrome_line());
+        Self::draw_rect(
+            &mut Canvas::over(buffer, width, height),
+            x,
+            y + 40,
+            w,
+            1,
+            theme.chrome_line(),
+        );
         self.draw_ui_text_tracked(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             title,
             x + 20,
             y + 26,
@@ -281,9 +283,7 @@ impl TerminalRenderer {
     ) {
         let cy = rect.1 + rect.3 / 2;
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             label,
             label_x,
             cy + 4,
@@ -318,9 +318,7 @@ impl TerminalRenderer {
         crate::ui::stroke_rounded_rect(buffer, width, height, bx, by, size, size, 4, border);
         if on {
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 crate::ui::LucideIcon::Check,
                 bx + size / 2,
                 by + size / 2,
@@ -329,9 +327,7 @@ impl TerminalRenderer {
             );
         }
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             if on { "Activado" } else { "Desactivado" },
             bx + size + 8,
             cy + 4,
@@ -370,9 +366,7 @@ impl TerminalRenderer {
 
         // 1. Fondo de la página
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             page_x,
             page_y,
             page_w,
@@ -384,9 +378,7 @@ impl TerminalRenderer {
         let content_x = rects.content_x;
         let card_w = rects.card_w;
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Ajustes",
             content_x,
             page_y + 48,
@@ -396,9 +388,7 @@ impl TerminalRenderer {
             true,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Apariencia, terminal y atajos de teclado",
             content_x,
             page_y + 70,
@@ -432,9 +422,7 @@ impl TerminalRenderer {
         let r_label_w = self.measure_ui_text(r_label, tokens::BODY, false);
         let r_text_x = r_btn.0 + r_btn.2.saturating_sub(r_label_w + 8);
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::RefreshCw,
             r_text_x.saturating_sub(13),
             r_cy,
@@ -442,9 +430,7 @@ impl TerminalRenderer {
             r_fg,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             r_label,
             r_text_x,
             r_cy + 4,
@@ -455,9 +441,7 @@ impl TerminalRenderer {
         );
 
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             content_x,
             page_y + 84,
             card_w,
@@ -505,9 +489,7 @@ impl TerminalRenderer {
             };
             let cy = r.1 + (r.3 / 2) - 1;
             self.draw_lucide_icon(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 icon,
                 r.0 + 14,
                 cy,
@@ -515,9 +497,7 @@ impl TerminalRenderer {
                 if is_active { theme.accent_color() } else { fg },
             );
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 title,
                 r.0 + 28,
                 cy + 4,
@@ -528,9 +508,7 @@ impl TerminalRenderer {
             );
             if is_active {
                 Self::draw_rect(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     r.0,
                     r.1 + r.3 - 2,
                     r.2,
@@ -540,9 +518,7 @@ impl TerminalRenderer {
             }
         }
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             content_x,
             rects.nav_appearance.1 + rects.nav_appearance.3,
             card_w,
@@ -596,9 +572,7 @@ impl TerminalRenderer {
             scroll,
         ) {
             Self::draw_scrollbar_rects(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 track,
                 thumb,
                 state.hovered_scrollbar,
@@ -689,9 +663,7 @@ impl TerminalRenderer {
             },
         );
         self.draw_lucide_icon(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             crate::ui::LucideIcon::Search,
             sb.0 + 14,
             sb.1 + sb.3 / 2,
@@ -706,9 +678,7 @@ impl TerminalRenderer {
         let count_w = self.measure_mono_text(&count, tokens::MICRO, false);
         let text_y = sb.1 + sb.3 / 2 + 4;
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &count,
             sb.0 + sb.2 - count_w - 12,
             text_y,
@@ -726,9 +696,7 @@ impl TerminalRenderer {
             )
         };
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &query,
             sb.0 + 30,
             text_y,
@@ -746,9 +714,7 @@ impl TerminalRenderer {
         if matches.is_empty() {
             let l = rects.theme_list;
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 "Sin resultados",
                 l.0 + 12,
                 l.1 + 20,
@@ -813,9 +779,7 @@ impl TerminalRenderer {
             }
             if is_current {
                 self.draw_lucide_icon(
-                    buffer,
-                    width,
-                    height,
+                    &mut Canvas::over(buffer, width, height),
                     crate::ui::LucideIcon::Check,
                     r.0 + r.2 - 14,
                     r.1 + r.3 / 2,
@@ -824,9 +788,7 @@ impl TerminalRenderer {
                 );
             }
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 name,
                 r.0 + 12,
                 r.1 + r.3 / 2 + 4,
@@ -855,9 +817,7 @@ impl TerminalRenderer {
         }
 
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Vista previa en vivo en toda la interfaz",
             content_x + 20,
             card_y + 370,
@@ -1156,9 +1116,7 @@ impl TerminalRenderer {
             theme.mix(theme.background, theme.foreground, 0.04),
         );
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Aa",
             preview.0 + 14,
             preview.1 + 28,
@@ -1168,9 +1126,7 @@ impl TerminalRenderer {
             false,
         );
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "fn main() -> Result<(), Error>",
             preview.0 + 52,
             preview.1 + 22,
@@ -1180,9 +1136,7 @@ impl TerminalRenderer {
             false,
         );
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &format!(
                 "{} · {:.1} pt",
                 if config.appearance.font_path.is_some() {
@@ -1421,9 +1375,7 @@ impl TerminalRenderer {
         );
         let path = AxonConfig::config_path();
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &path.to_string_lossy(),
             content_x + 20,
             cfg_y + 100,
@@ -1490,9 +1442,7 @@ impl TerminalRenderer {
             for (ki, key) in chord.split(" + ").enumerate() {
                 if ki > 0 {
                     self.draw_mono_text(
-                        buffer,
-                        width,
-                        height,
+                        &mut Canvas::over(buffer, width, height),
                         "+",
                         kx + 3,
                         y + 15,
@@ -1506,13 +1456,12 @@ impl TerminalRenderer {
                 if kx >= key_max {
                     break;
                 }
-                let kw = self.draw_keycap(buffer, width, height, kx, y, key, theme);
+                let kw =
+                    self.draw_keycap(&mut Canvas::over(buffer, width, height), kx, y, key, theme);
                 kx += kw + 4;
             }
             self.draw_ui_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 desc,
                 x,
                 y + 32,
@@ -1552,9 +1501,7 @@ impl TerminalRenderer {
         let left = content_x + 20;
         let right = content_x + card_w - 20;
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Axon Terminal",
             left,
             card_y + 76,
@@ -1566,9 +1513,7 @@ impl TerminalRenderer {
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         let version_w = self.measure_mono_text(&version, tokens::DETAIL, false);
         self.draw_mono_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             &version,
             right.saturating_sub(version_w),
             card_y + 74,
@@ -1578,9 +1523,7 @@ impl TerminalRenderer {
             false,
         );
         self.draw_ui_text(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             "Terminal nativo para Windows escrito en Rust. Render por software y ConPTY.",
             left,
             card_y + 98,
@@ -1591,9 +1534,7 @@ impl TerminalRenderer {
         );
 
         Self::draw_rect(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             left,
             card_y + 114,
             card_w.saturating_sub(40),
@@ -1619,9 +1560,7 @@ impl TerminalRenderer {
             let y = card_y + 136 + row * 42;
             self.draw_group_label(buffer, width, height, x, y, x + col_w, label, theme);
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 value,
                 x,
                 y + 20,
@@ -1634,9 +1573,7 @@ impl TerminalRenderer {
 
         if let Some(info) = crate::updater::get_available_update() {
             self.draw_mono_text(
-                buffer,
-                width,
-                height,
+                &mut Canvas::over(buffer, width, height),
                 &format!("v{} disponible", info.latest_version),
                 right.saturating_sub(120),
                 card_y + 52,
