@@ -252,9 +252,7 @@ fn draw_full_scene(
 
     if active_tab.is_settings {
         renderer.render_settings_page(
-            buffer,
-            width,
-            height,
+            &mut Canvas::over(buffer, width, height),
             p.offset,
             if p.panel_right && p.sidebar_visible {
                 SIDEBAR_WIDTH

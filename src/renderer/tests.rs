@@ -251,7 +251,16 @@ mod bench {
             true,
             &theme,
         );
-        r.render_settings_page(&mut buf, w, h, 190, 0, 0, 26, &cfg, &settings_state, &theme);
+        r.render_settings_page(
+            &mut Canvas::over(&mut buf, w, h),
+            190,
+            0,
+            0,
+            26,
+            &cfg,
+            &settings_state,
+            &theme,
+        );
 
         let n = if cfg!(debug_assertions) { 3 } else { 120 };
         let t_chrome = Instant::now();
@@ -302,7 +311,16 @@ mod bench {
 
         let t_settings = Instant::now();
         for _ in 0..n {
-            r.render_settings_page(&mut buf, w, h, 190, 0, 0, 26, &cfg, &settings_state, &theme);
+            r.render_settings_page(
+                &mut Canvas::over(&mut buf, w, h),
+                190,
+                0,
+                0,
+                26,
+                &cfg,
+                &settings_state,
+                &theme,
+            );
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("bench_render_ui_chrome: sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
@@ -522,9 +540,7 @@ fn test_sidebar_rendering_and_layout() {
     // 5. Probar renderizado de la pestaña de Ajustes
     let settings_state = crate::renderer::SettingsPageState::default();
     renderer.render_settings_page(
-        &mut buffer,
-        1000,
-        600,
+        &mut Canvas::over(&mut buffer, 1000, 600),
         190,
         0,
         0,
@@ -794,7 +810,16 @@ fn test_settings_page_scrolls_only_the_content() {
             scroll_y: scroll,
             ..SettingsPageState::default()
         };
-        renderer.render_settings_page(&mut buf, w, h, 190, 0, 0, status, &config, &state, &theme);
+        renderer.render_settings_page(
+            &mut Canvas::over(&mut buf, w, h),
+            190,
+            0,
+            0,
+            status,
+            &config,
+            &state,
+            &theme,
+        );
         buf
     };
     let (top, scrolled) = (render(0), render(120));
@@ -1356,9 +1381,7 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
         &theme,
     );
     r.render_settings_page(
-        &mut buf,
-        w,
-        h,
+        &mut Canvas::over(&mut buf, w, h),
         SIDEBAR_WIDTH,
         0,
         top_h,

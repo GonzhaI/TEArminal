@@ -29,6 +29,12 @@ impl<'a> Canvas<'a> {
         (self.w, self.h)
     }
 
+    /// Píxeles crudos del búfer. Temporal: la copia de Ajustes desde su búfer fuera de pantalla lo
+    /// necesita hasta la tarea 10, que la sustituye.
+    pub(super) fn pixels_mut(&mut self) -> &mut [u32] {
+        self.buf
+    }
+
     pub fn clear(&mut self, color: Color) {
         self.buf.fill(color.to_u32_xrgb());
     }
