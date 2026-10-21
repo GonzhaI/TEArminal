@@ -4098,3 +4098,145 @@ mod gpu_renderer {
         assert_eq!(px, base);
     }
 }
+
+mod gpu_surface {
+    use crate::renderer::gpu::{DriverKind, GpuSurface, Presented};
+    use crate::renderer::scene::Scene;
+    use crate::renderer::Canvas;
+    use crate::theme::Color;
+    use windows::Win32::Foundation::HWND;
+    use windows_sys::Win32::Foundation::HWND as SysHWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT, WNDCLASSW,
+        WS_OVERLAPPEDWINDOW,
+    };
+
+    /// Ventana real (oculta) que se destruye al salir del ámbito, también si el test entra en pánico.
+    /// Si no se puede crear, el test falla: nunca se salta en silencio.
+    struct TestWindow(SysHWND);
+
+    impl TestWindow {
+        fn new() -> Self {
+            let class_name: Vec<u16> = "AxonGpuSurfaceTestClass\0".encode_utf16().collect();
+            unsafe {
+                let wc = WNDCLASSW {
+                    lpfnWndProc: Some(DefWindowProcW),
+                    lpszClassName: class_name.as_ptr(),
+                    ..std::mem::zeroed()
+                };
+                RegisterClassW(&wc); // varios tests la registran: «la clase ya existe» no importa
+                let hwnd = CreateWindowExW(
+                    0,
+                    class_name.as_ptr(),
+                    class_name.as_ptr(),
+                    WS_OVERLAPPEDWINDOW,
+                    CW_USEDEFAULT,
+                    CW_USEDEFAULT,
+                    320,
+                    240,
+                    0 as SysHWND,
+                    0 as _,
+                    0 as _,
+                    std::ptr::null(),
+                );
+                assert!(
+                    hwnd != 0 as SysHWND,
+                    "no se pudo crear la ventana de prueba"
+                );
+                TestWindow(hwnd)
+            }
+        }
+
+        fn hwnd(&self) -> HWND {
+            HWND(self.0 as _)
+        }
+
+        fn surface(&self, w: u32, h: u32) -> GpuSurface {
+            GpuSurface::new(self.hwnd(), w, h).expect("crear la superficie")
+        }
+    }
+
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    fn scene(canvas: &mut Canvas, w: u32, h: u32, color: u32) -> &Scene {
+        canvas.begin(w, h);
+        canvas.clear(Color::from_u32_xrgb(color));
+        canvas.scene()
+    }
+
+    #[test]
+    fn test_surface_resize_to_zero_clamps_to_one() {
+        let win = TestWindow::new();
+        let mut s = win.surface(64, 48);
+        s.resize(0, 0).unwrap(); // ventana minimizada
+        assert_eq!(s.size(), (1, 1));
+        let mut canvas = Canvas::new();
+        assert!(matches!(
+            s.present(scene(&mut canvas, 1, 1, 0x336699)),
+            Ok(Presented::Ok)
+        ));
+    }
+
+    #[test]
+    fn test_surface_resize_beyond_limit_is_clamped() {
+        let win = TestWindow::new();
+        let mut s = win.surface(64, 48);
+        s.set_max_dim(512);
+        s.resize(1000, 300).unwrap();
+        assert_eq!(s.size(), (512, 300));
+        s.resize(1000, 700).unwrap();
+        assert_eq!(s.size(), (512, 512));
+    }
+
+    #[test]
+    fn test_surface_present_renders_and_resizes() {
+        let win = TestWindow::new();
+        let mut s = win.surface(64, 48);
+        assert_eq!(s.size(), (64, 48));
+        let mut canvas = Canvas::new();
+        assert!(matches!(
+            s.present(scene(&mut canvas, 64, 48, 0xFF8000)),
+            Ok(Presented::Ok)
+        ));
+        s.resize(128, 96).unwrap();
+        assert_eq!(s.size(), (128, 96));
+        assert!(matches!(
+            s.present(scene(&mut canvas, 128, 96, 0x0080FF)),
+            Ok(Presented::Ok)
+        ));
+    }
+
+    #[test]
+    fn test_surface_recovers_after_device_loss() {
+        let win = TestWindow::new();
+        let mut s = win.surface(64, 48);
+        let mut canvas = Canvas::new();
+        canvas.begin(64, 48);
+        canvas.clear(Color::from_u32_xrgb(0x203040));
+        canvas.fill_rect((0, 0, 64, 48), 8, 6, 20, 10, Color::from_u32_xrgb(0xE0A010));
+        let scene = canvas.scene();
+        assert!(matches!(s.present(scene), Ok(Presented::Ok)));
+        let before = s.renderer_mut().render_to_pixels(scene).unwrap();
+
+        s.simulate_device_loss();
+        assert!(matches!(s.present(scene), Ok(Presented::Recovered)));
+        let after = s.renderer_mut().render_to_pixels(scene).unwrap();
+        assert_eq!(before, after, "el renderer recreado dibuja igual");
+        assert_eq!(s.size(), (64, 48));
+        assert!(matches!(s.present(scene), Ok(Presented::Ok)));
+    }
+
+    #[test]
+    fn test_surface_driver_kind_is_reported() {
+        let win = TestWindow::new();
+        let s = win.surface(64, 48);
+        assert!(matches!(
+            s.driver_kind(),
+            DriverKind::Hardware | DriverKind::Warp
+        ));
+    }
+}

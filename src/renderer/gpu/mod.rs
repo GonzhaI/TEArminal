@@ -7,6 +7,7 @@ mod atlas;
 mod device;
 mod pipeline;
 mod renderer;
+mod surface;
 
 pub use atlas::{AtlasError, AtlasRect, GlyphAtlas, ImageTexture, ShelfPacker};
 pub use device::{
@@ -14,3 +15,4 @@ pub use device::{
 };
 pub use pipeline::{Instance, Kind, Pipeline};
 pub use renderer::{encode, Batch, EncodeStop, GpuRenderer};
+pub use surface::{GpuSurface, Presented};
