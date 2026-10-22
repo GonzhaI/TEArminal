@@ -474,6 +474,35 @@ impl AxonApp {
             }
         }
 
+        // Animaciones continuas de imágenes (Kitty Graphics / GIFs): despertar en el próximo fotograma si hay alguna visible
+        if !self.occluded && self.active_tab_index < self.tabs.len() {
+            let mut anim_wake: Option<Instant> = None;
+            let active_tab = &self.tabs[self.active_tab_index];
+            for pane in &active_tab.panes {
+                let view_start = pane
+                    .terminal
+                    .total_lines_count
+                    .saturating_sub(pane.terminal.rows);
+                let view_end = view_start + pane.terminal.rows;
+                for img in &pane.terminal.images {
+                    if img.line_index + img.height_rows > view_start && img.line_index < view_end {
+                        if let Some(delay_ms) = img.next_frame_delay_ms() {
+                            let next_instant =
+                                now + std::time::Duration::from_millis(delay_ms as u64);
+                            anim_wake =
+                                Some(anim_wake.map_or(next_instant, |w| w.min(next_instant)));
+                        }
+                    }
+                }
+            }
+            if let Some(w_time) = anim_wake {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                earliest(&mut wake, w_time);
+            }
+        }
+
         // Auto-ocultamiento de la barra de desplazamiento: un repintado exacto al expirar
         let hide_at = self.last_scroll_time + std::time::Duration::from_millis(1250);
         if now < hide_at {

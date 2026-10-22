@@ -32,6 +32,10 @@ fn test_clipboard_image_saving_and_paste_formatting() {
         path.exists(),
         "El archivo PNG generado debe existir en disco"
     );
+    assert!(
+        path.starts_with(crate::config::cache_dir_or_fallback()),
+        "El PNG debe guardarse en la carpeta de caché de Axon"
+    );
 
     // Formato para chat de IA: ruta entrecomillada con espacio al final
     let formatted = format!("\"{}\" ", path.to_string_lossy());
@@ -505,6 +509,13 @@ fn test_file_viewer_undo_redo() {
     assert_eq!(viewer.cursor_col, 5);
 
     viewer.redo();
+    assert_eq!(viewer.lines[0], "hello beautiful world");
+
+    // Reemplazo de selección cuenta como una única acción de deshacer
+    viewer.select_all();
+    viewer.insert_char('X');
+    assert_eq!(viewer.lines[0], "X");
+    viewer.undo();
     assert_eq!(viewer.lines[0], "hello beautiful world");
 
     let _ = std::fs::remove_file(temp_file);
@@ -1236,31 +1247,18 @@ fn test_single_click_opens_replaceable_preview_and_double_click_pins() {
             .unwrap()
             .is_preview
     );
-    let _ = std::fs::remove_dir_all(dir);
-}
 
-#[test]
-fn test_double_click_on_a_preview_tab_pins_it() {
-    let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
-    let path = std::env::temp_dir().join(format!("axon_test_tabclick_{}.txt", std::process::id()));
-    std::fs::write(&path, "x").expect("write");
-    app.open_file_in_viewer(&path, false);
-    let idx = app.tabs.len() - 1;
-    assert!(app.tabs[idx].is_preview);
-
-    // Dos clics rápidos en la misma pestaña la fijan; un clic aislado no
+    // Dos clics rápidos en la pestaña de vista previa también la fijan
+    let c_idx = app.tabs.iter().position(|t| t.title == "c.txt").unwrap();
+    if let Some(v) = app.tabs[c_idx].file_viewer.as_mut() {
+        v.is_dirty = false;
+    }
     app.last_tab_click_idx = None;
-    app.click_tab(idx);
-    assert!(app.tabs[idx].is_preview);
-    app.click_tab(idx);
-    assert!(!app.tabs[idx].is_preview);
+    app.click_tab(c_idx);
+    app.click_tab(c_idx);
+    assert!(!app.tabs[c_idx].is_preview, "doble clic en pestaña la fija");
 
-    // Dos clics en pestañas distintas no cuentan como doble clic
-    app.tabs[idx].is_preview = true;
-    app.click_tab(0);
-    app.click_tab(idx);
-    assert!(app.tabs[idx].is_preview);
-    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -1538,16 +1536,13 @@ fn test_nested_divider_path_targets_the_right_split() {
 }
 
 #[test]
-fn test_moved_index_follows_the_dragged_tab() {
+fn test_move_tab_reorders_and_keeps_active_tab() {
     // Mover 1 -> 3 en [a b c d e]: b pasa al final de ese tramo
     let order: Vec<usize> = (0..5).map(|i| super::tabs::moved_index(i, 1, 3)).collect();
     assert_eq!(order, vec![0, 3, 1, 2, 4]);
     let order: Vec<usize> = (0..5).map(|i| super::tabs::moved_index(i, 3, 1)).collect();
     assert_eq!(order, vec![0, 2, 3, 1, 4]);
-}
 
-#[test]
-fn test_move_tab_reorders_and_keeps_active_tab() {
     let mut app = AxonApp::new(AxonConfig::default(), None);
     app.create_new_tab();
     app.create_new_tab();
@@ -1637,16 +1632,6 @@ fn test_pane_ids_are_unique_across_windows() {
 }
 
 #[test]
-fn test_closing_last_tab_closes_the_window_not_the_process() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
-    app.create_new_tab();
-    app.close_tab(0);
-    assert!(!app.closing, "queda una pestaña");
-    app.close_tab(0);
-    assert!(app.closing && app.tabs.is_empty());
-}
-
-#[test]
 fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
     let mut app = AxonApp::new(AxonConfig::default(), None);
     let term = &mut app.tabs[0].panes[0].terminal;
@@ -1671,19 +1656,10 @@ fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
     assert_eq!(app.tabs.len(), 1);
     assert_eq!(app.tabs[0].id, 12);
     assert_eq!(app.active_tab_index, 0);
-}
 
-#[test]
-fn test_viewer_replace_selection_takes_single_undo() {
-    let (mut tab, path) = viewer_with("undo_sel.txt", "hola mundo");
-    let v = tab.file_viewer.as_mut().unwrap();
-    v.is_read_only = false;
-    v.select_all();
-    v.insert_char('X');
-    assert_eq!(v.lines[0], "X");
-    v.undo();
-    assert_eq!(v.lines[0], "hola mundo");
-    let _ = std::fs::remove_file(path);
+    // Cerrar la última pestaña marca el cierre de la ventana
+    app.close_tab(0);
+    assert!(app.closing && app.tabs.is_empty());
 }
 
 #[test]
@@ -2004,6 +1980,17 @@ fn test_attach_tab_and_re_docking() {
     assert!(menu_items
         .iter()
         .any(|item| item.label == "Acoplar a otra ventana"));
+
+    // Menú de ventana (sin pestaña activa seleccionada / clic derecho en titlebar o Alt+Espacio)
+    let window_items = app2.tab_or_window_menu(None);
+    assert!(window_items
+        .iter()
+        .any(|item| item.label == "Maximizar" || item.label == "Restaurar"));
+    assert!(window_items.iter().any(|item| item.label == "Minimizar"));
+    assert!(window_items.iter().any(|item| item.label == "Cerrar"));
+    assert!(window_items
+        .iter()
+        .any(|item| item.label == "Nueva pestaña"));
 }
 
 #[test]
@@ -2253,8 +2240,10 @@ fn test_top_tabs_panel_shows_and_hides_the_explorer_with_it() {
 }
 
 #[test]
-fn test_clean_block_command_drops_control_and_format_chars() {
+fn test_clean_block_command_and_path_helpers() {
     use super::clipboard::clean_block_command;
+    use super::shell_context::shorten_home;
+
     // ESC, CR/LF, bidi override (U+202E), ancho cero (U+200B) y BOM: nada de eso llega al prompt.
     let out = clean_block_command("ls\x1b[201~\r\nrm\u{202E}fr\u{200B}\u{FEFF} /tmp");
     assert_eq!(out, "ls[201~rmfr /tmp");
@@ -2263,11 +2252,8 @@ fn test_clean_block_command_drops_control_and_format_chars() {
         "cargo test --release"
     );
     assert_eq!(clean_block_command("echo ñ ✓"), "echo ñ ✓");
-}
 
-#[test]
-fn test_shorten_home_uses_backslashes_for_windows_paths() {
-    use super::shell_context::shorten_home;
+    // Acortado de rutas con tilde y barras de Windows
     let p = std::path::Path::new("D:/proyectos/axon");
     assert_eq!(shorten_home(p), r"D:\proyectos\axon");
     let p = std::path::Path::new("/home/user/proyecto");

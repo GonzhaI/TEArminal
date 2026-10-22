@@ -2697,50 +2697,29 @@ mod gpu_device {
     use windows::Win32::Graphics::Direct3D::*;
 
     #[test]
-    fn test_gpu_device_warp_is_always_available() {
+    fn test_gpu_device_creation_and_feature_levels() {
         let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0)
             .expect("WARP debe existir en Windows 10/11");
         assert_eq!(gpu.kind, DriverKind::Warp);
-    }
-
-    #[test]
-    fn test_gpu_device_feature_level_10_0_is_accepted() {
-        let gpu = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
         assert!(gpu.feature_level.0 >= D3D_FEATURE_LEVEL_10_0.0);
         assert!(gpu.max_texture_dim() >= 8192);
-        // Solo informativo (`--nocapture`)
-        println!("WARP: feature level {:#x}", gpu.feature_level.0);
-        match GpuDevice::new(None) {
-            Ok(g) => println!(
-                "new(None): {:?}, feature level {:#x}",
-                g.kind, g.feature_level.0
-            ),
-            Err(e) => println!("new(None): {e}"),
-        }
-    }
 
-    #[test]
-    fn test_requested_driver_reads_env() {
+        // Limitado a 10_0
+        let gpu_capped = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0)
+            .expect("WARP debe aceptar 10_0");
+        assert_eq!(gpu_capped.feature_level, D3D_FEATURE_LEVEL_10_0);
+        assert_eq!(gpu_capped.max_texture_dim(), 8192);
+
+        // Env vars y límites de textura por versión
         assert_eq!(requested_driver_from(Some("warp")), Some(DriverKind::Warp));
         assert_eq!(requested_driver_from(Some("WARP")), Some(DriverKind::Warp));
         assert_eq!(requested_driver_from(Some("hardware")), None);
         assert_eq!(requested_driver_from(None), None);
-    }
 
-    #[test]
-    fn test_max_texture_dim_by_feature_level() {
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_10_0), 8192);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_10_1), 8192);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_0), 16384);
         assert_eq!(max_texture_dim_for(D3D_FEATURE_LEVEL_11_1), 16384);
-    }
-
-    #[test]
-    fn test_gpu_device_can_be_capped_to_feature_level_10_0() {
-        let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0)
-            .expect("WARP debe aceptar 10_0");
-        assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
-        assert_eq!(gpu.max_texture_dim(), 8192);
     }
 }
 
@@ -2821,7 +2800,8 @@ mod gpu_atlas {
     }
 
     #[test]
-    fn test_shelf_packer_fills_row_then_opens_new_shelf() {
+    fn test_shelf_packer_behavior() {
+        // Asignación de filas y separación
         let mut p = ShelfPacker::new(32, 32);
         let a = p.alloc(10, 10).unwrap();
         let b = p.alloc(10, 10).unwrap();
@@ -2829,34 +2809,23 @@ mod gpu_atlas {
         assert_eq!(a.1, b.1, "los dos primeros comparten fila");
         assert!(b.0 > a.0 + 10, "con 1 px de separación");
         assert!(c.1 >= a.1 + 10, "el tercero abre un estante debajo");
-    }
 
-    #[test]
-    fn test_shelf_packer_returns_none_when_full() {
-        let mut p = ShelfPacker::new(32, 32);
+        // Límite de capacidad y reset
+        let mut p2 = ShelfPacker::new(32, 32);
         for _ in 0..4 {
-            assert!(p.alloc(15, 15).is_some()); // 2x2 de 16
+            assert!(p2.alloc(15, 15).is_some());
         }
-        assert!(p.alloc(15, 15).is_none());
-        assert!(p.alloc(64, 1).is_none(), "más ancho que el atlas");
-    }
+        assert!(p2.alloc(15, 15).is_none());
+        assert!(p2.alloc(64, 1).is_none(), "más ancho que el atlas");
+        p2.reset();
+        assert!(p2.alloc(15, 15).is_some(), "permite reuso tras reset");
 
-    #[test]
-    fn test_shelf_packer_reset_allows_reuse() {
-        let mut p = ShelfPacker::new(16, 16);
-        assert_eq!(p.alloc(15, 15), Some((0, 0)));
-        assert!(p.alloc(15, 15).is_none());
-        p.reset();
-        assert_eq!(p.alloc(15, 15), Some((0, 0)));
-    }
-
-    #[test]
-    fn test_shelf_packer_never_overlaps() {
-        let mut p = ShelfPacker::new(128, 128);
+        // No solapamiento en asignaciones múltiples
+        let mut p3 = ShelfPacker::new(128, 128);
         let mut rects = Vec::new();
         for i in 0..400u32 {
             let (w, h) = (3 + i * 7 % 13, 4 + i * 5 % 17);
-            if let Some((x, y)) = p.alloc(w, h) {
+            if let Some((x, y)) = p3.alloc(w, h) {
                 assert!(x + w <= 128 && y + h <= 128);
                 rects.push((x, y, w, h));
             }
@@ -2872,51 +2841,34 @@ mod gpu_atlas {
     }
 
     #[test]
-    fn test_atlas_uploads_glyph_and_reads_back_coverage() {
+    fn test_atlas_glyph_caching_and_coverage() {
         let gpu = warp();
         let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+
+        // Subida de glifo y cobertura
         let g = glyph(4, 4, |i| (i * 16) as u8);
         let r = atlas.rect_for(&gpu, &g).unwrap();
         assert_eq!((r.w, r.h), (4, 4));
         assert_eq!(region(&gpu, &atlas, r), g.bitmap);
-    }
 
-    #[test]
-    fn test_atlas_empty_glyph_reserves_nothing() {
-        let gpu = warp();
-        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
+        // Mismo glifo reutiliza rect sin resubir y retiene entrada
+        assert_eq!(atlas.rect_for(&gpu, &g).unwrap(), r);
+        assert_eq!(Rc::strong_count(&g), 2);
+
+        // Reset libera retención
+        atlas.reset();
+        assert_eq!(Rc::strong_count(&g), 1);
+
+        // Glifos vacíos o truncados no reservan espacio
         let mut truncated = glyph(3, 3, |_| 1);
         Rc::get_mut(&mut truncated).unwrap().bitmap.truncate(4);
-        for g in [glyph(0, 5, |_| 1), glyph(5, 0, |_| 1), truncated] {
-            let r = atlas.rect_for(&gpu, &g).unwrap();
-            assert_eq!(r, AtlasRect::default());
-            assert_eq!(Rc::strong_count(&g), 1, "no se retiene");
+        for empty_g in [glyph(0, 5, |_| 1), glyph(5, 0, |_| 1), truncated] {
+            let empty_r = atlas.rect_for(&gpu, &empty_g).unwrap();
+            assert_eq!(empty_r, AtlasRect::default());
+            assert_eq!(Rc::strong_count(&empty_g), 1, "no se retiene");
         }
         let first = atlas.rect_for(&gpu, &glyph(4, 4, |_| 9)).unwrap();
         assert_eq!((first.x, first.y), (0, 0), "no se reservó espacio");
-    }
-
-    #[test]
-    fn test_atlas_retains_glyph_while_entry_exists() {
-        let gpu = warp();
-        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
-        let g = glyph(4, 4, |_| 7);
-        atlas.rect_for(&gpu, &g).unwrap();
-        assert_eq!(Rc::strong_count(&g), 2);
-        atlas.reset();
-        assert_eq!(Rc::strong_count(&g), 1);
-    }
-
-    #[test]
-    fn test_atlas_same_glyph_returns_same_rect_without_reupload() {
-        let gpu = warp();
-        let mut atlas = GlyphAtlas::new(&gpu).unwrap();
-        let g = glyph(4, 4, |i| i as u8 + 1);
-        let a = atlas.rect_for(&gpu, &g).unwrap();
-        let other = atlas.rect_for(&gpu, &glyph(4, 4, |_| 3)).unwrap();
-        assert_ne!(a, other);
-        assert_eq!(atlas.rect_for(&gpu, &g).unwrap(), a);
-        assert_eq!(Rc::strong_count(&g), 2, "una sola entrada");
     }
 
     /// Emula al renderer: ante `Full` vacía el atlas y reintenta una vez. Devuelve los vaciados.
@@ -2999,12 +2951,8 @@ mod gpu_pipeline {
     use windows::Win32::Graphics::Direct3D::*;
 
     #[test]
-    fn test_instance_is_32_bytes() {
+    fn test_instance_layout_and_packing() {
         assert_eq!(std::mem::size_of::<Instance>(), 32);
-    }
-
-    #[test]
-    fn test_instance_packs_kind_radius_and_extra() {
         let i = Instance::new(
             Kind::CardCorner,
             [-3, 4, 5, 6],
@@ -4117,22 +4065,20 @@ mod gpu_surface {
     }
 
     #[test]
-    fn test_surface_resize_to_zero_clamps_to_one() {
+    fn test_surface_resize_bounds() {
         let win = TestWindow::new();
         let mut s = win.surface(64, 48);
-        s.resize(0, 0).unwrap(); // ventana minimizada
+
+        // Minimizada (0x0) se acota a 1x1
+        s.resize(0, 0).unwrap();
         assert_eq!(s.size(), (1, 1));
         let mut canvas = Canvas::new();
         assert!(matches!(
             s.present(scene(&mut canvas, 1, 1, 0x336699)),
             Ok(Presented::Ok)
         ));
-    }
 
-    #[test]
-    fn test_surface_resize_beyond_limit_is_clamped() {
-        let win = TestWindow::new();
-        let mut s = win.surface(64, 48);
+        // Más allá del límite máximo se acota
         s.set_max_dim(512);
         s.resize(1000, 300).unwrap();
         assert_eq!(s.size(), (512, 300));

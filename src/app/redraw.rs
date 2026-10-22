@@ -456,7 +456,7 @@ fn draw_full_scene(
                     .as_ref()
                     .filter(|s| s.is_active)
                     .map(|s| s.destination.clone());
-                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                let ai = pane.terminal.active_ai_agent();
                 (
                     c_dir,
                     g_branch,

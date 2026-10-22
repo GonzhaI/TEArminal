@@ -35,9 +35,9 @@ pub(super) fn shell_open(path: &std::path::Path) -> bool {
 }
 
 /// Abre una URL web externa con el navegador predeterminado del sistema (`ShellExecuteW`).
-/// Solo permite esquemas http:// y https:// por seguridad.
+/// Solo permite esquemas http://, https:// y mailto: por seguridad.
 pub fn shell_open_url(url: &str) -> bool {
-    if !url.starts_with("http://") && !url.starts_with("https://") {
+    if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("mailto:") {
         return false;
     }
     use std::os::windows::ffi::OsStrExt;

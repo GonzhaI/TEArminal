@@ -99,11 +99,8 @@ impl AxonApp {
 
             // Solo Claude Code soporta pegado nativo de imágenes con Alt+V (\x1bv).
             // Para otros agentes (gemini, agy, aider...) o la shell, se guarda el PNG y se pega su ruta.
-            let is_claude = active_pane.is_some_and(|p| {
-                p.terminal.window_title.as_deref().is_some_and(|t| {
-                    shell_context::detect_ai_agent(Some(t)) == AiAgentStatus::Claude
-                })
-            });
+            let is_claude =
+                active_pane.is_some_and(|p| p.terminal.active_ai_agent() == AiAgentStatus::Claude);
 
             // Si Claude Code (local o remoto vía SSH) está activo, enviamos la secuencia
             // nativa de pegado de imágenes (Alt + V: \x1bv).
@@ -155,25 +152,43 @@ impl AxonApp {
         }
     }
 
-    /// Guarda una imagen del portapapeles en la carpeta temporal de Axon como archivo PNG.
-    /// Realiza limpieza pasiva de archivos temporales con más de 24 horas de antigüedad.
+    /// Guarda una imagen del portapapeles en la carpeta de caché local de Axon (`%LOCALAPPDATA%\axon\axon\cache\clipboard`) como PNG.
+    /// Realiza limpieza pasiva periódica de capturas antiguas (>24 horas) con aceleración (máximo una vez por hora)
+    /// y elimina cualquier carpeta temporal obsoleta en `%TEMP%\axon_clipboard` para evitar alertas heurísticas de antivirus.
     pub(crate) fn save_clipboard_image(&self, img: &arboard::ImageData) -> Option<String> {
-        let clip_dir = std::env::temp_dir().join("axon_clipboard");
+        let clip_dir = crate::config::cache_dir_or_fallback().join("clipboard");
         let _ = std::fs::create_dir_all(&clip_dir);
 
-        // Limpieza pasiva de capturas antiguas (>24 horas)
-        if let Ok(entries) = std::fs::read_dir(&clip_dir) {
-            let now = std::time::SystemTime::now();
-            for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if let Ok(modified) = metadata.modified() {
-                        if let Ok(age) = now.duration_since(modified) {
-                            if age.as_secs() > 86400 {
-                                let _ = std::fs::remove_file(entry.path());
+        // Limpieza pasiva con aceleración (máx. 1 vez cada hora) para evitar escaneos constantes de I/O y falsos positivos de antivirus
+        static LAST_CLEANUP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last = LAST_CLEANUP.load(std::sync::atomic::Ordering::Relaxed);
+        if now_secs.saturating_sub(last) > 3600 {
+            LAST_CLEANUP.store(now_secs, std::sync::atomic::Ordering::Relaxed);
+
+            // 1. Limpieza de capturas con más de 24 horas en la caché de la aplicación
+            if let Ok(entries) = std::fs::read_dir(&clip_dir) {
+                let now = std::time::SystemTime::now();
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if let Ok(age) = now.duration_since(modified) {
+                                if age.as_secs() > 86400 {
+                                    let _ = std::fs::remove_file(entry.path());
+                                }
                             }
                         }
                     }
                 }
+            }
+
+            // 2. Limpieza proactiva del directorio temporal obsoleto en %TEMP%\axon_clipboard
+            let legacy_temp = std::env::temp_dir().join("axon_clipboard");
+            if legacy_temp.exists() {
+                let _ = std::fs::remove_dir_all(legacy_temp);
             }
         }
 

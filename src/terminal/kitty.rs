@@ -17,9 +17,17 @@ pub struct KittyControl {
     /// - 't': transmitir datos sin mostrar
     /// - 'T': transmitir y mostrar (predeterminado si hay datos y no se especifica)
     /// - 'p': mostrar / colocar imagen existente (especificada con `i`)
+    /// - 'f': transmitir nuevo fotograma para animación (especificada con `i`)
     /// - 'd': borrar imágenes
     /// - 'q': consultar soporte del protocolo
     pub action: char,
+    /// Medio de transmisión (`t`):
+    /// - 'd': directo en base64 (predeterminado)
+    /// - 'f': ruta a archivo regular en disco local
+    /// - 't': ruta a archivo temporal en disco local (eliminado tras cargarlo)
+    pub medium: char,
+    /// Retraso o intervalo del fotograma en milisegundos (`z`)
+    pub gap_ms: u32,
     /// Formato (`f`):
     /// - 100: PNG / compresión (autodetecta con `image`)
     /// - 32: RGBA raw de 32 bits
@@ -158,8 +166,22 @@ pub fn parse_kitty_control(bytes: &[u8]) -> KittyControl {
                     ctrl.cursor_movement = n;
                 }
             }
+            "t" => {
+                if let Some(ch) = val.chars().next() {
+                    ctrl.medium = ch;
+                }
+            }
+            "z" | "Z" => {
+                if let Ok(n) = val.parse::<u32>() {
+                    ctrl.gap_ms = n;
+                }
+            }
             _ => {}
         }
+    }
+
+    if ctrl.medium == '\0' {
+        ctrl.medium = 'd';
     }
 
     if ctrl.action == '\0' {
@@ -286,7 +308,7 @@ pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
         payload_bytes.to_vec()
     };
 
-    // 6. Decodificación de datos base64
+    // 6. Obtener los bytes de la imagen: directamente en base64 (t=d) o desde archivo (t=f / t=t)
     let clean_b64: Vec<u8> = full_payload
         .iter()
         .copied()
@@ -296,32 +318,175 @@ pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
         return;
     }
 
-    let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) else {
-        send_error(state, &control, "EINVAL:invalid base64");
-        return;
+    let image_bytes: Vec<u8> = if control.medium == 'f' || control.medium == 't' {
+        let raw_path = if let Ok(decoded_path) = BASE64_STANDARD.decode(&clean_b64) {
+            String::from_utf8(decoded_path)
+                .unwrap_or_else(|_| String::from_utf8_lossy(&full_payload).to_string())
+        } else {
+            String::from_utf8_lossy(&full_payload).to_string()
+        };
+        let clean_path = raw_path.trim().trim_matches('"').trim_matches('\'');
+
+        // Seguridad: rechazar rutas de red UNC (\\host\...) para evitar NTLM reflection attacks
+        let is_sep = |c: char| matches!(c, '/' | '\\');
+        let mut chars = clean_path.chars();
+        let is_unc = chars.next().is_some_and(is_sep) && chars.next().is_some_and(is_sep);
+        if clean_path.is_empty() || is_unc || clean_path.starts_with(r"\\?\UNC") {
+            send_error(state, &control, "EINVAL:unsafe file path");
+            return;
+        }
+
+        let file_path = std::path::Path::new(clean_path);
+        let Ok(meta) = std::fs::metadata(file_path) else {
+            send_error(state, &control, "ENOENT:file not found");
+            return;
+        };
+        if !meta.is_file() || meta.len() > 64 * 1024 * 1024 {
+            send_error(
+                state,
+                &control,
+                "EINVAL:file too large or not a regular file",
+            );
+            return;
+        };
+
+        let Ok(bytes) = std::fs::read(file_path) else {
+            send_error(state, &control, "EPERM:cannot read file");
+            return;
+        };
+
+        // Si es archivo temporal (t=t), eliminarlo tras leerlo solo si reside en una carpeta temporal segura
+        if control.medium == 't' {
+            let temp_dir = std::env::temp_dir();
+            let cache_dir = crate::config::cache_dir_or_fallback();
+            if file_path.starts_with(&temp_dir) || file_path.starts_with(&cache_dir) {
+                let _ = std::fs::remove_file(file_path);
+            }
+        }
+
+        bytes
+    } else {
+        let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) else {
+            send_error(state, &control, "EINVAL:invalid base64");
+            return;
+        };
+        decoded
     };
 
-    // 7. Decodificación de imagen según formato. Las dimensiones se comparan en `u64`: con `u32`,
-    // `s * v * 4` se desborda con valores que el emisor controla.
+    // 7. Decodificación de fotogramas de animación adicionales (a=f)
+    if control.action == 'f' || control.action == 'F' {
+        let (s, v) = (control.src_width, control.src_height);
+        let raw_len = |bpp: u64| u64::from(s) * u64::from(v) * bpp;
+        let frame_rgba = match control.format {
+            32 if s > 0 && v > 0 && image_bytes.len() as u64 == raw_len(4) => {
+                RgbaImage::from_raw(s, v, image_bytes)
+            }
+            24 if s > 0 && v > 0 && image_bytes.len() as u64 == raw_len(3) => {
+                let mut rgba = Vec::with_capacity(image_bytes.len() / 3 * 4);
+                for rgb in image_bytes.as_chunks::<3>().0 {
+                    rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+                }
+                RgbaImage::from_raw(s, v, rgba)
+            }
+            _ => decode_untrusted(&image_bytes),
+        };
+
+        let Some(frame_img) = frame_rgba else {
+            send_error(state, &control, "EBADPNG:cannot decode frame");
+            return;
+        };
+
+        let delay_ms = if control.gap_ms > 0 {
+            control.gap_ms
+        } else {
+            40
+        };
+
+        if let Some(stored) = state.kitty_stored_images.get_mut(&control.image_id) {
+            let (tw, th) = (stored.width_px, stored.height_px);
+            let scaled = fit_image(frame_img.clone(), tw, th);
+            if stored.frames.len() < 120 {
+                stored.frames.push(super::cell::ImageFrame {
+                    rgba_data: scaled.into_raw(),
+                    delay_ms,
+                });
+            }
+        }
+
+        for img in &mut state.images {
+            if img.id == control.image_id {
+                let (tw, th) = (img.width_px, img.height_px);
+                let scaled = fit_image(frame_img.clone(), tw, th);
+                if img.frames.len() < 120 {
+                    img.frames.push(super::cell::ImageFrame {
+                        rgba_data: scaled.into_raw(),
+                        delay_ms,
+                    });
+                }
+            }
+        }
+
+        if control.image_id > 0 && control.quiet == 0 {
+            let resp = format!("\x1b_Gi={};OK\x1b\\", control.image_id);
+            state.pty_write_queue.push(resp.into_bytes());
+        }
+        return;
+    }
+
+    // 8. Decodificación de imagen principal según formato y detección de GIF animado
     let (s, v) = (control.src_width, control.src_height);
     let raw_len = |bytes_per_pixel: u64| u64::from(s) * u64::from(v) * bytes_per_pixel;
+    let mut anim_frames: Vec<super::cell::ImageFrame> = Vec::new();
+
     let rgba_img: Option<RgbaImage> = match control.format {
-        32 if s > 0 && v > 0 && decoded.len() as u64 == raw_len(4) => {
-            RgbaImage::from_raw(s, v, decoded)
+        32 if s > 0 && v > 0 && image_bytes.len() as u64 == raw_len(4) => {
+            RgbaImage::from_raw(s, v, image_bytes)
         }
-        24 if s > 0 && v > 0 && decoded.len() as u64 == raw_len(3) => {
-            let mut rgba = Vec::with_capacity(decoded.len() / 3 * 4);
-            for rgb in decoded.as_chunks::<3>().0 {
+        24 if s > 0 && v > 0 && image_bytes.len() as u64 == raw_len(3) => {
+            let mut rgba = Vec::with_capacity(image_bytes.len() / 3 * 4);
+            for rgb in image_bytes.as_chunks::<3>().0 {
                 rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
             }
             RgbaImage::from_raw(s, v, rgba)
         }
-        // PNG/JPEG (formato 100) o datos que no encajan con las dimensiones declaradas
-        _ => decode_untrusted(&decoded).or_else(|| {
-            (s > 0 && v > 0 && decoded.len() as u64 == raw_len(4))
-                .then(|| RgbaImage::from_raw(s, v, decoded))
-                .flatten()
-        }),
+        _ => {
+            if image_bytes.starts_with(b"GIF87a") || image_bytes.starts_with(b"GIF89a") {
+                use image::AnimationDecoder;
+                if let Ok(decoder) =
+                    image::codecs::gif::GifDecoder::new(std::io::Cursor::new(&image_bytes))
+                {
+                    if let Ok(raw_frames) = decoder.into_frames().collect_frames() {
+                        if !raw_frames.is_empty() {
+                            let first = raw_frames[0].buffer().clone();
+                            if raw_frames.len() > 1 {
+                                for f in raw_frames.into_iter().take(120) {
+                                    let delay = f.delay().numer_denom_ms();
+                                    let delay_ms =
+                                        delay.0.checked_div(delay.1).unwrap_or(40).max(20);
+                                    anim_frames.push(super::cell::ImageFrame {
+                                        rgba_data: f.into_buffer().into_raw(),
+                                        delay_ms,
+                                    });
+                                }
+                            }
+                            Some(first)
+                        } else {
+                            decode_untrusted(&image_bytes)
+                        }
+                    } else {
+                        decode_untrusted(&image_bytes)
+                    }
+                } else {
+                    decode_untrusted(&image_bytes)
+                }
+            } else {
+                decode_untrusted(&image_bytes).or_else(|| {
+                    (s > 0 && v > 0 && image_bytes.len() as u64 == raw_len(4))
+                        .then(|| RgbaImage::from_raw(s, v, image_bytes))
+                        .flatten()
+                })
+            }
+        }
     };
 
     let Some(rgba_img) = rgba_img else {
@@ -334,14 +499,13 @@ pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
         return;
     }
 
-    // 8. Cálculo de dimensiones de rejilla (celdas de terminal)
+    // 9. Cálculo de dimensiones de rejilla (celdas de terminal)
     let cols = if let Some(c) = control.cols {
         c.clamp(1, state.cols)
     } else if let Some(r) = control.rows {
         let aspect = w as f32 / h as f32;
         ((r as f32 * (18.0 / 8.0) * aspect).round() as usize).clamp(1, state.cols)
     } else {
-        // `clamp(10, cols)` entraba en pánico (y con `panic = "abort"` cerraba Axon) en paneles de menos de 10 columnas
         let max_cols = (state.cols.saturating_sub(state.cursor_x + 2))
             .max(10)
             .min(state.cols)
@@ -356,9 +520,19 @@ pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
         ((cols as f32 * (8.0 / 18.0) * aspect).round() as usize).clamp(1, 100)
     };
 
-    // 9. Reescalar a resolución objetivo para acotar el uso de RAM (~80x30 celdas = 640x540 px)
+    // 10. Reescalar a resolución objetivo para acotar el uso de RAM (~80x30 celdas = 640x540 px)
     let (tw, th) = ((cols * 8) as u32, (rows * 18) as u32);
     let scaled_rgba = fit_image(rgba_img, tw, th);
+
+    let scaled_frames: Vec<super::cell::ImageFrame> = anim_frames
+        .into_iter()
+        .filter_map(|f| {
+            RgbaImage::from_raw(w, h, f.rgba_data).map(|buf| super::cell::ImageFrame {
+                rgba_data: fit_image(buf, tw, th).into_raw(),
+                delay_ms: f.delay_ms,
+            })
+        })
+        .collect();
 
     let img_id = if control.image_id > 0 {
         control.image_id
@@ -368,11 +542,12 @@ pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
         id
     };
 
-    let img_entry = InlineImage::new(
+    let img_entry = InlineImage::with_frames(
         img_id,
         (state.cursor_x, state.current_global_line()),
         (cols, rows),
         scaled_rgba,
+        scaled_frames,
     );
 
     if control.image_id > 0 {

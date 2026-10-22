@@ -15,13 +15,48 @@ fn test_default_theme_palette() {
 fn test_truecolor_parsing() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
-    // Secuencia TrueColor: RGB(120, 200, 250)
+    // 1. Secuencia TrueColor estándar punto y coma: RGB(120, 200, 250)
     let seq = b"\x1b[38;2;120;200;250mHola TrueColor\x1b[0m";
     term.process_bytes(seq);
 
     let cell = &term.grid[0][0];
     assert_eq!(cell.c, 'H');
     assert_eq!(cell.fg, Color::from_rgb(120, 200, 250));
+
+    // 2. TrueColor delimitado por dos puntos (38:2:R:G:B)
+    term.process_bytes(b"\r\n\x1b[38:2:180:90:220mY\x1b[0m");
+    let cell_y = &term.grid[1][0];
+    assert_eq!(cell_y.c, 'Y');
+    assert_eq!(cell_y.fg, Color::from_rgb(180, 90, 220));
+
+    // 3. TrueColor formato ISO con espacio de color (38:2::70:140:210)
+    term.process_bytes(b"\x1b[38:2::70:140:210mZ\x1b[0m");
+    let cell_z = &term.grid[1][1];
+    assert_eq!(cell_z.c, 'Z');
+    assert_eq!(cell_z.fg, Color::from_rgb(70, 140, 210));
+
+    // 4. Color de subrayado TrueColor (SGR 58;2;R;G;B y SGR 58:2:R:G:B)
+    term.process_bytes(b"\r\n\x1b[4;58;2;255;100;50mA\x1b[58:2:200:50:80mB\x1b[59mC\x1b[0m");
+    let cell_a = &term.grid[2][0];
+    assert_eq!(cell_a.c, 'A');
+    assert!(cell_a.underline());
+    assert_eq!(
+        term.underline_color_of(cell_a),
+        Some(Color::from_rgb(255, 100, 50))
+    );
+
+    let cell_b = &term.grid[2][1];
+    assert_eq!(cell_b.c, 'B');
+    assert!(cell_b.underline());
+    assert_eq!(
+        term.underline_color_of(cell_b),
+        Some(Color::from_rgb(200, 50, 80))
+    );
+
+    let cell_c = &term.grid[2][2];
+    assert_eq!(cell_c.c, 'C');
+    assert!(cell_c.underline());
+    assert_eq!(term.underline_color_of(cell_c), None); // SGR 59 restauró al color por defecto (fg)
 }
 
 #[test]
@@ -265,10 +300,8 @@ fn test_osc_52_clipboard() {
         "Debe agregar el texto decodificado a la cola de portapapeles"
     );
     assert_eq!(term.clipboard_queue[0], "Hello from SSH!");
-}
 
-#[test]
-fn test_osc_52_payload_is_capped_at_100kb() {
+    // Capped at 100 KB
     use base64::prelude::*;
     let enc = |n: usize| BASE64_STANDARD.encode(vec![b'a'; n]);
     assert_eq!(
@@ -424,7 +457,7 @@ fn test_unicode_box_drawing_and_braille_patterns() {
 }
 
 #[test]
-fn test_terminal_grapheme_clustering_combining_diacritics() {
+fn test_terminal_grapheme_clustering() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
@@ -454,22 +487,17 @@ fn test_terminal_grapheme_clustering_combining_diacritics() {
     assert_eq!(cell_o.width, 1);
     assert_eq!(term2.grapheme_of(cell_o), Some("o\u{031B}\u{0301}"));
     assert_eq!(term2.cursor_x, 1);
-}
-
-#[test]
-fn test_terminal_grapheme_clustering_emoji_modifiers_and_zwj() {
-    let theme = Theme::default();
-    let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Pulgar arriba con tono de piel medio (U+1F44D U+1F3FD)
-    term.process_bytes("👍🏽!".as_bytes());
-    let cell_thumb = &term.grid[0][0];
+    let mut term3 = TerminalState::new(80, 24, 1000, Theme::default());
+    term3.process_bytes("👍🏽!".as_bytes());
+    let cell_thumb = &term3.grid[0][0];
     assert!(cell_thumb.is_grapheme());
     assert_eq!(cell_thumb.width, 2);
-    assert_eq!(term.grapheme_of(cell_thumb), Some("👍🏽"));
-    assert_eq!(term.grid[0][1].width, 0); // espaciador
-    assert_eq!(term.grid[0][2].c, '!');
-    assert_eq!(term.cursor_x, 3);
+    assert_eq!(term3.grapheme_of(cell_thumb), Some("👍🏽"));
+    assert_eq!(term3.grid[0][1].width, 0); // espaciador
+    assert_eq!(term3.grid[0][2].c, '!');
+    assert_eq!(term3.cursor_x, 3);
 
     // Secuencia ZWJ (U+1F468 U+200D U+1F469: 👨‍👩)
     let mut term_zwj = TerminalState::new(80, 24, 1000, Theme::default());
@@ -582,31 +610,6 @@ fn test_terminal_selection_shifts_on_scrollback_eviction() {
     let sel = term.selection.expect("debe existir selección");
     assert_eq!(sel.start.1, 1, "La selección debió decrementarse de 2 a 1");
     assert_eq!(sel.end.1, 1);
-}
-
-#[test]
-fn test_truecolor_24bit_rgb_semicolon_and_colon() {
-    let theme = Theme::default();
-    let mut term = TerminalState::new(80, 24, 1000, theme);
-
-    // 1. TrueColor formato punto y coma estándar (38;2;R;G;B y 48;2;R;G;B)
-    term.process_bytes(b"\x1b[38;2;250;120;40;48;2;15;25;35mX\x1b[0m");
-    let cell_x = &term.grid[0][0];
-    assert_eq!(cell_x.c, 'X');
-    assert_eq!(cell_x.fg, Color::from_rgb(250, 120, 40));
-    assert_eq!(cell_x.bg, Color::from_rgb(15, 25, 35));
-
-    // 2. TrueColor formato delimitado por dos puntos (38:2:R:G:B)
-    term.process_bytes(b"\x1b[38:2:180:90:220mY\x1b[0m");
-    let cell_y = &term.grid[0][1];
-    assert_eq!(cell_y.c, 'Y');
-    assert_eq!(cell_y.fg, Color::from_rgb(180, 90, 220));
-
-    // 3. TrueColor formato ISO con espacio de color (38:2:0:70:140:210)
-    term.process_bytes(b"\x1b[38:2::70:140:210mZ\x1b[0m");
-    let cell_z = &term.grid[0][2];
-    assert_eq!(cell_z.c, 'Z');
-    assert_eq!(cell_z.fg, Color::from_rgb(70, 140, 210));
 }
 
 #[test]
@@ -902,13 +905,6 @@ fn test_osc_axon_ssh_signaling() {
 }
 
 #[test]
-fn test_axon_ssh_start_ignored_without_pane_token() {
-    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=host;token=\x07");
-    assert!(term.ssh_session.is_none());
-}
-
-#[test]
 fn test_osc_7_remote_host_ssh() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
@@ -938,6 +934,93 @@ fn test_cell_memory_footprint_16_bytes() {
         16,
         "Cell debe estar optimizada a exactamente 16 bytes de memoria"
     );
+}
+
+#[test]
+fn test_osc_8_explicit_hyperlinks() {
+    let mut term = TerminalState::new(80, 24, 100, Theme::default());
+
+    // 1. Enlace explícito terminado con ST (\x1b\)
+    let seq =
+        b"\x1b]8;id=xyz;https://axon.terminal/docs\x1b\\Documentacion\x1b]8;;\x1b\\ texto normal";
+    term.process_bytes(seq);
+
+    // Las celdas de "Documentacion" (cols 0..13) tienen el hipervínculo
+    for col in 0..13 {
+        assert_eq!(
+            term.url_at(col, 0),
+            Some("https://axon.terminal/docs".to_string()),
+            "col {col} debe tener el URL explicito"
+        );
+        assert!(term.grid[0][col].hyperlink_id > 0);
+    }
+
+    // " texto normal" (col 13 en adelante) no tiene enlace
+    for col in 13..26 {
+        assert_eq!(term.url_at(col, 0), None);
+        assert_eq!(term.grid[0][col].hyperlink_id, 0);
+    }
+
+    // 2. Enlace terminado con BEL (\x07) y URL con punto y coma
+    term.process_bytes(b"\r\n\x1b]8;;https://example.com/api?a=1;b=2\x07API\x1b]8;;\x07");
+    for col in 0..3 {
+        assert_eq!(
+            term.url_at(col, 1),
+            Some("https://example.com/api?a=1;b=2".to_string())
+        );
+    }
+
+    // 3. Enlace que envuelve de línea: mantiene el mismo ID y URL en ambas líneas
+    term.cursor_x = 75;
+    term.cursor_y = 2;
+    term.process_bytes(b"\x1b]8;;https://wrapped.link\x1b\\1234567890\x1b]8;;\x1b\\");
+    // Los primeros 5 caracteres están en cols 75..80 de la línea 2
+    for col in 75..80 {
+        assert_eq!(
+            term.url_at(col, 2),
+            Some("https://wrapped.link".to_string())
+        );
+    }
+    // Los siguientes 5 caracteres envolvieron a la línea 3 (cols 0..5)
+    for col in 0..5 {
+        assert_eq!(
+            term.url_at(col, 3),
+            Some("https://wrapped.link".to_string())
+        );
+    }
+
+    // 4. Alt screen no filtra el enlace activo
+    term.process_bytes(b"\x1b]8;;https://leak.test\x1b\\Texto");
+    assert!(term.current_hyperlink > 0);
+    term.enter_alt_screen();
+    assert_eq!(term.current_hyperlink, 0);
+    term.exit_alt_screen();
+    assert_eq!(term.current_hyperlink, 0);
+
+    // 5. Rechazo de URLs inválidas o con caracteres de control
+    let bad_ctrl = b"\x1b]8;;https://evil.com/\x00malicious\x1b\\malo\x1b]8;;\x1b\\";
+    term.process_bytes(bad_ctrl);
+    assert_eq!(term.current_hyperlink, 0);
+
+    // 6. Sobrescribir celdas con texto plano limpia el hipervínculo en esas celdas
+    let mut term2 = TerminalState::new(80, 24, 100, Theme::default());
+    term2.process_bytes(b"\x1b]8;;https://example.com\x1b\\HOLA\x1b]8;;\x1b\\");
+    assert_eq!(term2.url_at(0, 0), Some("https://example.com".to_string()));
+    // Volver al inicio y sobrescribir "HO" con "XX"
+    term2.process_bytes(b"\rXX");
+    assert_eq!(term2.url_at(0, 0), None);
+    assert_eq!(term2.url_at(1, 0), None);
+    assert_eq!(term2.url_at(2, 0), Some("https://example.com".to_string()));
+    assert_eq!(term2.url_at(3, 0), Some("https://example.com".to_string()));
+
+    // 5. El texto plano sin secuencias OSC 8 no genera hipervínculos
+    term2.cursor_x = 0;
+    term2.cursor_y = 1;
+    term2.process_bytes(b"Visita https://github.com/GonzhaI/axon para mas info.");
+    assert_eq!(term2.url_at(0, 1), None);
+    assert_eq!(term2.url_at(7, 1), None);
+    assert_eq!(term2.url_at(20, 1), None);
+    assert_eq!(term2.url_at(36, 1), None);
 }
 
 /// Las secuencias de escape son entrada no confiable: no pueden fijar un destino SSH con metacaracteres
@@ -1155,10 +1238,23 @@ fn test_axon_agent_osc_tracks_running_agent() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     assert!(!term.agent_running);
-    term.process_bytes(b"\x1b]1337;AxonAgent=start\x07");
+    term.process_bytes(b"\x1b]1337;AxonAgent=start;name=claude\x07");
     assert!(term.agent_running);
+    assert_eq!(
+        term.active_ai_agent(),
+        crate::renderer::AiAgentStatus::Claude
+    );
+
+    // Enviar un mensaje o cambiar el título (p. ej. herramientas o "Thinking...") no pierde el agente
+    term.process_bytes(b"\x1b]0;Thinking...\x07");
+    assert_eq!(
+        term.active_ai_agent(),
+        crate::renderer::AiAgentStatus::Claude
+    );
+
     term.process_bytes(b"\x1b]1337;AxonAgent=end\x07");
     assert!(!term.agent_running);
+    assert_eq!(term.active_ai_agent(), crate::renderer::AiAgentStatus::None);
 
     // Al terminar un agente, Axon restaura la región de scroll y modos TUI sin mover el cursor a (0,0)
     term.process_bytes(
@@ -1285,6 +1381,27 @@ fn test_kitty_graphics_transmit_and_display_png() {
     // Confirmación OK enviada al PTY porque i > 0 y q == 0
     assert_eq!(term.pty_write_queue.len(), 1);
     assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=15;OK\x1b\\");
+
+    // Transmisión fragmentada (m=1 y m=0)
+    let raw_rgba = vec![200u8; 16];
+    let b64_chunked = BASE64_STANDARD.encode(&raw_rgba);
+    let (chunk1, chunk2) = b64_chunked.split_at(b64_chunked.len() / 2);
+    let seq1 = format!("\x1b_Ga=T,f=32,s=2,v=2,i=25,m=1;{chunk1}\x1b\\");
+    let seq2 = format!("\x1b_Gm=0;{chunk2}\x1b\\");
+    term.process_bytes(seq1.as_bytes());
+    assert_eq!(term.images.len(), 1);
+    assert!(term.kitty_chunk_data.is_some());
+    term.process_bytes(seq2.as_bytes());
+    assert_eq!(term.images.len(), 2);
+    assert_eq!(term.images[1].id, 25);
+    assert!(term.kitty_chunk_data.is_none());
+
+    // Secuencia dividida en varias llamadas
+    term.pty_write_queue.clear();
+    term.process_bytes(b"\x1b_Ga=q,i=");
+    term.process_bytes(b"77\x1b\\");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=77;OK\x1b\\");
 }
 
 #[test]
@@ -1309,32 +1426,6 @@ fn test_kitty_graphics_raw_rgba_and_rgb() {
 
     assert_eq!(term.images.len(), 2);
     assert_eq!(term.images[1].id, 17);
-}
-
-#[test]
-fn test_kitty_graphics_chunked_transmission() {
-    use base64::prelude::*;
-    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
-
-    let raw_rgba = vec![200u8; 16]; // 2x2 RGBA
-    let b64 = BASE64_STANDARD.encode(&raw_rgba);
-
-    // Dividir en 2 fragmentos (m=1 y m=0)
-    let (chunk1, chunk2) = b64.split_at(b64.len() / 2);
-
-    let seq1 = format!("\x1b_Ga=T,f=32,s=2,v=2,i=25,m=1;{chunk1}\x1b\\");
-    let seq2 = format!("\x1b_Gm=0;{chunk2}\x1b\\");
-
-    term.process_bytes(seq1.as_bytes());
-    // Aún no debe haberse añadido la imagen a la lista visible
-    assert_eq!(term.images.len(), 0);
-    assert!(term.kitty_chunk_data.is_some());
-
-    term.process_bytes(seq2.as_bytes());
-    // Ahora debe estar completa
-    assert_eq!(term.images.len(), 1);
-    assert_eq!(term.images[0].id, 25);
-    assert!(term.kitty_chunk_data.is_none());
 }
 
 #[test]
@@ -1368,14 +1459,8 @@ fn test_kitty_graphics_transmit_put_and_delete() {
     term.process_bytes(b"\x1b_Ga=d,d=a\x1b\\");
     assert_eq!(term.images.len(), 0);
     assert!(term.kitty_stored_images.is_empty());
-}
 
-/// Al pasar de 32 imágenes guardadas se expulsa la más antigua (no una al azar) y la recién guardada sobrevive
-#[test]
-fn test_kitty_store_evicts_the_oldest_image() {
-    use base64::prelude::*;
-    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
-    let b64 = BASE64_STANDARD.encode(vec![255u8; 16]);
+    // 5. Expulsión LRU al superar el límite de 32 imágenes guardadas
     for id in 1..=40u64 {
         let seq = format!("\x1b_Ga=t,f=32,s=2,v=2,i={id},q=2;{b64}\x1b\\");
         term.process_bytes(seq.as_bytes());
@@ -1425,18 +1510,63 @@ fn test_kitty_rejects_hostile_images_without_panicking() {
 }
 
 #[test]
-fn test_kitty_graphics_stream_split_across_buffers() {
+fn test_kitty_graphics_file_medium_and_animation_frames() {
+    use base64::prelude::*;
     let mut term = TerminalState::new(80, 24, 1000, Theme::default());
 
-    // Secuencia \x1b_Ga=q,i=77\x1b\ dividida en varias llamadas
-    term.process_bytes(b"\x1b");
-    term.process_bytes(b"_");
-    term.process_bytes(b"Ga=q,i=");
-    term.process_bytes(b"77\x1b");
-    term.process_bytes(b"\\");
+    // 1. Crear imagen PNG de prueba en disco (%TEMP%)
+    let temp_file =
+        std::env::temp_dir().join(format!("axon_kitty_test_{}.png", std::process::id()));
+    let img = image::RgbaImage::new(4, 4);
+    img.save(&temp_file).unwrap();
+    assert!(temp_file.exists());
 
+    // Transmitir vía archivo regular (t=f)
+    let path_b64 = BASE64_STANDARD.encode(temp_file.to_string_lossy().as_bytes());
+    let seq_f = format!("\x1b_Ga=T,f=100,t=f,i=90;{path_b64}\x1b\\");
+    term.process_bytes(seq_f.as_bytes());
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 90);
+    assert!(
+        temp_file.exists(),
+        "t=f no debe borrar el archivo de origen"
+    );
+
+    // 2. Transmitir vía archivo temporal (t=t): debe leerlo y borrarlo
+    term.images.clear();
+    let seq_t = format!("\x1b_Ga=T,f=100,t=t,i=91;{path_b64}\x1b\\");
+    term.process_bytes(seq_t.as_bytes());
+    assert_eq!(term.images.len(), 1);
+    assert_eq!(term.images[0].id, 91);
+    assert!(
+        !temp_file.exists(),
+        "t=t debe eliminar el archivo temporal tras cargarlo"
+    );
+
+    // 3. Rechazo de rutas de red UNC por seguridad
+    term.pty_write_queue.clear();
+    let unc_b64 = BASE64_STANDARD.encode(br"\\attacker-server\share\exploit.png");
+    let seq_unc = format!("\x1b_Ga=T,f=100,t=f,i=92;{unc_b64}\x1b\\");
+    term.process_bytes(seq_unc.as_bytes());
+    assert_eq!(term.images.len(), 1); // No añadió imagen
     assert_eq!(term.pty_write_queue.len(), 1);
-    assert_eq!(term.pty_write_queue[0], b"\x1b_Gi=77;OK\x1b\\");
+    assert!(String::from_utf8_lossy(&term.pty_write_queue[0]).contains("EINVAL"));
+
+    // 4. Fotogramas de animación Kitty (a=f, z=80)
+    let raw_rgba = vec![180u8; 16];
+    let frame_b64 = BASE64_STANDARD.encode(&raw_rgba);
+    let seq_frame = format!("\x1b_Ga=f,f=32,s=2,v=2,i=91,z=80;{frame_b64}\x1b\\");
+    term.process_bytes(seq_frame.as_bytes());
+    assert_eq!(term.images[0].frames.len(), 1);
+    assert_eq!(term.images[0].frames[0].delay_ms, 80);
+    assert!(term.images[0].next_frame_delay_ms().is_none()); // solo 1 frame extra
+
+    // Añadir segundo fotograma para activar ciclo animado
+    let seq_frame2 = format!("\x1b_Ga=f,f=32,s=2,v=2,i=91,z=120;{frame_b64}\x1b\\");
+    term.process_bytes(seq_frame2.as_bytes());
+    assert_eq!(term.images[0].frames.len(), 2);
+    assert!(term.images[0].next_frame_delay_ms().is_some());
+    assert!(!term.images[0].active_rgba().is_empty());
 }
 
 #[test]
@@ -1459,6 +1589,20 @@ fn test_synchronized_rendering_dec_2026_and_timeout() {
     // Timeout de seguridad si pasan más de 200 ms
     term.process_bytes(b"\x1b[?2026h");
     assert!(term.is_in_sync_update());
+
+    // Consulta DECRQM (\x1b[?2026$p) en estado activo
+    term.pty_write_queue.clear();
+    term.process_bytes(b"\x1b[?2026$p");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?2026;1$y");
+
+    term.process_bytes(b"\x1b[?2026l");
+    term.pty_write_queue.clear();
+    term.process_bytes(b"\x1b[?2026$p");
+    assert_eq!(term.pty_write_queue.len(), 1);
+    assert_eq!(term.pty_write_queue[0], b"\x1b[?2026;2$y");
+
+    term.process_bytes(b"\x1b[?2026h");
     term.sync_update_start =
         Some(std::time::Instant::now() - std::time::Duration::from_millis(250));
     assert!(

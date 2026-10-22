@@ -378,10 +378,11 @@ impl TerminalRenderer {
                     compute_cell_fg(cell, theme)
                 };
 
-                // Subrayado (SGR 4) y tachado (SGR 9)
+                // Subrayado (SGR 4 / SGR 58) y tachado (SGR 9)
                 if cell.underline() {
                     let line_y = cell_y + self.row_height - 2;
-                    canvas.fill_rect(clip, cell_x, line_y, self.char_width, 1, fg_color);
+                    let ul_color = terminal.underline_color_of(cell).unwrap_or(fg_color);
+                    canvas.fill_rect(clip, cell_x, line_y, self.char_width, 1, ul_color);
                 }
                 if cell.strikethrough() {
                     let line_y = cell_y + (self.row_height / 2);
@@ -452,13 +453,15 @@ impl TerminalRenderer {
                             if k > 0 {
                                 if cur_cell.underline() {
                                     let line_y = cell_y + self.row_height - 2;
+                                    let ul_color =
+                                        terminal.underline_color_of(cur_cell).unwrap_or(fg_color);
                                     canvas.fill_rect(
                                         clip,
                                         cur_cell_x,
                                         line_y,
                                         self.char_width,
                                         1,
-                                        fg_color,
+                                        ul_color,
                                     );
                                 }
                                 if cur_cell.strikethrough() {
@@ -584,7 +587,7 @@ impl TerminalRenderer {
                 canvas.image(
                     clip,
                     ImageRef {
-                        rgba: &img.rgba_data,
+                        rgba: img.active_rgba(),
                         width: img.width_px,
                         height: img.height_px,
                     },

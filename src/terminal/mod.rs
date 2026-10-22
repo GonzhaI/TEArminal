@@ -73,6 +73,7 @@ pub struct TerminalState {
     pub pane_token: String,
     /// El wrapper de agentes de `init.ps1` avisó (OSC 1337 AxonAgent) de que hay un agente en marcha
     pub agent_running: bool,
+    pub ai_agent: crate::renderer::AiAgentStatus,
     pub window_title: Option<String>,
     /// El bash remoto lanzado por el wrapper `ssh` de Axon informa de rama git (OSC 1337 AxonGit) y listado
     pub remote_integration: bool,
@@ -129,6 +130,16 @@ pub struct TerminalState {
     pub graphemes: Vec<Box<str>>,
     pub grapheme_map: std::collections::HashMap<Box<str>, u32>,
 
+    // Soporte para hipervínculos explícitos (OSC 8)
+    pub current_hyperlink: u16,
+    pub hyperlinks: Vec<Box<str>>,
+    pub hyperlink_map: std::collections::HashMap<Box<str>, u16>,
+
+    // Soporte para color de subrayado explícito (SGR 58 / SGR 59)
+    pub current_underline_color: u8,
+    pub underline_colors: Vec<Color>,
+    pub underline_color_map: std::collections::HashMap<u32, u8>,
+
     // Protocolo Kitty Graphics (APC \x1b_G...) y cola de respuesta PTY
     pub pty_write_queue: Vec<Vec<u8>>,
     pub(super) kitty_apc_buf: Option<Vec<u8>>,
@@ -169,6 +180,7 @@ impl TerminalState {
             ssh_session: None,
             pane_token: String::new(),
             agent_running: false,
+            ai_agent: crate::renderer::AiAgentStatus::None,
             window_title: None,
             remote_integration: false,
             remote_listing: None,
@@ -201,6 +213,12 @@ impl TerminalState {
             parser_in_ground: true,
             graphemes: Vec::new(),
             grapheme_map: std::collections::HashMap::new(),
+            current_hyperlink: 0,
+            hyperlinks: Vec::new(),
+            hyperlink_map: std::collections::HashMap::new(),
+            current_underline_color: 0,
+            underline_colors: Vec::new(),
+            underline_color_map: std::collections::HashMap::new(),
             pty_write_queue: Vec::new(),
             kitty_apc_buf: None,
             kitty_esc_prefix: Vec::new(),
@@ -272,6 +290,13 @@ impl TerminalState {
         self.scrollback.len() + self.cursor_y
     }
 
+    pub fn active_ai_agent(&self) -> crate::renderer::AiAgentStatus {
+        if self.ai_agent != crate::renderer::AiAgentStatus::None {
+            return self.ai_agent;
+        }
+        crate::app::detect_ai_agent(self.window_title.as_deref())
+    }
+
     #[inline]
     pub fn grapheme_of(&self, cell: &Cell) -> Option<&str> {
         if cell.is_grapheme() {
@@ -294,6 +319,64 @@ impl TerminalState {
             id
         } else {
             0
+        }
+    }
+
+    pub fn register_hyperlink(&mut self, url: &str) -> u16 {
+        // Rechazar URLs vacías, excesivamente largas (> 2048) o con caracteres de control
+        if url.is_empty()
+            || url.len() > 2048
+            || url.chars().any(|c| (c as u32) < 0x20 || c == '\x7f')
+        {
+            return 0;
+        }
+
+        if let Some(&id) = self.hyperlink_map.get(url) {
+            return id;
+        }
+        if self.hyperlinks.len() < (Cell::HYPERLINK_MASK as usize) {
+            let id = (self.hyperlinks.len() + 1) as u16;
+            let boxed: Box<str> = url.into();
+            self.hyperlink_map.insert(boxed.clone(), id);
+            self.hyperlinks.push(boxed);
+            id
+        } else {
+            0
+        }
+    }
+
+    pub fn hyperlink_of(&self, cell: &Cell) -> Option<&str> {
+        let h_id = cell.raw_hyperlink_id();
+        if h_id == 0 {
+            None
+        } else {
+            let idx = (h_id as usize) - 1;
+            self.hyperlinks.get(idx).map(|s| &**s)
+        }
+    }
+
+    pub fn register_underline_color(&mut self, color: Color) -> u8 {
+        let key = color.to_u32_xrgb();
+        if let Some(&id) = self.underline_color_map.get(&key) {
+            return id;
+        }
+        if self.underline_colors.len() < (Cell::UNDERLINE_COLOR_MASK as usize) {
+            let id = (self.underline_colors.len() + 1) as u8;
+            self.underline_color_map.insert(key, id);
+            self.underline_colors.push(color);
+            id
+        } else {
+            self.underline_colors.len() as u8
+        }
+    }
+
+    pub fn underline_color_of(&self, cell: &Cell) -> Option<Color> {
+        let u_id = cell.underline_color_id();
+        if u_id == 0 {
+            None
+        } else {
+            let idx = (u_id as usize) - 1;
+            self.underline_colors.get(idx).copied()
         }
     }
 
@@ -417,6 +500,8 @@ impl TerminalState {
             }
             self.cursor_x = 0;
             self.cursor_y = 0;
+            self.current_hyperlink = 0;
+            self.current_underline_color = 0;
         }
     }
 
@@ -433,6 +518,8 @@ impl TerminalState {
             self.sync_update_mode = false;
             self.sync_update_start = None;
             self.cursor_key_mode = false;
+            self.current_hyperlink = 0;
+            self.current_underline_color = 0;
         }
     }
 
@@ -524,12 +611,13 @@ impl TerminalState {
                         .take_while(|&&ch| (0x20..=0x7e).contains(&ch))
                         .count();
                     if run > 0 && self.cursor_y < self.rows {
-                        let (cx, cy, flags, fg, bg) = (
+                        let (cx, cy, flags, fg, bg, meta) = (
                             self.cursor_x,
                             self.cursor_y,
                             self.current_flags,
                             self.current_fg,
                             self.current_bg,
+                            Cell::pack_meta(self.current_hyperlink, self.current_underline_color),
                         );
                         let grid = if self.is_alt_screen {
                             &mut self.alt_grid
@@ -542,6 +630,7 @@ impl TerminalState {
                                 c: ch as char,
                                 width: 1,
                                 flags,
+                                hyperlink_id: meta,
                                 fg,
                                 bg,
                             };
@@ -860,6 +949,7 @@ impl TerminalState {
             self.newline();
         }
 
+        let meta = Cell::pack_meta(self.current_hyperlink, self.current_underline_color);
         let (cx, cy, flags, fg, bg) = (
             self.cursor_x,
             self.cursor_y,
@@ -879,6 +969,7 @@ impl TerminalState {
                 c,
                 width: w,
                 flags,
+                hyperlink_id: meta,
                 fg,
                 bg,
             };
@@ -889,6 +980,7 @@ impl TerminalState {
                     c: ' ',
                     width: 0,
                     flags,
+                    hyperlink_id: meta,
                     fg,
                     bg,
                 };
@@ -1079,61 +1171,14 @@ impl TerminalState {
         }
     }
 
-    /// Extrae la URL (http:// o https://) bajo la coordenada (col, global_line), si existe.
+    /// Extrae la URL del hipervínculo explícito OSC 8 bajo (col, global_line), si existe.
     pub fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
         let row = self.get_buffer_line(global_line)?;
         if row.is_empty() || col >= row.len() {
             return None;
         }
 
-        let mut chars: Vec<(char, usize)> = Vec::with_capacity(row.len());
-        for (idx, cell) in row.iter().enumerate() {
-            if cell.width > 0 {
-                chars.push((cell.c, idx));
-            }
-        }
-
-        let text: String = chars.iter().map(|(c, _)| *c).collect();
-        let mut search_from = 0;
-        while search_from < text.len() {
-            let rem = &text[search_from..];
-            let http_pos = rem.find("http://");
-            let https_pos = rem.find("https://");
-            let rel_pos = match (http_pos, https_pos) {
-                (Some(p1), Some(p2)) => Some(p1.min(p2)),
-                (Some(p), None) | (None, Some(p)) => Some(p),
-                (None, None) => None,
-            };
-            let Some(pos) = rel_pos else {
-                break;
-            };
-            let abs_start = search_from + pos;
-            let url_rem = &text[abs_start..];
-            let end_offset = url_rem
-                .find(|c: char| {
-                    c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`' | '{' | '}')
-                })
-                .unwrap_or(url_rem.len());
-            let mut raw_url = &url_rem[..end_offset];
-            while raw_url.ends_with(['.', ',', ';', ':', '!', '?', ')', ']']) {
-                raw_url = &raw_url[..raw_url.len() - 1];
-            }
-            let url_char_len = raw_url.chars().count();
-            if url_char_len > 0 {
-                let start_char_idx = text[..abs_start].chars().count();
-                let end_char_idx = start_char_idx + url_char_len - 1;
-                if start_char_idx < chars.len() && end_char_idx < chars.len() {
-                    let start_col = chars[start_char_idx].1;
-                    let end_col = chars[end_char_idx].1;
-                    if col >= start_col && col <= end_col {
-                        return Some(raw_url.to_string());
-                    }
-                }
-            }
-            search_from = abs_start + end_offset.max(1);
-        }
-
-        None
+        self.hyperlink_of(&row[col]).map(|s| s.to_string())
     }
 
     /// Selecciona la palabra o bloque delimitado bajo la columna `col` en `global_line`.

@@ -154,7 +154,7 @@ fn spawn_io_threads(
         .name("axon-pty-reader".into())
         .stack_size(THREAD_STACK)
         .spawn(move || {
-            let mut buffer = [0u8; 16384];
+            let mut buffer = [0u8; 32768];
             while let Ok(n) = reader.read(&mut buffer) {
                 if n == 0 || from_pty_tx.send(buffer[..n].to_vec()).is_err() {
                     break;
@@ -181,6 +181,12 @@ fn spawn_io_threads(
             while let Ok(data) = to_pty_rx.recv() {
                 if writer.write_all(&data).is_err() {
                     break;
+                }
+                // Coalescer escrituras agrupadas (pegado, scripts, agentes) antes de vaciar el pipe
+                while let Ok(extra) = to_pty_rx.try_recv() {
+                    if writer.write_all(&extra).is_err() {
+                        return;
+                    }
                 }
                 let _ = writer.flush();
             }

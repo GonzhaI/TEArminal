@@ -56,8 +56,8 @@ pub struct TerminalConfig {
     #[serde(default = "default_true")]
     pub ssh_integration: bool,
     /// Deja que los programas de la terminal escriban en el portapapeles de Windows (OSC 52, máx. 100 KB).
-    /// Apagado por defecto: cualquier salida (un `cat` ajeno, un servidor SSH) podría dejar un comando listo para pegar.
-    #[serde(default = "default_false")]
+    /// Activo por defecto (la lectura '?' siempre está bloqueada por seguridad).
+    #[serde(default = "default_true")]
     pub osc52: bool,
     /// Ligaduras tipográficas de programación (->, !=, ==, =>...)
     #[serde(default = "default_true")]
@@ -176,7 +176,7 @@ impl Default for AxonConfig {
                 auto_save: false,
                 word_wrap: false,
                 ssh_integration: true,
-                osc52: false,
+                osc52: true,
                 ligatures: true,
                 gpu: true,
                 auto_check_updates: true,
@@ -317,6 +317,18 @@ pub(crate) fn dirs_or_fallback() -> PathBuf {
         dirs.config_dir().to_path_buf()
     } else {
         PathBuf::from("axon_config")
+    }
+}
+
+/// Carpeta de caché local del usuario (`%LOCALAPPDATA%\axon\axon\cache`)
+pub(crate) fn cache_dir_or_fallback() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join(format!("axon-test-cache-{}", std::process::id()));
+    }
+    if let Some(dirs) = directories::ProjectDirs::from("com", "axon", "axon") {
+        dirs.cache_dir().to_path_buf()
+    } else {
+        PathBuf::from("axon_cache")
     }
 }
 
@@ -579,19 +591,16 @@ mod tests {
     }
 
     #[test]
-    fn test_osc52_is_off_by_default_also_for_old_configs() {
-        assert!(!AxonConfig::default().terminal.osc52);
+    fn test_osc52_is_on_by_default_also_for_old_configs() {
+        assert!(AxonConfig::default().terminal.osc52);
         let mut old = toml::to_string(&AxonConfig::default()).unwrap();
         old = old
             .lines()
             .filter(|l| !l.starts_with("osc52"))
             .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
+            .join("\n");
         assert!(!old.contains("osc52"));
-        assert!(!toml::from_str::<AxonConfig>(&old).unwrap().terminal.osc52);
+        assert!(toml::from_str::<AxonConfig>(&old).unwrap().terminal.osc52);
     }
 
     #[test]

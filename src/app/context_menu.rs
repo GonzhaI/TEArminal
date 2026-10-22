@@ -43,6 +43,10 @@ pub enum MenuAction {
     ToggleExplorer,
     TriggerUpdate,
     OpenUrl(String),
+    CopyUrl(String),
+    ToggleMaximize,
+    MinimizeWindow,
+    CloseWindow,
     // Explorador
     ExplorerOpen(usize),
     ExplorerCopyPath(PathBuf),
@@ -203,6 +207,8 @@ impl AxonApp {
                 mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
             });
             self.tab_or_window_menu(hit)
+        } else if !self.is_horizontal_tabs() && my < crate::renderer::TopTitleBarRects::HEIGHT {
+            self.tab_or_window_menu(None)
         } else if let Some(lx) = self.panel_local_x(mx, my, win_w) {
             // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
             if self.is_horizontal_tabs() {
@@ -424,6 +430,33 @@ impl AxonApp {
                 self.tabs.len() > 1,
             ));
             items.push(MenuItem::separator());
+        } else {
+            let is_maximized = self.window.as_ref().is_some_and(|w| w.is_maximized());
+            if is_maximized {
+                items.push(MenuItem::new(
+                    "Restaurar",
+                    LucideIcon::Copy,
+                    "",
+                    MenuAction::ToggleMaximize,
+                    true,
+                ));
+            } else {
+                items.push(MenuItem::new(
+                    "Maximizar",
+                    LucideIcon::Square,
+                    "",
+                    MenuAction::ToggleMaximize,
+                    true,
+                ));
+            }
+            items.push(MenuItem::new(
+                "Minimizar",
+                LucideIcon::Minus,
+                "",
+                MenuAction::MinimizeWindow,
+                true,
+            ));
+            items.push(MenuItem::separator());
         }
         if crate::updater::get_available_update().is_some() {
             items.push(MenuItem::new(
@@ -463,6 +496,16 @@ impl AxonApp {
             MenuAction::OpenSettings,
             true,
         ));
+        if tab.is_none() {
+            items.push(MenuItem::separator());
+            items.push(MenuItem::new(
+                "Cerrar",
+                LucideIcon::X,
+                "Alt+F4",
+                MenuAction::CloseWindow,
+                true,
+            ));
+        }
         items
     }
 
@@ -473,7 +516,14 @@ impl AxonApp {
                 "Abrir enlace",
                 LucideIcon::ExternalLink,
                 "",
-                MenuAction::OpenUrl(url),
+                MenuAction::OpenUrl(url.clone()),
+                true,
+            ));
+            items.push(MenuItem::new(
+                "Copiar enlace",
+                LucideIcon::Copy,
+                "",
+                MenuAction::CopyUrl(url),
                 true,
             ));
             items.push(MenuItem::separator());
@@ -550,7 +600,14 @@ impl AxonApp {
                 "Abrir enlace",
                 LucideIcon::ExternalLink,
                 "",
-                MenuAction::OpenUrl(url),
+                MenuAction::OpenUrl(url.clone()),
+                true,
+            ));
+            items.push(MenuItem::new(
+                "Copiar enlace",
+                LucideIcon::Copy,
+                "",
+                MenuAction::CopyUrl(url),
                 true,
             ));
             items.push(MenuItem::separator());
@@ -863,6 +920,20 @@ impl AxonApp {
             MenuAction::OpenUrl(url) => {
                 crate::app::platform::shell_open_url(&url);
             }
+            MenuAction::CopyUrl(url) => {
+                self.set_clipboard_text(url);
+            }
+            MenuAction::ToggleMaximize => {
+                if let Some(w) = &self.window {
+                    w.set_maximized(!w.is_maximized());
+                }
+            }
+            MenuAction::MinimizeWindow => {
+                if let Some(w) = &self.window {
+                    w.set_minimized(true);
+                }
+            }
+            MenuAction::CloseWindow => self.request_close(),
             MenuAction::ExplorerOpen(i) => {
                 if let Some(item) = self.file_explorer.items.get(i).cloned() {
                     if item.is_dir {

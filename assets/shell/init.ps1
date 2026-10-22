@@ -165,7 +165,7 @@ function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList)
         [Console]::Write($esc + '[' + $h + ';1H')
     }
     # OSC 1337 AxonAgent: si la consola muere con el agente (opencode lo hace al salir), Axon reabre el shell
-    [Console]::Write($esc + ']1337;AxonAgent=start' + $bel)
+    [Console]::Write($esc + ']1337;AxonAgent=start;name=' + $Name + $bel)
     try { & $cmd @ArgumentList }
     finally {
         [Console]::Write($esc + ']1337;AxonAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[J')

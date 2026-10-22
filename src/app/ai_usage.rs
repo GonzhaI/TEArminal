@@ -223,7 +223,7 @@ pub(super) fn active_agents(tab: &TerminalTab) -> Vec<AiAgentStatus> {
     let focused = tab.panes.iter().filter(|p| p.id == tab.active_pane_id);
     let others = tab.panes.iter().filter(|p| p.id != tab.active_pane_id);
     for pane in focused.chain(others) {
-        let kind = shell_context::detect_ai_agent(pane.terminal.window_title.as_deref());
+        let kind = pane.terminal.active_ai_agent();
         if kind != AiAgentStatus::None && !found.contains(&kind) {
             found.push(kind);
         }
@@ -544,8 +544,8 @@ pub(super) fn scan_local_usage_blocking(
     if let Some(m) = claude.transcript_model.clone() {
         claude_model = Some(m);
     }
-    if agy_model.is_none() {
-        agy_model = agy.transcript_model.clone();
+    if let Some(m) = agy.transcript_model.clone() {
+        agy_model = Some(m);
     }
 
     let usages = active

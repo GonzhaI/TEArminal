@@ -1251,7 +1251,7 @@ impl AxonApp {
                     .as_ref()
                     .filter(|s| s.is_active)
                     .map(|s| s.destination.as_str());
-                let ai = detect_ai_agent(pane.terminal.window_title.as_deref());
+                let ai = pane.terminal.active_ai_agent();
                 (s_host, ai, (pane.terminal.cols, pane.terminal.rows))
             } else {
                 (None, AiAgentStatus::None, (100, 30))

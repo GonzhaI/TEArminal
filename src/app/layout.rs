@@ -226,9 +226,7 @@ impl TerminalPane {
 
     /// El panel corre un agente de IA (✧): lo avisa el wrapper del shell o el título de la ventana.
     pub fn is_agent_pane(&self) -> bool {
-        self.terminal.agent_running
-            || shell_context::detect_ai_agent(self.terminal.window_title.as_deref())
-                != AiAgentStatus::None
+        self.terminal.agent_running || self.terminal.active_ai_agent() != AiAgentStatus::None
     }
 
     /// Título de la cabecera del panel: el título que el shell puso a su ventana (el del agente) y,

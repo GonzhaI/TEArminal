@@ -22,6 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Cargar configuración de Axon
     let config = AxonConfig::load_or_default();
 
+    // Limpieza única en arranque de directorio temporal obsoleto (%TEMP%\axon_clipboard)
+    let legacy_clipboard = std::env::temp_dir().join("axon_clipboard");
+    if legacy_clipboard.exists() {
+        let _ = std::fs::remove_dir_all(legacy_clipboard);
+    }
+
     // 2. Crear EventLoop nativo de Windows con soporte para eventos asíncronos de ConPTY
     let event_loop = EventLoop::<AxonEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();

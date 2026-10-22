@@ -183,6 +183,20 @@ impl<'a> Perform for Performer<'a> {
                         let resp = self.state.color_scheme_report_bytes();
                         self.state.pty_write_queue.push(resp);
                     }
+                    'p' if mode == 2026 => {
+                        let status = if self.state.sync_update_mode { 1 } else { 2 };
+                        let resp = format!("\x1b[?2026;{status}$y");
+                        self.state.pty_write_queue.push(resp.into_bytes());
+                    }
+                    'p' if mode == 2004 => {
+                        let status = if self.state.bracketed_paste_mode {
+                            1
+                        } else {
+                            2
+                        };
+                        let resp = format!("\x1b[?2004;{status}$y");
+                        self.state.pty_write_queue.push(resp.into_bytes());
+                    }
                     _ => {}
                 }
             }
@@ -329,6 +343,7 @@ impl<'a> Perform for Performer<'a> {
                     c: ' ',
                     width: 1,
                     flags: 0,
+                    hyperlink_id: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
                 };
@@ -405,6 +420,7 @@ impl<'a> Perform for Performer<'a> {
                     c: ' ',
                     width: 1,
                     flags: 0,
+                    hyperlink_id: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
                 };
@@ -440,6 +456,7 @@ impl<'a> Perform for Performer<'a> {
                     c: ' ',
                     width: 1,
                     flags: 0,
+                    hyperlink_id: 0,
                     fg: self.state.current_fg,
                     bg: self.state.current_bg,
                 };
@@ -535,11 +552,43 @@ impl<'a> Perform for Performer<'a> {
             return;
         }
         match params[0] {
+            // Hipervínculos explícitos (OSC 8 ; params ; url)
+            b"8" => {
+                if params.len() >= 3 {
+                    let mut uri = String::new();
+                    for (i, part) in params[2..].iter().enumerate() {
+                        if i > 0 {
+                            uri.push(';');
+                        }
+                        uri.push_str(&String::from_utf8_lossy(part));
+                    }
+                    let uri = uri.trim();
+                    if uri.is_empty() {
+                        self.state.current_hyperlink = 0;
+                    } else {
+                        let id = self.state.register_hyperlink(uri);
+                        self.state.current_hyperlink = id;
+                    }
+                } else {
+                    self.state.current_hyperlink = 0;
+                }
+            }
             // Título de ventana e icono (OSC 0 y OSC 2)
             b"0" | b"2" if params.len() > 1 => {
                 let title_str = String::from_utf8_lossy(params[1]).trim().to_string();
                 if !title_str.is_empty() {
                     self.state.window_title = Some(title_str.clone());
+                    let kind = crate::app::detect_ai_agent(Some(&title_str));
+                    if kind != crate::renderer::AiAgentStatus::None {
+                        self.state.ai_agent = kind;
+                    } else if !self.state.agent_running
+                        && (title_str.eq_ignore_ascii_case("powershell")
+                            || title_str.eq_ignore_ascii_case("pwsh")
+                            || title_str.eq_ignore_ascii_case("cmd")
+                            || title_str.eq_ignore_ascii_case("bash"))
+                    {
+                        self.state.ai_agent = crate::renderer::AiAgentStatus::None;
+                    }
                     // El título NO crea sesiones SSH (cualquier texto en pantalla puede fijarlo); solo
                     // actualiza el directorio remoto de una sesión ya autenticada por `AxonSSH=start`
                     if let Some((user_host, rest)) = title_str.split_once(':') {
@@ -609,8 +658,26 @@ impl<'a> Perform for Performer<'a> {
                     }
                 } else if p1.starts_with(b"AxonAgent=start") {
                     self.state.agent_running = true;
+                    for param in &params[1..] {
+                        let text = String::from_utf8_lossy(param);
+                        for part in text.split(';') {
+                            if let Some(name) = part.strip_prefix("name=") {
+                                let kind = crate::app::detect_ai_agent(Some(name));
+                                if kind != crate::renderer::AiAgentStatus::None {
+                                    self.state.ai_agent = kind;
+                                }
+                            }
+                        }
+                    }
+                    if self.state.ai_agent == crate::renderer::AiAgentStatus::None {
+                        let kind = crate::app::detect_ai_agent(self.state.window_title.as_deref());
+                        if kind != crate::renderer::AiAgentStatus::None {
+                            self.state.ai_agent = kind;
+                        }
+                    }
                 } else if p1.starts_with(b"AxonAgent=end") {
                     self.state.agent_running = false;
+                    self.state.ai_agent = crate::renderer::AiAgentStatus::None;
                     // Restaura región de scroll y modos TUI sin mover el cursor a (0,0) como haría CSI r
                     if self.state.is_alt_screen {
                         self.state.exit_alt_screen();
@@ -806,6 +873,7 @@ impl<'a> Performer<'a> {
                     self.state.current_fg = self.state.theme.foreground;
                     self.state.current_bg = Color::TRANSPARENT;
                     self.state.current_flags = 0;
+                    self.state.current_underline_color = 0;
                 }
                 1 => self.state.current_flags |= Cell::FLAG_BOLD,
                 2 => self.state.current_flags |= Cell::FLAG_DIM,
@@ -844,6 +912,15 @@ impl<'a> Performer<'a> {
                     }
                 }
                 49 => self.state.current_bg = Color::TRANSPARENT,
+
+                // TrueColor & 256 Colors Underline (58;2;r;g;b / 58:2:r:g:b / 58;5;n / 58:5:n)
+                58 => {
+                    if let Some(c) = parse_sgr_color(param, &mut iter, &self.state.theme) {
+                        let id = self.state.register_underline_color(c);
+                        self.state.current_underline_color = id;
+                    }
+                }
+                59 => self.state.current_underline_color = 0,
 
                 // Foreground brillante (90..=97)
                 90..=97 => {
@@ -1013,6 +1090,9 @@ impl<'a> Performer<'a> {
         match code {
             b'A' => {
                 // Prompt Start (OSC 133;A)
+                if !self.state.agent_running {
+                    self.state.ai_agent = crate::renderer::AiAgentStatus::None;
+                }
                 if let Some(mut prev) = self.state.active_block.take() {
                     if prev.output_end.is_none() {
                         prev.output_end = Some(cur_line.saturating_sub(1));

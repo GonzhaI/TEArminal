@@ -1145,7 +1145,25 @@ impl AxonApp {
                 Key::Named(NamedKey::F4) => {
                     return; // Alt+F4 manejado por el sistema
                 }
+                Key::Named(NamedKey::Space) => {
+                    let win = self.window.as_ref().map_or((1080, 680), |w| {
+                        let s = w.inner_size();
+                        (s.width as usize, s.height as usize)
+                    });
+                    let items = self.tab_or_window_menu(None);
+                    self.show_menu(items, (10, 32), win);
+                    return;
+                }
                 Key::Character(ref s) => {
+                    if s == " " || matches!(physical_key, PhysicalKey::Code(KeyCode::Space)) {
+                        let win = self.window.as_ref().map_or((1080, 680), |w| {
+                            let s = w.inner_size();
+                            (s.width as usize, s.height as usize)
+                        });
+                        let items = self.tab_or_window_menu(None);
+                        self.show_menu(items, (10, 32), win);
+                        return;
+                    }
                     if let Some(c) = s.chars().next() {
                         if c.is_ascii_alphabetic() {
                             let mut buf = [0u8; 5];
