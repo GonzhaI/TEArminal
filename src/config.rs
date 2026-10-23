@@ -397,7 +397,7 @@ pub(crate) struct WindowSession {
     pub(crate) tabs: Vec<TabSession>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub(crate) struct TabSession {
     pub(crate) title: String,
     pub(crate) layout: PaneSession,
@@ -436,16 +436,6 @@ impl Default for WindowSession {
             file_explorer_visible: false,
             file_explorer_width: default_explorer_width(),
             tabs: Vec::new(),
-        }
-    }
-}
-
-impl Default for TabSession {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            layout: PaneSession::default(),
-            active_pane: 0,
         }
     }
 }

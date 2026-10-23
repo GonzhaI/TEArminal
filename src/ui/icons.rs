@@ -1,4 +1,5 @@
 /// Catálogo de iconos Lucide vectoriales embebidos para Axon
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LucideIcon {
     SquareTerminal,
@@ -165,6 +166,7 @@ impl From<LucideIcon> for char {
 }
 
 /// Resuelve el icono Lucide y el índice de color ANSI (0..16) según el nombre y la extensión del archivo.
+#[allow(dead_code)]
 pub(crate) fn file_icon_and_slot(path: &std::path::Path) -> (LucideIcon, usize) {
     let file_name = path
         .file_name()
@@ -309,11 +311,13 @@ pub(crate) fn file_icon_and_slot(path: &std::path::Path) -> (LucideIcon, usize) 
 }
 
 /// Devuelve el icono representativo para una ruta de archivo.
+#[allow(dead_code)]
 pub(crate) fn file_icon(path: &std::path::Path) -> LucideIcon {
     file_icon_and_slot(path).0
 }
 
 /// Devuelve el icono y el color temático (paleta ANSI) representativos para una ruta de archivo.
+#[allow(dead_code)]
 pub(crate) fn file_icon_and_color(
     path: &std::path::Path,
     theme: &crate::theme::Theme,

@@ -176,6 +176,7 @@ impl From<(String, String)> for RemoteSshSession {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct FileExplorer {
     pub root_dir: PathBuf,
@@ -245,6 +246,7 @@ impl FileExplorer {
     pub(crate) const LIST_TOP_PAD: usize = 4;
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn changes_btn_rect(
         panel_x: usize,
@@ -255,6 +257,7 @@ impl FileExplorer {
     }
 
     /// Botón «Fijar» (Pin) del encabezado (compartido por dibujo y clics): x, y, ancho, alto
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn pin_btn_rect(
         panel_x: usize,
@@ -363,6 +366,7 @@ impl FileExplorer {
     }
 
     /// Alterna el estado de fijado del explorador
+    #[allow(dead_code)]
     pub(crate) fn toggle_pinned(&mut self) {
         self.is_pinned = !self.is_pinned;
     }
