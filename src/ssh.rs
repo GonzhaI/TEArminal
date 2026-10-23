@@ -120,6 +120,7 @@ impl std::str::FromStr for SafeSshDestination {
 pub(crate) enum RemoteDirError {
     Empty,
     TooLong(usize),
+    StartsWithDash,
     InvalidCharacters,
 }
 
@@ -128,6 +129,9 @@ impl std::fmt::Display for RemoteDirError {
         match self {
             Self::Empty => write!(f, "el directorio remoto no puede estar vacío"),
             Self::TooLong(n) => write!(f, "el directorio remoto supera los 1024 caracteres ({n})"),
+            Self::StartsWithDash => {
+                write!(f, "el directorio remoto no puede comenzar con '-'")
+            }
             Self::InvalidCharacters => {
                 write!(f, "el directorio remoto contiene caracteres no permitidos")
             }
@@ -147,6 +151,9 @@ impl SafeRemoteDir {
         let s = dir.as_ref();
         if s.is_empty() {
             return Err(RemoteDirError::Empty);
+        }
+        if s.starts_with('-') {
+            return Err(RemoteDirError::StartsWithDash);
         }
         if s.len() > 1024 {
             return Err(RemoteDirError::TooLong(s.len()));
@@ -683,6 +690,8 @@ mod tests {
         assert_eq!(&*dir, "/home/usuario/proyecto");
 
         assert!(SafeRemoteDir::parse("").is_err());
+        assert!(SafeRemoteDir::parse("-").is_err());
+        assert!(SafeRemoteDir::parse("-rf").is_err());
         assert!(SafeRemoteDir::parse("/home/user'; rm -rf /").is_err());
         assert!(SafeRemoteDir::parse("/home/$USER").is_err());
     }
