@@ -59,7 +59,7 @@ impl AxonApp {
             ))
     }
 
-    pub fn toggle_restore_session(&mut self) {
+    pub(crate) fn toggle_restore_session(&mut self) {
         self.config.terminal.restore_session = !self.config.terminal.restore_session;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -222,7 +222,7 @@ impl AxonApp {
         let _ = self.config.save();
     }
 
-    pub fn set_theme_mode(&mut self, mode: &str) {
+    pub(crate) fn set_theme_mode(&mut self, mode: &str) {
         self.config.appearance.theme_mode = mode.to_string();
         // La lista pasa a editar el tema que ahora está en uso
         self.settings_page_state.theme_slot_light = self
@@ -233,7 +233,7 @@ impl AxonApp {
         self.refresh_theme();
     }
 
-    pub fn set_tab_layout(&mut self, layout: &str) {
+    pub(crate) fn set_tab_layout(&mut self, layout: &str) {
         self.config.appearance.tab_layout = layout.to_string();
         // Con pestañas superiores el explorador va con el panel
         if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
@@ -247,7 +247,7 @@ impl AxonApp {
     }
 
     /// Lado de la ventana donde va el panel de navegación: `"left"` o `"right"`.
-    pub fn set_panel_side(&mut self, side: &str) {
+    pub(crate) fn set_panel_side(&mut self, side: &str) {
         self.config.appearance.panel_side = side.to_string();
         self.recompute_grid_for_all_tabs();
         let _ = self.config.save();
@@ -256,7 +256,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_status_bar(&mut self) {
+    pub(crate) fn toggle_status_bar(&mut self) {
         self.config.appearance.show_status_bar = !self.config.appearance.show_status_bar;
         self.recompute_grid_for_all_tabs();
         let _ = self.config.save();
@@ -265,7 +265,7 @@ impl AxonApp {
         }
     }
 
-    pub fn adjust_opacity(&mut self, delta: f32) {
+    pub(crate) fn adjust_opacity(&mut self, delta: f32) {
         let new_op = (self.config.appearance.window_opacity + delta).clamp(0.50, 1.0);
         self.config.appearance.window_opacity = (new_op * 100.0).round() / 100.0;
         let _ = self.config.save();
@@ -275,7 +275,7 @@ impl AxonApp {
         }
     }
 
-    pub fn adjust_line_spacing(&mut self, delta: f32) {
+    pub(crate) fn adjust_line_spacing(&mut self, delta: f32) {
         let new_sp = (self.config.appearance.line_spacing + delta).clamp(0.8, 2.0);
         self.config.appearance.line_spacing = (new_sp * 10.0).round() / 10.0;
         let _ = self.config.save();
@@ -289,7 +289,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_cursor_blink(&mut self) {
+    pub(crate) fn toggle_cursor_blink(&mut self) {
         self.config.terminal.cursor_blink = !self.config.terminal.cursor_blink;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -297,7 +297,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_shell_integration(&mut self) {
+    pub(crate) fn toggle_shell_integration(&mut self) {
         self.config.terminal.shell_integration = !self.config.terminal.shell_integration;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -305,7 +305,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_copy_on_select(&mut self) {
+    pub(crate) fn toggle_copy_on_select(&mut self) {
         self.config.terminal.copy_on_select = !self.config.terminal.copy_on_select;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -314,7 +314,7 @@ impl AxonApp {
     }
 
     /// Ajuste de línea global del visor (se aplica a todas las pestañas del visor en el siguiente fotograma)
-    pub fn toggle_word_wrap(&mut self) {
+    pub(crate) fn toggle_word_wrap(&mut self) {
         self.config.terminal.word_wrap = !self.config.terminal.word_wrap;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -323,12 +323,12 @@ impl AxonApp {
     }
 
     /// Los shells nuevos heredan `AXON_SSH_INTEGRATION`, que lee el wrapper `ssh` de `init.ps1`
-    pub fn apply_ssh_integration_env(&self) {
+    pub(crate) fn apply_ssh_integration_env(&self) {
         let on = self.config.terminal.ssh_integration;
         std::env::set_var("AXON_SSH_INTEGRATION", if on { "1" } else { "0" });
     }
 
-    pub fn toggle_ssh_integration(&mut self) {
+    pub(crate) fn toggle_ssh_integration(&mut self) {
         self.config.terminal.ssh_integration = !self.config.terminal.ssh_integration;
         self.apply_ssh_integration_env();
         let _ = self.config.save();
@@ -337,7 +337,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_ligatures(&mut self) {
+    pub(crate) fn toggle_ligatures(&mut self) {
         self.config.terminal.ligatures = !self.config.terminal.ligatures;
         if let Some(r) = &mut self.renderer {
             r.ligatures = self.config.terminal.ligatures;
@@ -348,7 +348,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_auto_save(&mut self) {
+    pub(crate) fn toggle_auto_save(&mut self) {
         self.config.terminal.auto_save = !self.config.terminal.auto_save;
         let _ = self.config.save();
         if let Some(w) = &self.window {
@@ -356,7 +356,7 @@ impl AxonApp {
         }
     }
 
-    pub fn open_config_file(&self) {
+    pub(crate) fn open_config_file(&self) {
         let path = AxonConfig::config_path();
         if !path.exists() {
             let _ = self.config.save();
@@ -371,7 +371,7 @@ impl AxonApp {
         }
     }
 
-    pub fn reset_to_defaults(&mut self) {
+    pub(crate) fn reset_to_defaults(&mut self) {
         crate::logger::log("-> Restableciendo configuración a valores por defecto");
         self.config = AxonConfig::default();
         let _ = self.config.save();

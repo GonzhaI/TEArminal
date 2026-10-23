@@ -119,7 +119,7 @@ impl AxonApp {
             .tabs
             .get(active)
             .and_then(Self::tab_dir)
-            .map(|d| shell_context::shorten_home(&d));
+            .map(|d| shell_context::shorten_home(&d).into_owned());
         SidebarHeader {
             title: "Sesiones".to_string(),
             branch: self.tabs.get_mut(active).and_then(|t| t.get_git_branch()),

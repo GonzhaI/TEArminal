@@ -11,8 +11,8 @@ use image::imageops::FilterType;
 use image::RgbaImage;
 
 /// Parámetros de control decodificados de una secuencia Kitty Graphics
-#[derive(Debug, Clone, Default)]
-pub struct KittyControl {
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct KittyControl {
     /// Acción (`a`):
     /// - 't': transmitir datos sin mostrar
     /// - 'T': transmitir y mostrar (predeterminado si hay datos y no se especifica)
@@ -20,44 +20,44 @@ pub struct KittyControl {
     /// - 'f': transmitir nuevo fotograma para animación (especificada con `i`)
     /// - 'd': borrar imágenes
     /// - 'q': consultar soporte del protocolo
-    pub action: char,
+    pub(crate) action: char,
     /// Medio de transmisión (`t`):
     /// - 'd': directo en base64 (predeterminado)
     /// - 'f': ruta a archivo regular en disco local
     /// - 't': ruta a archivo temporal en disco local (eliminado tras cargarlo)
-    pub medium: char,
+    pub(crate) medium: char,
     /// Retraso o intervalo del fotograma en milisegundos (`z`)
-    pub gap_ms: u32,
+    pub(crate) gap_ms: u32,
     /// Formato (`f`):
     /// - 100: PNG / compresión (autodetecta con `image`)
     /// - 32: RGBA raw de 32 bits
     /// - 24: RGB raw de 24 bits
-    pub format: u32,
+    pub(crate) format: u32,
     /// Ancho en píxeles de los datos en bruto (`s`)
-    pub src_width: u32,
+    pub(crate) src_width: u32,
     /// Alto en píxeles de los datos en bruto (`v`)
-    pub src_height: u32,
+    pub(crate) src_height: u32,
     /// Columnas de terminal deseadas (`c`)
-    pub cols: Option<usize>,
+    pub(crate) cols: Option<usize>,
     /// Filas de terminal deseadas (`r`)
-    pub rows: Option<usize>,
+    pub(crate) rows: Option<usize>,
     /// Identificador numérico de la imagen (`i` o `I`)
-    pub image_id: u64,
+    pub(crate) image_id: u64,
     /// Hay más fragmentos (`m=1`) o es el último/único (`m=0`)
-    pub more_chunks: bool,
+    pub(crate) more_chunks: bool,
     /// Nivel de silencio (`q`): 0 = normal, 1 = silenciar OK, 2 = silenciar todo
-    pub quiet: u8,
+    pub(crate) quiet: u8,
     /// Acción de borrado (`d`): 'a'/'A' = todas, 'i'/'I' = por ID, 'p'/'P' = en cursor
-    pub delete_action: Option<char>,
+    pub(crate) delete_action: Option<char>,
     /// Movimiento del cursor (`C`): 0 = avanzar cursor (predeterminado), 1 = no mover
-    pub cursor_movement: u8,
+    pub(crate) cursor_movement: u8,
 }
 
 /// Estado de acumulación de fragmentos de imagen (`m=1`)
-#[derive(Debug, Clone)]
-pub struct KittyChunkState {
-    pub control: KittyControl,
-    pub data: Vec<u8>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct KittyChunkState {
+    pub(crate) control: KittyControl,
+    pub(crate) data: Vec<u8>,
 }
 
 /// Decodifica una imagen que llega por la salida de la terminal (Kitty, iTerm2): entrada NO confiable, así que
@@ -93,7 +93,7 @@ fn send_error(state: &mut TerminalState, control: &KittyControl, msg: &str) {
 }
 
 /// Parsea los pares clave=valor del encabezado de control de Kitty
-pub fn parse_kitty_control(bytes: &[u8]) -> KittyControl {
+pub(crate) fn parse_kitty_control(bytes: &[u8]) -> KittyControl {
     let mut ctrl = KittyControl::default();
     let text = String::from_utf8_lossy(bytes);
     for item in text.split(',') {
@@ -196,7 +196,7 @@ pub fn parse_kitty_control(bytes: &[u8]) -> KittyControl {
 }
 
 /// Procesa una secuencia Kitty Graphics completa recibida en APC (`\x1b_G...`)
-pub fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
+pub(crate) fn process_kitty_apc(state: &mut TerminalState, payload: &[u8]) {
     // 1. Separar control y carga base64 (separador ';')
     let (control_bytes, payload_bytes) = if let Some(pos) = payload.iter().position(|&b| b == b';')
     {

@@ -7,14 +7,21 @@ pub(super) type Clip = (usize, usize, usize, usize);
 
 impl TerminalRenderer {
     /// Rellena un rectángulo de color sólido directamente en el buffer
-    pub fn draw_rect(canvas: &mut Canvas, x: usize, y: usize, w: usize, h: usize, color: Color) {
+    pub(crate) fn draw_rect(
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        color: Color,
+    ) {
         let (buf_width, buf_height) = canvas.size();
         canvas.fill_rect((0, 0, buf_width, buf_height), x, y, w, h, color);
     }
 
     /// Ratio de escalado para la tipografía e iconografía de la UI basado en ui_font_size
     #[inline]
-    pub fn ui_scale_ratio(&self) -> f32 {
+    pub(crate) fn ui_scale_ratio(&self) -> f32 {
         let base = 13.0 * self.scale_factor as f32;
         if base > 0.0 {
             (self.ui_font_size / base).clamp(0.6, 2.5)
@@ -24,12 +31,12 @@ impl TerminalRenderer {
     }
 
     /// Mide el ancho en píxeles de un texto renderizado con Inter
-    pub fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
+    pub(crate) fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
         self.measure_ui_text_tracked(text, size_px, semibold, 0.0)
     }
 
     /// Mide texto con tracking adicional entre caracteres (micro-etiquetas en mayúsculas).
-    pub fn measure_ui_text_tracked(
+    pub(crate) fn measure_ui_text_tracked(
         &self,
         text: &str,
         size_px: f32,
@@ -57,7 +64,7 @@ impl TerminalRenderer {
     }
 
     /// Dibuja texto proporcional moderno utilizando la tipografía Inter
-    pub fn draw_ui_text(
+    pub(crate) fn draw_ui_text(
         &mut self,
         canvas: &mut Canvas,
         text: &str,
@@ -75,7 +82,7 @@ impl TerminalRenderer {
 
     /// Igual que `draw_ui_text`, con separación extra entre caracteres.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_ui_text_tracked(
+    pub(crate) fn draw_ui_text_tracked(
         &mut self,
         canvas: &mut Canvas,
         text: &str,
@@ -166,7 +173,7 @@ impl TerminalRenderer {
     }
 
     /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
-    pub fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
+    pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
         let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.mono_advance_cache.borrow_mut();
@@ -185,7 +192,7 @@ impl TerminalRenderer {
 
     /// Dibuja un valor de máquina (ruta, rama, dimensión, atajo o versión) en JetBrains Mono.
     /// Es la segunda voz tipográfica del chrome: Inter habla, Mono mide.
-    pub fn draw_mono_text(
+    pub(crate) fn draw_mono_text(
         &mut self,
         canvas: &mut Canvas,
         text: &str,
@@ -240,7 +247,7 @@ impl TerminalRenderer {
 
     /// Tecla individual del chrome: caja de 18 px, borde hairline y glifo mono centrado.
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_keycap(
+    pub(crate) fn draw_keycap(
         &mut self,
         canvas: &mut Canvas,
         x: usize,
@@ -274,7 +281,7 @@ impl TerminalRenderer {
     }
 
     /// Dibuja un icono Lucide vectorial perfectamente centrado en una caja
-    pub fn draw_lucide_icon(
+    pub(crate) fn draw_lucide_icon(
         &mut self,
         canvas: &mut Canvas,
         icon: crate::ui::LucideIcon,
@@ -315,7 +322,7 @@ impl TerminalRenderer {
     }
 
     /// Dibuja una barra de desplazamiento vertical unificada con pista translúcida y pulgar redondeado
-    pub fn draw_scrollbar(
+    pub(crate) fn draw_scrollbar(
         canvas: &mut Canvas,
         track_x: usize,
         track_y: usize,
@@ -340,7 +347,7 @@ impl TerminalRenderer {
     /// Barra de desplazamiento genérica (vertical u horizontal) a partir de pista y pulgar.
     /// Solo se dibuja con el ratón encima (`is_hovered`) o mientras se hace scroll (`awake`).
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_scrollbar_rects(
+    pub(crate) fn draw_scrollbar_rects(
         canvas: &mut Canvas,
         track: Rect,
         thumb: Rect,

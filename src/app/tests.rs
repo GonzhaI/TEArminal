@@ -223,37 +223,39 @@ fn test_command_hint_strips_the_shell_prompt() {
 
 #[test]
 fn test_split_panes_layout_and_tree() {
-    use crate::app::{SplitDirection, TerminalPane, TerminalTab};
+    use crate::app::{PaneId, SplitDirection, TabId, TerminalPane, TerminalTab};
     use crate::pty::PtyManager;
     use crate::terminal::TerminalState;
     use crate::theme::Theme;
 
     let theme = Theme::default();
-    let pty1 = PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).expect("Pty 1");
+    let pty1 =
+        PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).expect("Pty 1");
     let term1 = TerminalState::new(80, 24, 1000, theme.clone());
-    let pane1 = TerminalPane::new(1, pty1, term1, (80, 24));
+    let pane1 = TerminalPane::new(PaneId(1), pty1, term1, (80, 24));
 
-    let mut tab = TerminalTab::new(0, "Test Tab".to_string(), pane1);
+    let mut tab = TerminalTab::new(TabId(0), "Test Tab".to_string(), pane1);
     assert_eq!(tab.panes.len(), 1);
-    assert_eq!(tab.active_pane_id, 1);
+    assert_eq!(tab.active_pane_id, PaneId(1));
 
     // 1. Rectángulo inicial sin splits
     let rects = tab.compute_pane_rects(0, 0, 1000, 600);
     assert_eq!(rects.len(), 1);
-    assert_eq!(rects[0].pane_id, 1);
+    assert_eq!(rects[0].pane_id, PaneId(1));
     assert_eq!(rects[0].x, 0);
     assert_eq!(rects[0].y, 0);
     assert_eq!(rects[0].width, 1000);
     assert_eq!(rects[0].height, 600);
 
     // 2. División horizontal (Ctrl + Alt + D)
-    let pty2 = PtyManager::new(2, "powershell.exe", false, 80, 24, None, None).expect("Pty 2");
+    let pty2 =
+        PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None).expect("Pty 2");
     let term2 = TerminalState::new(80, 24, 1000, theme.clone());
-    let pane2 = TerminalPane::new(2, pty2, term2, (80, 24));
+    let pane2 = TerminalPane::new(PaneId(2), pty2, term2, (80, 24));
 
-    tab.split_active_pane(2, pane2, SplitDirection::Horizontal);
+    tab.split_active_pane(PaneId(2), pane2, SplitDirection::Horizontal);
     assert_eq!(tab.panes.len(), 2);
-    assert_eq!(tab.active_pane_id, 2);
+    assert_eq!(tab.active_pane_id, PaneId(2));
 
     let h_rects = tab.compute_pane_rects(0, 0, 1000, 600);
     assert_eq!(h_rects.len(), 2);
@@ -274,15 +276,15 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(dividers[0].rect, (0, h_rects[0].height + hdr, 1000, 2));
 
     // 2b. Maximizar: solo el panel activo ocupa el área (con su cabecera) y no quedan divisores
-    assert!(tab.toggle_pane_zoom(2));
+    assert!(tab.toggle_pane_zoom(PaneId(2)));
     let zoomed = tab.compute_pane_rects(0, 0, 1000, 600);
     assert_eq!(zoomed.len(), 1);
-    assert_eq!(zoomed[0].pane_id, 2);
+    assert_eq!(zoomed[0].pane_id, PaneId(2));
     assert_eq!(zoomed[0].width, 1000);
     assert_eq!(zoomed[0].height, 600 - hdr);
     assert!(tab.compute_dividers(0, 0, 1000, 600).is_empty());
     // Restaurar el reparto
-    assert!(tab.toggle_pane_zoom(2));
+    assert!(tab.toggle_pane_zoom(PaneId(2)));
     assert_eq!(tab.compute_pane_rects(0, 0, 1000, 600).len(), 2);
 
     // 2c. Botones de la cabecera: dividir/maximizar solo en el panel enfocado
@@ -304,13 +306,13 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(header.button_at(10, 300, true), None);
 
     // 3. Cerrar un panel (Ctrl + Alt + W) y validar que el árbol colapsa limpiamente
-    tab.close_pane(1);
+    tab.close_pane(PaneId(1));
     assert_eq!(tab.panes.len(), 1);
-    assert_eq!(tab.active_pane_id, 2);
+    assert_eq!(tab.active_pane_id, PaneId(2));
 
     let collapsed_rects = tab.compute_pane_rects(0, 0, 1000, 600);
     assert_eq!(collapsed_rects.len(), 1);
-    assert_eq!(collapsed_rects[0].pane_id, 2);
+    assert_eq!(collapsed_rects[0].pane_id, PaneId(2));
     assert_eq!(collapsed_rects[0].width, 1000);
     assert_eq!(collapsed_rects[0].height, 600);
 }
@@ -379,6 +381,10 @@ fn test_paste_is_sanitized_against_escape_injection() {
         "saltos de línea normalizados a CR: {out:?}"
     );
     assert_eq!(out, "ls[201~]0;xrm -rf /\rfin\tñ");
+    assert!(matches!(out, std::borrow::Cow::Owned(_)));
+    let clean = sanitize_paste("git status");
+    assert!(matches!(clean, std::borrow::Cow::Borrowed(_)));
+    assert_eq!(clean, "git status");
 }
 
 #[test]
@@ -386,8 +392,8 @@ fn test_file_viewer_tab_creation_and_title() {
     let cargo_toml = std::path::PathBuf::from("Cargo.toml");
     assert!(cargo_toml.exists());
 
-    let tab = TerminalTab::new_file_viewer(42, cargo_toml.clone());
-    assert_eq!(tab.id, 42);
+    let tab = TerminalTab::new_file_viewer(TabId(42), cargo_toml.clone());
+    assert_eq!(tab.id, TabId(42));
     assert!(!tab.is_settings);
     assert!(tab.file_viewer.is_some());
     assert_eq!(tab.display_title(), "Cargo.toml");
@@ -411,7 +417,7 @@ fn test_file_viewer_editing_and_dirty_state() {
     let temp_file = temp_dir.join(format!("axon_test_edit_{}.rs", std::process::id()));
     let _ = std::fs::write(&temp_file, "");
 
-    let mut tab = TerminalTab::new_file_viewer(99, temp_file.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(99), temp_file.clone());
 
     assert_eq!(
         tab.display_title(),
@@ -449,7 +455,7 @@ fn test_file_viewer_editing_and_dirty_state() {
 fn test_remote_viewer_save_keeps_line_endings() {
     for original in ["a\r\nb\r\n", "a\nb\n", "a\r\nb", "a\nb"] {
         let mut tab = TerminalTab::new_remote_file_viewer_from(
-            1,
+            TabId(1),
             "host".into(),
             std::path::PathBuf::from("/srv/x.txt"),
             None,
@@ -466,7 +472,7 @@ fn test_remote_viewer_save_keeps_line_endings() {
 fn test_viewer_does_not_overwrite_external_changes() {
     let path = std::env::temp_dir().join(format!("axon_test_extchg_{}.txt", std::process::id()));
     std::fs::write(&path, "uno").unwrap();
-    let mut tab = TerminalTab::new_file_viewer(102, path.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(102), path.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
     viewer.insert_text("X");
@@ -496,7 +502,7 @@ fn test_file_viewer_undo_redo() {
     let temp_file = temp_dir.join(format!("axon_test_undo_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "hello world");
 
-    let mut tab = TerminalTab::new_file_viewer(100, temp_file.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(100), temp_file.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
 
@@ -527,7 +533,7 @@ fn test_file_viewer_word_navigation_and_deletion() {
     let temp_file = temp_dir.join(format!("axon_test_words_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "foo bar_baz  qux");
 
-    let mut tab = TerminalTab::new_file_viewer(101, temp_file.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(101), temp_file.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
 
@@ -558,7 +564,7 @@ fn test_file_viewer_git_diff_status() {
     let temp_file = temp_dir.join(format!("axon_test_diff_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "line1\nline2\nline3");
 
-    let mut tab = TerminalTab::new_file_viewer(102, temp_file.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(102), temp_file.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
 
@@ -588,7 +594,7 @@ fn test_file_viewer_selection_and_deletion() {
     let temp_file = temp_dir.join(format!("axon_test_sel_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "hello beautiful world\nsecond line here");
 
-    let mut tab = TerminalTab::new_file_viewer(103, temp_file.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(103), temp_file.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
 
@@ -632,10 +638,10 @@ fn test_file_viewer_selection_and_deletion() {
 #[test]
 fn test_terminal_pane_git_branch_ssh_isolation() {
     let theme = crate::theme::Theme::default();
-    let pty =
-        crate::pty::PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).expect("pty");
+    let pty = crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None)
+        .expect("pty");
     let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
-    let mut pane = TerminalPane::new(1, pty, term, (80, 24));
+    let mut pane = TerminalPane::new(PaneId(1), pty, term, (80, 24));
     pane.terminal.current_dir = Some(std::path::PathBuf::from("C:\\Users\\Mock\\Repo"));
 
     // Sin SSH activo: se consulta el repositorio local (o None si no existe el path mock)
@@ -810,7 +816,7 @@ fn test_file_viewer_read_only_and_modes() {
     ));
     std::fs::write(&temp_md, "# Title\nLine 1\nLine 2").expect("write temp md");
 
-    let mut tab = TerminalTab::new_file_viewer(99, temp_md.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(99), temp_md.clone());
     let viewer = tab.file_viewer.as_mut().expect("viewer");
 
     // Todo archivo arranca en modo lectura y los .md con render_markdown activo
@@ -881,7 +887,7 @@ fn test_file_viewer_read_only_blocks_every_mutation() {
 segunda",
     )
     .expect("write");
-    let mut tab = TerminalTab::new_file_viewer(99, path.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(99), path.clone());
     let v = tab.file_viewer.as_mut().expect("viewer");
     assert!(v.is_read_only);
 
@@ -923,7 +929,7 @@ segunda"
 fn test_file_viewer_selection_stats_and_horizontal_scroll_limits() {
     let path = std::env::temp_dir().join(format!("axon_test_stats_{}.txt", std::process::id()));
     std::fs::write(&path, "    indentado\n\ttab\nlínea larguísima de prueba").expect("write");
-    let mut tab = TerminalTab::new_file_viewer(99, path.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(99), path.clone());
     let v = tab.file_viewer.as_mut().expect("viewer");
 
     assert_eq!(v.selection_stats(), None);
@@ -943,7 +949,7 @@ fn test_file_viewer_selection_stats_and_horizontal_scroll_limits() {
 fn viewer_with(name: &str, content: &str) -> (TerminalTab, std::path::PathBuf) {
     let path = std::env::temp_dir().join(format!("axon_test_{}_{}", std::process::id(), name));
     std::fs::write(&path, content).expect("write");
-    (TerminalTab::new_file_viewer(99, path.clone()), path)
+    (TerminalTab::new_file_viewer(TabId(99), path.clone()), path)
 }
 
 #[test]
@@ -1333,7 +1339,7 @@ b
     assert_eq!(names, vec!["nuevo.txt", "mod.txt  sub"]);
 
     // el visor compara contra HEAD aunque el archivo ya esté guardado en disco
-    let tab = TerminalTab::new_file_viewer(103, dir.join("sub").join("mod.txt"));
+    let tab = TerminalTab::new_file_viewer(TabId(103), dir.join("sub").join("mod.txt"));
     let viewer = tab.file_viewer.as_ref().unwrap();
     assert_eq!(viewer.get_line_git_diff_status(0), None);
     assert_eq!(
@@ -1375,7 +1381,7 @@ c
 ",
     )
     .unwrap();
-    let mut tab = TerminalTab::new_file_viewer(104, path.clone());
+    let mut tab = TerminalTab::new_file_viewer(TabId(104), path.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.git_base = Some(v("a b"));
     viewer.is_read_only = false;
@@ -1407,7 +1413,7 @@ fn test_file_viewer_save_preserves_format_and_never_corrupts() {
     let open = |name: &str, bytes: &[u8]| {
         let p = dir.join(name);
         std::fs::write(&p, bytes).unwrap();
-        let mut tab = TerminalTab::new_file_viewer(110, p.clone());
+        let mut tab = TerminalTab::new_file_viewer(TabId(110), p.clone());
         tab.file_viewer.as_mut().unwrap().is_read_only = false;
         (tab, p)
     };
@@ -1546,11 +1552,11 @@ fn test_move_tab_reorders_and_keeps_active_tab() {
     let mut app = AxonApp::new(AxonConfig::default(), None);
     app.create_new_tab();
     app.create_new_tab();
-    let ids: Vec<usize> = app.tabs.iter().map(|t| t.id).collect();
+    let ids: Vec<TabId> = app.tabs.iter().map(|t| t.id).collect();
     assert_eq!(app.active_tab_index, 2);
 
     app.move_tab(2, 0);
-    let moved: Vec<usize> = app.tabs.iter().map(|t| t.id).collect();
+    let moved: Vec<TabId> = app.tabs.iter().map(|t| t.id).collect();
     assert_eq!(moved, vec![ids[2], ids[0], ids[1]]);
     assert_eq!(app.active_tab_index, 0, "la activa viaja con su pestaña");
 
@@ -1645,16 +1651,16 @@ fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
     assert!(app.remote_cd("/srv"));
     assert!(!app.tabs[0].panes[0].terminal.remote_at_prompt);
 
-    app.tabs.push(TerminalTab::new_settings(10));
-    app.tabs.push(TerminalTab::new_settings(11));
+    app.tabs.push(TerminalTab::new_settings(TabId(10)));
+    app.tabs.push(TerminalTab::new_settings(TabId(11)));
     app.switch_to_tab(1);
     app.close_tab(0);
-    assert_eq!(app.tabs[app.active_tab_index].id, 10);
+    assert_eq!(app.tabs[app.active_tab_index].id, TabId(10));
 
-    app.tabs.push(TerminalTab::new_settings(12));
+    app.tabs.push(TerminalTab::new_settings(TabId(12)));
     app.close_other_tabs(2);
     assert_eq!(app.tabs.len(), 1);
-    assert_eq!(app.tabs[0].id, 12);
+    assert_eq!(app.tabs[0].id, TabId(12));
     assert_eq!(app.active_tab_index, 0);
 
     // Cerrar la última pestaña marca el cierre de la ventana
@@ -1801,8 +1807,7 @@ fn test_close_other_tabs_flushes_pending_autosave() {
     let file_path = temp_dir.join("test.txt");
     std::fs::write(&file_path, "initial").unwrap();
 
-    let tab_id = app.next_tab_id;
-    app.next_tab_id += 1;
+    let tab_id = app.alloc_tab_id();
     let mut tab = TerminalTab::new_file_viewer(tab_id, file_path.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
     viewer.is_read_only = false;
@@ -2247,11 +2252,15 @@ fn test_clean_block_command_and_path_helpers() {
     // ESC, CR/LF, bidi override (U+202E), ancho cero (U+200B) y BOM: nada de eso llega al prompt.
     let out = clean_block_command("ls\x1b[201~\r\nrm\u{202E}fr\u{200B}\u{FEFF} /tmp");
     assert_eq!(out, "ls[201~rmfr /tmp");
-    assert_eq!(
-        clean_block_command("cargo test --release"),
-        "cargo test --release"
-    );
-    assert_eq!(clean_block_command("echo ñ ✓"), "echo ñ ✓");
+    assert!(matches!(out, std::borrow::Cow::Owned(_)));
+
+    let clean = clean_block_command("cargo test --release");
+    assert_eq!(clean, "cargo test --release");
+    assert!(matches!(clean, std::borrow::Cow::Borrowed(_)));
+
+    let clean_unicode = clean_block_command("echo ñ ✓");
+    assert_eq!(clean_unicode, "echo ñ ✓");
+    assert!(matches!(clean_unicode, std::borrow::Cow::Borrowed(_)));
 
     // Acortado de rutas con tilde y barras de Windows
     let p = std::path::Path::new("D:/proyectos/axon");
@@ -2315,4 +2324,143 @@ fn test_gpu_error_message_mentions_warp_and_requirements() {
     let m = platform::gpu_error_message(&"HRESULT 0x887A0004");
     assert!(m.contains("WARP") && m.contains("AXON_RENDERER=warp"));
     assert!(m.contains("1809") && m.contains("0x887A0004"));
+}
+
+#[test]
+fn test_terminal_area_offsets_not_corrupted_by_settings_tab() {
+    let mut config = AxonConfig::load_or_default();
+    config.appearance.tab_layout = "horizontal".to_string();
+    config.appearance.panel_side = "left".to_string();
+    config.appearance.show_status_bar = true;
+    let mut app = AxonApp::new(config, None);
+    app.sidebar_visible = true;
+
+    // Con la terminal activa, el área de terminal descuenta la barra lateral izquierda y la de estado
+    let (left, right, top, status_h) = app.terminal_area_offsets();
+    assert_eq!(left, SIDEBAR_WIDTH);
+    assert_eq!(right, 0);
+    assert_eq!(top, crate::renderer::TopTabBarRects::HEIGHT);
+    assert_eq!(status_h, 26);
+
+    // Al abrir Ajustes (que en horizontal es fullscreen y no dibuja barra lateral ni de estado),
+    // terminal_area_offsets DEBE seguir devolviendo las dimensiones reales de las terminales
+    // para no corromper el cálculo de columnas (PTY/VT) de las pestañas en segundo plano.
+    app.open_or_switch_settings_tab();
+    assert!(app.settings_fullscreen());
+    assert!(!app.panel_shown());
+
+    let (left_s, right_s, top_s, status_hs) = app.terminal_area_offsets();
+    assert_eq!(left_s, SIDEBAR_WIDTH);
+    assert_eq!(right_s, 0);
+    assert_eq!(top_s, crate::renderer::TopTabBarRects::HEIGHT);
+    assert_eq!(status_hs, 26);
+
+    // Al volver a la pestaña de terminal, todo se mantiene intacto
+    app.switch_to_tab(0);
+    assert!(!app.settings_fullscreen());
+    assert!(app.panel_shown());
+    let (left_t, right_t, top_t, status_ht) = app.terminal_area_offsets();
+    assert_eq!(left_t, SIDEBAR_WIDTH);
+    assert_eq!(right_t, 0);
+    assert_eq!(top_t, crate::renderer::TopTabBarRects::HEIGHT);
+    assert_eq!(status_ht, 26);
+}
+
+#[test]
+fn test_standard_traits_and_conversions() {
+    use crate::app::viewer::DecodedText;
+    use crate::app::{PaneId, PaneNode, TabId};
+    use crate::explorer::RemoteSshSession;
+    use crate::terminal::{Cell, SelectionRange};
+    use crate::ui::LucideIcon;
+
+    // PaneId & TabId
+    let p_id = PaneId(42);
+    let p_raw: usize = p_id.into();
+    assert_eq!(p_raw, 42);
+    let node: PaneNode = p_id.into();
+    assert_eq!(node, PaneNode::Leaf(PaneId(42)));
+
+    let t_id = TabId(7);
+    let t_raw: usize = t_id.into();
+    assert_eq!(t_raw, 7);
+
+    // Cell & SelectionRange
+    let cell: Cell = 'Z'.into();
+    assert_eq!(cell.c, 'Z');
+    assert_eq!(cell.width, 1);
+    let sel: SelectionRange = ((2, 3), (4, 5)).into();
+    assert_eq!(sel.start, (2, 3));
+    assert_eq!(sel.end, (4, 5));
+    let sel_tuple: ((usize, usize), (usize, usize)) = sel.into();
+    assert_eq!(sel_tuple, ((2, 3), (4, 5)));
+
+    // LucideIcon -> char
+    let icon_ch: char = LucideIcon::Terminal.into();
+    assert_eq!(icon_ch, LucideIcon::Terminal.as_char());
+
+    // RemoteSshSession
+    let sess: RemoteSshSession = ("myhost", "/home/user").into();
+    assert_eq!(sess.destination, "myhost");
+    assert_eq!(sess.remote_dir, "/home/user");
+
+    // DecodedText
+    let decoded: DecodedText = b"hello\nworld".as_slice().into();
+    assert_eq!(decoded.lines, vec!["hello", "world"]);
+
+    let decoded_reader =
+        DecodedText::from_reader(std::io::Cursor::new(b"line1\r\nline2\r\n")).unwrap();
+    assert_eq!(decoded_reader.lines, vec!["line1", "line2"]);
+    assert!(decoded_reader.crlf);
+    assert!(decoded_reader.final_newline);
+
+    // FileViewerState write_to en memoria sobre std::io::Write
+    let tab = TerminalTab::new_remote_file_viewer_from(
+        TabId(101),
+        "host".into(),
+        std::path::PathBuf::from("/srv/test.txt"),
+        None,
+        Ok(b"abc\ndef\n".to_vec()),
+    );
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    let mut written = Vec::new();
+    viewer.write_to(&mut written).unwrap();
+    assert_eq!(written, b"abc\ndef\n");
+}
+
+#[test]
+fn test_cache_alignment_and_enum_size_regressions() {
+    // Mechanical Sympathy & Enum Bloat checks
+    assert_eq!(std::mem::size_of::<crate::terminal::Cell>(), 16);
+    assert_eq!(std::mem::size_of::<AxonEvent>(), 16);
+    assert_eq!(std::mem::size_of::<crate::app::ssh_jobs::SshDone>(), 64);
+    assert_eq!(
+        std::mem::size_of::<crate::app::remote_files::RemoteJob>(),
+        64
+    );
+    assert_eq!(std::mem::size_of::<PaneNode>(), 24);
+    assert!(std::mem::size_of::<crate::app::context_menu::MenuAction>() <= 32);
+
+    // False Sharing mitigation checks
+    assert_eq!(
+        std::mem::align_of::<CachePadded<std::sync::atomic::AtomicBool>>(),
+        64
+    );
+    assert_eq!(
+        std::mem::size_of::<CachePadded<std::sync::atomic::AtomicBool>>(),
+        64
+    );
+    assert_eq!(
+        std::mem::align_of::<CachePadded<std::sync::atomic::AtomicUsize>>(),
+        64
+    );
+    assert_eq!(
+        std::mem::size_of::<CachePadded<std::sync::atomic::AtomicUsize>>(),
+        64
+    );
+
+    let flag = CachePadded::new(std::sync::atomic::AtomicBool::new(false));
+    assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }

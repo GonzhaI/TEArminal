@@ -12,20 +12,24 @@ const MAX_SAVE_BYTES: usize = 96 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Clone)]
+pub(super) struct RemoteSaveJob {
+    pub(super) dest: String,
+    pub(super) path: PathBuf,
+    /// Lo que debe haber quedado escrito: `cksum` (CRC y tamaño) del contenido enviado
+    pub(super) expected: (u32, usize),
+    /// `edit_gen` del visor al enviar: si cambió, lo guardado ya no es lo que se ve
+    pub(super) edit_gen: u64,
+}
+
+#[derive(Debug, Clone)]
 pub(super) enum RemoteJob {
     Open {
         dest: String,
         path: PathBuf,
         pin: bool,
     },
-    Save {
-        dest: String,
-        path: PathBuf,
-        /// Lo que debe haber quedado escrito: `cksum` (CRC y tamaño) del contenido enviado
-        expected: (u32, usize),
-        /// `edit_gen` del visor al enviar: si cambió, lo guardado ya no es lo que se ve
-        edit_gen: u64,
-    },
+    /// Variante grande empaquetada en `Box` para optimizar el tamaño del enum en la caché
+    Save(Box<RemoteSaveJob>),
     List {
         dest: String,
         dir: PathBuf,
@@ -35,7 +39,8 @@ pub(super) enum RemoteJob {
 impl RemoteJob {
     fn dest(&self) -> &str {
         match self {
-            Self::Open { dest, .. } | Self::Save { dest, .. } | Self::List { dest, .. } => dest,
+            Self::Open { dest, .. } | Self::List { dest, .. } => dest,
+            Self::Save(s) => &s.dest,
         }
     }
 }
@@ -44,7 +49,7 @@ impl RemoteJob {
 pub(super) struct PendingRemote {
     id: u32,
     /// Panel al que se envió la petición: solo sus respuestas la resuelven (los demás paneles SSH no son de fiar)
-    pane_id: usize,
+    pane_id: PaneId,
     job: RemoteJob,
     deadline: Instant,
 }
@@ -192,12 +197,12 @@ impl AxonApp {
             pct_encode(remote_path_str(&path).as_bytes()),
             pct_encode(content.as_bytes())
         );
-        let job = RemoteJob::Save {
+        let job = RemoteJob::Save(Box::new(RemoteSaveJob {
             dest,
             path,
             expected,
             edit_gen,
-        };
+        }));
         self.remote_send(job, "put", &payload)
     }
 
@@ -245,7 +250,7 @@ impl AxonApp {
 
     /// Recoge las respuestas llegadas por los terminales y las aplica
     pub(super) fn process_remote_results(&mut self) {
-        let mut results = Vec::new();
+        let mut results = Vec::with_capacity(self.pending_remote.len().max(8));
         for pane in self.tabs.iter_mut().flat_map(|t| t.panes.iter_mut()) {
             let pane_id = pane.id;
             results.extend(
@@ -275,12 +280,13 @@ impl AxonApp {
                     };
                     self.push_remote_viewer(&dest, &path, data, pin);
                 }
-                RemoteJob::Save {
-                    dest,
-                    path,
-                    expected,
-                    edit_gen,
-                } => {
+                RemoteJob::Save(save) => {
+                    let RemoteSaveJob {
+                        dest,
+                        path,
+                        expected,
+                        edit_gen,
+                    } = *save;
                     let viewer = self
                         .tabs
                         .iter_mut()
@@ -347,7 +353,7 @@ impl AxonApp {
         for p in expired {
             match p.job {
                 RemoteJob::Open { dest, path, pin } => self.ssh_open_file(&dest, &path, pin),
-                RemoteJob::Save { dest, path, .. } => self.ssh_save_viewer(&dest, &path),
+                RemoteJob::Save(save) => self.ssh_save_viewer(&save.dest, &save.path),
                 RemoteJob::List { dir, .. } => {
                     self.file_explorer.set_expanded(&dir, false);
                     self.file_explorer.remote_expand_all = false;
@@ -370,8 +376,7 @@ impl AxonApp {
             .get_mut(self.active_tab_index)
             .and_then(|t| t.active_pane_mut())
             .and_then(|p| p.get_git_branch());
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
+        let tab_id = self.alloc_tab_id();
         let tab = TerminalTab::new_remote_file_viewer_from(
             tab_id,
             dest.to_string(),
@@ -395,6 +400,19 @@ mod tests {
         assert!(pct_encode(&(0..=255u8).collect::<Vec<_>>())
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || "%-_.~/".contains(c)));
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_pct_encode_output_is_always_safe_and_ascii(bytes: Vec<u8>) {
+            let enc = pct_encode(&bytes);
+            prop_assert!(enc.is_ascii());
+            prop_assert!(enc.chars().all(|c| c.is_ascii_alphanumeric() || "%-_.~/".contains(c)));
+            let bad = |c| matches!(c, ';' | '&' | '|' | '#' | '\n' | '\r' | '\0' | ' ' | '\t' | '\'' | '"' | '\\');
+            prop_assert!(!enc.chars().any(bad));
+        }
     }
 
     #[test]
@@ -502,11 +520,13 @@ mod tests {
         use super::super::ssh_jobs::SshDone;
         let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
         let tabs_before = app.tabs.len();
-        let done = |pin| SshDone::Open {
-            dest: "user@host".into(),
-            path: PathBuf::from("/etc/hosts"),
-            pin,
-            data: Ok(b"127.0.0.1 localhost\n".to_vec()),
+        let done = |pin| {
+            SshDone::Open(Box::new(super::super::ssh_jobs::SshOpenDone {
+                dest: "user@host".into(),
+                path: PathBuf::from("/etc/hosts"),
+                pin,
+                data: Ok(b"127.0.0.1 localhost\n".to_vec()),
+            }))
         };
         app.ssh_tx.send(done(false)).unwrap();
         app.ssh_tx.send(done(true)).unwrap();
@@ -538,7 +558,7 @@ mod tests {
         };
 
         // La petición se hizo a otro panel: la respuesta de este se descarta y la petición sigue en curso
-        app.pending_remote.push(pending(pane_id + 1000));
+        app.pending_remote.push(pending(PaneId(pane_id.0 + 1000)));
         app.tabs[0].panes[0]
             .terminal
             .remote_file_results
@@ -588,12 +608,12 @@ mod tests {
         app.pending_remote.push(PendingRemote {
             id: 42,
             pane_id,
-            job: RemoteJob::Save {
+            job: RemoteJob::Save(Box::new(RemoteSaveJob {
                 dest: "user@host".into(),
                 path: path.clone(),
                 expected,
                 edit_gen,
-            },
+            })),
             deadline: Instant::now() + REQUEST_TIMEOUT,
         });
         app.tabs[1].panes[0]
@@ -613,12 +633,12 @@ mod tests {
         app.pending_remote.push(PendingRemote {
             id: 43,
             pane_id,
-            job: RemoteJob::Save {
+            job: RemoteJob::Save(Box::new(RemoteSaveJob {
                 dest: "user@host".into(),
                 path: path.clone(),
                 expected,
                 edit_gen,
-            },
+            })),
             deadline: Instant::now() + REQUEST_TIMEOUT,
         });
         app.tabs[1].panes[0]

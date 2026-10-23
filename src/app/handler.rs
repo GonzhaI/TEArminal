@@ -168,10 +168,7 @@ impl AxonApp {
             crate::logger::log(&format!("GPU: no se pudo ajustar el tamaño inicial: {e}"));
         }
 
-        let offset = self.sidebar_offset();
-        let right_offset = self.file_explorer_offset();
-        let top_offset = self.top_offset();
-        let status_bar_h = self.status_bar_height();
+        let (offset, right_offset, top_offset, status_bar_h) = self.terminal_area_offsets();
 
         let total_w = (initial_size.width as usize).saturating_sub(offset + right_offset);
         let total_h = (initial_size.height as usize).saturating_sub(top_offset + status_bar_h);
@@ -388,7 +385,7 @@ impl AxonApp {
         }
 
         // 2. Revisar si algún panel tiene su proceso terminado (tras haber consumido toda su salida)
-        let mut closed_panes = Vec::new();
+        let mut closed_panes: smallvec::SmallVec<[PaneId; 4]> = smallvec::SmallVec::new();
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
                 if pane.pty.is_child_exited() {

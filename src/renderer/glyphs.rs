@@ -21,46 +21,9 @@ pub(super) const EMBEDDED_INTER_SEMIBOLD: &[u8] =
 
 pub(super) const EMBEDDED_LUCIDE: &[u8] = include_bytes!("../../assets/fonts/lucide.ttf");
 
-/// Hasher multiplicativo (FxHash) para las cachés de glifos: claves minúsculas (char, tamaño, bool)
+/// Caché de glifos y medidas con FxHash (`FxHashMap`): claves minúsculas (char, tamaño, bool)
 /// consultadas decenas de miles de veces por fotograma; SipHash es innecesariamente caro aquí.
-#[derive(Default, Clone, Copy)]
-pub(super) struct FastHasher(u64);
-
-impl FastHasher {
-    #[inline(always)]
-    fn add(&mut self, v: u64) {
-        self.0 = (self.0.rotate_left(5) ^ v).wrapping_mul(0x517c_c1b7_2722_0a95);
-    }
-}
-
-impl Hasher for FastHasher {
-    #[inline]
-    fn write(&mut self, bytes: &[u8]) {
-        bytes.iter().for_each(|&b| self.add(b as u64));
-    }
-    #[inline]
-    fn write_u8(&mut self, i: u8) {
-        self.add(i as u64);
-    }
-    #[inline]
-    fn write_u32(&mut self, i: u32) {
-        self.add(i as u64);
-    }
-    #[inline]
-    fn write_u64(&mut self, i: u64) {
-        self.add(i);
-    }
-    #[inline]
-    fn write_usize(&mut self, i: usize) {
-        self.add(i as u64);
-    }
-    #[inline]
-    fn finish(&self) -> u64 {
-        self.0
-    }
-}
-
-pub(super) type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FastHasher>>;
+pub(super) type FastMap<K, V> = rustc_hash::FxHashMap<K, V>;
 
 /// Ajustes de fuente comunes. Carga sustituciones GSUB para soportar ligaduras de programación.
 pub(super) fn font_settings() -> fontdue::FontSettings {
@@ -80,7 +43,7 @@ pub(super) struct PunctKey {
 
 impl PunctKey {
     #[inline]
-    pub fn new(slice: &[u8], bold: bool) -> Self {
+    pub(super) fn new(slice: &[u8], bold: bool) -> Self {
         let mut bytes = [0u8; 8];
         let len = slice.len().min(8);
         bytes[..len].copy_from_slice(&slice[..len]);
@@ -94,13 +57,13 @@ impl PunctKey {
 
 /// GIDs de una secuencia con ligadura dada forma (hasta 8 glifos, 16 bytes, Copy)
 #[derive(Clone, Copy)]
-pub struct ShapedGids {
+pub(crate) struct ShapedGids {
     pub gids: [u16; 8],
 }
 
 /// Comprueba si un carácter puede formar parte de una ligadura de programación
 #[inline]
-pub fn is_ligature_candidate(c: char) -> bool {
+pub(crate) fn is_ligature_candidate(c: char) -> bool {
     matches!(
         c,
         '!' | '#'
@@ -125,7 +88,7 @@ pub fn is_ligature_candidate(c: char) -> bool {
     )
 }
 
-pub struct CachedGlyph {
+pub(crate) struct CachedGlyph {
     pub width: usize,
     pub height: usize,
     pub x_offset: i32,
@@ -145,7 +108,7 @@ impl TerminalRenderer {
             }
         }
         let regular = fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_REGULAR, font_settings())
-            .expect("Error al inicializar fuente JetBrains Mono Nerd Font Regular");
+            .expect("invariante: fuente embebida JetBrains Mono Nerd Font Regular válida");
         (regular, false)
     }
 
@@ -155,7 +118,7 @@ impl TerminalRenderer {
         }
         self.bold_font.get_or_init(|| {
             fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_BOLD, font_settings())
-                .expect("Error al inicializar fuente JetBrains Mono Nerd Font Bold")
+                .expect("invariante: fuente embebida JetBrains Mono Nerd Font Bold válida")
         })
     }
 
@@ -164,7 +127,7 @@ impl TerminalRenderer {
         let block = (c as u32 >= 0xF0000) as usize;
         self.nerd_fonts[block].get_or_init(|| {
             fontdue::Font::from_bytes(EMBEDDED_NERD_ICONS[block], font_settings())
-                .expect("Error al inicializar iconos Nerd Font")
+                .expect("invariante: fuente embebida Nerd Font válida")
         })
     }
 
@@ -211,14 +174,16 @@ impl TerminalRenderer {
 
     /// Obtiene o rasteriza un glifo; tabla plana O(1) para ASCII + Latin-1 y caché rápida para el resto
     #[inline]
-    pub fn get_glyph(&mut self, c: char, bold: bool) -> &Rc<CachedGlyph> {
+    pub(crate) fn get_glyph(&mut self, c: char, bold: bool) -> &Rc<CachedGlyph> {
         let code = c as u32;
         if code < 256 {
             let idx = code as usize + if bold { 256 } else { 0 };
             if self.ascii_cache[idx].is_none() {
                 self.ascii_cache[idx] = Some(Rc::new(self.rasterize_glyph(c, bold)));
             }
-            return self.ascii_cache[idx].as_ref().unwrap();
+            return self.ascii_cache[idx]
+                .as_ref()
+                .expect("invariante: inicializado inmediatamente si era None");
         }
 
         if !self.glyph_cache.contains_key(&(c, bold)) {
@@ -246,7 +211,7 @@ impl TerminalRenderer {
     }
 
     /// Obtiene o rasteriza un glifo de ligadura por su GID de OpenType
-    pub fn get_ligature_glyph(&mut self, gid: u16, bold: bool) -> &Rc<CachedGlyph> {
+    pub(crate) fn get_ligature_glyph(&mut self, gid: u16, bold: bool) -> &Rc<CachedGlyph> {
         if !self.ligature_cache.contains_key(&(gid, bold)) {
             let font = if bold {
                 self.bold_font()
@@ -268,7 +233,7 @@ impl TerminalRenderer {
 
     /// Da forma a una secuencia de puntuación ASCII (hasta 8 bytes).
     /// Devuelve un `ShapedGids` que contiene los GIDs de cada carácter.
-    pub fn shape_punctuation_run(&mut self, slice: &[u8], bold: bool) -> ShapedGids {
+    pub(crate) fn shape_punctuation_run(&mut self, slice: &[u8], bold: bool) -> ShapedGids {
         let key = PunctKey::new(slice, bold);
         if let Some(&cached) = self.shaped_ligatures.get(&key) {
             return cached;
@@ -290,8 +255,8 @@ impl TerminalRenderer {
                 let glyphs = rustybuzz::shape(face, &[], buf);
                 let infos = glyphs.glyph_infos();
                 if infos.len() == len {
-                    for (i, info) in infos.iter().take(8).enumerate() {
-                        gids[i] = info.glyph_id as u16;
+                    for (dst, info) in gids.iter_mut().zip(infos) {
+                        *dst = info.glyph_id as u16;
                     }
                 } else {
                     // Si el moldeado devuelve menos glifos que caracteres (p. ej. compresión no monospaciada),
@@ -301,8 +266,8 @@ impl TerminalRenderer {
                     } else {
                         &self.regular_font
                     };
-                    for (i, &b) in slice[..len].iter().enumerate() {
-                        gids[i] = font.lookup_glyph_index(b as char);
+                    for (dst, &b) in gids[..len].iter_mut().zip(&slice[..len]) {
+                        *dst = font.lookup_glyph_index(b as char);
                     }
                 }
             }
@@ -312,8 +277,8 @@ impl TerminalRenderer {
             } else {
                 &self.regular_font
             };
-            for (i, &b) in slice[..len].iter().enumerate() {
-                gids[i] = font.lookup_glyph_index(b as char);
+            for (dst, &b) in gids[..len].iter_mut().zip(&slice[..len]) {
+                *dst = font.lookup_glyph_index(b as char);
             }
         }
 

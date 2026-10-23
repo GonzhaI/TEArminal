@@ -5,7 +5,7 @@ use crate::app::ContextMenu;
 
 impl TerminalRenderer {
     /// Ancho que necesita el menú: etiqueta más larga + atajo, sin que se solapen nunca
-    pub fn context_menu_width(&self, items: &[crate::app::MenuItem]) -> usize {
+    pub(crate) fn context_menu_width(&self, items: &[crate::app::MenuItem]) -> usize {
         let content = items
             .iter()
             .map(|i| {
@@ -22,7 +22,12 @@ impl TerminalRenderer {
         (ContextMenu::PAD * 2 + 36 + content + 14).max(200)
     }
 
-    pub fn render_context_menu(&mut self, canvas: &mut Canvas, menu: &ContextMenu, theme: &Theme) {
+    pub(crate) fn render_context_menu(
+        &mut self,
+        canvas: &mut Canvas,
+        menu: &ContextMenu,
+        theme: &Theme,
+    ) {
         let (width, height) = canvas.size();
         let (x, y, w, h) = menu.bounds();
         // Sombra corta, superficie elevada y hairline: un menú, no una isla.

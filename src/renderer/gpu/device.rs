@@ -8,12 +8,12 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::Win32::Graphics::Gdi::{MonitorFromWindow, MONITOR_DEFAULTTONEAREST};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DriverKind {
+pub(crate) enum DriverKind {
     Hardware,
     Warp,
 }
 
-pub struct GpuDevice {
+pub(crate) struct GpuDevice {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
     pub kind: DriverKind,
@@ -25,18 +25,18 @@ const MIN_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_10_0;
 const MAX_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_11_1;
 
 /// `AXON_RENDERER=warp` fuerza WARP (diagnóstico y CI).
-pub fn requested_driver() -> Option<DriverKind> {
+pub(super) fn requested_driver() -> Option<DriverKind> {
     requested_driver_from(std::env::var("AXON_RENDERER").ok().as_deref())
 }
 
-pub fn requested_driver_from(value: Option<&str>) -> Option<DriverKind> {
+pub(crate) fn requested_driver_from(value: Option<&str>) -> Option<DriverKind> {
     value
         .filter(|v| v.eq_ignore_ascii_case("warp"))
         .map(|_| DriverKind::Warp)
 }
 
 /// Lado máximo de textura: 8192 con FL 10_x, 16384 con 11_0 o más.
-pub fn max_texture_dim_for(level: D3D_FEATURE_LEVEL) -> u32 {
+pub(crate) fn max_texture_dim_for(level: D3D_FEATURE_LEVEL) -> u32 {
     if level.0 >= D3D_FEATURE_LEVEL_11_0.0 {
         16384
     } else {
@@ -46,7 +46,7 @@ pub fn max_texture_dim_for(level: D3D_FEATURE_LEVEL) -> u32 {
 
 impl GpuDevice {
     /// Hardware en el adaptador del monitor de `hwnd` (o el que elija Windows) y, si falla, WARP.
-    pub fn new(hwnd: Option<HWND>) -> Result<GpuDevice> {
+    pub(crate) fn new(hwnd: Option<HWND>) -> Result<GpuDevice> {
         if requested_driver() != Some(DriverKind::Warp) {
             let adapter = hwnd.and_then(adapter_for_window);
             if let Ok(gpu) =
@@ -60,7 +60,10 @@ impl GpuDevice {
 
     #[cfg(test)]
     /// Fuerza un tipo de dispositivo (`None` = como `new` sin ventana). Para tests.
-    pub fn new_with(kind: Option<DriverKind>, min_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
+    pub(crate) fn new_with(
+        kind: Option<DriverKind>,
+        min_level: D3D_FEATURE_LEVEL,
+    ) -> Result<GpuDevice> {
         match kind {
             Some(kind) => Self::create(None, kind, min_level, MAX_LEVEL),
             None => Self::create(None, DriverKind::Hardware, min_level, MAX_LEVEL)
@@ -70,11 +73,11 @@ impl GpuDevice {
 
     #[cfg(test)]
     /// Dispositivo de `kind` limitado a `max_level` como mucho (probar FL 10_x en una máquina con 11_x).
-    pub fn new_at_most(kind: DriverKind, max_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
+    pub(crate) fn new_at_most(kind: DriverKind, max_level: D3D_FEATURE_LEVEL) -> Result<GpuDevice> {
         Self::create(None, kind, MIN_LEVEL, max_level)
     }
 
-    pub fn max_texture_dim(&self) -> u32 {
+    pub(crate) fn max_texture_dim(&self) -> u32 {
         max_texture_dim_for(self.feature_level)
     }
 

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub fn key_code_to_char(code: KeyCode) -> Option<char> {
+pub(crate) fn key_code_to_char(code: KeyCode) -> Option<char> {
     match code {
         KeyCode::KeyA => Some('a'),
         KeyCode::KeyB => Some('b'),
@@ -48,7 +48,7 @@ pub fn key_code_to_char(code: KeyCode) -> Option<char> {
     }
 }
 
-pub fn key_is_char(key: &Key, physical: PhysicalKey, target: char) -> bool {
+pub(crate) fn key_is_char(key: &Key, physical: PhysicalKey, target: char) -> bool {
     let target_lower = target.to_ascii_lowercase();
 
     // 1. Comprobar tecla física (PhysicalKey) por hardware KeyCode.
@@ -86,15 +86,16 @@ pub fn key_is_char(key: &Key, physical: PhysicalKey, target: char) -> bool {
 }
 
 /// Tipo de evento de tecla para el Kitty Keyboard Protocol
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum KeyEventType {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub(crate) enum KeyEventType {
+    #[default]
     Press,
     Repeat,
     Release,
 }
 
 /// Resuelve el número de tecla según la especificación del Kitty Keyboard Protocol
-pub fn kitty_key_number(logical_key: &Key, physical_key: PhysicalKey) -> Option<u32> {
+pub(super) fn kitty_key_number(logical_key: &Key, physical_key: PhysicalKey) -> Option<u32> {
     match logical_key {
         Key::Named(NamedKey::Enter) => Some(13),
         Key::Named(NamedKey::Tab) => Some(9),
@@ -170,7 +171,7 @@ pub fn kitty_key_number(logical_key: &Key, physical_key: PhysicalKey) -> Option<
 
 /// Codifica una pulsación o liberación según las banderas activas del Kitty Keyboard Protocol (CSI u)
 #[allow(clippy::too_many_arguments)]
-pub fn encode_kitty_key(
+pub(crate) fn encode_kitty_key(
     logical_key: &Key,
     physical_key: PhysicalKey,
     ctrl: bool,

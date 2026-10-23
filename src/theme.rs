@@ -1,62 +1,62 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct Color {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: u8,
+pub(crate) struct Color {
+    pub(crate) r: u8,
+    pub(crate) g: u8,
+    pub(crate) b: u8,
+    pub(crate) a: u8,
 }
 
 impl Color {
-    pub const TRANSPARENT: Self = Self {
+    pub(crate) const TRANSPARENT: Self = Self {
         r: 0,
         g: 0,
         b: 0,
         a: 0,
     };
 
-    pub const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
+    pub(crate) const fn from_rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
     }
 
-    pub const fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
+    pub(crate) const fn from_rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
 
     #[inline(always)]
-    pub const fn r(self) -> u8 {
+    pub(crate) const fn r(self) -> u8 {
         self.r
     }
 
     #[inline(always)]
-    pub const fn g(self) -> u8 {
+    pub(crate) const fn g(self) -> u8 {
         self.g
     }
 
     #[inline(always)]
-    pub const fn b(self) -> u8 {
+    pub(crate) const fn b(self) -> u8 {
         self.b
     }
 
     #[inline(always)]
-    pub const fn a(self) -> u8 {
+    pub(crate) const fn a(self) -> u8 {
         self.a
     }
 
     /// Convierte a formato de pixel 32-bit XRGB nativo de Windows (0x00RRGGBB)
     #[inline(always)]
-    pub fn to_u32_xrgb(self) -> u32 {
+    pub(crate) fn to_u32_xrgb(self) -> u32 {
         ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
     }
 
     /// Inversa de `to_u32_xrgb`: color opaco desde un píxel XRGB.
     #[inline(always)]
-    pub const fn from_u32_xrgb(v: u32) -> Self {
+    pub(crate) const fn from_u32_xrgb(v: u32) -> Self {
         Self::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
     }
 
     /// Mezcla alpha de un color de primer plano sobre este color de fondo
     #[inline(always)]
-    pub fn blend_over(&self, fg: Color, alpha: u8) -> u32 {
+    pub(crate) fn blend_over(&self, fg: Color, alpha: u8) -> u32 {
         if alpha == 0 {
             return self.to_u32_xrgb();
         }
@@ -72,26 +72,66 @@ impl Color {
     }
 }
 
+impl From<(u8, u8, u8)> for Color {
+    #[inline]
+    fn from((r, g, b): (u8, u8, u8)) -> Self {
+        Self::from_rgb(r, g, b)
+    }
+}
+
+impl From<(u8, u8, u8, u8)> for Color {
+    #[inline]
+    fn from((r, g, b, a): (u8, u8, u8, u8)) -> Self {
+        Self::from_rgba(r, g, b, a)
+    }
+}
+
+impl From<[u8; 3]> for Color {
+    #[inline]
+    fn from([r, g, b]: [u8; 3]) -> Self {
+        Self::from_rgb(r, g, b)
+    }
+}
+
+impl From<[u8; 4]> for Color {
+    #[inline]
+    fn from([r, g, b, a]: [u8; 4]) -> Self {
+        Self::from_rgba(r, g, b, a)
+    }
+}
+
 /// Temas de iterm2-color-schemes (`.itermcolors` originales de `schemes/`), generados con `tools/fetch-themes.ps1`.
 /// Una línea por tema: nombre, fondo, texto, cursor, selección (fondo y texto) y 16 colores ANSI.
 static THEMES: &str = include_str!("../assets/themes.txt");
 
-#[derive(Clone, Debug)]
-pub struct Theme {
-    pub background: Color,
-    pub foreground: Color,
-    pub cursor: Color,
-    pub selection: Color,
-    pub selection_fg: Color,
-    pub ansi: [Color; 16],
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Theme {
+    pub(crate) background: Color,
+    pub(crate) foreground: Color,
+    pub(crate) cursor: Color,
+    pub(crate) selection: Color,
+    pub(crate) selection_fg: Color,
+    pub(crate) ansi: [Color; 16],
     /// Acento de la interfaz. No es un color ANSI: la UI no debe depender de que el tema tenga
     /// un verde o un azul utilizables como acento.
-    pub ui_accent: Color,
+    pub(crate) ui_accent: Color,
 }
 
 impl Default for Theme {
     fn default() -> Self {
         Self::from_name(Self::DEFAULT_DARK)
+    }
+}
+
+impl From<&str> for Theme {
+    fn from(name: &str) -> Self {
+        Self::from_name(name)
+    }
+}
+
+impl From<String> for Theme {
+    fn from(name: String) -> Self {
+        Self::from_name(&name)
     }
 }
 
@@ -128,7 +168,7 @@ fn luminance(c: Color) -> f32 {
 }
 
 /// Contraste WCAG entre dos colores opacos (1..21).
-pub fn contrast_ratio(a: Color, b: Color) -> f32 {
+pub(crate) fn contrast_ratio(a: Color, b: Color) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
@@ -168,16 +208,16 @@ fn parse_line(line: &str) -> Option<(&str, Theme)> {
 }
 
 impl Theme {
-    pub const DEFAULT_DARK: &'static str = "Catppuccin Frappe";
-    pub const DEFAULT_LIGHT: &'static str = "Catppuccin Latte";
+    pub(crate) const DEFAULT_DARK: &'static str = "Catppuccin Frappe";
+    pub(crate) const DEFAULT_LIGHT: &'static str = "Catppuccin Latte";
 
     /// Nombres de todos los temas incorporados (los de iTerm2).
-    pub fn names() -> impl Iterator<Item = &'static str> {
+    pub(crate) fn names() -> impl Iterator<Item = &'static str> {
         THEMES.lines().map(first_field)
     }
 
     /// Temas cuyo nombre contiene `filter` (sin distinguir mayúsculas ni separadores).
-    pub fn search(filter: &str) -> Vec<&'static str> {
+    pub(crate) fn search(filter: &str) -> Vec<&'static str> {
         let key = name_key(filter);
         if key.is_empty() {
             return Self::names().collect();
@@ -210,21 +250,21 @@ impl Theme {
     }
 
     /// Nombre canónico del tema configurado (el de por defecto si no existe).
-    pub fn canonical_name(name: &str) -> &'static str {
+    pub(crate) fn canonical_name(name: &str) -> &'static str {
         Self::find(name).map_or(Self::DEFAULT_DARK, |(n, _)| n)
     }
 
     /// Resuelve el tema configurado; si no existe, usa el de por defecto.
-    pub fn from_name(name: &str) -> Self {
+    pub(crate) fn from_name(name: &str) -> Self {
         Self::find(name)
             .or_else(|| Self::find(Self::DEFAULT_DARK))
             .map(|(_, t)| t)
-            .expect("el tema por defecto está en themes.txt")
+            .expect("invariante: DEFAULT_DARK está garantizado en assets/themes.txt compilado")
     }
 
     /// Determina si el tema activo es de tonalidad clara
     #[inline]
-    pub fn is_light(&self) -> bool {
+    pub(crate) fn is_light(&self) -> bool {
         let lum = 0.2126 * (self.background.r as f32)
             + 0.7152 * (self.background.g as f32)
             + 0.0722 * (self.background.b as f32);
@@ -233,87 +273,87 @@ impl Theme {
 
     /// Determina si el tema activo es de tonalidad oscura
     #[inline]
-    pub fn is_dark(&self) -> bool {
+    pub(crate) fn is_dark(&self) -> bool {
         !self.is_light()
     }
 
     /// Mezcla lineal en sRGB entre dos colores opacos (`t` = 0 devuelve `a`, 1 devuelve `b`).
-    pub fn mix(&self, a: Color, b: Color, t: f32) -> Color {
+    pub(crate) fn mix(&self, a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
         let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
         Color::from_rgb(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b))
     }
 
     /// Fondo del chrome (barras, pestañas inactivas). Un paso hacia el texto, nunca un gris ajeno.
-    pub fn chrome_bg(&self) -> Color {
+    pub(crate) fn chrome_bg(&self) -> Color {
         self.mix(self.background, self.foreground, 0.045)
     }
 
     /// Fondo de las barras de ventana y de estado: en temas oscuros un paso hacia la sombra, para que
     /// el chrome se separe del lienzo; en claros apenas se distingue de él.
-    pub fn bar_bg(&self) -> Color {
+    pub(crate) fn bar_bg(&self) -> Color {
         let depth = if self.is_dark() { 0.26 } else { 0.05 };
         self.mix(self.background, Color::from_rgb(0, 0, 0), depth)
     }
 
     /// Superficie elevada: filas activas, tarjetas, menús.
-    pub fn chrome_bg_elevated(&self) -> Color {
+    pub(crate) fn chrome_bg_elevated(&self) -> Color {
         self.mix(self.background, self.foreground, 0.08)
     }
 
     /// Hairline de 1 px para separar regiones.
-    pub fn chrome_line(&self) -> Color {
+    pub(crate) fn chrome_line(&self) -> Color {
         self.mix(self.background, self.foreground, 0.12)
     }
 
     /// Hairline con más presencia (foco, bordes de controles).
-    pub fn chrome_line_strong(&self) -> Color {
+    pub(crate) fn chrome_line_strong(&self) -> Color {
         self.mix(self.background, self.foreground, 0.22)
     }
 
     /// Texto secundario legible (mezcla de texto y fondo).
-    pub fn text_secondary(&self) -> Color {
+    pub(crate) fn text_secondary(&self) -> Color {
         self.mix(self.foreground, self.background, 0.28)
     }
 
     /// Texto terciario: metadatos que se leen, no decoración.
-    pub fn text_muted(&self) -> Color {
+    pub(crate) fn text_muted(&self) -> Color {
         self.mix(self.foreground, self.background, 0.48)
     }
 
     /// Relleno translúcido del acento para estados seleccionados.
-    pub fn accent_soft(&self, alpha: u8) -> Color {
+    pub(crate) fn accent_soft(&self, alpha: u8) -> Color {
         let a = self.ui_accent;
         Color::from_rgba(a.r, a.g, a.b, alpha)
     }
 
     /// Fondo de la barra lateral y de las barras de chrome.
-    pub fn sidebar_bg(&self) -> Color {
+    pub(crate) fn sidebar_bg(&self) -> Color {
         self.chrome_bg()
     }
 
     /// Color divisorio sutil y fino acorde al tema.
-    pub fn border_color(&self) -> Color {
+    pub(crate) fn border_color(&self) -> Color {
         self.chrome_line()
     }
 
     /// Color de superficie para tarjetas, ítems activos y botones.
-    pub fn surface_bg(&self) -> Color {
+    pub(crate) fn surface_bg(&self) -> Color {
         self.chrome_bg_elevated()
     }
 
     /// Color de superficie para estados hover.
-    pub fn surface_hover(&self) -> Color {
+    pub(crate) fn surface_hover(&self) -> Color {
         self.mix(self.background, self.foreground, 0.12)
     }
 
     /// Color de acento de interfaz primario.
-    pub fn accent_color(&self) -> Color {
+    pub(crate) fn accent_color(&self) -> Color {
         self.ui_accent
     }
 
     /// Resuelve índices de 256 colores estándar ANSI
-    pub fn resolve_256_color(&self, index: u8) -> Color {
+    pub(crate) fn resolve_256_color(&self, index: u8) -> Color {
         match index {
             0..=15 => self.ansi[index as usize],
             16..=231 => {
@@ -333,7 +373,7 @@ impl Theme {
 }
 
 /// Consulta el registro de Windows para detectar si el sistema tiene activo el Modo Claro
-pub fn is_windows_system_light_mode() -> bool {
+pub(crate) fn is_windows_system_light_mode() -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::ffi::OsStr;
@@ -381,6 +421,23 @@ mod tests {
         assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
         assert_eq!(Theme::names().count(), lines);
         assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
+    }
+
+    #[test]
+    fn test_color_and_theme_from_conversions() {
+        let c1: Color = (10u8, 20u8, 30u8).into();
+        assert_eq!(c1, Color::from_rgb(10, 20, 30));
+        let c2: Color = (10u8, 20u8, 30u8, 200u8).into();
+        assert_eq!(c2, Color::from_rgba(10, 20, 30, 200));
+        let c3: Color = [1u8, 2u8, 3u8].into();
+        assert_eq!(c3, Color::from_rgb(1, 2, 3));
+        let c4: Color = [1u8, 2u8, 3u8, 4u8].into();
+        assert_eq!(c4, Color::from_rgba(1, 2, 3, 4));
+
+        let t1: Theme = "Catppuccin Frappe".into();
+        assert_eq!(t1, Theme::from_name("Catppuccin Frappe"));
+        let t2: Theme = String::from("Catppuccin Latte").into();
+        assert_eq!(t2, Theme::from_name("Catppuccin Latte"));
     }
 
     #[test]

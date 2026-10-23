@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MenuAction {
+pub(crate) enum MenuAction {
     // Visor de archivos
     ViewerCopy,
     ViewerCut,
@@ -55,14 +55,14 @@ pub enum MenuAction {
     ExplorerExpandAll,
 }
 
-#[derive(Debug, Clone)]
-pub struct MenuItem {
-    pub label: Cow<'static, str>,
-    pub icon: Option<LucideIcon>,
-    pub shortcut: &'static str,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MenuItem {
+    pub(crate) label: Cow<'static, str>,
+    pub(crate) icon: Option<LucideIcon>,
+    pub(crate) shortcut: &'static str,
     /// `None` = separador
-    pub action: Option<MenuAction>,
-    pub enabled: bool,
+    pub(crate) action: Option<MenuAction>,
+    pub(crate) enabled: bool,
 }
 
 impl MenuItem {
@@ -93,20 +93,20 @@ impl MenuItem {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ContextMenu {
-    pub x: usize,
-    pub y: usize,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ContextMenu {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
     /// Ancho calculado con el texto real de etiquetas y atajos
-    pub w: usize,
-    pub items: Vec<MenuItem>,
-    pub hovered: Option<usize>,
+    pub(crate) w: usize,
+    pub(crate) items: Vec<MenuItem>,
+    pub(crate) hovered: Option<usize>,
 }
 
 impl ContextMenu {
-    pub const ITEM_H: usize = 28;
-    pub const SEP_H: usize = 9;
-    pub const PAD: usize = 6;
+    pub(crate) const ITEM_H: usize = 28;
+    pub(crate) const SEP_H: usize = 9;
+    pub(crate) const PAD: usize = 6;
 
     /// Crea el menú y lo coloca dentro de la ventana (se abre hacia el lado con espacio).
     pub(super) fn new(
@@ -136,7 +136,7 @@ impl ContextMenu {
         menu
     }
 
-    pub fn height(&self) -> usize {
+    pub(crate) fn height(&self) -> usize {
         Self::PAD * 2
             + self
                 .items
@@ -151,12 +151,12 @@ impl ContextMenu {
                 .sum::<usize>()
     }
 
-    pub fn bounds(&self) -> Rect {
+    pub(crate) fn bounds(&self) -> Rect {
         (self.x, self.y, self.w, self.height())
     }
 
     /// Rectángulo del elemento `idx` (los separadores también tienen rectángulo)
-    pub fn item_rect(&self, idx: usize) -> Rect {
+    pub(crate) fn item_rect(&self, idx: usize) -> Rect {
         let mut y = self.y + Self::PAD;
         for (i, item) in self.items.iter().enumerate() {
             let h = if item.action.is_some() {
@@ -173,9 +173,9 @@ impl ContextMenu {
     }
 
     /// Índice del elemento accionable bajo el ratón
-    pub fn item_at(&self, mx: usize, my: usize) -> Option<usize> {
-        (0..self.items.len()).find(|&i| {
-            self.items[i].action.is_some() && {
+    pub(crate) fn item_at(&self, mx: usize, my: usize) -> Option<usize> {
+        self.items.iter().enumerate().position(|(i, item)| {
+            item.action.is_some() && {
                 let r = self.item_rect(i);
                 mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
             }
@@ -202,7 +202,7 @@ impl AxonApp {
 
         let items = if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
             let rects = TopTabBarRects::compute(win_w, self.tabs.len());
-            let hit = (0..self.tabs.len()).find(|&idx| {
+            let hit = self.tabs.iter().enumerate().position(|(idx, _)| {
                 let r = rects.tab_rect(idx);
                 mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
             });
@@ -235,7 +235,7 @@ impl AxonApp {
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             let idx = self.file_explorer.item_at_y(my, panel_y);
             self.file_explorer.is_focused = true;
-            let mut items = Vec::new();
+            let mut items = Vec::with_capacity(8);
             if let Some(idx) = idx {
                 let item = &self.file_explorer.items[idx];
                 self.file_explorer.selected_index = Some(idx);
@@ -386,7 +386,7 @@ impl AxonApp {
     }
 
     pub(super) fn tab_or_window_menu(&self, tab: Option<usize>) -> Vec<MenuItem> {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(10);
         if let Some(idx) = tab {
             if self.tabs.get(idx).is_some_and(|t| t.is_preview) {
                 items.push(MenuItem::new(
@@ -510,7 +510,7 @@ impl AxonApp {
     }
 
     fn terminal_menu(&self, has_selection: bool, clicked_url: Option<String>) -> Vec<MenuItem> {
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(6);
         if let Some(url) = clicked_url {
             items.push(MenuItem::new(
                 "Abrir enlace",
@@ -594,7 +594,7 @@ impl AxonApp {
             .extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"));
-        let mut items = Vec::new();
+        let mut items = Vec::with_capacity(12);
         if let Some(url) = clicked_url {
             items.push(MenuItem::new(
                 "Abrir enlace",
@@ -665,7 +665,11 @@ impl AxonApp {
                 v.is_dirty,
             ),
         ]);
-        let foldable = (0..v.lines.len()).any(|i| v.fold_end(i).is_some());
+        let foldable = v
+            .lines
+            .iter()
+            .enumerate()
+            .any(|(i, _)| v.fold_end(i).is_some());
         items.push(MenuItem::separator());
         items.push(MenuItem::new(
             "Contraer todo",
@@ -805,7 +809,7 @@ impl AxonApp {
                         .or_else(|| v.lines.get(v.cursor_line).map(|l| format!("{l}\n")))
                 });
                 if let Some(text) = text {
-                    self.set_clipboard_text(text);
+                    self.set_clipboard_text(&text);
                 }
             }
             MenuAction::ViewerCut => {
@@ -816,7 +820,7 @@ impl AxonApp {
                     .filter(|v| v.is_editable())
                     .and_then(|v| v.selected_text());
                 if let Some(text) = text {
-                    self.set_clipboard_text(text);
+                    self.set_clipboard_text(&text);
                     if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
                         v.delete_selection();
                         if auto_save {
@@ -880,7 +884,7 @@ impl AxonApp {
                     }
                 });
                 if let Some(text) = text {
-                    self.set_clipboard_text(text);
+                    self.set_clipboard_text(&text);
                 }
             }
             MenuAction::TermCopy => {
@@ -888,7 +892,7 @@ impl AxonApp {
                     .active_pane_mut()
                     .and_then(|p| p.terminal.copy_selection_text());
                 if let Some(text) = text {
-                    self.set_clipboard_text(text);
+                    self.set_clipboard_text(&text);
                     if let Some(p) = self.tabs[idx].active_pane_mut() {
                         p.terminal.selection = None;
                     }
@@ -921,7 +925,7 @@ impl AxonApp {
                 crate::app::platform::shell_open_url(&url);
             }
             MenuAction::CopyUrl(url) => {
-                self.set_clipboard_text(url);
+                self.set_clipboard_text(&url);
             }
             MenuAction::ToggleMaximize => {
                 if let Some(w) = &self.window {
@@ -944,7 +948,7 @@ impl AxonApp {
                 }
             }
             MenuAction::ExplorerCopyPath(path) => {
-                self.set_clipboard_text(path.display().to_string());
+                self.set_clipboard_text(&path.to_string_lossy());
             }
             MenuAction::ExplorerCollapseAll => self.file_explorer.collapse_all(),
             MenuAction::ExplorerExpandAll => {

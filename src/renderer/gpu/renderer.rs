@@ -16,14 +16,14 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 /// Instancias consecutivas que comparten enlace de textura: `image == None` es «sin textura o solo atlas».
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Batch {
-    pub first: u32,
-    pub count: u32,
-    pub image: Option<ImageId>,
+pub(crate) struct Batch {
+    pub(crate) first: u32,
+    pub(crate) count: u32,
+    pub(crate) image: Option<ImageId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EncodeStop {
+pub(crate) enum EncodeStop {
     Done,
     /// El atlas no admite el glifo de la operación `at_op`: lo codificado hasta ahí (sin incluirla) es válido.
     AtlasFull {
@@ -32,14 +32,17 @@ pub enum EncodeStop {
 }
 
 /// Rect del glifo en el atlas (lo sube si hace falta). `Full` = vaciar el atlas y reintentar.
-pub type RectFor<'a> =
+#[allow(dead_code)]
+pub(super) type RectFor<'a> =
     dyn FnMut(&Scene, GlyphId) -> std::result::Result<AtlasRect, AtlasError> + 'a;
 
+#[inline]
 fn color_bits(c: Color) -> u32 {
     (c.a as u32) << 24 | (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32
 }
 
 /// Recorte de la escena acotado al destino; `None` si queda vacío.
+#[inline]
 fn clamp_clip(c: RealClip, tw: i32, th: i32) -> Option<[u16; 4]> {
     let (x0, y0) = (c.0.max(0), c.1.max(0));
     let (x1, y1) = (c.2.min(tw), c.3.min(th));
@@ -47,6 +50,7 @@ fn clamp_clip(c: RealClip, tw: i32, th: i32) -> Option<[u16; 4]> {
 }
 
 /// ¿Corta el rectángulo `(x, y, w, h)` con el recorte? (`i64`: sin desbordes con tamaños absurdos.)
+#[inline]
 fn visible(x: i32, y: i32, w: u32, h: u32, clip: [u16; 4]) -> bool {
     let (x, y) = (x as i64, y as i64);
     w > 0
@@ -59,6 +63,7 @@ fn visible(x: i32, y: i32, w: u32, h: u32, clip: [u16; 4]) -> bool {
 
 /// El rect cabe en `i16` (los campos de `Instance`). Con la forma visible solo falla si es descomunal.
 // ponytail: una forma de más de 32767 px se omite; el destino máximo mide 16384
+#[inline]
 fn rect_i16(x: i32, y: i32, w: u32, h: u32) -> Option<[i16; 4]> {
     Some([
         i16::try_from(x).ok()?,
@@ -74,6 +79,7 @@ struct Sink<'a> {
 }
 
 impl Sink<'_> {
+    #[inline]
     fn push(&mut self, image: Option<ImageId>, inst: Instance) {
         let idx = self.out.len() as u32;
         self.out.push(inst);
@@ -88,6 +94,7 @@ impl Sink<'_> {
     }
 
     /// Relleno opaco de `(x0, y0)-(x1, y1)` (ya dentro del destino); vacío = nada.
+    #[inline]
     fn solid(&mut self, (x0, y0, x1, y1): (i32, i32, i32, i32), color: Color) {
         if x0 >= x1 || y0 >= y1 {
             return;
@@ -104,14 +111,20 @@ impl Sink<'_> {
 /// Convierte las operaciones de `from_op` en adelante, EN ORDEN, en instancias y lotes (se añaden a
 /// `out` y `batches`). `target` es el tamaño real del destino: acota los recortes. Se detiene antes
 /// de la primera operación cuyo glifo no cabe en el atlas.
-pub fn encode(
-    scene: &Scene,
+///
+/// Monomorfizado mediante `F: FnMut` (despacho estático) en esta ruta caliente de renderizado por GPU
+/// para permitir inlining del lookup del atlas y eliminar el sobrecoste de llamadas indirectas por vtable.
+pub(crate) fn encode<'a, F>(
+    scene: &'a Scene,
     from_op: usize,
     target: (u32, u32),
     out: &mut Vec<Instance>,
     batches: &mut Vec<Batch>,
-    rect_for: &mut RectFor<'_>,
-) -> std::result::Result<EncodeStop, AtlasError> {
+    mut rect_for: F,
+) -> std::result::Result<EncodeStop, AtlasError>
+where
+    F: FnMut(&'a Scene, GlyphId) -> std::result::Result<AtlasRect, AtlasError>,
+{
     let (tw, th) = (target.0.min(16384) as i32, target.1.min(16384) as i32);
     let mut sink = Sink { out, batches };
     for (i, op) in scene.ops.iter().enumerate().skip(from_op) {
@@ -299,7 +312,7 @@ fn into_windows(e: AtlasError) -> Error {
 const INSTANCE_STRIDE: u32 = std::mem::size_of::<Instance>() as u32;
 const INITIAL_INSTANCES: u32 = 4096;
 
-pub struct GpuRenderer {
+pub(crate) struct GpuRenderer {
     dev: GpuDevice,
     pipeline: Pipeline,
     atlas: GlyphAtlas,
@@ -325,14 +338,14 @@ fn create_instance_buffer(dev: &GpuDevice, count: u32) -> Result<ID3D11Buffer> {
 }
 
 impl GpuRenderer {
-    pub fn new(dev: GpuDevice) -> Result<Self> {
+    pub(crate) fn new(dev: GpuDevice) -> Result<Self> {
         let atlas = GlyphAtlas::new(&dev).map_err(into_windows)?;
         Self::build(dev, atlas)
     }
 
     /// Atlas de tamaño inicial y tope dados (los tests lo llenan con pocos glifos).
     #[cfg(test)]
-    pub fn with_atlas_limits(dev: GpuDevice, initial: u32, max: u32) -> Result<Self> {
+    pub(crate) fn with_atlas_limits(dev: GpuDevice, initial: u32, max: u32) -> Result<Self> {
         let atlas = GlyphAtlas::with_limits(&dev, initial, max).map_err(into_windows)?;
         Self::build(dev, atlas)
     }
@@ -351,13 +364,13 @@ impl GpuRenderer {
         })
     }
 
-    pub fn device(&self) -> &GpuDevice {
+    pub(crate) fn device(&self) -> &GpuDevice {
         &self.dev
     }
 
     /// Dibuja `scene` en `target` (de `target_size` píxeles, acotado a la textura máxima del dispositivo).
     /// No limpia el destino: la escena empieza con su `Op::Clear` si quiere fondo.
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
         scene: &Scene,
         target: &ID3D11RenderTargetView,
@@ -382,9 +395,14 @@ impl GpuRenderer {
                 batches,
                 ..
             } = self;
-            let stop = encode(scene, next_op, size, instances, batches, &mut |sc, id| {
-                atlas.rect_for(dev, sc.glyph_rc(id))
-            })
+            let stop = encode(
+                scene,
+                next_op,
+                size,
+                instances,
+                batches,
+                |sc: &Scene, id: GlyphId| atlas.rect_for(dev, sc.glyph_rc(id)),
+            )
             .map_err(into_windows)?;
             // Se dibuja lo codificado ANTES de tocar el atlas: el vaciado reutiliza sus huecos
             self.flush(scene)?;
@@ -505,13 +523,13 @@ impl GpuRenderer {
     /// Dibuja `scene` en una textura sin ventana que empieza en negro y devuelve `0x00RRGGBB` por píxel
     /// con el tamaño real (acotado a la textura máxima). Solo tests y capturas.
     #[cfg(test)]
-    pub fn render_to_pixels(&mut self, scene: &Scene) -> Result<(Vec<u32>, u32, u32)> {
+    pub(crate) fn render_to_pixels(&mut self, scene: &Scene) -> Result<(Vec<u32>, u32, u32)> {
         self.render_offscreen(scene, None)
     }
 
     /// Como `render_to_pixels`, con `base` (`scene.w * scene.h` píxeles `0x00RRGGBB`) como contenido inicial.
     #[cfg(test)]
-    pub fn render_to_pixels_over(
+    pub(crate) fn render_to_pixels_over(
         &mut self,
         scene: &Scene,
         base: &[u32],

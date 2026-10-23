@@ -253,13 +253,12 @@ impl AxonApp {
                 }
 
                 // Clic en pestañas o en botón cerrar 'x'
-                for idx in 0..self.tabs.len() {
+                for (idx, _tab) in self.tabs.iter().enumerate() {
                     let tr = top_rects.tab_rect(idx);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         if button == MouseButton::Middle {
                             crate::logger::log(&format!(
-                                "-> Clic botón central (rueda) en pestaña {}",
-                                idx
+                                "-> Clic botón central (rueda) en pestaña {idx}"
                             ));
                             self.close_tab(idx);
                             return;
@@ -267,11 +266,11 @@ impl AxonApp {
                         if button == MouseButton::Left {
                             let cr = top_rects.close_btn_rect(idx);
                             if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
-                                crate::logger::log(&format!("-> Clic en [x] pestaña {}", idx));
+                                crate::logger::log(&format!("-> Clic en [x] pestaña {idx}"));
                                 self.close_tab(idx);
                                 return;
                             }
-                            crate::logger::log(&format!("-> Clic en pestaña {}", idx));
+                            crate::logger::log(&format!("-> Clic en pestaña {idx}"));
                             self.click_tab(idx);
                             self.tab_drag = Some(idx);
                             return;
@@ -1346,7 +1345,8 @@ impl AxonApp {
                         let command = block
                             .as_ref()
                             .and_then(|b| b.command.as_deref())
-                            .map(super::clipboard::clean_block_command);
+                            .map(super::clipboard::clean_block_command)
+                            .map(|c| c.into_owned());
                         let exit_code = block.as_ref().and_then(|b| b.exit_code);
                         match action {
                             crate::renderer::BlockCardButton::Copy => {

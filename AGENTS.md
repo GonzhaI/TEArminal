@@ -7,18 +7,18 @@ Terminal nativa para Windows en Rust (ConPTY, `winit`, dibujo con Direct3D 11). 
 ```text
 src/
 ├── main.rs        # carga config, fija AXON_SSH_INTEGRATION y arranca el EventLoop
-├── app/           # AxonApp y bucle de winit, un archivo por responsabilidad:
-│   host.rs (AxonHost: ventanas, único que toca el ActiveEventLoop) · mod.rs (estado, sesión) · handler.rs (despacho de eventos, about_to_wait) · redraw.rs (un fotograma)
+├── app.rs         # AxonApp y bucle de winit; submódulos en app/:
+│   host.rs (AxonHost: ventanas, único que toca el ActiveEventLoop) · handler.rs (despacho de eventos, about_to_wait) · redraw.rs (un fotograma)
 │   keyboard.rs · cursor.rs · click.rs · wheel.rs (entrada) · tabs.rs · settings.rs · clipboard.rs
 │   layout.rs (paneles, TerminalPane/TerminalTab) · viewer.rs (FileViewerState) · context_menu.rs
 │   remote_files.rs (peticiones en banda por SSH) · shell_context.rs · platform.rs (Win32) · keys.rs · tests.rs
 ├── pty.rs         # PtyManager (ConPTY vía portable-pty), hilos I/O
-├── terminal/      # emulador VT: mod.rs (TerminalState), performer.rs (vte → estado), cell.rs
-├── renderer/      # una pantalla por archivo (pane, sidebar, top_bar, status_bar, explorer_panel,
+├── terminal.rs    # emulador VT (TerminalState); submódulos en terminal/: performer.rs (vte → estado), cell.rs
+├── renderer.rs    # fachada del renderer; submódulos en renderer/: una pantalla por archivo (pane, sidebar, top_bar, status_bar, explorer_panel,
 │                  # settings_page, file_viewer, md_preview, context_menu) que GRABA su dibujo en un `Canvas`;
 │                  # geometry.rs = rectángulos compartidos por dibujo y clics; state.rs; glyphs.rs; draw.rs
 │                  # canvas.rs (API de dibujo: graba) · scene.rs (`Scene`/`Op`, lo grabado) · test_support.rs (solo tests)
-│                  # gpu/ = backend Direct3D 11: device.rs (adaptador → WARP) · atlas.rs (glifos R8, imágenes) ·
+│                  # gpu.rs + gpu/ = backend Direct3D 11: device.rs (adaptador → WARP) · atlas.rs (glifos R8, imágenes) ·
 │                  #   pipeline.rs (`Instance`, `Kind`, shaders embebidos) · renderer.rs (`encode` + dibujo) ·
 │                  #   surface.rs (swap chain, redimensionado, recuperación) · shaders/ (quad.hlsl y .cso)
 │                  # golden/ = referencias PNG y firmas de los tests
@@ -107,7 +107,7 @@ tools/             # subset-fonts (recorta fuentes), make-icon.ps1, fetch-themes
 
 ## Convenciones
 
-* Un método nuevo de `AxonApp` va en su submódulo temático, no en `mod.rs`; los brazos de `window_event` solo llaman a un método. Un archivo de ~1 000 líneas se divide por responsabilidad.
+* Un método nuevo de `AxonApp` va en su submódulo temático, no en `app.rs`; los brazos de `window_event` solo llaman a un método. Un archivo de ~1 000 líneas se divide por responsabilidad.
 * Tests junto al código (`src/<módulo>/tests.rs`); no toques la configuración real (`config::dirs_or_fallback()` usa una carpeta temporal en tests).
 * En documentación usa rutas relativas. `axon.toml` de la raíz y `*.log` están en `.gitignore` (ejemplo en `examples/axon.toml`).
 * Al mover código entre archivos, compara hashes de fotogramas antes y después: `cargo test` no detecta cambios de píxeles.

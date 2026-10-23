@@ -16,7 +16,7 @@ fn is_empty(c: RealClip) -> bool {
 }
 
 #[derive(Default)]
-pub struct Canvas {
+pub(crate) struct Canvas {
     scene: Scene,
     /// Origen local en el búfer real (`with_offset`); (0, 0) fuera de él.
     ox: i32,
@@ -29,13 +29,13 @@ pub struct Canvas {
 }
 
 impl Canvas {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Empieza un fotograma `w` x `h`: vacía la escena conservando su memoria y reinicia
     /// desplazamiento y recorte.
-    pub fn begin(&mut self, w: u32, h: u32) {
+    pub(crate) fn begin(&mut self, w: u32, h: u32) {
         self.scene.reset(w, h);
         self.ox = 0;
         self.oy = 0;
@@ -44,7 +44,7 @@ impl Canvas {
         self.clip = (0, 0, w as i32, h as i32);
     }
 
-    pub fn scene(&self) -> &Scene {
+    pub(crate) fn scene(&self) -> &Scene {
         &self.scene
     }
 
@@ -56,7 +56,7 @@ impl Canvas {
     }
 
     /// Tamaño local: el del fotograma, o el declarado por el `with_offset` en curso.
-    pub fn size(&self) -> (usize, usize) {
+    pub(crate) fn size(&self) -> (usize, usize) {
         (self.lw, self.lh)
     }
 
@@ -65,7 +65,7 @@ impl Canvas {
     /// el área local trasladada y con el recorte explícito de cada operación. Sustituye a dibujar
     /// en un búfer aparte y copiar la ventana visible: una forma que sale de la ventana se recorta
     /// con la misma cobertura que tendría entera. Restaura el estado al volver.
-    pub fn with_offset(
+    pub(crate) fn with_offset(
         &mut self,
         dx: i32,
         dy: i32,
@@ -94,7 +94,7 @@ impl Canvas {
         intersect(self.clip, local)
     }
 
-    pub fn clear(&mut self, color: Color) {
+    pub(crate) fn clear(&mut self, color: Color) {
         let c = self.clip;
         if c == (0, 0, self.scene.w as i32, self.scene.h as i32) {
             self.scene.ops.push(Op::Clear(color));
@@ -118,7 +118,15 @@ impl Canvas {
         });
     }
 
-    pub fn fill_rect(&mut self, clip: Clip, x: usize, y: usize, w: usize, h: usize, color: Color) {
+    pub(crate) fn fill_rect(
+        &mut self,
+        clip: Clip,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        color: Color,
+    ) {
         let c = self.real_clip(clip);
         self.fill_real(
             c,
@@ -130,7 +138,14 @@ impl Canvas {
         );
     }
 
-    pub fn glyph(&mut self, clip: Clip, glyph: &Rc<CachedGlyph>, gx: i32, gy: i32, fg: Color) {
+    pub(crate) fn glyph(
+        &mut self,
+        clip: Clip,
+        glyph: &Rc<CachedGlyph>,
+        gx: i32,
+        gy: i32,
+        fg: Color,
+    ) {
         let c = self.real_clip(clip);
         if is_empty(c) {
             return;
@@ -167,7 +182,7 @@ impl Canvas {
         });
     }
 
-    pub fn rounded_fill(
+    pub(crate) fn rounded_fill(
         &mut self,
         x: usize,
         y: usize,
@@ -179,7 +194,7 @@ impl Canvas {
         self.rounded((x, y, w, h), radius, color, false);
     }
 
-    pub fn rounded_stroke(
+    pub(crate) fn rounded_stroke(
         &mut self,
         x: usize,
         y: usize,
@@ -193,7 +208,7 @@ impl Canvas {
 
     /// Copia `img` escalada (vecino más próximo) a `dst = (x, y, ancho, alto)`, recortada a `clip`.
     /// Sustituye al bucle inline que tenía `pane.rs` (misma salida salvo con `rgba` truncado, donde no dibuja nada).
-    pub fn image(&mut self, clip: Clip, img: ImageRef<'_>, dst: (i32, i32, usize, usize)) {
+    pub(crate) fn image(&mut self, clip: Clip, img: ImageRef<'_>, dst: (i32, i32, usize, usize)) {
         let (iw, ih) = (img.width as usize, img.height as usize);
         if iw == 0 || ih == 0 || img.rgba.len() < iw * ih * 4 {
             return;
@@ -215,7 +230,7 @@ impl Canvas {
         });
     }
 
-    pub fn card(
+    pub(crate) fn card(
         &mut self,
         region: (usize, usize, usize, usize),
         inset: usize,

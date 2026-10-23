@@ -1,9 +1,10 @@
 //! Tipos de estado de la interfaz que `app` construye y el renderer dibuja.
 
 /// Estado de una sesión según OSC 133: lo único que Axon sabe de forma fiable de un comando.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionStatus {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SessionStatus {
     /// Prompt libre y sin comandos terminados.
+    #[default]
     Idle,
     /// Hay un comando en ejecución (un agente de CLI cuenta como tal mientras viva su proceso).
     Running,
@@ -14,7 +15,7 @@ pub enum SessionStatus {
 }
 
 impl SessionStatus {
-    pub fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Idle => "En espera",
             Self::Running => "En curso",
@@ -25,27 +26,27 @@ impl SessionStatus {
 }
 
 /// Límite real de la cuenta mostrado como medidor en la barra de estado.
-#[derive(Debug, Clone)]
-pub struct StatusMeter {
-    pub label: String,
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct StatusMeter {
+    pub(crate) label: String,
     /// Consumido, `0.0..=100.0`.
-    pub percent: f32,
+    pub(crate) percent: f32,
 }
 
 /// Cabecera de la columna de sesiones: título, rama y carpeta de la sesión a la vista.
-#[derive(Debug, Clone, Default)]
-pub struct SidebarHeader {
-    pub title: String,
-    pub branch: Option<String>,
-    pub path: Option<String>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SidebarHeader {
+    pub(crate) title: String,
+    pub(crate) branch: Option<String>,
+    pub(crate) path: Option<String>,
     /// El panel está a la derecha: el borde que lo separa del contenido es el izquierdo.
-    pub on_right: bool,
+    pub(crate) on_right: bool,
     /// Fin (y) de la lista de sesiones; bajo ella queda el explorador.
-    pub list_end: usize,
+    pub(crate) list_end: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct SidebarTabItem {
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct SidebarTabItem {
     /// Posición de la pestaña en `AxonApp::tabs`.
     pub index: usize,
     /// `None` en Ajustes y visores de archivo.
@@ -72,7 +73,7 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
-pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
+pub(crate) fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
     if tab.is_settings {
         crate::ui::LucideIcon::Settings
     } else if tab.is_file_viewer {
@@ -112,16 +113,18 @@ pub fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SettingsSection {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SettingsSection {
+    #[default]
     Appearance,
     Terminal,
     Shortcuts,
     About,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AiAgentStatus {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum AiAgentStatus {
+    #[default]
     None,
     Claude,
     Agy,
@@ -131,8 +134,9 @@ pub enum AiAgentStatus {
     Ollama,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditingSettingField {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum EditingSettingField {
+    #[default]
     FontSize,
     UiFontSize,
     LineSpacing,
@@ -141,7 +145,7 @@ pub enum EditingSettingField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettingsPageState {
+pub(crate) struct SettingsPageState {
     pub section: SettingsSection,
     pub hovered_section: Option<SettingsSection>,
     pub hovered_theme: Option<usize>,
@@ -188,7 +192,7 @@ pub struct SettingsPageState {
 impl SettingsPageState {
     /// Limpia todos los estados de hover conservando la sección activa, el scroll y la edición en curso.
     /// Devuelve `true` si algún indicador de hover cambió.
-    pub fn clear_hover(&mut self) -> bool {
+    pub(crate) fn clear_hover(&mut self) -> bool {
         let changed = self.hovered_section.is_some()
             || self.hovered_theme.is_some()
             || self.hovered_theme_mode.is_some()

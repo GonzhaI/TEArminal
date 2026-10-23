@@ -3,18 +3,85 @@
 
 use crate::app::platform::hide_console;
 use crate::json::extract_json_str;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::process::Command;
 use std::sync::RwLock;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateInfo {
-    pub current_version: String,
-    pub latest_version: String,
-    pub download_url: Option<String>,
+// -------------------------------------------------------------------------------------------------
+// Patrón Typestate para el instalador (Estados en Tiempo de Compilación)
+// -------------------------------------------------------------------------------------------------
+
+/// Marcador zero-sized: instalador descargado en disco pero cuyo hash SHA-256 no ha sido verificado.
+pub(crate) struct Unverified;
+
+/// Marcador zero-sized: instalador cuyo hash SHA-256 coincide estrictamente con el oficial de la release.
+pub(crate) struct Verified;
+
+/// Instalador de Axon con estados en tiempo de compilación (Patrón Typestate).
+///
+/// El método `launch()` **solo existe** en `UpdateInstaller<Verified>`. Es un error
+/// de compilación intentar ejecutar un instalador en estado `Unverified`, garantizando por tipo
+/// que ningún binario descargado pueda ejecutarse sin haber superado `verify()`.
+pub(crate) struct UpdateInstaller<State = Unverified> {
+    path: std::path::PathBuf,
+    _state: PhantomData<State>,
+}
+
+impl UpdateInstaller<Unverified> {
+    pub(crate) fn new(path: std::path::PathBuf) -> Self {
+        Self {
+            path,
+            _state: PhantomData,
+        }
+    }
+
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Consume el instalador no verificado y devuelve `UpdateInstaller<Verified>` solo
+    /// si el hash SHA-256 calculado coincide con el esperado.
+    pub(crate) fn verify(self, expected_sha256: &str) -> Result<UpdateInstaller<Verified>, String> {
+        let computed =
+            sha256_hex(&self.path).ok_or_else(|| "no se pudo calcular el hash".to_string())?;
+        if computed.eq_ignore_ascii_case(expected_sha256) {
+            Ok(UpdateInstaller {
+                path: self.path,
+                _state: PhantomData,
+            })
+        } else {
+            Err(format!(
+                "hash no coincide: esperado {expected_sha256}, calculado {computed}"
+            ))
+        }
+    }
+}
+
+impl UpdateInstaller<Verified> {
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Ejecuta el instalador verificado. Solo accesible tras `verify()` exitoso en tiempo de compilación.
+    pub(crate) fn launch(&self) -> Result<(), std::io::Error> {
+        Command::new(&self.path).spawn()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct UpdateInfo {
+    pub(crate) current_version: String,
+    pub(crate) latest_version: String,
+    pub(crate) download_url: Option<String>,
     /// `SHA256SUMS.txt` de la misma release: el instalador no se ejecuta si su hash no coincide
-    pub checksums_url: Option<String>,
-    pub html_url: String,
+    pub(crate) checksums_url: Option<String>,
+    pub(crate) html_url: String,
 }
 
 /// Único origen aceptado para descargar el instalador y sus sumas de verificación
@@ -23,19 +90,19 @@ const RELEASE_PREFIX: &str = "https://github.com/GonzhaI/axon/releases/download/
 static AVAILABLE_UPDATE: RwLock<Option<UpdateInfo>> = RwLock::new(None);
 
 /// Devuelve la información de actualización disponible, si existe
-pub fn get_available_update() -> Option<UpdateInfo> {
+pub(crate) fn get_available_update() -> Option<UpdateInfo> {
     AVAILABLE_UPDATE.read().ok().and_then(|lock| lock.clone())
 }
 
 /// Almacena la actualización disponible detectada
-pub fn set_available_update(info: Option<UpdateInfo>) {
+pub(crate) fn set_available_update(info: Option<UpdateInfo>) {
     if let Ok(mut lock) = AVAILABLE_UPDATE.write() {
         *lock = info;
     }
 }
 
 /// Extrae la tupla semver `(major, minor, patch)` a partir de una cadena de versión ("0.7.1", "v0.8.0", etc.)
-pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
+pub(crate) fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
     let clean = v.trim().trim_start_matches('v').trim_start_matches('V');
     let mut parts = clean.split('.');
     let major = parts.next()?.parse().ok()?;
@@ -50,7 +117,7 @@ pub fn parse_version(v: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Determina si `latest` es estrictamente mayor que `current` según SemVer
-pub fn is_newer_version(current: &str, latest: &str) -> bool {
+pub(crate) fn is_newer_version(current: &str, latest: &str) -> bool {
     match (parse_version(current), parse_version(latest)) {
         (Some(c), Some(l)) => l > c,
         _ => false,
@@ -74,7 +141,7 @@ fn extract_asset_url(json: &str, accept: impl Fn(&str) -> bool) -> Option<String
 }
 
 /// Busca en el JSON de GitHub Releases la URL de descarga directa del instalador de Axon
-pub fn extract_installer_download_url(json: &str) -> Option<String> {
+pub(crate) fn extract_installer_download_url(json: &str) -> Option<String> {
     extract_asset_url(json, |v| {
         v.ends_with(".exe") && (v.contains("setup") || v.contains("Setup"))
     })
@@ -85,13 +152,24 @@ fn extract_checksums_url(json: &str) -> Option<String> {
     extract_asset_url(json, |v| v.ends_with("/SHA256SUMS.txt"))
 }
 
+/// Hash esperado de `file_name` desde un lector genérico `BufRead` reutilizando un único buffer
+fn expected_hash_reader<R: std::io::BufRead>(mut reader: R, file_name: &str) -> Option<String> {
+    let mut line = String::with_capacity(256);
+    while reader.read_line(&mut line).ok()? != 0 {
+        let mut it = line.split_whitespace();
+        if let (Some(hash), Some(name)) = (it.next(), it.next()) {
+            if name.trim_start_matches('*') == file_name {
+                return Some(hash.to_ascii_lowercase());
+            }
+        }
+        line.clear();
+    }
+    None
+}
+
 /// Hash esperado de `file_name` en un `SHA256SUMS.txt` (`<hash>  <archivo>` por línea)
 fn expected_hash(sums: &str, file_name: &str) -> Option<String> {
-    sums.lines().find_map(|line| {
-        let mut it = line.split_whitespace();
-        let (hash, name) = (it.next()?, it.next()?);
-        (name.trim_start_matches('*') == file_name).then(|| hash.to_ascii_lowercase())
-    })
+    expected_hash_reader(sums.as_bytes(), file_name)
 }
 
 /// SHA-256 de un archivo con `certutil` (viene con Windows)
@@ -122,7 +200,7 @@ fn curl_get(url: &str, max_time: &str, extra: &[&str]) -> Option<Vec<u8>> {
 }
 
 /// Comprueba sincrónicamente si hay una nueva versión en GitHub Releases
-pub fn check_for_updates_sync() -> Option<UpdateInfo> {
+pub(crate) fn check_for_updates_sync() -> Option<UpdateInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
     let json_text = fetch_releases_json()?;
 
@@ -165,7 +243,7 @@ fn fetch_releases_json() -> Option<String> {
 }
 
 /// Lanza la comprobación de actualización en un hilo en segundo plano y notifica al EventLoop
-pub fn check_for_updates_background(
+pub(crate) fn check_for_updates_background(
     proxy: Option<winit::event_loop::EventLoopProxy<crate::app::AxonEvent>>,
 ) {
     std::thread::Builder::new()
@@ -185,9 +263,9 @@ pub fn check_for_updates_background(
         .ok();
 }
 
-/// Descarga el instalador a una carpeta temporal nueva y devuelve su ruta solo si su SHA-256 coincide con el
-/// de `SHA256SUMS.txt` de la misma release. Sin sumas, sin coincidencia o con una URL ajena: `None`.
-fn download_verified_installer(info: &UpdateInfo) -> Option<std::path::PathBuf> {
+/// Descarga el instalador a una carpeta temporal nueva y devuelve un `UpdateInstaller<Verified>` solo
+/// si su SHA-256 coincide con el de `SHA256SUMS.txt` de la misma release. Sin sumas, sin coincidencia o con una URL ajena: `None`.
+fn download_verified_installer(info: &UpdateInfo) -> Option<UpdateInstaller<Verified>> {
     let url = info.download_url.as_deref()?;
     let name = url.rsplit('/').next()?;
     if !url.starts_with(RELEASE_PREFIX)
@@ -208,23 +286,31 @@ fn download_verified_installer(info: &UpdateInfo) -> Option<std::path::PathBuf> 
     let dir = std::env::temp_dir().join(format!("axon-update-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(name);
-    let verified = curl_get(url, "60", &[])
-        .is_some_and(|bytes| std::fs::write(&path, bytes).is_ok())
-        && sha256_hex(&path).is_some_and(|h| h == expected);
-    if !verified {
+    let downloaded =
+        curl_get(url, "60", &[]).is_some_and(|bytes| std::fs::write(&path, bytes).is_ok());
+    if !downloaded {
         let _ = std::fs::remove_dir_all(&dir);
         return None;
     }
-    Some(path)
+
+    let unverified = UpdateInstaller::new(path);
+    match unverified.verify(&expected) {
+        Ok(verified) => Some(verified),
+        Err(e) => {
+            crate::logger::log(&format!("Verificación de instalador fallida: {e}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            None
+        }
+    }
 }
 
 /// Abre una URL en el navegador web por defecto del sistema (solo `http(s)`: ver `shell_open_url`)
-pub fn open_url_in_browser(url: &str) {
+pub(crate) fn open_url_in_browser(url: &str) {
     crate::app::platform::shell_open_url(url);
 }
 
 /// Dispara la acción de actualización: descarga el instalador y lo lanza, o abre la release en el navegador
-pub fn trigger_update() {
+pub(crate) fn trigger_update() {
     let Some(info) = get_available_update() else {
         return;
     };
@@ -232,12 +318,12 @@ pub fn trigger_update() {
     std::thread::Builder::new()
         .name("axon-updater".to_string())
         .spawn(move || {
-            if let Some(installer_path) = download_verified_installer(&info) {
+            if let Some(installer) = download_verified_installer(&info) {
                 crate::logger::log(&format!(
                     "Lanzando instalador de Axon: {}",
-                    installer_path.display()
+                    installer.path().display()
                 ));
-                if Command::new(&installer_path).spawn().is_ok() {
+                if installer.launch().is_ok() {
                     return;
                 }
             } else {
@@ -333,5 +419,32 @@ mod tests {
             hash.as_deref(),
             Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         );
+    }
+
+    #[test]
+    fn test_typestate_update_installer_verification() {
+        let path =
+            std::env::temp_dir().join(format!("axon-test-installer-{}.exe", std::process::id()));
+        std::fs::write(&path, b"dummy installer content").unwrap();
+
+        let real_hash = sha256_hex(&path).unwrap();
+
+        // 1. Empieza en estado Unverified
+        let unverified = UpdateInstaller::new(path.clone());
+        assert_eq!(unverified.path(), &path);
+
+        // 2. Verificación fallida con hash incorrecto rechaza la transición
+        let failed_result =
+            unverified.verify("0000000000000000000000000000000000000000000000000000000000000000");
+        assert!(failed_result.is_err());
+
+        // 3. Verificación exitosa produce UpdateInstaller<Verified>
+        let unverified_2 = UpdateInstaller::new(path.clone());
+        let verified: UpdateInstaller<Verified> =
+            unverified_2.verify(&real_hash).expect("debe verificar");
+        assert_eq!(verified.path(), &path);
+
+        // Limpieza
+        let _ = std::fs::remove_file(&path);
     }
 }

@@ -1,10 +1,10 @@
 //! Estado del visor/editor de archivos en pestaña: texto, selección, deshacer y diff de git.
 
-#[derive(Debug, Clone)]
-pub struct ViewerSnapshot {
-    pub lines: Vec<String>,
-    pub cursor_line: usize,
-    pub cursor_col: usize,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ViewerSnapshot {
+    pub(crate) lines: Vec<String>,
+    pub(crate) cursor_line: usize,
+    pub(crate) cursor_col: usize,
 }
 
 use std::cell::RefCell;
@@ -12,25 +12,25 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SelectionStats {
-    pub chars: usize,
-    pub lines: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SelectionStats {
+    pub(crate) chars: usize,
+    pub(crate) lines: usize,
 }
 
 /// Fila visual del visor: un tramo [start, end) de caracteres de una línea (`end == usize::MAX` = hasta el final).
 /// El ajuste de línea parte una línea en varias filas y el plegado oculta líneas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RowRef {
-    pub line: usize,
-    pub start: usize,
-    pub end: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RowRef {
+    pub(crate) line: usize,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct RowsCache {
+pub(crate) struct RowsCache {
     key: (u64, u64, usize, bool),
-    rows: Rc<Vec<RowRef>>,
+    rows: Rc<[RowRef]>,
     max_cols_gen: u64,
     max_cols: usize,
 }
@@ -130,7 +130,7 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
 }
 
 #[derive(Debug, Clone)]
-pub struct FileViewerState {
+pub(crate) struct FileViewerState {
     pub path: std::path::PathBuf,
     pub file_name: String,
     pub lines: Vec<String>,
@@ -185,7 +185,8 @@ pub struct FileViewerState {
 }
 
 /// Texto de un archivo tal como lo ve el visor, más lo necesario para escribirlo igual que se leyó
-pub struct DecodedText {
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct DecodedText {
     pub lines: Vec<String>,
     pub crlf: bool,
     pub final_newline: bool,
@@ -193,7 +194,15 @@ pub struct DecodedText {
 }
 
 impl DecodedText {
-    pub fn decode(bytes: &[u8]) -> Self {
+    /// Decodifica texto desde cualquier flujo de lectura genérico (std::io::Read)
+    #[cfg(test)]
+    pub(crate) fn from_reader(mut reader: impl std::io::Read) -> std::io::Result<Self> {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(Self::decode(&bytes))
+    }
+
+    pub(crate) fn decode(bytes: &[u8]) -> Self {
         let (text, non_utf8) = match std::str::from_utf8(bytes) {
             Ok(t) => (std::borrow::Cow::Borrowed(t), false),
             Err(_) => (String::from_utf8_lossy(bytes), true),
@@ -211,20 +220,27 @@ impl DecodedText {
     }
 }
 
+impl From<&[u8]> for DecodedText {
+    #[inline]
+    fn from(bytes: &[u8]) -> Self {
+        Self::decode(bytes)
+    }
+}
+
 impl FileViewerState {
     /// Única puerta de las mutaciones: en modo lectura (o binario) el texto no puede cambiar por ninguna vía.
-    pub fn is_editable(&self) -> bool {
+    pub(crate) fn is_editable(&self) -> bool {
         !self.is_binary && !self.is_read_only && !self.non_utf8 && !self.is_diff()
     }
 
     /// Alterna lectura/edición; un archivo que no es UTF-8 no puede pasar a edición (se corrompería al guardar)
-    pub fn toggle_read_only(&mut self) {
+    pub(crate) fn toggle_read_only(&mut self) {
         if !self.non_utf8 {
             self.is_read_only = !self.is_read_only;
         }
     }
 
-    pub fn is_markdown(&self) -> bool {
+    pub(crate) fn is_markdown(&self) -> bool {
         self.path
             .extension()
             .and_then(|e| e.to_str())
@@ -232,12 +248,12 @@ impl FileViewerState {
     }
 
     /// El ajuste de línea no se aplica a la vista previa de Markdown (se dibuja línea a línea)
-    pub fn wrap_active(&self) -> bool {
+    pub(crate) fn wrap_active(&self) -> bool {
         self.word_wrap && !(self.render_markdown && self.is_markdown())
     }
 
     /// Filas visuales (ajuste de línea + plegado), en caché mientras no cambien texto, pliegues, ancho ni modo.
-    pub fn rows(&self) -> Rc<Vec<RowRef>> {
+    pub(crate) fn rows(&self) -> Rc<[RowRef]> {
         let wrap = self.wrap_active();
         let key = (self.edit_gen, self.fold_gen, self.visible_cols, wrap);
         let prev_max_cols = {
@@ -282,7 +298,7 @@ impl FileViewerState {
                 .max()
                 .unwrap_or(0)
         });
-        let rows = Rc::new(rows);
+        let rows: Rc<[RowRef]> = Rc::from(rows);
         *self.rows_cache.borrow_mut() = Some(RowsCache {
             key,
             rows: rows.clone(),
@@ -293,7 +309,7 @@ impl FileViewerState {
     }
 
     /// Texto del tramo de una fila visual
-    pub fn row_text(&self, row: &RowRef) -> &str {
+    pub(crate) fn row_text(&self, row: &RowRef) -> &str {
         let line = self.lines.get(row.line).map_or("", |l| l.as_str());
         if row.start == 0 && row.end == usize::MAX {
             return line;
@@ -308,7 +324,7 @@ impl FileViewerState {
     }
 
     /// (línea, columna) bajo la fila visual `row_idx` y la coordenada X del ratón
-    pub fn hit_test(
+    pub(crate) fn hit_test(
         &self,
         row_idx: usize,
         mx: usize,
@@ -330,24 +346,23 @@ impl FileViewerState {
     }
 
     /// Índice de la fila visual que contiene (línea, columna); `None` si la línea está plegada
-    pub fn row_of(&self, line: usize, col: usize) -> Option<usize> {
+    pub(crate) fn row_of(&self, line: usize, col: usize) -> Option<usize> {
         self.rows()
             .iter()
             .rposition(|r| r.line == line && r.start <= col)
     }
 
     /// Última línea de la región plegable que empieza en `start` (títulos en Markdown, sangría en el resto)
-    pub fn fold_end(&self, start: usize) -> Option<usize> {
+    pub(crate) fn fold_end(&self, start: usize) -> Option<usize> {
         let line = self.lines.get(start)?;
-        let n = self.lines.len();
         if self.is_markdown() {
             if let Some(level) = heading_level(line) {
                 let mut end = start;
-                for i in start + 1..n {
-                    if heading_level(&self.lines[i]).is_some_and(|l| l <= level) {
+                for (i, cur_line) in self.lines.iter().enumerate().skip(start + 1) {
+                    if heading_level(cur_line).is_some_and(|l| l <= level) {
                         break;
                     }
-                    if !self.lines[i].trim().is_empty() {
+                    if !cur_line.trim().is_empty() {
                         end = i;
                     }
                 }
@@ -356,8 +371,8 @@ impl FileViewerState {
         }
         let base = indent_of(line)?;
         let mut end = None;
-        for i in start + 1..n {
-            match indent_of(&self.lines[i]) {
+        for (i, cur_line) in self.lines.iter().enumerate().skip(start + 1) {
+            match indent_of(cur_line) {
                 None => continue,
                 Some(ind) if ind > base => end = Some(i),
                 _ => break,
@@ -367,7 +382,7 @@ impl FileViewerState {
     }
 
     /// Plega o despliega la región que empieza en `line`
-    pub fn toggle_fold(&mut self, line: usize) {
+    pub(crate) fn toggle_fold(&mut self, line: usize) {
         if !self.folded.remove(&line) {
             let Some(end) = self.fold_end(line) else {
                 return;
@@ -382,9 +397,12 @@ impl FileViewerState {
         self.fold_gen += 1;
     }
 
-    pub fn fold_all(&mut self) {
-        let starts: Vec<usize> = (0..self.lines.len())
-            .filter(|&i| self.fold_end(i).is_some())
+    pub(crate) fn fold_all(&mut self) {
+        let starts: Vec<usize> = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, _)| self.fold_end(i).is_some().then_some(i))
             .collect();
         self.folded.extend(starts);
         self.fold_gen += 1;
@@ -400,7 +418,7 @@ impl FileViewerState {
         self.scroll_offset = self.scroll_offset.min(self.rows().len().saturating_sub(1));
     }
 
-    pub fn unfold_all(&mut self) {
+    pub(crate) fn unfold_all(&mut self) {
         if !self.folded.is_empty() {
             self.folded.clear();
             self.fold_gen += 1;
@@ -408,7 +426,7 @@ impl FileViewerState {
     }
 
     /// Despliega las regiones que ocultan `line` (el cursor nunca queda en una línea oculta)
-    pub fn reveal_line(&mut self, line: usize) {
+    pub(crate) fn reveal_line(&mut self, line: usize) {
         let hiding: Vec<usize> = self
             .folded
             .iter()
@@ -423,7 +441,7 @@ impl FileViewerState {
         }
     }
 
-    pub fn selection_ordered(&self) -> Option<((usize, usize), (usize, usize))> {
+    pub(crate) fn selection_ordered(&self) -> Option<((usize, usize), (usize, usize))> {
         let (p1, p2) = self.selection?;
         if p1 <= p2 {
             Some((p1, p2))
@@ -433,7 +451,7 @@ impl FileViewerState {
     }
 
     /// Ancho en columnas de la línea más larga (tabulador = 4), para el scroll horizontal.
-    pub fn max_cols(&self) -> usize {
+    pub(crate) fn max_cols(&self) -> usize {
         if let Some(c) = &*self.rows_cache.borrow() {
             if c.max_cols_gen == self.edit_gen {
                 return c.max_cols;
@@ -453,12 +471,12 @@ impl FileViewerState {
     }
 
     /// Máximo `scroll_offset_x`: deja 2 columnas libres para el cursor al final de la línea más larga.
-    pub fn max_scroll_x(&self) -> usize {
+    pub(crate) fn max_scroll_x(&self) -> usize {
         (self.max_cols() + 2).saturating_sub(self.visible_cols.max(1))
     }
 
     /// Resumen de la selección: caracteres y líneas (sin alojar memoria)
-    pub fn selection_stats(&self) -> Option<SelectionStats> {
+    pub(crate) fn selection_stats(&self) -> Option<SelectionStats> {
         let ((l1, c1), (l2, c2)) = self.selection_ordered()?;
         if (l1 == l2 && c1 == c2) || l1 >= self.lines.len() {
             return None;
@@ -488,7 +506,7 @@ impl FileViewerState {
         })
     }
 
-    pub fn has_selection(&self) -> bool {
+    pub(crate) fn has_selection(&self) -> bool {
         if let Some((p1, p2)) = self.selection_ordered() {
             p1 != p2
         } else {
@@ -496,11 +514,11 @@ impl FileViewerState {
         }
     }
 
-    pub fn clear_selection(&mut self) {
+    pub(crate) fn clear_selection(&mut self) {
         self.selection = None;
     }
 
-    pub fn selected_text(&self) -> Option<String> {
+    pub(crate) fn selected_text(&self) -> Option<String> {
         let ((l1, c1), (l2, c2)) = self.selection_ordered()?;
         if l1 == l2 && c1 == c2 {
             return None;
@@ -509,8 +527,10 @@ impl FileViewerState {
             return None;
         }
 
-        let mut res = Vec::new();
-        for line_idx in l1..=l2.min(self.lines.len().saturating_sub(1)) {
+        let end_idx = l2.min(self.lines.len().saturating_sub(1));
+        let num_lines = (end_idx + 1).saturating_sub(l1);
+        let mut res = Vec::with_capacity(num_lines);
+        for line_idx in l1..=end_idx {
             let line = &self.lines[line_idx];
             let len = char_count(line);
             let start = if line_idx == l1 { c1.min(len) } else { 0 };
@@ -526,7 +546,7 @@ impl FileViewerState {
         Some(res.join("\n"))
     }
 
-    pub fn delete_selection(&mut self) -> bool {
+    pub(crate) fn delete_selection(&mut self) -> bool {
         if !self.is_editable() {
             return false;
         }
@@ -570,7 +590,7 @@ impl FileViewerState {
         true
     }
 
-    pub fn select_all(&mut self) {
+    pub(crate) fn select_all(&mut self) {
         if self.lines.is_empty() {
             self.selection = None;
             return;
@@ -583,11 +603,11 @@ impl FileViewerState {
     }
 
     #[inline]
-    pub fn line_len(&self, line: usize) -> usize {
+    pub(crate) fn line_len(&self, line: usize) -> usize {
         self.lines.get(line).map_or(0, |l| char_count(l))
     }
 
-    pub fn select_word_at_cursor(&mut self) {
+    pub(crate) fn select_word_at_cursor(&mut self) {
         if self.lines.is_empty() || self.cursor_line >= self.lines.len() {
             return;
         }
@@ -621,7 +641,7 @@ impl FileViewerState {
         self.cursor_col = end_col;
     }
 
-    pub fn select_line_at_cursor(&mut self) {
+    pub(crate) fn select_line_at_cursor(&mut self) {
         if self.lines.is_empty() || self.cursor_line >= self.lines.len() {
             return;
         }
@@ -632,7 +652,7 @@ impl FileViewerState {
 
     /// Extrae un enlace web externo (Markdown `[texto](url)` o URL cruda `http://`/`https://`)
     /// bajo la línea y columna especificadas.
-    pub fn link_at(&self, line_idx: usize, col: usize) -> Option<String> {
+    pub(crate) fn link_at(&self, line_idx: usize, col: usize) -> Option<String> {
         let line = self.lines.get(line_idx)?;
         let chars: Vec<char> = line.chars().collect();
         let col = col.min(chars.len());
@@ -713,7 +733,7 @@ impl FileViewerState {
 
         None
     }
-    pub fn push_undo(&mut self) {
+    pub(crate) fn push_undo(&mut self) {
         if self.undo_stack.len() >= 100 {
             self.undo_stack.remove(0);
         }
@@ -726,7 +746,7 @@ impl FileViewerState {
         self.edit_gen += 1;
     }
 
-    pub fn undo(&mut self) {
+    pub(crate) fn undo(&mut self) {
         if !self.is_editable() {
             return;
         }
@@ -744,7 +764,7 @@ impl FileViewerState {
         }
     }
 
-    pub fn redo(&mut self) {
+    pub(crate) fn redo(&mut self) {
         if !self.is_editable() {
             return;
         }
@@ -762,7 +782,7 @@ impl FileViewerState {
         }
     }
 
-    pub fn ensure_cursor_visible(&mut self, visible_lines: usize) {
+    pub(crate) fn ensure_cursor_visible(&mut self, visible_lines: usize) {
         self.reveal_line(self.cursor_line);
         if let Some(row) = self.row_of(self.cursor_line, self.cursor_col) {
             if row < self.scroll_offset {
@@ -782,7 +802,7 @@ impl FileViewerState {
         }
     }
 
-    pub fn insert_char(&mut self, ch: char) {
+    pub(crate) fn insert_char(&mut self, ch: char) {
         if !self.is_editable() {
             return;
         }
@@ -804,7 +824,7 @@ impl FileViewerState {
         self.is_dirty = true;
     }
 
-    pub fn insert_text(&mut self, text: &str) {
+    pub(crate) fn insert_text(&mut self, text: &str) {
         if !self.is_editable() || text.is_empty() {
             return;
         }
@@ -849,7 +869,7 @@ impl FileViewerState {
         self.is_dirty = true;
     }
 
-    pub fn insert_newline(&mut self) {
+    pub(crate) fn insert_newline(&mut self) {
         if !self.is_editable() {
             return;
         }
@@ -875,11 +895,11 @@ impl FileViewerState {
         self.is_dirty = true;
     }
 
-    pub fn insert_tab(&mut self) {
+    pub(crate) fn insert_tab(&mut self) {
         self.insert_text("    ");
     }
 
-    pub fn backspace(&mut self) {
+    pub(crate) fn backspace(&mut self) {
         if !self.is_editable() {
             return;
         }
@@ -915,7 +935,7 @@ impl FileViewerState {
         }
     }
 
-    pub fn delete(&mut self) {
+    pub(crate) fn delete(&mut self) {
         if !self.is_editable() {
             return;
         }
@@ -950,7 +970,7 @@ impl FileViewerState {
     }
 
     /// Borrado de palabra hacia la izquierda (Ctrl + Backspace)
-    pub fn delete_word_left(&mut self) {
+    pub(crate) fn delete_word_left(&mut self) {
         if !self.is_editable() || self.lines.is_empty() {
             return;
         }
@@ -972,7 +992,7 @@ impl FileViewerState {
     }
 
     /// Borrado de palabra hacia la derecha (Ctrl + Delete)
-    pub fn delete_word_right(&mut self) {
+    pub(crate) fn delete_word_right(&mut self) {
         if !self.is_editable() || self.lines.is_empty() {
             return;
         }
@@ -993,7 +1013,7 @@ impl FileViewerState {
         self.is_dirty = true;
     }
 
-    pub fn find_word_boundary_left(&self) -> usize {
+    pub(crate) fn find_word_boundary_left(&self) -> usize {
         if self.cursor_col == 0 || self.cursor_line >= self.lines.len() {
             return 0;
         }
@@ -1026,7 +1046,7 @@ impl FileViewerState {
         idx
     }
 
-    pub fn find_word_boundary_right(&self) -> usize {
+    pub(crate) fn find_word_boundary_right(&self) -> usize {
         if self.cursor_line >= self.lines.len() {
             return 0;
         }
@@ -1057,7 +1077,7 @@ impl FileViewerState {
         idx
     }
 
-    pub fn is_diff(&self) -> bool {
+    pub(crate) fn is_diff(&self) -> bool {
         self.diff_stash.is_some()
     }
 
@@ -1067,12 +1087,12 @@ impl FileViewerState {
             let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
             let marks = diff_marks(base, &self.lines);
             let has_changes = marks.iter().any(Option::is_some);
-            *cache = Some((self.edit_gen, has_changes, Rc::new(marks)));
+            *cache = Some((self.edit_gen, has_changes, Rc::from(marks)));
         }
     }
 
     /// El texto (el real, aunque se esté viendo el diff) difiere de `HEAD`
-    pub fn has_git_changes(&self) -> bool {
+    pub(crate) fn has_git_changes(&self) -> bool {
         let Some(base) = &self.git_base else {
             return true;
         };
@@ -1084,7 +1104,7 @@ impl FileViewerState {
     }
 
     /// Alterna entre el archivo y su diff unificado contra `HEAD` (la vista de cambios es de solo lectura)
-    pub fn toggle_diff(&mut self) {
+    pub(crate) fn toggle_diff(&mut self) {
         if let Some(st) = self.diff_stash.take() {
             let st = *st;
             self.lines = st.lines;
@@ -1124,7 +1144,7 @@ impl FileViewerState {
         self.fold_gen += 1;
     }
 
-    pub fn get_line_git_diff_status(&self, line_idx: usize) -> Option<GitLineStatus> {
+    pub(crate) fn get_line_git_diff_status(&self, line_idx: usize) -> Option<GitLineStatus> {
         if self.is_diff() {
             return None;
         }
@@ -1139,7 +1159,7 @@ impl FileViewerState {
     }
 
     /// Programa el autoguardado para ejecutarse con retardo (antirrebote) tras dejar de teclear
-    pub fn schedule_autosave(&mut self) {
+    pub(crate) fn schedule_autosave(&mut self) {
         if self.remote_destination.is_none() {
             self.needs_autosave = true;
             self.last_edit_time = Instant::now();
@@ -1147,7 +1167,7 @@ impl FileViewerState {
     }
 
     /// Autoguardado tras editar: solo archivos locales, sin recortar saltos en curso ni borrar el historial de deshacer
-    pub fn autosave_local(&mut self) {
+    pub(crate) fn autosave_local(&mut self) {
         if self.remote_destination.is_none() {
             self.needs_autosave = false;
             let _ = self.save_to_disk_inner(false);
@@ -1155,7 +1175,7 @@ impl FileViewerState {
     }
 
     /// Recorta las líneas vacías finales dejando como máximo una (estándar de los IDE) y mantiene el cursor dentro de rango
-    pub fn trim_trailing_blank_lines(&mut self) {
+    pub(crate) fn trim_trailing_blank_lines(&mut self) {
         while self.lines.len() > 1
             && self.lines.last().map(|s| s.is_empty()).unwrap_or(false)
             && self.lines[self.lines.len() - 2].is_empty()
@@ -1172,7 +1192,7 @@ impl FileViewerState {
 
     /// Contenido de un archivo remoto tal como se escribe al guardar (con el fin de línea y el salto final
     /// que tenía al abrirlo, igual que el guardado local)
-    pub fn remote_content(&mut self) -> String {
+    pub(crate) fn remote_content(&mut self) -> String {
         self.trim_trailing_blank_lines();
         self.text_for_disk()
     }
@@ -1202,16 +1222,21 @@ impl FileViewerState {
     }
 
     /// El servidor confirmó la escritura: el texto actual pasa a ser el original
-    pub fn mark_remote_saved(&mut self) {
+    pub(crate) fn mark_remote_saved(&mut self) {
         self.is_dirty = false;
         self.file_size = self.lines.iter().map(|l| l.len() + 1).sum::<usize>() as u64;
         self.original_lines = self.lines.clone();
         self.edit_gen += 1;
     }
 
+    /// Escribe el contenido en cualquier flujo de salida genérico (std::io::Write)
+    pub(crate) fn write_to(&self, mut writer: impl std::io::Write) -> Result<(), std::io::Error> {
+        let content = self.text_for_disk();
+        writer.write_all(content.as_bytes())
+    }
+
     /// Escribe en `<archivo>.axon-tmp` y renombra encima: un fallo (disco lleno…) deja el original intacto
     fn write_local(&self) -> Result<(), std::io::Error> {
-        let content = self.text_for_disk();
         // Un enlace simbólico se conserva: se reemplaza su destino, no el enlace
         let target = if std::fs::symlink_metadata(&self.path).is_ok_and(|m| m.is_symlink()) {
             std::fs::canonicalize(&self.path).unwrap_or_else(|_| self.path.clone())
@@ -1227,19 +1252,24 @@ impl FileViewerState {
             .write(true)
             .create_new(true)
             .open(&tmp)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, content.as_bytes()))
+            .and_then(|f| {
+                use std::io::Write;
+                let mut writer = std::io::BufWriter::new(f);
+                self.write_to(&mut writer)?;
+                writer.flush()
+            })
             .and_then(|()| std::fs::rename(&tmp, &target))
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&tmp);
             })
     }
 
-    pub fn save_to_disk(&mut self) -> Result<(), std::io::Error> {
+    pub(crate) fn save_to_disk(&mut self) -> Result<(), ViewerSaveError> {
         self.needs_autosave = false;
         self.save_to_disk_inner(true)
     }
 
-    fn save_to_disk_inner(&mut self, is_explicit_save: bool) -> Result<(), std::io::Error> {
+    fn save_to_disk_inner(&mut self, is_explicit_save: bool) -> Result<(), ViewerSaveError> {
         // En la vista de cambios `lines` es el diff, nunca debe llegar a disco
         if self.is_binary || self.non_utf8 || self.is_diff() {
             return Ok(());
@@ -1251,9 +1281,7 @@ impl FileViewerState {
 
         if self.remote_destination.is_some() {
             // El guardado remoto es asíncrono (`AxonApp::ssh_save_viewer`): nunca bloquea aquí
-            return Err(std::io::Error::other(
-                "los archivos remotos se guardan por SSH en segundo plano",
-            ));
+            return Err(ViewerSaveError::RemoteFile);
         }
 
         // Otro programa escribió el archivo desde que se abrió: el autoguardado se detiene y un guardado
@@ -1267,13 +1295,12 @@ impl FileViewerState {
             } else {
                 "El archivo cambió en disco: autoguardado detenido (guarda con Ctrl+S para sobrescribir)"
             };
-            let e = std::io::Error::other(msg);
-            self.save_error = Some(e.to_string());
-            return Err(e);
+            self.save_error = Some(msg.to_string());
+            return Err(ViewerSaveError::ExternalModification(msg));
         }
         if let Err(e) = self.write_local() {
             self.save_error = Some(e.to_string());
-            return Err(e);
+            return Err(ViewerSaveError::Io(e));
         }
         self.save_error = None;
         self.disk_mtime = self.disk_mtime_now();
@@ -1287,16 +1314,26 @@ impl FileViewerState {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ViewerSaveError {
+    #[error("los archivos remotos se guardan por SSH en segundo plano")]
+    RemoteFile,
+    #[error("{0}")]
+    ExternalModification(&'static str),
+    #[error("error de E/S al guardar archivo: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GitLineStatus {
+pub(crate) enum GitLineStatus {
     Added,
     Modified,
     Deleted,
 }
 
 /// Estado del visor mientras se muestra el diff (se restaura al volver al archivo)
-#[derive(Debug, Clone)]
-pub struct DiffStash {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffStash {
     lines: Vec<String>,
     original_lines: Vec<String>,
     cursor_line: usize,
@@ -1308,12 +1345,13 @@ pub struct DiffStash {
     render_markdown: bool,
 }
 
-type GitMarks = Rc<Vec<Option<GitLineStatus>>>;
+type GitMarks = Rc<[Option<GitLineStatus>]>;
 
 /// Máximo de celdas de la tabla LCS; por encima, todo el tramo cambiado se marca como modificado.
 const LCS_MAX_CELLS: usize = 4_000_000;
 
 /// Tramo cambiado: `del` líneas de la base desde `b` sustituidas por `add` líneas de la actual desde `c`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct Hunk {
     b: usize,
     del: usize,
@@ -1409,7 +1447,7 @@ pub(crate) fn diff_marks(base: &[String], cur: &[String]) -> Vec<Option<GitLineS
 /// Diff unificado (`@@`, ` contexto`, `-antes`, `+ahora`) con `ctx` líneas de contexto por tramo.
 pub(crate) fn unified_diff(base: &[String], cur: &[String], ctx: usize) -> Vec<String> {
     let hunks = diff_hunks(base, cur);
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(hunks.len() * (2 * ctx + 4));
     let mut k = 0;
     while k < hunks.len() {
         // Une los tramos cuyo contexto se solapa

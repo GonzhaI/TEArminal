@@ -156,7 +156,7 @@ impl TerminalRenderer {
 
     /// Renderiza la barra horizontal de pestañas: franja plana, pestañas y regla de acento.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_top_tab_bar(
+    pub(crate) fn render_top_tab_bar(
         &mut self,
         canvas: &mut Canvas,
         tabs: &[SidebarTabItem],
@@ -366,7 +366,7 @@ impl TerminalRenderer {
 
     /// Dibuja los botones de control de ventana estándar (Minimizar, Maximizar, Cerrar)
     #[allow(clippy::too_many_arguments)]
-    pub fn draw_window_controls(
+    pub(crate) fn draw_window_controls(
         &mut self,
         canvas: &mut Canvas,
         min_btn: (usize, usize, usize, usize),
@@ -442,7 +442,7 @@ impl TerminalRenderer {
     /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar): marca,
     /// píldora de búsqueda centrada y controles de ventana. El título y la rama viven en la barra de estado.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_top_title_bar(
+    pub(crate) fn render_top_title_bar(
         &mut self,
         canvas: &mut Canvas,
         _title: &str,

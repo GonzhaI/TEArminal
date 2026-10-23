@@ -13,8 +13,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Límite de la cuenta (ventana de 5 h, semanal…) tal como lo informa el servidor
-#[derive(Debug, Clone)]
-pub struct AiLimit {
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct AiLimit {
     pub label: String,
     /// Consumido, `0.0..=100.0`
     pub percent: f32,
@@ -23,7 +23,7 @@ pub struct AiLimit {
 }
 
 impl AiLimit {
-    pub fn resets_in_secs(&self) -> Option<u64> {
+    pub(crate) fn resets_in_secs(&self) -> Option<u64> {
         let left = self.resets_at?.saturating_sub(now_unix_secs());
         (left > 0).then_some(left)
     }
@@ -121,44 +121,44 @@ fn parse_claude_limits(body: &str) -> Vec<AiLimit> {
 }
 
 /// Estadísticas de tokens acumulados en un intervalo (Sesión actual, Ventana 5h, Últimas 24h)
-#[derive(Debug, Clone, Default)]
-pub struct AiTokenWindow {
-    pub input_tokens: u64,
-    pub cache_tokens: u64,
-    pub output_tokens: u64,
-    pub turns: u32,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct AiTokenWindow {
+    pub(crate) input_tokens: u64,
+    pub(crate) cache_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) turns: u32,
     /// Segundos hasta que se reinicia la ventana de 5h (basado en el turno más antiguo dentro de las 5h)
-    pub reset_in_secs: Option<u64>,
+    pub(crate) reset_in_secs: Option<u64>,
 }
 
 impl AiTokenWindow {
-    pub fn total_tokens(&self) -> u64 {
+    pub(crate) fn total_tokens(&self) -> u64 {
         self.input_tokens + self.cache_tokens + self.output_tokens
     }
 }
 
 /// Fila informativa de un agente o modelo detectado localmente
-#[derive(Debug, Clone)]
-pub struct AiAgentSummary {
-    pub agent: String,
-    pub model: String,
-    pub detail: String,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct AiAgentSummary {
+    pub(crate) agent: String,
+    pub(crate) model: String,
+    pub(crate) detail: String,
 }
 
 /// Consumo de un agente de IA con sesión en la pestaña activa: cada uno con su modelo y sus ventanas
-#[derive(Debug, Clone)]
-pub struct AiAgentUsage {
-    pub kind: AiAgentStatus,
-    pub model: String,
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct AiAgentUsage {
+    pub(crate) kind: AiAgentStatus,
+    pub(crate) model: String,
     /// Plan (Claude) o modo (AGY)
-    pub plan: Option<String>,
-    pub window_5h: AiTokenWindow,
-    pub session: AiTokenWindow,
+    pub(crate) plan: Option<String>,
+    pub(crate) window_5h: AiTokenWindow,
+    pub(crate) session: AiTokenWindow,
 }
 
 impl AiUsageSnapshot {
     /// Límites reales de un agente (hoy solo Claude los expone)
-    pub fn limits_for(&self, kind: AiAgentStatus) -> &[AiLimit] {
+    pub(crate) fn limits_for(&self, kind: AiAgentStatus) -> &[AiLimit] {
         if kind == AiAgentStatus::Claude {
             &self.claude_limits
         } else {
@@ -167,7 +167,7 @@ impl AiUsageSnapshot {
     }
 
     /// Modelo de un agente: el del último escaneo o, antes del primero, el de su configuración
-    pub fn model_for(&self, kind: AiAgentStatus) -> Option<&str> {
+    pub(crate) fn model_for(&self, kind: AiAgentStatus) -> Option<&str> {
         let name = match kind {
             AiAgentStatus::Claude => "Claude",
             AiAgentStatus::Agy => "AGY",
@@ -189,37 +189,37 @@ impl AiUsageSnapshot {
 
 impl AiAgentUsage {
     /// Hay tokens registrados localmente (Aider, Copilot y Ollama no dejan transcripciones)
-    pub fn has_tokens(&self) -> bool {
+    pub(crate) fn has_tokens(&self) -> bool {
         self.window_5h.total_tokens() > 0 || self.session.total_tokens() > 0
     }
 }
 
 /// Instantánea lista para renderizar en el menú flotante de la barra de estado
-#[derive(Debug, Clone, Default)]
-pub struct AiUsageSnapshot {
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) struct AiUsageSnapshot {
     /// Un bloque por agente distinto en los paneles de la pestaña activa; el del panel enfocado primero
-    pub usages: Vec<AiAgentUsage>,
+    pub(crate) usages: Vec<AiAgentUsage>,
     /// Límites reales de la cuenta de Claude según el servidor (vacío si no hay sesión o no respondió)
-    pub claude_limits: Vec<AiLimit>,
-    pub window_24h_tokens: u64,
-    pub window_24h_sessions: u32,
-    pub agents: Vec<AiAgentSummary>,
-    pub terminal_hint: Option<String>,
+    pub(crate) claude_limits: Vec<AiLimit>,
+    pub(crate) window_24h_tokens: u64,
+    pub(crate) window_24h_sessions: u32,
+    pub(crate) agents: Vec<AiAgentSummary>,
+    pub(crate) terminal_hint: Option<String>,
 }
 
 /// Resultado del escaneo en segundo plano de configuraciones y transcripciones locales (`.jsonl`)
 pub(super) struct LocalUsageScan {
     /// `Some` solo si en este escaneo se consultó al servidor (vacío = sin sesión válida o sin respuesta)
-    pub claude_limits: Option<Vec<AiLimit>>,
-    pub usages: Vec<AiAgentUsage>,
-    pub window_24h_tokens: u64,
-    pub window_24h_sessions: u32,
-    pub agents: Vec<AiAgentSummary>,
+    pub(super) claude_limits: Option<Vec<AiLimit>>,
+    pub(super) usages: Vec<AiAgentUsage>,
+    pub(super) window_24h_tokens: u64,
+    pub(super) window_24h_sessions: u32,
+    pub(super) agents: Vec<AiAgentSummary>,
 }
 
 /// Agentes de IA distintos de la pestaña, el del panel enfocado primero
 pub(super) fn active_agents(tab: &TerminalTab) -> Vec<AiAgentStatus> {
-    let mut found = Vec::new();
+    let mut found = Vec::with_capacity(tab.panes.len());
     let focused = tab.panes.iter().filter(|p| p.id == tab.active_pane_id);
     let others = tab.panes.iter().filter(|p| p.id != tab.active_pane_id);
     for pane in focused.chain(others) {
@@ -231,11 +231,11 @@ pub(super) fn active_agents(tab: &TerminalTab) -> Vec<AiAgentStatus> {
     found
 }
 
-pub struct AiUsageState {
-    pub snapshot: AiUsageSnapshot,
+pub(crate) struct AiUsageState {
+    pub(crate) snapshot: AiUsageSnapshot,
     last_local_scan: Option<Instant>,
     last_limits_fetch: Option<Instant>,
-    pub local_scan_in_flight: bool,
+    pub(crate) local_scan_in_flight: bool,
 }
 
 /// Cada cuánto se consulta al servidor (no es una API pensada para sondeo)
@@ -256,7 +256,11 @@ impl Default for AiUsageState {
 
 impl AiUsageState {
     /// Actualiza la pista de la terminal y devuelve si se debe lanzar el escaneo local en segundo plano
-    pub fn refresh_if_needed(&mut self, terminal: Option<&TerminalState>, force: bool) -> bool {
+    pub(crate) fn refresh_if_needed(
+        &mut self,
+        terminal: Option<&TerminalState>,
+        force: bool,
+    ) -> bool {
         self.snapshot.terminal_hint = terminal.and_then(scrape_terminal_usage_line);
 
         let now = Instant::now();
@@ -274,7 +278,7 @@ impl AiUsageState {
 
     /// Reescaneo en segundo plano mientras hay un agente a la vista (sin esperar al hover del badge):
     /// devuelve si hay que lanzarlo ahora y cuándo volver a despertar.
-    pub fn periodic_scan(&mut self, now: Instant) -> (bool, Instant) {
+    pub(crate) fn periodic_scan(&mut self, now: Instant) -> (bool, Instant) {
         const POLL: Duration = Duration::from_secs(4);
         let next = self.last_local_scan.map_or(now, |t| t + POLL);
         if self.local_scan_in_flight || now < next {
@@ -343,7 +347,7 @@ impl AiUsageState {
             }
         }
         self.snapshot.usages.clear();
-        let mut agents = Vec::new();
+        let mut agents = Vec::with_capacity(3);
         if let Some(m) = agy_model {
             let detail = agy_mode
                 .as_deref()
@@ -586,7 +590,7 @@ pub(super) fn scan_local_usage_blocking(
         })
         .collect();
 
-    let mut agents = Vec::new();
+    let mut agents = Vec::with_capacity(3);
     let claude_present =
         claude_plan.is_some() || claude_model.is_some() || claude.win.total_tokens() > 0;
     for (name, model, acc, fallback, present) in [
@@ -652,25 +656,36 @@ pub(super) fn scan_local_usage_blocking(
 
 const MAX_TRANSCRIPT_TAIL_BYTES: u64 = 512 * 1024;
 
-/// Lee un archivo de texto acotando la lectura a los últimos `max_bytes` si es muy grande
-fn read_transcript_tail(path: &Path, max_bytes: u64) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
+/// Lee un flujo genérico seekable acotando la lectura a los últimos `max_bytes` si es muy grande
+fn read_tail_from_seekable<R: std::io::Read + std::io::Seek>(
+    reader: &mut R,
+    max_bytes: u64,
+) -> Option<String> {
+    use std::io::{Read, SeekFrom};
+    let len = reader.seek(SeekFrom::End(0)).ok()?;
     let truncated = len > max_bytes;
     if truncated {
         let seek_pos = len.saturating_sub(max_bytes);
-        if f.seek(SeekFrom::Start(seek_pos)).is_err() {
-            let _ = f.seek(SeekFrom::Start(0));
+        if reader.seek(SeekFrom::Start(seek_pos)).is_err() {
+            let _ = reader.seek(SeekFrom::Start(0));
         }
+    } else {
+        let _ = reader.seek(SeekFrom::Start(0));
     }
     let mut buf = Vec::with_capacity((len.min(max_bytes)) as usize);
-    f.take(max_bytes).read_to_end(&mut buf).ok()?;
+    reader.take(max_bytes).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
     Some(match text.split_once('\n') {
         Some((_, rest)) if truncated => rest.to_string(),
         _ => text.into_owned(),
     })
+}
+
+/// Lee un archivo de texto acotando la lectura a los últimos `max_bytes` si es muy grande
+fn read_transcript_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut reader = std::io::BufReader::new(f);
+    read_tail_from_seekable(&mut reader, max_bytes)
 }
 
 struct TranscriptScan {
@@ -680,8 +695,64 @@ struct TranscriptScan {
     last_model: Option<String>,
 }
 
-fn scan_agy_transcript(
-    path: &Path,
+/// Procesa una sola línea de transcripción de AGY
+fn process_agy_transcript_line(
+    line: &str,
+    cutoff_5h: u64,
+    cutoff_24h: u64,
+    scan: &mut TranscriptScan,
+    oldest_in_5h: &mut Option<u64>,
+) {
+    if let Some((_, after)) = line.split_once("Model Selection` from ") {
+        if let Some((_, to_part)) = after.split_once(" to ") {
+            let candidate = if let Some((m, _)) = to_part.split_once(". No need") {
+                m
+            } else {
+                to_part
+                    .lines()
+                    .next()
+                    .unwrap_or(to_part)
+                    .trim_end_matches('.')
+            };
+            let trimmed = candidate.trim().trim_matches('"').trim_matches('\\');
+            if !trimmed.is_empty() {
+                scan.last_model = Some(trimmed.to_string());
+            }
+        }
+    }
+    if !line.contains("\"input_tokens\":") && !line.contains("\"output_tokens\":") {
+        return;
+    }
+    let inp = extract_json_u64(line, "input_tokens").unwrap_or(0);
+    let cache = extract_json_u64(line, "cache_read_tokens").unwrap_or(0);
+    let out = extract_json_u64(line, "output_tokens").unwrap_or(0);
+    if inp == 0 && cache == 0 && out == 0 {
+        return;
+    }
+    scan.session.input_tokens += inp;
+    scan.session.cache_tokens += cache;
+    scan.session.output_tokens += out;
+    scan.session.turns += 1;
+
+    if let Some(ts_str) = extract_json_str(line, "created_at") {
+        if let Some(ts) = parse_iso8601_utc(&ts_str) {
+            if ts >= cutoff_24h {
+                scan.tokens_24h += inp + cache + out;
+            }
+            if ts >= cutoff_5h {
+                scan.win_5h.input_tokens += inp;
+                scan.win_5h.cache_tokens += cache;
+                scan.win_5h.output_tokens += out;
+                scan.win_5h.turns += 1;
+                *oldest_in_5h = Some(oldest_in_5h.map_or(ts, |old| old.min(ts)));
+            }
+        }
+    }
+}
+
+/// Analiza una transcripción de AGY leyendo línea a línea reutilizando un único buffer en el bucle
+fn scan_agy_transcript_reader<R: std::io::BufRead>(
+    mut reader: R,
     now_epoch: u64,
     oldest_in_5h: &mut Option<u64>,
 ) -> TranscriptScan {
@@ -691,60 +762,40 @@ fn scan_agy_transcript(
         tokens_24h: 0,
         last_model: None,
     };
-    let Some(content) = read_transcript_tail(path, MAX_TRANSCRIPT_TAIL_BYTES) else {
-        return scan;
-    };
     let cutoff_5h = now_epoch.saturating_sub(5 * 3600);
     let cutoff_24h = now_epoch.saturating_sub(24 * 3600);
 
-    for line in content.lines() {
-        if let Some((_, after)) = line.split_once("Model Selection` from ") {
-            if let Some((_, to_part)) = after.split_once(" to ") {
-                let candidate = if let Some((m, _)) = to_part.split_once(". No need") {
-                    m
-                } else {
-                    to_part
-                        .lines()
-                        .next()
-                        .unwrap_or(to_part)
-                        .trim_end_matches('.')
-                };
-                let trimmed = candidate.trim().trim_matches('"').trim_matches('\\');
-                if !trimmed.is_empty() {
-                    scan.last_model = Some(trimmed.to_string());
-                }
-            }
-        }
-        if !line.contains("\"input_tokens\":") && !line.contains("\"output_tokens\":") {
-            continue;
-        }
-        let inp = extract_json_u64(line, "input_tokens").unwrap_or(0);
-        let cache = extract_json_u64(line, "cache_read_tokens").unwrap_or(0);
-        let out = extract_json_u64(line, "output_tokens").unwrap_or(0);
-        if inp == 0 && cache == 0 && out == 0 {
-            continue;
-        }
-        scan.session.input_tokens += inp;
-        scan.session.cache_tokens += cache;
-        scan.session.output_tokens += out;
-        scan.session.turns += 1;
-
-        if let Some(ts_str) = extract_json_str(line, "created_at") {
-            if let Some(ts) = parse_iso8601_utc(&ts_str) {
-                if ts >= cutoff_24h {
-                    scan.tokens_24h += inp + cache + out;
-                }
-                if ts >= cutoff_5h {
-                    scan.win_5h.input_tokens += inp;
-                    scan.win_5h.cache_tokens += cache;
-                    scan.win_5h.output_tokens += out;
-                    scan.win_5h.turns += 1;
-                    *oldest_in_5h = Some(oldest_in_5h.map_or(ts, |old| old.min(ts)));
-                }
-            }
-        }
+    let mut line_buf = String::with_capacity(1024);
+    while reader.read_line(&mut line_buf).unwrap_or(0) != 0 {
+        process_agy_transcript_line(&line_buf, cutoff_5h, cutoff_24h, &mut scan, oldest_in_5h);
+        line_buf.clear();
     }
     scan
+}
+
+/// Analiza el contenido de texto de una transcripción de AGY calculando ventanas de consumo de IA
+fn scan_agy_transcript_content(
+    content: &str,
+    now_epoch: u64,
+    oldest_in_5h: &mut Option<u64>,
+) -> TranscriptScan {
+    scan_agy_transcript_reader(content.as_bytes(), now_epoch, oldest_in_5h)
+}
+
+fn scan_agy_transcript(
+    path: &Path,
+    now_epoch: u64,
+    oldest_in_5h: &mut Option<u64>,
+) -> TranscriptScan {
+    let Some(content) = read_transcript_tail(path, MAX_TRANSCRIPT_TAIL_BYTES) else {
+        return TranscriptScan {
+            session: AiTokenWindow::default(),
+            win_5h: AiTokenWindow::default(),
+            tokens_24h: 0,
+            last_model: None,
+        };
+    };
+    scan_agy_transcript_content(&content, now_epoch, oldest_in_5h)
 }
 
 /// Modelo que anuncia `/model` en la transcripción de Claude Code: «Set model to `Sonnet 5.5` and
@@ -761,8 +812,59 @@ fn model_from_slash_command(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-fn scan_claude_transcript(
-    path: &Path,
+fn process_claude_transcript_line(
+    line: &str,
+    cutoff_5h: u64,
+    cutoff_24h: u64,
+    scan: &mut TranscriptScan,
+    oldest_in_5h: &mut Option<u64>,
+) {
+    // `/model` queda en la transcripción al instante; el `model` de un mensaje solo llega con la
+    // siguiente respuesta, así que sin esto la barra de estado iría un turno atrasada.
+    if let Some(m) = model_from_slash_command(line) {
+        scan.last_model = Some(m);
+        return;
+    }
+    if !line.contains("\"usage\"") {
+        return;
+    }
+    if let Some(m) = extract_json_str(line, "model") {
+        if !m.starts_with('<') {
+            scan.last_model = Some(m);
+        }
+    }
+    let inp = extract_json_u64(line, "input_tokens").unwrap_or(0);
+    let cache_create = extract_json_u64(line, "cache_creation_input_tokens").unwrap_or(0);
+    let cache_read = extract_json_u64(line, "cache_read_input_tokens").unwrap_or(0);
+    let out = extract_json_u64(line, "output_tokens").unwrap_or(0);
+    let cache = cache_create + cache_read;
+    if inp == 0 && cache == 0 && out == 0 {
+        return;
+    }
+    scan.session.input_tokens += inp;
+    scan.session.cache_tokens += cache;
+    scan.session.output_tokens += out;
+    scan.session.turns += 1;
+
+    if let Some(ts_str) = extract_json_str(line, "timestamp") {
+        if let Some(ts) = parse_iso8601_utc(&ts_str) {
+            if ts >= cutoff_24h {
+                scan.tokens_24h += inp + cache + out;
+            }
+            if ts >= cutoff_5h {
+                scan.win_5h.input_tokens += inp;
+                scan.win_5h.cache_tokens += cache;
+                scan.win_5h.output_tokens += out;
+                scan.win_5h.turns += 1;
+                *oldest_in_5h = Some(oldest_in_5h.map_or(ts, |old| old.min(ts)));
+            }
+        }
+    }
+}
+
+/// Analiza una transcripción de Claude Code leyendo línea a línea reutilizando un único buffer en el bucle
+fn scan_claude_transcript_reader<R: std::io::BufRead>(
+    mut reader: R,
     now_epoch: u64,
     oldest_in_5h: &mut Option<u64>,
 ) -> TranscriptScan {
@@ -772,63 +874,40 @@ fn scan_claude_transcript(
         tokens_24h: 0,
         last_model: None,
     };
-    let Some(content) = read_transcript_tail(path, MAX_TRANSCRIPT_TAIL_BYTES) else {
-        return scan;
-    };
     let cutoff_5h = now_epoch.saturating_sub(5 * 3600);
     let cutoff_24h = now_epoch.saturating_sub(24 * 3600);
 
-    for line in content.lines() {
-        // `/model` queda en la transcripción al instante; el `model` de un mensaje solo llega con la
-        // siguiente respuesta, así que sin esto la barra de estado iría un turno atrasada.
-        if let Some(m) = model_from_slash_command(line) {
-            scan.last_model = Some(m);
-            continue;
-        }
-        if !line.contains("\"usage\"") {
-            continue;
-        }
-        if let Some(m) = extract_json_str(line, "model") {
-            if !m.starts_with('<') {
-                scan.last_model = Some(m);
-            }
-        }
-        let inp = extract_json_u64(line, "input_tokens").unwrap_or(0);
-        let cache_create = extract_json_u64(line, "cache_creation_input_tokens").unwrap_or(0);
-        let cache_read = extract_json_u64(line, "cache_read_input_tokens").unwrap_or(0);
-        let out = extract_json_u64(line, "output_tokens").unwrap_or(0);
-        let cache = cache_create + cache_read;
-        if inp == 0 && cache == 0 && out == 0 {
-            continue;
-        }
-        scan.session.input_tokens += inp;
-        scan.session.cache_tokens += cache;
-        scan.session.output_tokens += out;
-        scan.session.turns += 1;
-
-        if let Some(ts_str) = extract_json_str(line, "timestamp") {
-            if let Some(ts) = parse_iso8601_utc(&ts_str) {
-                if ts >= cutoff_24h {
-                    scan.tokens_24h += inp + cache + out;
-                }
-                if ts >= cutoff_5h {
-                    scan.win_5h.input_tokens += inp;
-                    scan.win_5h.cache_tokens += cache;
-                    scan.win_5h.output_tokens += out;
-                    scan.win_5h.turns += 1;
-                    *oldest_in_5h = Some(oldest_in_5h.map_or(ts, |old| old.min(ts)));
-                }
-            }
-        }
+    let mut line_buf = String::with_capacity(1024);
+    while reader.read_line(&mut line_buf).unwrap_or(0) != 0 {
+        process_claude_transcript_line(&line_buf, cutoff_5h, cutoff_24h, &mut scan, oldest_in_5h);
+        line_buf.clear();
     }
     scan
 }
 
+fn scan_claude_transcript(
+    path: &Path,
+    now_epoch: u64,
+    oldest_in_5h: &mut Option<u64>,
+) -> TranscriptScan {
+    let Some(content) = read_transcript_tail(path, MAX_TRANSCRIPT_TAIL_BYTES) else {
+        return TranscriptScan {
+            session: AiTokenWindow::default(),
+            win_5h: AiTokenWindow::default(),
+            tokens_24h: 0,
+            last_model: None,
+        };
+    };
+    scan_claude_transcript_reader(content.as_bytes(), now_epoch, oldest_in_5h)
+}
+
 /// Busca en las últimas líneas visibles de la terminal indicadores de contexto/tokens/coste de TUIs
 fn scrape_terminal_usage_line(term: &TerminalState) -> Option<String> {
+    let mut line_buf = String::with_capacity(term.cols.max(80));
     for row in term.grid.iter().rev().take(8) {
-        let line = term.row_text_to_string(row);
-        let trimmed = line.trim();
+        line_buf.clear();
+        term.append_row_text(row, &mut line_buf);
+        let trimmed = line_buf.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -846,7 +925,7 @@ fn scrape_terminal_usage_line(term: &TerminalState) -> Option<String> {
     None
 }
 
-pub fn format_tokens(n: u64) -> String {
+pub(crate) fn format_tokens(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.2}M", n as f64 / 1_000_000.0)
     } else if n >= 1_000 {
@@ -856,7 +935,7 @@ pub fn format_tokens(n: u64) -> String {
     }
 }
 
-pub fn format_duration(secs: u64) -> String {
+pub(crate) fn format_duration(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;
     let mins = (secs % 3600) / 60;
@@ -1030,46 +1109,33 @@ mod tests {
 
     #[test]
     fn test_scan_agy_transcript_extracts_decimal_model_names() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("axon-test-transcript-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let path = temp_dir.join("transcript.jsonl");
         let content = "The user changed setting `Model Selection` from None to Gemini 3.8 Flash (Medium). No need to comment.\n\
                        {\"created_at\": \"2026-10-18T15:54:26Z\", \"input_tokens\": 100, \"output_tokens\": 50}\n";
-        std::fs::write(&path, content).unwrap();
         let mut oldest = None;
-        let scan = scan_agy_transcript(&path, 1_792_338_866, &mut oldest);
+        let scan = scan_agy_transcript_content(content, 1_792_338_866, &mut oldest);
         assert_eq!(
             scan.last_model.as_deref(),
             Some("Gemini 3.8 Flash (Medium)")
         );
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&temp_dir);
+        assert_eq!(scan.session.input_tokens, 100);
+        assert_eq!(scan.session.output_tokens, 50);
+        assert_eq!(scan.session.turns, 1);
     }
 
     #[test]
     fn test_read_transcript_tail() {
-        let temp_dir = std::env::temp_dir().join(format!("axon-test-tail-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let path = temp_dir.join("tail.txt");
-
-        // Archivo pequeño: no debe cortar la primera línea
-        std::fs::write(&path, "line 1\nline 2\nline 3\n").unwrap();
-        let res = read_transcript_tail(&path, 1024).unwrap();
+        // Flujo pequeño en memoria: no debe cortar la primera línea
+        let mut small = std::io::Cursor::new(b"line 1\nline 2\nline 3\n".to_vec());
+        let res = read_tail_from_seekable(&mut small, 1024).unwrap();
         assert_eq!(res, "line 1\nline 2\nline 3\n");
 
-        // Archivo truncado a cola: descarta la primera línea incompleta
-        std::fs::write(
-            &path,
-            "first_long_line_to_be_truncated\nsecond_line\nthird_line\n",
-        )
-        .unwrap();
-        let res = read_transcript_tail(&path, 25).unwrap();
+        // Flujo truncado a cola: descarta la primera línea incompleta
+        let mut large = std::io::Cursor::new(
+            b"first_long_line_to_be_truncated\nsecond_line\nthird_line\n".to_vec(),
+        );
+        let res = read_tail_from_seekable(&mut large, 25).unwrap();
         assert!(res.contains("third_line"));
         assert!(!res.contains("first_long_line"));
-
-        let _ = std::fs::remove_file(&path);
-        let _ = std::fs::remove_dir(&temp_dir);
     }
 
     #[test]

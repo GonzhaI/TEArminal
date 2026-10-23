@@ -6,7 +6,7 @@ impl TerminalRenderer {
     /// Renderiza la barra lateral: riel de ajustes a la izquierda y, a su lado, la lista de sesiones.
     /// Dibuja en un búfer propio de ancho `sidebar_width`: `app` lo coloca a izquierda o derecha.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_sidebar(
+    pub(crate) fn render_sidebar(
         &mut self,
         canvas: &mut Canvas,
         sidebar_width: usize,
@@ -324,7 +324,7 @@ impl TerminalRenderer {
     }
 
     /// Botón flotante para recuperar la barra lateral cuando está oculta.
-    pub fn render_floating_sidebar_toggle(
+    pub(crate) fn render_floating_sidebar_toggle(
         &mut self,
         canvas: &mut Canvas,
         status_bar_h: usize,
@@ -369,7 +369,7 @@ impl TerminalRenderer {
         );
     }
 
-    pub fn sidebar_scrollbar_geometry(
+    pub(crate) fn sidebar_scrollbar_geometry(
         sidebar_width: usize,
         list_end: usize,
         total_tabs: usize,

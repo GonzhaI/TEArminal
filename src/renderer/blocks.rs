@@ -20,25 +20,25 @@ const EXPLAIN_W: usize = 96;
 const IGNORE_W: usize = 74;
 
 /// Rectángulos de una tarjeta de bloque ya situada en el panel (geometría única para dibujo y clics).
-#[derive(Clone, Copy, Debug)]
-pub struct BlockCardLayout {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct BlockCardLayout {
     /// Índice real en `TerminalState::command_blocks`.
-    pub block_index: usize,
+    pub(crate) block_index: usize,
     /// Fila global (de la rejilla) del prompt; la cabecera se dibuja encima.
-    pub header_line: usize,
-    pub header_visible: bool,
-    pub failed: bool,
-    pub card: (usize, usize, usize, usize),
+    pub(crate) header_line: usize,
+    pub(crate) header_visible: bool,
+    pub(crate) failed: bool,
+    pub(crate) card: (usize, usize, usize, usize),
     /// Banda de la cabecera (icono, comando, metadatos y botones) para los clics.
-    pub header: (usize, usize, usize, usize),
-    pub copy_btn: Option<(usize, usize, usize, usize)>,
-    pub repeat_btn: Option<(usize, usize, usize, usize)>,
-    pub explain_btn: Option<(usize, usize, usize, usize)>,
-    pub ignore_btn: Option<(usize, usize, usize, usize)>,
+    pub(crate) header: (usize, usize, usize, usize),
+    pub(crate) copy_btn: Option<(usize, usize, usize, usize)>,
+    pub(crate) repeat_btn: Option<(usize, usize, usize, usize)>,
+    pub(crate) explain_btn: Option<(usize, usize, usize, usize)>,
+    pub(crate) ignore_btn: Option<(usize, usize, usize, usize)>,
 }
 
 impl BlockCardLayout {
-    pub fn button_at(&self, mx: usize, my: usize) -> Option<BlockCardButton> {
+    pub(crate) fn button_at(&self, mx: usize, my: usize) -> Option<BlockCardButton> {
         let inside = |r: (usize, usize, usize, usize)| {
             mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
         };
@@ -56,7 +56,7 @@ impl BlockCardLayout {
     }
 
     /// Zona de la cabecera (icono, comando, metadatos y botones) para no iniciar una selección.
-    pub fn header_at(&self, mx: usize, my: usize) -> bool {
+    pub(crate) fn header_at(&self, mx: usize, my: usize) -> bool {
         let (x, y, w, h) = self.header;
         self.header_visible && mx >= x && mx < x + w && my >= y && my < y + h
     }
@@ -64,7 +64,7 @@ impl BlockCardLayout {
 
 /// Acción de una tarjeta de bloque.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlockCardButton {
+pub(crate) enum BlockCardButton {
     Copy,
     Repeat,
     Explain,
@@ -72,7 +72,7 @@ pub enum BlockCardButton {
 }
 
 /// Duración legible: `22,9 s`, `1 min 06 s`, `0,1 s`.
-pub fn format_duration(duration: std::time::Duration) -> String {
+pub(crate) fn format_duration(duration: std::time::Duration) -> String {
     let secs = duration.as_secs_f32();
     if secs < 60.0 {
         format!("{:.1} s", secs).replace('.', ",")
@@ -98,7 +98,7 @@ pub(super) fn row_has_content(row: Option<&[Cell]>) -> bool {
 
 impl TerminalRenderer {
     /// Tarjetas visibles del panel, con la misma geometría que usa el dibujo.
-    pub fn block_cards(
+    pub(crate) fn block_cards(
         &self,
         rect_x: usize,
         rect_y: usize,
@@ -119,7 +119,7 @@ impl TerminalRenderer {
         let base_y = rect_y + self.margin_y;
         let max_x = rect_x + rect_w;
         let max_y = rect_y + rect_h;
-        let mut cards = Vec::new();
+        let mut cards = Vec::with_capacity(terminal.command_blocks.len() + 1);
         let mut entries: Vec<(usize, &CommandBlock)> =
             terminal.command_blocks.iter().enumerate().collect();
         if let Some(active) = terminal

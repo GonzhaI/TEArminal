@@ -7,7 +7,7 @@ impl TerminalRenderer {
     /// Dibuja el fondo del panel en un búfer propio de ancho `panel_w` (como `render_sidebar`).
     /// `on_right`: el panel está a la derecha y el borde que lo separa del contenido es el izquierdo.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_files_panel(
+    pub(crate) fn render_files_panel(
         &mut self,
         canvas: &mut Canvas,
         panel_w: usize,

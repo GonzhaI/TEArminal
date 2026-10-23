@@ -25,13 +25,13 @@ mod tabs;
 mod viewer;
 mod wheel;
 
-pub use ai_usage::*;
-pub use context_menu::*;
-pub use host::AxonHost;
-pub use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
-pub use layout::*;
+pub(crate) use ai_usage::*;
+pub(crate) use context_menu::*;
+pub(crate) use host::AxonHost;
+pub(crate) use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
+pub(crate) use layout::*;
 pub(crate) use shell_context::detect_ai_agent;
-pub use viewer::*;
+pub(crate) use viewer::*;
 
 use platform::{
     apply_window_opacity_native, create_native_icon, get_physical_modifiers, update_windows_theme,
@@ -56,10 +56,10 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey, SmolStr};
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
-#[derive(Debug, Clone, Copy)]
-pub enum AxonEvent {
-    PtyData(usize),
-    PtyClosed(usize),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AxonEvent {
+    PtyData(PaneId),
+    PtyClosed(PaneId),
     /// Terminó un trabajo SSH en segundo plano (`AxonApp::process_ssh_results`)
     SshDone,
     /// Cambio detectado en el sistema de archivos del espacio de trabajo
@@ -68,24 +68,24 @@ pub enum AxonEvent {
     UpdateCheckDone,
 }
 
-pub const SIDEBAR_WIDTH: usize = crate::renderer::SidebarRects::WIDTH;
+pub(crate) const SIDEBAR_WIDTH: usize = crate::renderer::SidebarRects::WIDTH;
 
 /// Acción de soltar una pestaña con el mouse (para transferir a otra ventana o nueva ventana)
-pub struct TabDropAction {
-    pub tab: TerminalTab,
-    pub screen_pos: (i32, i32),
+pub(crate) struct TabDropAction {
+    pub(crate) tab: TerminalTab,
+    pub(crate) screen_pos: (i32, i32),
 }
 
-pub struct AxonApp {
+pub(crate) struct AxonApp {
     pub config: AxonConfig,
     pub theme: Theme,
     proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
-    next_tab_id: usize,
+    next_tab_id: TabId,
     /// (pestaña, panel) cuya carpeta mostró por última vez el explorador: si el foco pasa a otra terminal
     /// de la misma pestaña, `on_redraw` reorienta el explorador (`sync_file_explorer_root`).
-    explorer_focus: (usize, usize),
+    explorer_focus: Option<(TabId, PaneId)>,
     pub sidebar_visible: bool,
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
@@ -93,7 +93,7 @@ pub struct AxonApp {
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
     /// Botón de la cabecera de un panel dividido bajo el ratón
-    hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
+    hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
     pub file_explorer: crate::explorer::FileExplorer,
@@ -130,7 +130,7 @@ pub struct AxonApp {
     is_focused: bool,
     // Barra de desplazamiento interactiva y auto-ocultable
     scrollbar_dragging: bool,
-    scrollbar_drag_pane_id: Option<usize>,
+    scrollbar_drag_pane_id: Option<PaneId>,
     scrollbar_drag_offset_y: f32,
     sidebar_scrollbar_dragging: bool,
     sidebar_scrollbar_drag_offset_y: f32,
@@ -156,7 +156,7 @@ pub struct AxonApp {
     viewer_click_count: usize,
     last_terminal_click_time: Instant,
     last_terminal_click_pos: Option<(usize, usize)>,
-    last_terminal_click_pane_id: Option<usize>,
+    last_terminal_click_pane_id: Option<PaneId>,
     terminal_click_count: usize,
     last_window_move: Instant,
     last_scroll_time: Instant,
@@ -203,17 +203,60 @@ pub struct AxonApp {
     fs_watcher: Option<fs_watcher::FsWatcher>,
 }
 
-/// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña
-static NEXT_PANE_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static NEXT_WINDOW_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+// -------------------------------------------------------------------------------------------------
+// Mechanical Sympathy: alineación de variables a la línea de caché (64 bytes) para evitar False Sharing
+// -------------------------------------------------------------------------------------------------
 
-pub(crate) fn alloc_pane_id() -> usize {
-    NEXT_PANE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// Envoltorio alineado a la línea de caché de la CPU (64 bytes) para mitigar el **False Sharing**.
+///
+/// Previene que dos variables atómicas independientes residan en la misma línea de caché L1/L2
+/// (generalmente de 64 bytes). Sin esta alineación, modificaciones atómicas simultáneas desde
+/// diferentes núcleos provocan invalidaciones constantes de caché (cache line ping-pong),
+/// degradando el rendimiento del sistema multihilo.
+#[repr(align(64))]
+pub(crate) struct CachePadded<T>(pub T);
+
+impl<T> CachePadded<T> {
+    pub(crate) const fn new(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> std::ops::Deref for CachePadded<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for CachePadded<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña.
+/// Se alinean a líneas de caché separadas para evitar False Sharing entre hilos de E/S y UI.
+static NEXT_PANE_ID: CachePadded<std::sync::atomic::AtomicUsize> =
+    CachePadded::new(std::sync::atomic::AtomicUsize::new(0));
+static NEXT_WINDOW_ID: CachePadded<std::sync::atomic::AtomicU32> =
+    CachePadded::new(std::sync::atomic::AtomicU32::new(0));
+
+pub(crate) fn alloc_pane_id() -> PaneId {
+    PaneId(NEXT_PANE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }
 
 impl AxonApp {
+    pub(crate) fn alloc_tab_id(&mut self) -> TabId {
+        let id = self.next_tab_id;
+        self.next_tab_id = TabId(id.0 + 1);
+        id
+    }
+
     /// Ventana con una sola pestaña nueva
-    pub fn new(
+    pub(crate) fn new(
         config: AxonConfig,
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
     ) -> Self {
@@ -221,7 +264,7 @@ impl AxonApp {
     }
 
     /// Ventana restaurada desde `session` (sin sesión, o sin pestañas, una pestaña nueva)
-    pub fn from_session(
+    pub(crate) fn from_session(
         config: AxonConfig,
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
         session: Option<WindowSession>,
@@ -246,11 +289,11 @@ impl AxonApp {
                 .tabs
                 .iter()
                 .enumerate()
-                .map(|(id, t)| spawn.restore_tab(id, t))
+                .map(|(id, t)| spawn.restore_tab(TabId(id), t))
                 .collect(),
             None => {
                 let pane = spawn.pane(None);
-                vec![TerminalTab::new(0, "Terminal 1".to_string(), pane)]
+                vec![TerminalTab::new(TabId(0), "Terminal 1".to_string(), pane)]
             }
         };
         let active_tab_index = active_tab_index.min(tabs.len() - 1);
@@ -275,12 +318,12 @@ impl AxonApp {
     }
 
     /// Ventana nueva inicializada con una pestaña existente transferida desde otra ventana
-    pub fn from_tab(
+    pub(crate) fn from_tab(
         config: AxonConfig,
         proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
         mut tab: TerminalTab,
     ) -> Self {
-        tab.id = 0;
+        tab.id = TabId(0);
         let system_light = crate::theme::is_windows_system_light_mode();
         let theme = config.appearance.resolve_theme(system_light);
         let explorer_visible = config.appearance.show_file_explorer;
@@ -318,7 +361,7 @@ impl AxonApp {
         } else {
             explorer_visible
         };
-        let next_tab_id = tabs.len();
+        let next_tab_id = TabId(tabs.len());
         let file_explorer =
             crate::explorer::FileExplorer::new(std::env::current_dir().ok(), explorer_visible);
         let clipboard = arboard::Clipboard::new().ok();
@@ -342,7 +385,7 @@ impl AxonApp {
             file_explorer,
             hovered_files_btn: false,
             last_terminal_tab_index: 0,
-            explorer_focus: (usize::MAX, usize::MAX),
+            explorer_focus: None,
             renderer: None,
             window: None,
             gpu_surface: None,
@@ -470,7 +513,7 @@ impl AxonApp {
         }
     }
 
-    pub fn save_session(&self) {
+    pub(crate) fn save_session(&self) {
         crate::config::SessionState::save_window(self.session_id, self.session_snapshot());
     }
 
@@ -504,26 +547,50 @@ impl AxonApp {
         self.closing = true;
     }
 
-    pub fn owns_pane(&self, pane_id: usize) -> bool {
+    pub(crate) fn owns_pane(&self, pane_id: PaneId) -> bool {
         self.tabs.iter().any(|t| t.find_pane(pane_id).is_some())
     }
 
     /// Carpeta local del panel activo (la ventana nueva arranca ahí)
-    pub fn active_cwd(&self) -> Option<std::path::PathBuf> {
+    pub(crate) fn active_cwd(&self) -> Option<std::path::PathBuf> {
         let pane = self.tabs.get(self.active_tab_index)?.active_pane()?;
         let dir = pane.terminal.current_dir.clone();
         dir.filter(|d| pane.terminal.ssh_session.is_none() && d.is_dir())
     }
 
-    pub fn is_horizontal_tabs(&self) -> bool {
+    pub(crate) fn is_horizontal_tabs(&self) -> bool {
         self.config
             .appearance
             .tab_layout
             .eq_ignore_ascii_case("horizontal")
     }
 
+    /// Offsets `(left_offset, right_offset, top_offset, status_bar_h)` para los paneles de terminal.
+    /// No dependen de si la pestaña activa en este momento es Ajustes: las terminales siempre
+    /// usan su propia disposición según `sidebar_visible`, `panel_on_right` y `show_status_bar`.
+    pub(crate) fn terminal_area_offsets(&self) -> (usize, usize, usize, usize) {
+        let top = self.top_offset();
+        let status_h = if self.config.appearance.show_status_bar {
+            26
+        } else {
+            0
+        };
+        let (left, right) = if self.sidebar_visible {
+            if self.panel_on_right() {
+                (0, SIDEBAR_WIDTH)
+            } else {
+                (SIDEBAR_WIDTH, 0)
+            }
+        } else if self.file_explorer.visible {
+            (0, self.file_explorer.width)
+        } else {
+            (0, 0)
+        };
+        (left, right, top, status_h)
+    }
+
     /// Espacio que el panel lateral quita al contenido por la izquierda.
-    pub fn sidebar_offset(&self) -> usize {
+    pub(crate) fn sidebar_offset(&self) -> usize {
         if self.panel_shown() && !self.panel_on_right() {
             SIDEBAR_WIDTH
         } else {
@@ -531,7 +598,7 @@ impl AxonApp {
         }
     }
 
-    pub fn top_offset(&self) -> usize {
+    pub(crate) fn top_offset(&self) -> usize {
         if self.is_horizontal_tabs() {
             TopTabBarRects::HEIGHT
         } else {
@@ -539,7 +606,7 @@ impl AxonApp {
         }
     }
 
-    pub fn status_bar_height(&self) -> usize {
+    pub(crate) fn status_bar_height(&self) -> usize {
         if self.config.appearance.show_status_bar
             && self
                 .tabs
@@ -554,7 +621,7 @@ impl AxonApp {
 
     /// Espacio que quitan al contenido por la derecha el explorador acoplado y el panel si va a ese lado.
     /// Con el panel a la vista el explorador va dentro de él y no resta ancho.
-    pub fn file_explorer_offset(&self) -> usize {
+    pub(crate) fn file_explorer_offset(&self) -> usize {
         if self.settings_fullscreen() {
             return 0;
         }
@@ -604,10 +671,7 @@ impl AxonApp {
     fn recompute_grid_for_all_tabs(&mut self) {
         if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
             let size = window.inner_size();
-            let offset = self.sidebar_offset();
-            let right_offset = self.file_explorer_offset();
-            let top_offset = self.top_offset();
-            let status_bar_h = self.status_bar_height();
+            let (offset, right_offset, top_offset, status_bar_h) = self.terminal_area_offsets();
             let total_w = (size.width as usize).saturating_sub(offset + right_offset);
             let total_h = (size.height as usize).saturating_sub(top_offset + status_bar_h);
             if total_w == 0 || total_h == 0 {
@@ -667,13 +731,13 @@ impl SpawnCtx<'_> {
         TerminalPane::new(id, pty, terminal, (cols, rows))
     }
 
-    fn restore_tab(&self, id: usize, tab: &TabSession) -> TerminalTab {
-        let mut panes = Vec::new();
+    fn restore_tab(&self, id: TabId, tab: &TabSession) -> TerminalTab {
+        let mut panes = Vec::with_capacity(4);
         let layout = self.restore_layout(&tab.layout, &mut panes);
         let active = panes
             .get(tab.active_pane)
             .or(panes.first())
-            .map_or(0, |p| p.id);
+            .map_or(PaneId(0), |p| p.id);
         TerminalTab::from_layout(id, tab.title.clone(), layout, panes, active)
     }
 

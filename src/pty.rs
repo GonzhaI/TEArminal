@@ -1,4 +1,4 @@
-use crate::app::AxonEvent;
+use crate::app::{AxonEvent, PaneId};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,35 +12,14 @@ use winit::event_loop::EventLoopProxy;
 /// El destino puede venir de secuencias de escape que emite cualquier programa (título OSC 0/2, OSC 1337,
 /// OSC 7), es decir, es entrada NO confiable. Se interpola en una orden de PowerShell y en `ssh.exe`, así que
 /// solo se admite este alfabeto: nada de espacios, `;`, `$`, comillas ni opciones (`-oProxyCommand=...`).
-pub fn is_safe_ssh_destination(dest: &str) -> bool {
-    let ok_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
-    if dest.is_empty() || dest.len() > 255 || dest.starts_with('-') {
-        return false;
-    }
-    let mut parts = dest.splitn(2, '@');
-    let first = parts.next().unwrap_or("");
-    match parts.next() {
-        None => first.chars().all(ok_char),
-        Some(host) => {
-            !first.is_empty()
-                && !host.is_empty()
-                && first.chars().all(ok_char)
-                && host.chars().all(ok_char)
-        }
-    }
+pub(crate) fn is_safe_ssh_destination(dest: &str) -> bool {
+    crate::ssh::SafeSshDestination::parse(dest).is_ok()
 }
 
 /// Directorio remoto reportado por la sesión (OSC 7) si es seguro de interpolar entre comillas simples dentro
 /// de una orden de PowerShell: sin `'`, `"`, `$`, `` ` ``, `;`, `&`, `|`, `<`, `>`, `\`, etc.
-pub fn safe_remote_dir(dir: &str) -> Option<&str> {
-    let ok = |c: char| {
-        c.is_ascii_alphanumeric()
-            || matches!(
-                c,
-                '/' | '.' | '_' | '-' | '~' | '+' | '@' | ':' | ',' | '=' | ' '
-            )
-    };
-    (!dir.is_empty() && dir.len() <= 1024 && dir.chars().all(ok)).then_some(dir)
+pub(crate) fn safe_remote_dir(dir: &str) -> Option<&str> {
+    crate::ssh::SafeRemoteDir::parse(dir).ok().map(|_| dir)
 }
 
 /// Orden de PowerShell que reconecta por SSH. La orden remota va entre comillas simples: PowerShell no
@@ -67,7 +46,8 @@ impl Drop for PtyManager {
 
 /// Mensaje de error nativo. Axon usa el subsistema "windows" (sin consola) y `panic = "abort"`:
 /// sin esto, un fallo de ConPTY cerraría la app sin que el usuario viera nada.
-pub fn report_spawn_error(shell: &str, err: &dyn std::fmt::Display) {
+#[cold]
+pub(crate) fn report_spawn_error(shell: &str, err: &dyn std::fmt::Display) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     crate::logger::log(&format!("Error al iniciar la terminal ({shell}): {err}"));
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
@@ -82,7 +62,8 @@ pub fn report_spawn_error(shell: &str, err: &dyn std::fmt::Display) {
 }
 
 /// Error irrecuperable al crear la primera terminal: informar y salir
-pub fn fatal_spawn_error(shell: &str, err: &dyn std::fmt::Display) -> ! {
+#[cold]
+pub(crate) fn fatal_spawn_error(shell: &str, err: &dyn std::fmt::Display) -> ! {
     report_spawn_error(shell, err);
     std::process::exit(1)
 }
@@ -113,41 +94,62 @@ fn random_token() -> String {
 }
 
 /// Identificador inicial aleatorio de las peticiones en banda (si el RNG falla, 1)
-pub fn random_id() -> u32 {
+pub(crate) fn random_id() -> u32 {
     random_bytes().map_or(1, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 /// Pila reducida: estos hilos solo copian bytes (el defecto de 2 MB se reserva por hilo)
 const THREAD_STACK: usize = 256 * 1024;
 
-pub struct PtyManager {
+pub(crate) struct PtyManager {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     to_pty_tx: Sender<Vec<u8>>,
     from_pty_rx: Receiver<Vec<u8>>,
-    /// Hay un `PtyData` en vuelo: el lector no encola otro hasta que el consumidor vacíe el canal
-    output_pending: Arc<AtomicBool>,
+    /// Hay un `PtyData` en vuelo: el lector no encola otro hasta que el consumidor vacíe el canal.
+    /// Alineado a 64 bytes (`CachePadded`) para evitar false sharing entre el hilo lector del PTY y la UI.
+    output_pending: Arc<crate::app::CachePadded<AtomicBool>>,
     /// Secreto de este shell (`AXON_PANE_TOKEN`): solo el wrapper `ssh` de `init.ps1` lo conoce y lo adjunta a
     /// `AxonSSH=start`. Vacío en los paneles que no ejecutan `init.ps1` (ningún marcador es válido).
-    pub token: String,
+    pub(crate) token: String,
 }
 
 /// Hilos lector/escritor del PTY (compartidos por shell local y SSH). Devuelve (tx entrada, rx salida, flag de coalescencia).
 /// (tx de entrada, rx de salida, flag de coalescencia de eventos)
-type IoChannels = (Sender<Vec<u8>>, Receiver<Vec<u8>>, Arc<AtomicBool>);
+type IoChannels = (
+    Sender<Vec<u8>>,
+    Receiver<Vec<u8>>,
+    Arc<crate::app::CachePadded<AtomicBool>>,
+);
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PtyError {
+    #[error("error del sistema ConPTY: {0}")]
+    Pty(String),
+    #[error("error de E/S en PTY: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("destino SSH no válido: {0:?}")]
+    InvalidSshDestination(String),
+}
 
 fn spawn_io_threads(
     master: &(dyn MasterPty + Send),
-    id: usize,
+    id: PaneId,
     proxy: Option<EventLoopProxy<AxonEvent>>,
-) -> Result<IoChannels, Box<dyn std::error::Error>> {
-    let mut reader = master.try_clone_reader()?;
-    let mut writer = master.take_writer()?;
+) -> Result<IoChannels, PtyError> {
+    let mut reader = master
+        .try_clone_reader()
+        .map_err(|e| PtyError::Pty(e.to_string()))?;
+    let mut writer = std::io::BufWriter::new(
+        master
+            .take_writer()
+            .map_err(|e| PtyError::Pty(e.to_string()))?,
+    );
     // Acotado (64 x 16 KB): si la interfaz va por detrás de un `cat` enorme el lector espera y ConPTY frena al
     // proceso, en vez de acumular la salida entera en memoria
     let (from_pty_tx, from_pty_rx) = sync_channel::<Vec<u8>>(64);
     let (to_pty_tx, to_pty_rx) = channel::<Vec<u8>>();
-    let pending = Arc::new(AtomicBool::new(false));
+    let pending = Arc::new(crate::app::CachePadded::new(AtomicBool::new(false)));
     let pending_reader = pending.clone();
 
     thread::Builder::new()
@@ -223,22 +225,24 @@ fn build_shell_command(
 }
 
 impl PtyManager {
-    pub fn new(
-        id: usize,
+    pub(crate) fn new(
+        id: PaneId,
         shell: &str,
         shell_integration: bool,
         cols: u16,
         rows: u16,
         cwd: Option<&std::path::Path>,
         proxy: Option<EventLoopProxy<AxonEvent>>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| PtyError::Pty(e.to_string()))?;
 
         let token = random_token();
         // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
@@ -256,9 +260,11 @@ impl PtyManager {
                         &token,
                         &path_env,
                     );
-                    pair.slave.spawn_command(fallback)?
+                    pair.slave
+                        .spawn_command(fallback)
+                        .map_err(|e| PtyError::Pty(e.to_string()))?
                 } else {
-                    return Err(e.into());
+                    return Err(PtyError::Pty(e.to_string()));
                 }
             }
         };
@@ -276,24 +282,26 @@ impl PtyManager {
     }
 
     /// Crea un nuevo PTY reconectando automáticamente a una sesión SSH remota
-    pub fn new_ssh(
-        id: usize,
+    pub(crate) fn new_ssh(
+        id: PaneId,
         destination: &str,
         remote_dir: Option<&str>,
         cols: u16,
         rows: u16,
         proxy: Option<EventLoopProxy<AxonEvent>>,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, PtyError> {
         if !is_safe_ssh_destination(destination) {
-            return Err(format!("destino SSH no válido: {destination:?}").into());
+            return Err(PtyError::InvalidSshDestination(destination.to_string()));
         }
         let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        let pair = pty_system
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| PtyError::Pty(e.to_string()))?;
 
         let mut cmd = CommandBuilder::new("powershell.exe");
         cmd.env("TERM", "xterm-256color");
@@ -308,7 +316,10 @@ impl PtyManager {
         cmd.arg("-Command");
 
         cmd.arg(ssh_command_line(destination, remote_dir));
-        let child = pair.slave.spawn_command(cmd)?;
+        let child = pair
+            .slave
+            .spawn_command(cmd)
+            .map_err(|e| PtyError::Pty(e.to_string()))?;
 
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
 
@@ -322,15 +333,15 @@ impl PtyManager {
         })
     }
 
-    pub fn is_child_exited(&mut self) -> bool {
+    pub(crate) fn is_child_exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
-    pub fn write_input(&self, data: &[u8]) {
+    pub(crate) fn write_input(&self, data: &[u8]) {
         let _ = self.to_pty_tx.send(data.to_vec());
     }
 
-    pub fn try_recv_output(&self) -> Option<Vec<u8>> {
+    pub(crate) fn try_recv_output(&self) -> Option<Vec<u8>> {
         if let Ok(bytes) = self.from_pty_rx.try_recv() {
             return Some(bytes);
         }
@@ -339,7 +350,7 @@ impl PtyManager {
         self.from_pty_rx.try_recv().ok()
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) {
+    pub(crate) fn resize(&self, cols: u16, rows: u16) {
         if let Ok(master) = self.master.lock() {
             let _ = master.resize(PtySize {
                 rows,
@@ -358,8 +369,9 @@ mod tests {
     /// El shell recibe el token del panel (lo adjunta el wrapper `ssh` a `AxonSSH=start`) y es único por panel
     #[test]
     fn test_pane_token_reaches_shell_and_is_unique() {
-        let pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None, None).unwrap();
-        let other = PtyManager::new(1, "powershell.exe", false, 80, 24, None, None).unwrap();
+        let pty = PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
+        let other =
+            PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).unwrap();
         assert_eq!(pty.token.len(), 32);
         assert_ne!(pty.token, other.token);
         std::thread::sleep(std::time::Duration::from_millis(1500)); // arranque de PowerShell
@@ -379,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
-        let pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None, None).unwrap();
+        let pty = PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
         let mut total_output = String::new();
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -458,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_powershell_and_harness_kill_word() {
-        let pty = PtyManager::new(0, "powershell.exe", true, 120, 30, None, None).unwrap();
+        let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 120, 30, None, None).unwrap();
         // Esperar al prompt (no a un tiempo fijo): si PowerShell aún arranca, descarta lo que se teclea.
         let (ready, boot) = read_until(&pty, "]133;B", 40_000);
         assert!(ready, "el prompt de Axon no apareció: {boot:?}");
@@ -578,7 +590,7 @@ mod tests {
             "En línea:",
         ];
         for shell in installed_shells() {
-            let pty = PtyManager::new(0, &shell, true, 120, 30, Some(&cwd), None)
+            let pty = PtyManager::new(PaneId(0), &shell, true, 120, 30, Some(&cwd), None)
                 .unwrap_or_else(|e| panic!("{shell}: no se pudo iniciar: {e}"));
 
             // 1. Arranque: el prompt completo termina con OSC 133;B
@@ -662,7 +674,8 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_exit_detection() {
-        let mut pty = PtyManager::new(0, "powershell.exe", false, 80, 24, None, None).unwrap();
+        let mut pty =
+            PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         assert!(
             !pty.is_child_exited(),
@@ -715,8 +728,8 @@ mod tests {
             assert!(!is_safe_ssh_destination(bad), "debe rechazar {bad:?}");
         }
         // el sumidero también valida (defensa en profundidad): ni siquiera abre el PTY
-        assert!(PtyManager::new_ssh(0, "x; calc", None, 80, 24, None).is_err());
-        assert!(PtyManager::new_ssh(0, "-oProxyCommand=calc", None, 80, 24, None).is_err());
+        assert!(PtyManager::new_ssh(PaneId(0), "x; calc", None, 80, 24, None).is_err());
+        assert!(PtyManager::new_ssh(PaneId(0), "-oProxyCommand=calc", None, 80, 24, None).is_err());
     }
 
     #[test]
@@ -808,7 +821,7 @@ mod tests {
     /// Cerrar un panel (soltar el `PtyManager`) o morir Axon no debe dejar PowerShell ni sus hijos vivos.
     #[test]
     fn test_dropping_pty_kills_shell_and_its_children() {
-        let pty = PtyManager::new(0, "powershell.exe", true, 100, 30, None, None).unwrap();
+        let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 100, 30, None, None).unwrap();
         let shell = pty.child.process_id().expect("pid del shell");
         let (ok, boot) = read_until(&pty, "]133;B", 40_000);
         assert!(ok, "prompt no apareció: {boot:?}");
@@ -859,7 +872,8 @@ mod tests {
         for shell in installed_shells() {
             let pids: Vec<u32> = (0..4)
                 .map(|i| {
-                    let pty = PtyManager::new(i, &shell, true, 100, 30, None, None).unwrap();
+                    let pty =
+                        PtyManager::new(PaneId(i), &shell, true, 100, 30, None, None).unwrap();
                     let pid = pty.child.process_id().expect("pid del shell");
                     drop(pty); // sin esperar al prompt
                     pid

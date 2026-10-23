@@ -356,7 +356,7 @@ impl AxonApp {
                     is_pointer = true;
                 }
                 // Check tabs
-                for idx in 0..self.tabs.len() {
+                for (idx, _tab) in self.tabs.iter().enumerate() {
                     let tr = top_rects.tab_rect(idx);
                     if mx >= tr.0 && mx < tr.0 + tr.2 && my >= tr.1 && my < tr.1 + tr.3 {
                         new_hovered_tab = Some(idx);

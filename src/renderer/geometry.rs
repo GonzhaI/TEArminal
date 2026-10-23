@@ -1,12 +1,12 @@
 //! Geometría compartida entre el dibujo y la detección de clics/hover (una sola fuente de verdad).
 
 /// Rectángulo (x, y, ancho, alto) en píxeles
-pub type Rect = (usize, usize, usize, usize);
+pub(crate) type Rect = (usize, usize, usize, usize);
 
 /// Convierte la posición Y deseada de la parte superior del pulgar (`thumb_top_y`) en un `scroll_offset`
 /// dentro de `0..=max_offset` para una barra de desplazamiento vertical `(track, thumb)`.
 #[inline]
-pub fn scroll_offset_for_thumb_y(
+pub(crate) fn scroll_offset_for_thumb_y(
     track: Rect,
     thumb: Rect,
     thumb_top_y: f32,
@@ -23,7 +23,7 @@ pub fn scroll_offset_for_thumb_y(
 
 /// Rectángulo del botón flotante "ir hasta abajo" en el panel de la terminal
 #[inline]
-pub fn pane_scroll_to_bottom_btn_rect(
+pub(crate) fn pane_scroll_to_bottom_btn_rect(
     rect_x: usize,
     rect_y: usize,
     rect_width: usize,
@@ -37,8 +37,8 @@ pub fn pane_scroll_to_bottom_btn_rect(
     (x, y, size, size)
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TopTabBarRects {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct TopTabBarRects {
     pub bar_h: usize,
     pub tabs_start_x: usize,
     pub tab_w: usize,
@@ -54,16 +54,16 @@ pub struct TopTabBarRects {
 }
 
 impl TopTabBarRects {
-    pub const HEIGHT: usize = 38;
+    pub(crate) const HEIGHT: usize = 38;
     /// La marca ocupa el extremo izquierdo en ambos modos; las pestañas empiezan después.
-    pub const BRAND_W: usize = 88;
-    pub const TAB_GAP: usize = 3;
-    pub const CLOSE_W: usize = 24;
-    pub const PLUS_W: usize = 28;
+    pub(crate) const BRAND_W: usize = 88;
+    pub(crate) const TAB_GAP: usize = 3;
+    pub(crate) const CLOSE_W: usize = 24;
+    pub(crate) const PLUS_W: usize = 28;
     /// Lado de los botones de acción del chrome (buscar, panel, ajustes).
-    pub const ACTION: usize = 32;
+    pub(crate) const ACTION: usize = 32;
 
-    pub fn compute(width: usize, tabs_count: usize) -> Self {
+    pub(crate) fn compute(width: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
@@ -126,7 +126,7 @@ impl TopTabBarRects {
     }
 
     #[inline]
-    pub fn tab_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
+    pub(crate) fn tab_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
         (
             self.tabs_start_x + idx * (self.tab_w + self.tab_gap),
             0,
@@ -136,7 +136,7 @@ impl TopTabBarRects {
     }
 
     #[inline]
-    pub fn close_btn_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
+    pub(crate) fn close_btn_rect(&self, idx: usize) -> (usize, usize, usize, usize) {
         let tab = self.tab_rect(idx);
         if self.tab_w >= 76 {
             (
@@ -151,7 +151,7 @@ impl TopTabBarRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         rect.2 > 0
             && rect.3 > 0
             && mx >= rect.0
@@ -161,8 +161,8 @@ impl TopTabBarRects {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct TopTitleBarRects {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct TopTitleBarRects {
     pub bar_h: usize,
     pub files_btn: (usize, usize, usize, usize),
     pub settings_btn: (usize, usize, usize, usize),
@@ -174,11 +174,11 @@ pub struct TopTitleBarRects {
 }
 
 impl TopTitleBarRects {
-    pub const HEIGHT: usize = 38;
-    pub const SEARCH_W: usize = 420;
-    pub const SEARCH_H: usize = 30;
+    pub(crate) const HEIGHT: usize = 38;
+    pub(crate) const SEARCH_W: usize = 420;
+    pub(crate) const SEARCH_H: usize = 30;
 
-    pub fn compute(width: usize) -> Self {
+    pub(crate) fn compute(width: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
@@ -210,8 +210,8 @@ impl TopTitleBarRects {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct SettingsPageRects {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SettingsPageRects {
     pub nav_appearance: (usize, usize, usize, usize),
     pub nav_terminal: (usize, usize, usize, usize),
     pub nav_shortcuts: (usize, usize, usize, usize),
@@ -265,22 +265,22 @@ pub struct SettingsPageRects {
 
 impl SettingsPageRects {
     /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
-    pub const CONTENT_TOP: usize = 144;
+    pub(crate) const CONTENT_TOP: usize = 144;
     /// Filas visibles de la lista de temas, alto de cada una y alto de su tarjeta
-    pub const THEME_ROWS: usize = 7;
-    pub const THEME_ROW_H: usize = 30;
-    pub const THEME_CARD_H: usize = 428;
-    pub const INTERFACE_CARD_H: usize = 270;
-    pub const TYPOGRAPHY_CARD_H: usize = 236;
+    pub(crate) const THEME_ROWS: usize = 7;
+    pub(crate) const THEME_ROW_H: usize = 30;
+    pub(crate) const THEME_CARD_H: usize = 428;
+    pub(crate) const INTERFACE_CARD_H: usize = 270;
+    pub(crate) const TYPOGRAPHY_CARD_H: usize = 236;
     /// Alto de la tarjeta «Comportamiento del terminal»
-    pub const TERMINAL_CARD_H: usize = 464;
-    pub const TERMINAL_ROW_H: usize = 28;
-    pub const DISK_CARD_H: usize = 118;
-    pub const SHORTCUTS_CARD_H: usize = 392;
-    pub const ABOUT_CARD_H: usize = 328;
+    pub(crate) const TERMINAL_CARD_H: usize = 464;
+    pub(crate) const TERMINAL_ROW_H: usize = 28;
+    pub(crate) const DISK_CARD_H: usize = 118;
+    pub(crate) const SHORTCUTS_CARD_H: usize = 392;
+    pub(crate) const ABOUT_CARD_H: usize = 328;
 
     /// Alto total del contenido desplazable de una sección (desde `CONTENT_TOP`).
-    pub fn content_height(section: super::state::SettingsSection) -> usize {
+    pub(crate) fn content_height(section: super::state::SettingsSection) -> usize {
         use super::state::SettingsSection::*;
         match section {
             Appearance => 970,
@@ -291,12 +291,12 @@ impl SettingsPageRects {
     }
 
     /// Máximo desplazamiento vertical para un viewport de `viewport_h` píxeles.
-    pub fn max_scroll(section: super::state::SettingsSection, viewport_h: usize) -> usize {
+    pub(crate) fn max_scroll(section: super::state::SettingsSection, viewport_h: usize) -> usize {
         Self::content_height(section).saturating_sub(viewport_h)
     }
 
     /// Pista y pulgar de la barra de scroll de Ajustes (compartidos por dibujo, clic y arrastre)
-    pub fn scrollbar(
+    pub(crate) fn scrollbar(
         section: super::state::SettingsSection,
         page_y: usize,
         win_w: usize,
@@ -313,7 +313,7 @@ impl SettingsPageRects {
         )
     }
 
-    pub fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
+    pub(crate) fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
         let max_card_w = 980;
         let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
         let card_w = (page_w.saturating_sub(side_padding * 2))
@@ -494,13 +494,13 @@ impl SettingsPageRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct FileViewerHeaderRects {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FileViewerHeaderRects {
     pub mode_btn: (usize, usize, usize, usize),
     pub md_btn: Option<(usize, usize, usize, usize)>,
     /// «Cambios»: abre el diff contra HEAD (solo si el archivo está en un repo)
@@ -508,7 +508,7 @@ pub struct FileViewerHeaderRects {
 }
 
 impl FileViewerHeaderRects {
-    pub fn compute(
+    pub(crate) fn compute(
         x: usize,
         y: usize,
         w: usize,
@@ -547,14 +547,14 @@ impl FileViewerHeaderRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
     }
 }
 
 /// Geometría del área de texto del visor de archivos (una sola fuente para dibujo, clics y scroll).
-#[derive(Debug, Clone, Copy)]
-pub struct FileViewerLayout {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FileViewerLayout {
     pub content_y: usize,
     pub content_h: usize,
     pub row_h: usize,
@@ -568,9 +568,9 @@ pub struct FileViewerLayout {
 }
 
 impl FileViewerLayout {
-    pub const HEADER_H: usize = 38;
+    pub(crate) const HEADER_H: usize = 38;
 
-    pub fn compute(
+    pub(crate) fn compute(
         x: usize,
         y: usize,
         w: usize,
@@ -601,7 +601,7 @@ impl FileViewerLayout {
     }
 
     /// Columna (índice de grafema) de la línea bajo la coordenada X, con el scroll horizontal aplicado.
-    pub fn col_at(&self, line: &str, mx: usize, scroll_x: usize) -> usize {
+    pub(crate) fn col_at(&self, line: &str, mx: usize, scroll_x: usize) -> usize {
         if mx < self.text_x {
             return 0;
         }
@@ -624,7 +624,7 @@ impl FileViewerLayout {
     }
 
     /// Pista y pulgar de la barra horizontal; `None` si todo el ancho cabe. `max_scroll` = `FileViewerState::max_scroll_x`.
-    pub fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
+    pub(crate) fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
         if max_scroll == 0 || self.content_h < 24 {
             return None;
         }
@@ -649,32 +649,32 @@ impl FileViewerLayout {
 /// La barra empieza en `TOP` (bajo la barra de título) para no tapar la marca. Las coordenadas de sus
 /// métodos son locales a la barra, que se dibuja en su propio búfer y se coloca a izquierda o derecha:
 /// clic y dibujo no repiten la retícula.
-pub struct SidebarRects;
+pub(crate) struct SidebarRects;
 
 impl SidebarRects {
-    pub const WIDTH: usize = 328;
+    pub(crate) const WIDTH: usize = 328;
     /// Ancho del riel (solo lleva el botón de ajustes); la columna de sesiones ocupa el resto.
-    pub const RAIL_W: usize = 60;
-    pub const TOP: usize = 38;
+    pub(crate) const RAIL_W: usize = 60;
+    pub(crate) const TOP: usize = 38;
     /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`Canvas::card`).
-    pub const CARD_INSET: usize = 6;
-    pub const CARD_RADIUS: usize = 10;
+    pub(crate) const CARD_INSET: usize = 6;
+    pub(crate) const CARD_RADIUS: usize = 10;
     /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire
     /// dentro de la tarjeta y alinea los bordes de todas las secciones.
-    pub const PAD_R: usize = 20;
+    pub(crate) const PAD_R: usize = 20;
     /// Título, rama y carpeta.
-    pub const HEADER_H: usize = 66;
+    pub(crate) const HEADER_H: usize = 66;
     /// Y de la primera fila.
-    pub const LIST_START_Y: usize = Self::TOP + Self::HEADER_H + 8;
-    pub const TAB_ITEM_H: usize = 48;
-    pub const TAB_SPACING: usize = 2;
+    pub(crate) const LIST_START_Y: usize = Self::TOP + Self::HEADER_H + 8;
+    pub(crate) const TAB_ITEM_H: usize = 48;
+    pub(crate) const TAB_SPACING: usize = 2;
     /// X de las filas de sesión (junto al riel).
-    pub const PAD_X: usize = Self::RAIL_W + 8;
-    pub const CLOSE_SIZE: usize = 24;
-    pub const PLUS_SIZE: usize = 28;
+    pub(crate) const PAD_X: usize = Self::RAIL_W + 8;
+    pub(crate) const CLOSE_SIZE: usize = 24;
+    pub(crate) const PLUS_SIZE: usize = 28;
 
     #[inline]
-    pub fn plus_btn() -> Rect {
+    pub(crate) fn plus_btn() -> Rect {
         (
             Self::WIDTH - Self::PLUS_SIZE - 10,
             Self::TOP + 8,
@@ -684,13 +684,13 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub fn list_max_y(usable_h: usize) -> usize {
+    pub(crate) fn list_max_y(usable_h: usize) -> usize {
         Self::content_bottom(usable_h).max(Self::LIST_START_Y)
     }
 
     /// Fin (y) de la lista de sesiones. Sin explorador llega hasta el pie; con él la lista cede espacio:
     /// como mucho el 40 % libre, en filas enteras y con al menos una.
-    pub fn list_end(usable_h: usize, rows: usize, explorer_visible: bool) -> usize {
+    pub(crate) fn list_end(usable_h: usize, rows: usize, explorer_visible: bool) -> usize {
         let max = Self::list_max_y(usable_h);
         if !explorer_visible {
             return max;
@@ -701,7 +701,7 @@ impl SidebarRects {
     }
 
     /// Rectángulo del explorador alojado bajo la lista de sesiones.
-    pub fn explorer_rect_after(usable_h: usize, list_end: usize) -> Rect {
+    pub(crate) fn explorer_rect_after(usable_h: usize, list_end: usize) -> Rect {
         let top = list_end + 8;
         let bottom = Self::content_bottom(usable_h);
         (
@@ -713,7 +713,7 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub fn visible_items(list_end: usize) -> usize {
+    pub(crate) fn visible_items(list_end: usize) -> usize {
         if list_end > Self::LIST_START_Y {
             (list_end - Self::LIST_START_Y) / (Self::TAB_ITEM_H + Self::TAB_SPACING)
         } else {
@@ -723,19 +723,19 @@ impl SidebarRects {
 
     /// Y absoluta de la fila `vis_idx` (índice dentro de la ventana visible).
     #[inline]
-    pub fn row_y(vis_idx: usize) -> usize {
+    pub(crate) fn row_y(vis_idx: usize) -> usize {
         Self::LIST_START_Y + vis_idx * (Self::TAB_ITEM_H + Self::TAB_SPACING)
     }
 
     /// Borde inferior del contenido del panel (sin el pie, que ya no existe).
     #[inline]
-    pub fn content_bottom(usable_h: usize) -> usize {
+    pub(crate) fn content_bottom(usable_h: usize) -> usize {
         usable_h.saturating_sub(8)
     }
 
     /// Botón de ajustes al fondo del riel (modo vertical): abre Ajustes.
     #[inline]
-    pub fn settings_btn_rect(usable_h: usize) -> Rect {
+    pub(crate) fn settings_btn_rect(usable_h: usize) -> Rect {
         let size = 30;
         (
             (Self::RAIL_W - size) / 2,
@@ -747,7 +747,7 @@ impl SidebarRects {
 
     /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
     #[inline]
-    pub fn tab_rect(idx: usize, scroll_offset: usize) -> Rect {
+    pub(crate) fn tab_rect(idx: usize, scroll_offset: usize) -> Rect {
         (
             Self::PAD_X,
             Self::row_y(idx.saturating_sub(scroll_offset)),
@@ -757,7 +757,7 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub fn close_btn_rect(tab: Rect) -> Rect {
+    pub(crate) fn close_btn_rect(tab: Rect) -> Rect {
         (
             tab.0 + tab.2.saturating_sub(Self::CLOSE_SIZE + 6),
             tab.1 + (tab.3.saturating_sub(Self::CLOSE_SIZE)) / 2,
@@ -767,7 +767,7 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub fn tab_at_y(
+    pub(crate) fn tab_at_y(
         my: usize,
         list_end: usize,
         scroll_offset: usize,
@@ -786,7 +786,7 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect.2 > 0
             && rect.3 > 0
             && mx >= rect.0
@@ -799,11 +799,11 @@ impl SidebarRects {
 /// Barra de scroll vertical de toda la interfaz (panel, explorador, terminal, visor y Ajustes): un solo
 /// carril, ancho y posición, para que todas se vean y respondan igual. Dibujo, clic, hover y arrastre
 /// parten de `vertical`.
-pub struct ScrollbarRects;
+pub(crate) struct ScrollbarRects;
 
 impl ScrollbarRects {
     /// Ancho del carril y del pulgar.
-    pub const WIDTH: usize = 8;
+    pub(crate) const WIDTH: usize = 8;
     /// Aire entre el carril y el borde de la tarjeta.
     const GAP: usize = 2;
     /// Pulgar mínimo, para que siga siendo agarrable con listas muy largas.
@@ -812,13 +812,13 @@ impl ScrollbarRects {
     /// X del carril de un contenido que termina en `right`: junto al borde de la tarjeta
     /// (`SidebarRects::CARD_INSET`), que recorta ese margen.
     #[inline]
-    pub fn track_x(right: usize) -> usize {
+    pub(crate) fn track_x(right: usize) -> usize {
         right.saturating_sub(Self::WIDTH + Self::GAP + SidebarRects::CARD_INSET)
     }
 
     /// Carril `(x, y, WIDTH, h)` y pulgar de una vista de `visible` unidades sobre `total`, desplazada
     /// `offset` unidades desde arriba. `None` si todo cabe.
-    pub fn vertical(
+    pub(crate) fn vertical(
         right: usize,
         y: usize,
         h: usize,
@@ -839,55 +839,60 @@ impl ScrollbarRects {
     /// Zona que responde como barra (clic y hover): el carril, 8 px a su izquierda y el margen hasta el
     /// borde, para no agarrar por error lo que queda detrás.
     #[inline]
-    pub fn hit(track: Rect, right: usize, mx: usize, my: usize) -> bool {
+    pub(crate) fn hit(track: Rect, right: usize, mx: usize, my: usize) -> bool {
         mx + 8 >= track.0 && mx < right && my >= track.1 && my < track.1 + track.3
     }
 }
 
 /// Geometría del panel del modo de pestañas superiores: el explorador ocupa todo el panel, que mide
 /// `SidebarRects::WIDTH`. Es local al panel.
-pub struct FilesPanelRects;
+pub(crate) struct FilesPanelRects;
 
 impl FilesPanelRects {
     /// Rectángulo del explorador alojado: desde el margen de la tarjeta hasta el fondo.
-    pub fn explorer_rect(usable_h: usize) -> Rect {
+    pub(crate) fn explorer_rect(usable_h: usize) -> Rect {
         let top = SidebarRects::TOP + SidebarRects::CARD_INSET;
         let bottom = SidebarRects::content_bottom(usable_h);
         (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct StatusBarRects {
-    pub ai_badge: Rect,
-    pub update_badge: Option<Rect>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct StatusBarRects {
+    pub(crate) ai_badge: Rect,
+    pub(crate) update_badge: Option<Rect>,
     /// Medidores de límites; `0` de ancho cuando no hay sitio y no se dibujan.
-    pub meters: Rect,
+    pub(crate) meters: Rect,
 }
 
 impl StatusBarRects {
-    pub const BAR_H: usize = 28;
-    pub const POPUP_W: usize = 392;
+    pub(crate) const BAR_H: usize = 28;
+    pub(crate) const POPUP_W: usize = 392;
     /// Margen derecho del grupo de estado (las dimensiones cierran la barra).
-    pub const RIGHT_PAD: usize = 14;
+    pub(crate) const RIGHT_PAD: usize = 14;
     /// Separación entre bloques del grupo derecho (badge, medidores, dimensiones).
-    pub const GROUP_GAP: usize = 20;
+    pub(crate) const GROUP_GAP: usize = 20;
     /// Ancho de la barra de un medidor y alto del carril.
-    pub const METER_TRACK_W: usize = 82;
-    pub const METER_TRACK_H: usize = 6;
+    pub(crate) const METER_TRACK_W: usize = 82;
+    pub(crate) const METER_TRACK_H: usize = 6;
     /// Ancho mínimo que debe quedar para la ruta y la rama: por debajo, los medidores no se dibujan.
-    pub const MIN_CONTENT_W: usize = 240;
+    pub(crate) const MIN_CONTENT_W: usize = 240;
 
     /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
     /// incluyendo el indicador opcional de nueva versión disponible
     #[cfg(test)]
-    pub fn compute(width: usize, height: usize, label_w: usize, update_w: Option<usize>) -> Self {
+    pub(crate) fn compute(
+        width: usize,
+        height: usize,
+        label_w: usize,
+        update_w: Option<usize>,
+    ) -> Self {
         Self::compute_with_status(width, height, label_w, update_w, 0, 0)
     }
 
     /// Como `compute`, reservando a la derecha del badge las dimensiones de la rejilla (`dims_w`) y los
     /// medidores de límites (`meters_w`). El grupo se ancla al borde derecho y el badge queda a su izquierda.
-    pub fn compute_with_status(
+    pub(crate) fn compute_with_status(
         width: usize,
         height: usize,
         label_w: usize,
@@ -938,7 +943,7 @@ impl StatusBarRects {
     }
 
     /// Rectángulo del menú flotante de consumo encima de la barra de estado.
-    pub fn popup_rect(width: usize, height: usize, popup_h: usize) -> Rect {
+    pub(crate) fn popup_rect(width: usize, height: usize, popup_h: usize) -> Rect {
         let w = Self::POPUP_W.min(width.saturating_sub(16));
         let x = width.saturating_sub(w + 10);
         let bar_y = height.saturating_sub(Self::BAR_H);
@@ -947,7 +952,7 @@ impl StatusBarRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect.2 > 0
             && rect.3 > 0
             && mx >= rect.0
@@ -958,7 +963,7 @@ impl StatusBarRects {
 
     /// Mantiene abierto el menú flotante si el ratón está en el badge, en la tarjeta o en el puente de 6px entre ambos.
     #[inline]
-    pub fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
+    pub(crate) fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
         let bridge = (popup.0, popup.1, popup.2, popup.3 + 8);
         Self::inside(mx, my, badge) || Self::inside(mx, my, bridge)
     }
@@ -966,7 +971,7 @@ impl StatusBarRects {
 
 /// Botón de la cabecera de un panel dividido.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaneHeaderButton {
+pub(crate) enum PaneHeaderButton {
     /// Dividir el panel en dos columnas
     Split,
     /// Maximizar el panel (ocultar el resto) o restaurar el reparto
@@ -977,28 +982,28 @@ pub enum PaneHeaderButton {
 
 /// Geometría de la cabecera de un panel dividido (38 px): icono, título, subtítulo y los tres
 /// botones de la derecha. Es local al hueco del panel y la comparten dibujo, clic y hover.
-#[derive(Debug, Clone, Copy)]
-pub struct PaneHeaderRects {
-    pub header: Rect,
-    pub split_btn: Rect,
-    pub zoom_btn: Rect,
-    pub close_btn: Rect,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PaneHeaderRects {
+    pub(crate) header: Rect,
+    pub(crate) split_btn: Rect,
+    pub(crate) zoom_btn: Rect,
+    pub(crate) close_btn: Rect,
 }
 
 impl PaneHeaderRects {
-    pub const HEIGHT: usize = 38;
+    pub(crate) const HEIGHT: usize = 38;
     /// Línea inferior que separa la cabecera del terminal
-    pub const BORDER: usize = 1;
+    pub(crate) const BORDER: usize = 1;
     /// Lo que hay que descontar del hueco del panel para obtener el área del terminal
-    pub const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
-    pub const BTN: usize = 26;
-    pub const BTN_GAP: usize = 10;
-    pub const PAD_RIGHT: usize = 16;
+    pub(crate) const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
+    pub(crate) const BTN: usize = 26;
+    pub(crate) const BTN_GAP: usize = 10;
+    pub(crate) const PAD_RIGHT: usize = 16;
     /// Centro del icono y comienzo del título, relativos al borde izquierdo del panel
-    pub const ICON_X: usize = 24;
-    pub const TEXT_X: usize = 41;
+    pub(crate) const ICON_X: usize = 24;
+    pub(crate) const TEXT_X: usize = 41;
 
-    pub fn compute(x: usize, y: usize, w: usize) -> Self {
+    pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {
         let right = x + w;
         let by = y + (Self::HEIGHT.saturating_sub(Self::BTN)) / 2;
         let close_btn = (
@@ -1028,7 +1033,12 @@ impl PaneHeaderRects {
     }
 
     /// Botón bajo el ratón. Dividir y maximizar solo existen en el panel enfocado; cerrar, en todos.
-    pub fn button_at(&self, mx: usize, my: usize, focused: bool) -> Option<PaneHeaderButton> {
+    pub(crate) fn button_at(
+        &self,
+        mx: usize,
+        my: usize,
+        focused: bool,
+    ) -> Option<PaneHeaderButton> {
         if !Self::inside(mx, my, self.header) {
             return None;
         }
@@ -1045,7 +1055,7 @@ impl PaneHeaderRects {
     }
 
     #[inline]
-    pub fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+    pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect.2 > 0
             && rect.3 > 0
             && mx >= rect.0
@@ -1057,27 +1067,27 @@ impl PaneHeaderRects {
 
 impl SettingsPageRects {
     /// Rectángulo de la fila `i` (0..THEME_ROWS) de la lista de temas
-    pub fn theme_row(&self, i: usize) -> (usize, usize, usize, usize) {
+    pub(crate) fn theme_row(&self, i: usize) -> (usize, usize, usize, usize) {
         let l = self.theme_list;
         (l.0, l.1 + i * Self::THEME_ROW_H, l.2, Self::THEME_ROW_H)
     }
 
     /// Fila de la lista de temas bajo el ratón, si hay alguna
-    pub fn theme_row_at(&self, mx: usize, my: usize) -> Option<usize> {
+    pub(crate) fn theme_row_at(&self, mx: usize, my: usize) -> Option<usize> {
         Self::inside(mx, my, self.theme_list).then(|| (my - self.theme_list.1) / Self::THEME_ROW_H)
     }
 }
 
 /// Pestañas «Archivos» · «Cambios» que encabezan el explorador: dos mitades iguales con el margen
 /// de la tarjeta del panel. La comparten dibujo, clic y hover.
-#[derive(Debug, Clone, Copy)]
-pub struct ExplorerTabsRects {
-    pub files: Rect,
-    pub changes: Rect,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ExplorerTabsRects {
+    pub(crate) files: Rect,
+    pub(crate) changes: Rect,
 }
 
 impl ExplorerTabsRects {
-    pub fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
+    pub(crate) fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
         let inner = panel_w.saturating_sub(16);
         let half = inner / 2;
         Self {
@@ -1087,7 +1097,7 @@ impl ExplorerTabsRects {
     }
 
     /// `Some(true)` sobre «Cambios», `Some(false)` sobre «Archivos».
-    pub fn tab_at(&self, mx: usize, my: usize) -> Option<bool> {
+    pub(crate) fn tab_at(&self, mx: usize, my: usize) -> Option<bool> {
         let inside = |r: Rect| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3;
         if inside(self.files) {
             Some(false)

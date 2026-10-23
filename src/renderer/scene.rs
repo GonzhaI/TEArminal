@@ -8,26 +8,55 @@ use crate::theme::Color;
 use std::rc::Rc;
 
 /// Recorte absoluto `(x0, y0, x1, y1)` en el búfer real (límite superior exclusivo).
-pub type RealClip = (i32, i32, i32, i32);
+pub(crate) type RealClip = (i32, i32, i32, i32);
 
 /// Imagen RGBA de 8 bits por canal (`width * height * 4` bytes).
-pub struct ImageRef<'a> {
-    pub rgba: &'a [u8],
-    pub width: u32,
-    pub height: u32,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageRef<'a> {
+    pub(crate) rgba: &'a [u8],
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 /// Índice de un glifo en `Scene::glyphs`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GlyphId(u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub(crate) struct GlyphId(u32);
+
+impl From<u32> for GlyphId {
+    #[inline]
+    fn from(v: u32) -> Self {
+        Self(v)
+    }
+}
+
+impl From<GlyphId> for u32 {
+    #[inline]
+    fn from(id: GlyphId) -> Self {
+        id.0
+    }
+}
 
 /// Índice de una imagen en `Scene::images`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ImageId(u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub(crate) struct ImageId(u32);
+
+impl From<u32> for ImageId {
+    #[inline]
+    fn from(v: u32) -> Self {
+        Self(v)
+    }
+}
+
+impl From<ImageId> for u32 {
+    #[inline]
+    fn from(id: ImageId) -> Self {
+        id.0
+    }
+}
 
 /// Una operación de dibujo. Todas llevan coordenadas absolutas y el recorte ya intersecado.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Op {
+pub(crate) enum Op {
     /// Rellena todo el búfer.
     Clear(Color),
     Fill {
@@ -80,7 +109,7 @@ struct ImageEntry {
 }
 
 #[derive(Default)]
-pub struct Scene {
+pub(crate) struct Scene {
     pub w: u32,
     pub h: u32,
     pub ops: Vec<Op>,
@@ -96,7 +125,7 @@ pub struct Scene {
 
 impl Scene {
     /// Vacía la escena conservando la memoria de las tablas y de `ops`.
-    pub fn reset(&mut self, w: u32, h: u32) {
+    pub(crate) fn reset(&mut self, w: u32, h: u32) {
         self.w = w;
         self.h = h;
         self.ops.clear();
@@ -107,16 +136,16 @@ impl Scene {
         self.image_bytes.clear();
     }
 
-    pub fn glyph(&self, id: GlyphId) -> &CachedGlyph {
+    pub(crate) fn glyph(&self, id: GlyphId) -> &CachedGlyph {
         &self.glyphs[id.0 as usize]
     }
 
     /// El `Rc` del glifo: su dirección es la identidad estable que usa el atlas de la GPU.
-    pub fn glyph_rc(&self, id: GlyphId) -> &Rc<CachedGlyph> {
+    pub(crate) fn glyph_rc(&self, id: GlyphId) -> &Rc<CachedGlyph> {
         &self.glyphs[id.0 as usize]
     }
 
-    pub fn image(&self, id: ImageId) -> ImageRef<'_> {
+    pub(crate) fn image(&self, id: ImageId) -> ImageRef<'_> {
         let e = &self.images[id.0 as usize];
         let len = e.width as usize * e.height as usize * 4;
         ImageRef {
@@ -128,7 +157,7 @@ impl Scene {
 
     /// Número de glifos distintos que usa la escena.
     #[cfg(test)]
-    pub fn glyph_count(&self) -> usize {
+    pub(crate) fn glyph_count(&self) -> usize {
         self.glyphs.len()
     }
 

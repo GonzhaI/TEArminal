@@ -1,0 +1,10 @@
+# Configuración de cargo-nextest para Axon
+[profile.default]
+retries = 0
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# Tests de UI que requieren su propio contexto gráfico
+[[profile.default.overrides]]
+filter = 'test(renderer::tests::gpu_)'
+threads-required = 1

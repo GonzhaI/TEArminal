@@ -1,6 +1,6 @@
 /// Catálogo de iconos Lucide vectoriales embebidos para Axon
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LucideIcon {
+pub(crate) enum LucideIcon {
     SquareTerminal,
     Terminal,
     Sparkles,
@@ -78,7 +78,7 @@ pub enum LucideIcon {
 
 impl LucideIcon {
     /// Devuelve el carácter Unicode codificado en la tipografía `lucide.ttf`
-    pub fn as_char(&self) -> char {
+    pub(crate) fn as_char(&self) -> char {
         match self {
             Self::SquareTerminal => '\u{e20a}',
             Self::Terminal => '\u{e181}',
@@ -157,8 +157,15 @@ impl LucideIcon {
     }
 }
 
+impl From<LucideIcon> for char {
+    #[inline]
+    fn from(icon: LucideIcon) -> Self {
+        icon.as_char()
+    }
+}
+
 /// Resuelve el icono Lucide y el índice de color ANSI (0..16) según el nombre y la extensión del archivo.
-pub fn file_icon_and_slot(path: &std::path::Path) -> (LucideIcon, usize) {
+pub(crate) fn file_icon_and_slot(path: &std::path::Path) -> (LucideIcon, usize) {
     let file_name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -302,12 +309,12 @@ pub fn file_icon_and_slot(path: &std::path::Path) -> (LucideIcon, usize) {
 }
 
 /// Devuelve el icono representativo para una ruta de archivo.
-pub fn file_icon(path: &std::path::Path) -> LucideIcon {
+pub(crate) fn file_icon(path: &std::path::Path) -> LucideIcon {
     file_icon_and_slot(path).0
 }
 
 /// Devuelve el icono y el color temático (paleta ANSI) representativos para una ruta de archivo.
-pub fn file_icon_and_color(
+pub(crate) fn file_icon_and_color(
     path: &std::path::Path,
     theme: &crate::theme::Theme,
 ) -> (LucideIcon, crate::theme::Color) {

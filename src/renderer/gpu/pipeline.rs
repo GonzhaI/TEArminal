@@ -9,9 +9,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 static VS_BYTECODE: &[u8] = include_bytes!("shaders/quad_vs.cso");
 static PS_BYTECODE: &[u8] = include_bytes!("shaders/quad_ps.cso");
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[repr(u32)]
 pub enum Kind {
+    #[default]
     Solid = 0,
     RoundedFill = 1,
     RoundedStroke = 2,
@@ -20,10 +21,34 @@ pub enum Kind {
     CardCorner = 5,
 }
 
+impl From<Kind> for u32 {
+    #[inline]
+    fn from(kind: Kind) -> Self {
+        kind as u32
+    }
+}
+
+impl TryFrom<u32> for Kind {
+    type Error = ();
+
+    #[inline]
+    fn try_from(v: u32) -> std::result::Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Kind::Solid),
+            1 => Ok(Kind::RoundedFill),
+            2 => Ok(Kind::RoundedStroke),
+            3 => Ok(Kind::Glyph),
+            4 => Ok(Kind::Image),
+            5 => Ok(Kind::CardCorner),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Una primitiva (32 bytes, un elemento por instancia del buffer de vértices; `IASetVertexBuffers` con stride 32).
 #[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct Instance {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct Instance {
     /// x, y, ancho, alto en píxeles del destino (x e y pueden ser negativos)
     pub rect: [i16; 4],
     /// x0, y0, x1, y1 absolutos, límite superior exclusivo, ya recortados al búfer (no negativos)
@@ -41,7 +66,7 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(
+    pub(crate) fn new(
         kind: Kind,
         rect: [i16; 4],
         clip: [u16; 4],
@@ -61,7 +86,7 @@ impl Instance {
     }
 }
 
-pub struct Pipeline {
+pub(crate) struct Pipeline {
     pub vs: ID3D11VertexShader,
     pub ps: ID3D11PixelShader,
     pub layout: ID3D11InputLayout,
@@ -74,7 +99,7 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn new(dev: &GpuDevice) -> Result<Self> {
+    pub(crate) fn new(dev: &GpuDevice) -> Result<Self> {
         let d = &dev.device;
         unsafe {
             let mut vs = None;

@@ -7,11 +7,12 @@ pub(crate) mod kitty;
 pub(crate) mod performer;
 pub(crate) use performer::clean_listing;
 
-pub use cell::*;
-pub use kitty::*;
+pub(crate) use cell::*;
+pub(crate) use kitty::*;
 use performer::Performer;
 
 use crate::theme::{Color, Theme};
+use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
 
@@ -22,10 +23,10 @@ type OscParser = Parser<OSC_BUF_SIZE>;
 
 /// Respuesta a una petición en banda al bash remoto (leer/escribir archivo, listar carpeta)
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteFileResult {
-    pub id: u32,
-    pub ok: bool,
-    pub data: Vec<u8>,
+pub(crate) struct RemoteFileResult {
+    pub(crate) id: u32,
+    pub(crate) ok: bool,
+    pub(crate) data: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,7 @@ struct RemoteFileAsm {
     parts: Vec<Option<String>>,
 }
 
-pub struct TerminalState {
+pub(crate) struct TerminalState {
     pub cols: usize,
     pub rows: usize,
     pub cursor_x: usize,
@@ -128,30 +129,30 @@ pub struct TerminalState {
 
     // Soporte para clústeres de grafemas extendidos (UAX #29)
     pub graphemes: Vec<Box<str>>,
-    pub grapheme_map: std::collections::HashMap<Box<str>, u32>,
+    pub grapheme_map: FxHashMap<Box<str>, u32>,
 
     // Soporte para hipervínculos explícitos (OSC 8)
     pub current_hyperlink: u16,
     pub hyperlinks: Vec<Box<str>>,
-    pub hyperlink_map: std::collections::HashMap<Box<str>, u16>,
+    pub hyperlink_map: FxHashMap<Box<str>, u16>,
 
     // Soporte para color de subrayado explícito (SGR 58 / SGR 59)
     pub current_underline_color: u8,
     pub underline_colors: Vec<Color>,
-    pub underline_color_map: std::collections::HashMap<u32, u8>,
+    pub underline_color_map: FxHashMap<u32, u8>,
 
     // Protocolo Kitty Graphics (APC \x1b_G...) y cola de respuesta PTY
     pub pty_write_queue: Vec<Vec<u8>>,
     pub(super) kitty_apc_buf: Option<Vec<u8>>,
     pub(super) kitty_esc_prefix: Vec<u8>,
     pub(super) kitty_chunk_data: Option<KittyChunkState>,
-    pub(super) kitty_stored_images: std::collections::HashMap<u64, InlineImage>,
+    pub(super) kitty_stored_images: FxHashMap<u64, InlineImage>,
     /// Ids de `kitty_stored_images` de más antiguo a más reciente (orden de expulsión)
     pub(super) kitty_stored_order: Vec<u64>,
 }
 
 impl TerminalState {
-    pub fn new(cols: usize, rows: usize, max_scrollback: usize, theme: Theme) -> Self {
+    pub(crate) fn new(cols: usize, rows: usize, max_scrollback: usize, theme: Theme) -> Self {
         let default_cell = Cell::default_with_theme(&theme);
         let grid = (0..rows).map(|_| vec![default_cell; cols]).collect();
         let alt_grid = VecDeque::new();
@@ -212,25 +213,25 @@ impl TerminalState {
             parser: Some(Box::default()),
             parser_in_ground: true,
             graphemes: Vec::new(),
-            grapheme_map: std::collections::HashMap::new(),
+            grapheme_map: FxHashMap::default(),
             current_hyperlink: 0,
             hyperlinks: Vec::new(),
-            hyperlink_map: std::collections::HashMap::new(),
+            hyperlink_map: FxHashMap::default(),
             current_underline_color: 0,
             underline_colors: Vec::new(),
-            underline_color_map: std::collections::HashMap::new(),
+            underline_color_map: FxHashMap::default(),
             pty_write_queue: Vec::new(),
             kitty_apc_buf: None,
             kitty_esc_prefix: Vec::new(),
             kitty_chunk_data: None,
-            kitty_stored_images: std::collections::HashMap::new(),
+            kitty_stored_images: FxHashMap::default(),
             kitty_stored_order: Vec::new(),
         }
     }
 
     /// Comprueba si el terminal está en modo de renderizado sincronizado activo (DEC 2026).
     /// Incluye un tiempo de seguridad de 200 ms para evitar que el terminal quede congelado.
-    pub fn is_in_sync_update(&self) -> bool {
+    pub(crate) fn is_in_sync_update(&self) -> bool {
         if !self.sync_update_mode {
             return false;
         }
@@ -243,13 +244,13 @@ impl TerminalState {
     }
 
     /// Genera la secuencia de reporte de modo de color para DEC 2031 (1 = oscuro, 2 = claro).
-    pub fn color_scheme_report_bytes(&self) -> Vec<u8> {
+    pub(crate) fn color_scheme_report_bytes(&self) -> Vec<u8> {
         let code = if self.theme.is_dark() { 1 } else { 2 };
         format!("\x1b[?2031;{code}$y").into_bytes()
     }
 
     /// El marcador trae el token de este panel (comparación en tiempo constante). Un token vacío nunca vale.
-    pub fn pane_token_matches(&self, token: &str) -> bool {
+    pub(crate) fn pane_token_matches(&self, token: &str) -> bool {
         let (a, b) = (self.pane_token.as_bytes(), token.as_bytes());
         !a.is_empty()
             && a.len() == b.len()
@@ -260,7 +261,7 @@ impl TerminalState {
     /// petición tras `#AXR#` en la línea de edición y pulsa una combinación que el gancho de Axon
     /// tiene enlazada (`bind -x`); el gancho borra la petición y responde con `OSC 1337 AxonFile`.
     /// Solo con integración activa y el prompt esperando entrada (si no, los bytes irían a otro programa).
-    pub fn remote_request_bytes(&self, op: &str, id: u32, payload: &str) -> Option<Vec<u8>> {
+    pub(crate) fn remote_request_bytes(&self, op: &str, id: u32, payload: &str) -> Option<Vec<u8>> {
         let safe = |s: &str, extra: &[char]| {
             s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
@@ -276,21 +277,21 @@ impl TerminalState {
     }
 
     /// El usuario pulsó Enter: lo que se escriba ya no llega a un prompt sino a un programa
-    pub fn note_enter_sent(&mut self) {
+    pub(crate) fn note_enter_sent(&mut self) {
         self.remote_at_prompt = false;
     }
 
-    pub fn is_mouse_reporting_active(&self) -> bool {
+    pub(crate) fn is_mouse_reporting_active(&self) -> bool {
         self.mouse_reporting_normal
             || self.mouse_reporting_button_event
             || self.mouse_reporting_any_event
     }
 
-    pub fn current_global_line(&self) -> usize {
+    pub(crate) fn current_global_line(&self) -> usize {
         self.scrollback.len() + self.cursor_y
     }
 
-    pub fn active_ai_agent(&self) -> crate::renderer::AiAgentStatus {
+    pub(crate) fn active_ai_agent(&self) -> crate::renderer::AiAgentStatus {
         if self.ai_agent != crate::renderer::AiAgentStatus::None {
             return self.ai_agent;
         }
@@ -298,7 +299,7 @@ impl TerminalState {
     }
 
     #[inline]
-    pub fn grapheme_of(&self, cell: &Cell) -> Option<&str> {
+    pub(crate) fn grapheme_of(&self, cell: &Cell) -> Option<&str> {
         if cell.is_grapheme() {
             let id = (cell.c as u32).checked_sub(0x100000)? as usize;
             self.graphemes.get(id).map(|s| &**s)
@@ -307,7 +308,7 @@ impl TerminalState {
         }
     }
 
-    pub fn register_grapheme(&mut self, s: &str) -> u32 {
+    pub(crate) fn register_grapheme(&mut self, s: &str) -> u32 {
         if let Some(&id) = self.grapheme_map.get(s) {
             return id;
         }
@@ -322,7 +323,7 @@ impl TerminalState {
         }
     }
 
-    pub fn register_hyperlink(&mut self, url: &str) -> u16 {
+    pub(crate) fn register_hyperlink(&mut self, url: &str) -> u16 {
         // Rechazar URLs vacías, excesivamente largas (> 2048) o con caracteres de control
         if url.is_empty()
             || url.len() > 2048
@@ -345,7 +346,7 @@ impl TerminalState {
         }
     }
 
-    pub fn hyperlink_of(&self, cell: &Cell) -> Option<&str> {
+    pub(crate) fn hyperlink_of(&self, cell: &Cell) -> Option<&str> {
         let h_id = cell.raw_hyperlink_id();
         if h_id == 0 {
             None
@@ -355,7 +356,7 @@ impl TerminalState {
         }
     }
 
-    pub fn register_underline_color(&mut self, color: Color) -> u8 {
+    pub(crate) fn register_underline_color(&mut self, color: Color) -> u8 {
         let key = color.to_u32_xrgb();
         if let Some(&id) = self.underline_color_map.get(&key) {
             return id;
@@ -370,7 +371,7 @@ impl TerminalState {
         }
     }
 
-    pub fn underline_color_of(&self, cell: &Cell) -> Option<Color> {
+    pub(crate) fn underline_color_of(&self, cell: &Cell) -> Option<Color> {
         let u_id = cell.underline_color_id();
         if u_id == 0 {
             None
@@ -380,7 +381,7 @@ impl TerminalState {
         }
     }
 
-    pub fn append_cell_text(&self, cell: &Cell, out: &mut String) {
+    pub(crate) fn append_cell_text(&self, cell: &Cell, out: &mut String) {
         if cell.is_grapheme() {
             if let Some(s) = self.grapheme_of(cell) {
                 out.push_str(s);
@@ -390,15 +391,19 @@ impl TerminalState {
         out.push(cell.c);
     }
 
-    pub fn row_text_to_string(&self, row: &[Cell]) -> String {
-        let mut s = String::with_capacity(row.len());
+    pub(crate) fn append_row_text(&self, row: &[Cell], buf: &mut String) {
         for cell in row.iter().filter(|c| c.width > 0) {
-            self.append_cell_text(cell, &mut s);
+            self.append_cell_text(cell, buf);
         }
+    }
+
+    pub(crate) fn row_text_to_string(&self, row: &[Cell]) -> String {
+        let mut s = String::with_capacity(row.len());
+        self.append_row_text(row, &mut s);
         s
     }
 
-    pub fn get_last_output_text(&self) -> Option<String> {
+    pub(crate) fn get_last_output_text(&self) -> Option<String> {
         let block = self.command_blocks.last()?;
         let start = block.output_start?;
         let end = block
@@ -408,11 +413,14 @@ impl TerminalState {
             return None;
         }
 
-        let mut lines = Vec::new();
+        let line_count = (end + 1).saturating_sub(start);
+        let mut lines = Vec::with_capacity(line_count);
+        let mut line_buf = String::with_capacity(self.cols.max(80));
         for line_idx in start..=end {
             if let Some(row) = self.get_buffer_line(line_idx) {
-                let s = self.row_text_to_string(row);
-                let trimmed = s.trim_end();
+                line_buf.clear();
+                self.append_row_text(row, &mut line_buf);
+                let trimmed = line_buf.trim_end();
                 if !trimmed.is_empty() {
                     lines.push(trimmed.to_string());
                 }
@@ -428,7 +436,7 @@ impl TerminalState {
     }
 
     #[inline]
-    pub fn total_buffer_lines(&self) -> usize {
+    pub(crate) fn total_buffer_lines(&self) -> usize {
         if self.is_alt_screen {
             self.alt_grid.len()
         } else {
@@ -437,7 +445,7 @@ impl TerminalState {
     }
 
     #[inline]
-    pub fn get_buffer_line(&self, line_idx: usize) -> Option<&[Cell]> {
+    pub(crate) fn get_buffer_line(&self, line_idx: usize) -> Option<&[Cell]> {
         if self.is_alt_screen {
             self.alt_grid.get(line_idx).map(|r| r.as_slice())
         } else if line_idx < self.scrollback.len() {
@@ -448,7 +456,7 @@ impl TerminalState {
         }
     }
 
-    pub fn selection_ordered(&self) -> Option<((usize, usize), (usize, usize))> {
+    pub(crate) fn selection_ordered(&self) -> Option<((usize, usize), (usize, usize))> {
         let sel = self.selection?;
         let (mut p1, mut p2) = (sel.start, sel.end);
         if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
@@ -462,11 +470,11 @@ impl TerminalState {
     }
 
     #[inline]
-    pub fn has_selection(&self) -> bool {
+    pub(crate) fn has_selection(&self) -> bool {
         self.selection_ordered().is_some()
     }
 
-    pub fn visible_line_start(&self) -> usize {
+    pub(crate) fn visible_line_start(&self) -> usize {
         if self.is_alt_screen {
             0
         } else {
@@ -474,7 +482,7 @@ impl TerminalState {
         }
     }
 
-    pub fn active_grid_mut(&mut self) -> &mut VecDeque<Vec<Cell>> {
+    pub(crate) fn active_grid_mut(&mut self) -> &mut VecDeque<Vec<Cell>> {
         if self.is_alt_screen {
             &mut self.alt_grid
         } else {
@@ -482,7 +490,7 @@ impl TerminalState {
         }
     }
 
-    pub fn enter_alt_screen(&mut self) {
+    pub(crate) fn enter_alt_screen(&mut self) {
         if !self.is_alt_screen {
             self.is_alt_screen = true;
             self.saved_cursor_x = self.cursor_x;
@@ -505,7 +513,7 @@ impl TerminalState {
         }
     }
 
-    pub fn exit_alt_screen(&mut self) {
+    pub(crate) fn exit_alt_screen(&mut self) {
         if self.is_alt_screen {
             self.is_alt_screen = false;
             self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
@@ -523,7 +531,7 @@ impl TerminalState {
         }
     }
 
-    pub fn process_bytes(&mut self, bytes: &[u8]) {
+    pub(crate) fn process_bytes(&mut self, bytes: &[u8]) {
         let Some(mut parser) = self.parser.take() else {
             return;
         };
@@ -566,13 +574,15 @@ impl TerminalState {
                 let b = bytes[i];
                 i += 1;
                 if b == 0x07 {
-                    let payload = self.kitty_apc_buf.take().unwrap();
-                    kitty::process_kitty_apc(self, &payload);
+                    if let Some(payload) = self.kitty_apc_buf.take() {
+                        kitty::process_kitty_apc(self, &payload);
+                    }
                     self.parser_in_ground = true;
                 } else if b == b'\\' && buf.ends_with(&[0x1b]) {
                     buf.pop();
-                    let payload = self.kitty_apc_buf.take().unwrap();
-                    kitty::process_kitty_apc(self, &payload);
+                    if let Some(payload) = self.kitty_apc_buf.take() {
+                        kitty::process_kitty_apc(self, &payload);
+                    }
                     self.parser_in_ground = true;
                 } else if buf.len() >= 64 * 1024 * 1024 {
                     self.kitty_apc_buf = None;
@@ -793,7 +803,7 @@ impl TerminalState {
         max_line > 0
     }
 
-    pub fn newline(&mut self) {
+    pub(crate) fn newline(&mut self) {
         self.total_lines_count += 1;
         let default_cell = Cell::default_with_theme(&self.theme);
 
@@ -875,7 +885,7 @@ impl TerminalState {
     }
 
     #[inline(always)]
-    pub fn put_char(&mut self, c: char) {
+    pub(crate) fn put_char(&mut self, c: char) {
         let (cx, cy) = (self.cursor_x, self.cursor_y);
         let is_alt = self.is_alt_screen;
 
@@ -991,7 +1001,7 @@ impl TerminalState {
         }
     }
 
-    pub fn scroll_up(&mut self, lines: usize) {
+    pub(crate) fn scroll_up(&mut self, lines: usize) {
         if self.is_alt_screen {
             return;
         }
@@ -999,19 +1009,19 @@ impl TerminalState {
         self.scroll_offset = (self.scroll_offset + lines).min(max_offset);
     }
 
-    pub fn scroll_down(&mut self, lines: usize) {
+    pub(crate) fn scroll_down(&mut self, lines: usize) {
         if self.is_alt_screen {
             return;
         }
         self.scroll_offset = self.scroll_offset.saturating_sub(lines);
     }
 
-    pub fn reset_scroll(&mut self) {
+    pub(crate) fn reset_scroll(&mut self) {
         self.scroll_offset = 0;
     }
 
     /// Vacía el historial de desplazamiento, los bloques OSC 133, las imágenes inline y la selección
-    pub fn clear_scrollback(&mut self) {
+    pub(crate) fn clear_scrollback(&mut self) {
         self.scrollback.clear();
         self.scroll_offset = 0;
         self.total_lines_count = self.rows;
@@ -1023,26 +1033,26 @@ impl TerminalState {
     }
 
     /// Obtiene las filas que deben renderizarse en pantalla según `scroll_offset`
-    pub fn visible_rows(&self) -> Vec<&Vec<Cell>> {
+    pub(crate) fn visible_rows(&self) -> Vec<&[Cell]> {
         if self.is_alt_screen {
-            return self.alt_grid.iter().collect();
+            return self.alt_grid.iter().map(|r| r.as_slice()).collect();
         }
 
         if self.scroll_offset == 0 {
-            self.grid.iter().collect()
+            self.grid.iter().map(|r| r.as_slice()).collect()
         } else {
             let total_history = self.scrollback.len();
             let start = total_history.saturating_sub(self.scroll_offset);
             let mut rows = Vec::with_capacity(self.rows);
 
             for r in self.scrollback.range(start..) {
-                rows.push(r);
+                rows.push(r.as_slice());
                 if rows.len() == self.rows {
                     return rows;
                 }
             }
             for r in &self.grid {
-                rows.push(r);
+                rows.push(r.as_slice());
                 if rows.len() == self.rows {
                     return rows;
                 }
@@ -1051,7 +1061,7 @@ impl TerminalState {
         }
     }
 
-    pub fn resize(&mut self, new_cols: usize, new_rows: usize) {
+    pub(crate) fn resize(&mut self, new_cols: usize, new_rows: usize) {
         if new_cols == self.cols && new_rows == self.rows {
             return;
         }
@@ -1114,7 +1124,7 @@ impl TerminalState {
 
     // `y` se usa como número de línea global en el buffer
     #[allow(clippy::needless_range_loop)]
-    pub fn copy_selection_text(&self) -> Option<String> {
+    pub(crate) fn copy_selection_text(&self) -> Option<String> {
         let (p1, p2) = self.selection_ordered()?;
 
         let total_lines = self.total_buffer_lines();
@@ -1122,9 +1132,11 @@ impl TerminalState {
             return None;
         }
 
-        let mut result = String::new();
         let max_line = total_lines.saturating_sub(1);
         let end_line = p2.1.min(max_line);
+        let num_lines = (end_line + 1).saturating_sub(p1.1);
+        let mut result = String::with_capacity(num_lines * (self.cols.max(80) + 1));
+        let mut line_buf = String::with_capacity(self.cols.max(80));
 
         for y in p1.1..=end_line {
             let Some(row) = self.get_buffer_line(y) else {
@@ -1150,15 +1162,15 @@ impl TerminalState {
                 line_used.saturating_sub(1)
             };
 
-            let mut line = String::new();
+            line_buf.clear();
             if x_start <= x_end && x_start < row.len() {
                 for x in x_start..=x_end {
                     if x < row.len() && row[x].width > 0 {
-                        self.append_cell_text(&row[x], &mut line);
+                        self.append_cell_text(&row[x], &mut line_buf);
                     }
                 }
             }
-            result.push_str(line.trim_end());
+            result.push_str(line_buf.trim_end());
             if y < p2.1 {
                 result.push('\n');
             }
@@ -1172,7 +1184,7 @@ impl TerminalState {
     }
 
     /// Extrae la URL del hipervínculo explícito OSC 8 bajo (col, global_line), si existe.
-    pub fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
+    pub(crate) fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
         let row = self.get_buffer_line(global_line)?;
         if row.is_empty() || col >= row.len() {
             return None;
@@ -1182,7 +1194,7 @@ impl TerminalState {
     }
 
     /// Selecciona la palabra o bloque delimitado bajo la columna `col` en `global_line`.
-    pub fn select_word_at(&mut self, col: usize, global_line: usize) {
+    pub(crate) fn select_word_at(&mut self, col: usize, global_line: usize) {
         let Some(row) = self.get_buffer_line(global_line) else {
             self.selection = None;
             return;
@@ -1240,7 +1252,7 @@ impl TerminalState {
     }
 
     /// Selecciona toda la línea visible ocupada en `global_line`.
-    pub fn select_line_at(&mut self, global_line: usize) {
+    pub(crate) fn select_line_at(&mut self, global_line: usize) {
         let Some(row) = self.get_buffer_line(global_line) else {
             self.selection = None;
             return;

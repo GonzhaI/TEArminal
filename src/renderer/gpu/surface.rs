@@ -10,13 +10,13 @@ use windows::Win32::Graphics::Dxgi::*;
 
 /// Resultado de `present`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Presented {
+pub(crate) enum Presented {
     Ok,
     /// Se recreó el dispositivo: el llamante debe tratar la escena como repintada por completo.
     Recovered,
 }
 
-pub struct GpuSurface {
+pub(crate) struct GpuSurface {
     renderer: GpuRenderer,
     /// `None` solo si una recuperación falló a medias: el siguiente `present` la reintenta
     swap: Option<IDXGISwapChain1>,
@@ -86,7 +86,7 @@ fn create_rtv(dev: &GpuDevice, swap: &IDXGISwapChain1) -> Result<ID3D11RenderTar
 }
 
 impl GpuSurface {
-    pub fn new(hwnd: HWND, w: u32, h: u32) -> Result<Self> {
+    pub(crate) fn new(hwnd: HWND, w: u32, h: u32) -> Result<Self> {
         let dev = GpuDevice::new(Some(hwnd))?;
         let max_dim = dev.max_texture_dim();
         let size = (clamp_dim(w, max_dim), clamp_dim(h, max_dim));
@@ -104,16 +104,16 @@ impl GpuSurface {
     }
 
     #[cfg(test)]
-    pub fn size(&self) -> (u32, u32) {
+    pub(crate) fn size(&self) -> (u32, u32) {
         self.size
     }
 
-    pub fn driver_kind(&self) -> DriverKind {
+    pub(crate) fn driver_kind(&self) -> DriverKind {
         self.renderer.device().kind
     }
 
     /// Acota cada lado a `1..=max_dim` (una ventana minimizada llega como 0x0) y redimensiona los búferes.
-    pub fn resize(&mut self, w: u32, h: u32) -> Result<()> {
+    pub(crate) fn resize(&mut self, w: u32, h: u32) -> Result<()> {
         let size = (clamp_dim(w, self.max_dim), clamp_dim(h, self.max_dim));
         if size == self.size {
             return Ok(());
@@ -139,7 +139,7 @@ impl GpuSurface {
 
     /// Dibuja `scene` en el búfer trasero y lo presenta con VSync. Ante un dispositivo perdido lo recrea todo,
     /// repinta la escena y devuelve `Recovered`; los demás errores se propagan.
-    pub fn present(&mut self, scene: &Scene) -> Result<Presented> {
+    pub(crate) fn present(&mut self, scene: &Scene) -> Result<Presented> {
         if self.swap.is_none() || self.rtv.is_none() {
             return self.recover(scene);
         }
@@ -170,6 +170,7 @@ impl GpuSurface {
 
     /// Suelta la vista y la cadena (un HWND solo admite una), recrea dispositivo, renderer (atlas e imágenes
     /// vuelven a rellenarse a demanda), cadena y vista con el mismo tamaño, y pinta la escena de nuevo.
+    #[cold]
     fn recover(&mut self, scene: &Scene) -> Result<Presented> {
         let renderer = GpuRenderer::new(GpuDevice::new(Some(self.hwnd))?)?;
         self.rtv = None;
@@ -196,15 +197,15 @@ impl GpuSurface {
 
 #[cfg(test)]
 impl GpuSurface {
-    pub fn simulate_device_loss(&mut self) {
+    pub(crate) fn simulate_device_loss(&mut self) {
         self.simulated_loss = true;
     }
 
-    pub fn set_max_dim(&mut self, d: u32) {
+    pub(crate) fn set_max_dim(&mut self, d: u32) {
         self.max_dim = d;
     }
 
-    pub fn renderer_mut(&mut self) -> &mut GpuRenderer {
+    pub(crate) fn renderer_mut(&mut self) -> &mut GpuRenderer {
         &mut self.renderer
     }
 }

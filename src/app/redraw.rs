@@ -19,7 +19,7 @@ struct SceneParams<'a> {
     hovered_files_btn: bool,
     hovered_settings_btn: bool,
     hovered_toggle_btn: bool,
-    hovered_pane_btn: Option<(usize, PaneHeaderButton)>,
+    hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
     hovered_win_min: bool,
     hovered_win_max: bool,
     hovered_win_close: bool,
@@ -43,7 +43,7 @@ impl AxonApp {
         let focus = self
             .tabs
             .get(self.active_tab_index)
-            .map_or((usize::MAX, usize::MAX), |t| (t.id, t.active_pane_id));
+            .map(|t| (t.id, t.active_pane_id));
         if focus != self.explorer_focus {
             self.explorer_focus = focus;
             self.sync_file_explorer_root();
@@ -431,7 +431,7 @@ fn draw_full_scene(
     if config.appearance.show_status_bar && !active_tab.is_settings {
         let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
             if let Some(ref viewer) = active_tab.file_viewer {
-                let path_str = shell_context::shorten_home(&viewer.path);
+                let path_str = shell_context::shorten_home(&viewer.path).into_owned();
                 let branch = viewer.remote_branch.clone();
                 let ssh = viewer.remote_destination.clone();
                 let lines_count = viewer.lines.len();
@@ -448,7 +448,7 @@ fn draw_full_scene(
                     .terminal
                     .current_dir
                     .as_deref()
-                    .map(shell_context::shorten_home);
+                    .map(|d| shell_context::shorten_home(d).into_owned());
                 let g_branch = pane.get_git_branch();
                 let s_host = pane
                     .terminal

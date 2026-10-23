@@ -2,9 +2,9 @@
 //! de respuestas pequeñas (GitHub Releases, transcripciones, `settings.json`).
 
 /// Valor de la primera clave `"key": "..."` del texto, con las secuencias `\x` reducidas a `x`
-pub fn extract_json_str(text: &str, key: &str) -> Option<String> {
+pub(crate) fn extract_json_str(text: &str, key: &str) -> Option<String> {
     let rest = value_after_key(text, key)?.strip_prefix('"')?;
-    let mut out = String::new();
+    let mut out = String::with_capacity(rest.len().min(128));
     let mut chars = rest.chars();
     while let Some(c) = chars.next() {
         match c {
@@ -17,7 +17,7 @@ pub fn extract_json_str(text: &str, key: &str) -> Option<String> {
 }
 
 /// Valor entero sin signo de la primera clave `"key": 123` del texto
-pub fn extract_json_u64(text: &str, key: &str) -> Option<u64> {
+pub(crate) fn extract_json_u64(text: &str, key: &str) -> Option<u64> {
     let rest = value_after_key(text, key)?;
     let end = rest
         .find(|c: char| !c.is_ascii_digit())

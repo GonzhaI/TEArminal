@@ -4,7 +4,7 @@ use super::*;
 
 /// Evita la ventana de consola parpadeante al lanzar un proceso auxiliar (`CREATE_NO_WINDOW`) y le baja la
 /// prioridad (`BELOW_NORMAL_PRIORITY_CLASS`): todos corren en segundo plano y no deben quitar CPU a la interfaz
-pub fn hide_console(cmd: &mut std::process::Command) -> &mut std::process::Command {
+pub(crate) fn hide_console(cmd: &mut std::process::Command) -> &mut std::process::Command {
     use std::os::windows::process::CommandExt;
     cmd.creation_flags(0x0800_0000 | 0x0000_4000)
 }
@@ -36,7 +36,7 @@ pub(super) fn shell_open(path: &std::path::Path) -> bool {
 
 /// Abre una URL web externa con el navegador predeterminado del sistema (`ShellExecuteW`).
 /// Solo permite esquemas http://, https:// y mailto: por seguridad.
-pub fn shell_open_url(url: &str) -> bool {
+pub(crate) fn shell_open_url(url: &str) -> bool {
     if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("mailto:") {
         return false;
     }
@@ -99,7 +99,8 @@ pub(super) fn create_native_icon() -> Icon {
             }
         }
     }
-    Icon::from_rgba(rgba, size as u32, size as u32).expect("Error al crear icono de ventana")
+    Icon::from_rgba(rgba, size as u32, size as u32)
+        .expect("invariante: el buffer rgba tiene tamaño exacto size * size * 4")
 }
 
 #[cfg(target_os = "windows")]
@@ -255,7 +256,7 @@ pub(super) fn get_physical_modifiers() -> (bool, bool, bool, bool, bool) {
 }
 
 #[cfg(target_os = "windows")]
-pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
+pub(crate) fn get_screen_cursor_pos() -> Option<(i32, i32)> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
     let mut pt = POINT { x: 0, y: 0 };
@@ -272,6 +273,7 @@ pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
 }
 
 /// Texto del diálogo cuando Direct3D 11 no arranca ni siquiera con WARP.
+#[cold]
 pub(crate) fn gpu_error_message(err: &dyn std::fmt::Display) -> String {
     format!(
         "Axon no pudo inicializar Direct3D 11 (ni siquiera el respaldo por software WARP).\n\n\
@@ -284,6 +286,7 @@ pub(crate) fn gpu_error_message(err: &dyn std::fmt::Display) -> String {
 
 /// Error irrecuperable al crear la superficie de GPU: informar (registro + diálogo nativo) y salir,
 /// en vez de dejar una ventana en blanco. Mismo patrón que `pty::report_spawn_error`.
+#[cold]
 pub(crate) fn fatal_gpu_error(err: &dyn std::fmt::Display) -> ! {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
     crate::logger::log(&format!("Error al inicializar Direct3D 11: {err}"));

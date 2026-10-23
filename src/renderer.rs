@@ -34,23 +34,21 @@ use glyphs::{
     EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
 };
 
-pub use blocks::BlockCardButton;
-pub use canvas::Canvas;
-pub use geometry::*;
-pub use glyphs::{is_ligature_candidate, CachedGlyph};
-pub use gpu::{GpuSurface, Presented};
-pub use scene::ImageRef;
-pub use state::*;
+pub(crate) use blocks::BlockCardButton;
+pub(crate) use canvas::Canvas;
+pub(crate) use geometry::*;
+pub(crate) use glyphs::{is_ligature_candidate, CachedGlyph};
+pub(crate) use gpu::{GpuSurface, Presented};
+pub(crate) use scene::ImageRef;
+pub(crate) use state::*;
 
 use crate::config::AxonConfig;
 use crate::terminal::{Cell, TerminalState};
 use crate::theme::{Color, Theme};
 use std::cell::{OnceCell, RefCell};
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 use std::rc::Rc;
 
-pub struct TerminalRenderer {
+pub(crate) struct TerminalRenderer {
     regular_font: fontdue::Font,
     /// Negrita embebida, cargada al primer uso. Con fuente personalizada no existe (se usa `regular_font`).
     bold_font: OnceCell<fontdue::Font>,
@@ -85,11 +83,11 @@ pub struct TerminalRenderer {
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
     ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
     shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
-    md_blocks_cache: Option<(std::path::PathBuf, u64, Rc<Vec<md_preview::MdBlock>>)>,
+    md_blocks_cache: Option<(std::path::PathBuf, u64, Rc<[md_preview::MdBlock]>)>,
 }
 
 impl TerminalRenderer {
-    pub fn new(config: &AxonConfig, scale_factor: f64) -> Self {
+    pub(crate) fn new(config: &AxonConfig, scale_factor: f64) -> Self {
         // JetBrains Mono Nerd Font Regular (o la fuente del usuario); negrita y fallback son perezosas
         let (regular_font, custom_font) = Self::load_regular_font(config);
         let regular_face = if custom_font {
@@ -99,12 +97,13 @@ impl TerminalRenderer {
         };
 
         let inter_font = fontdue::Font::from_bytes(EMBEDDED_INTER_MEDIUM, font_settings())
-            .expect("Error al inicializar fuente Inter Medium");
+            .expect("invariante: fuente embebida Inter Medium válida en tiempo de compilación");
         let inter_semibold_font =
-            fontdue::Font::from_bytes(EMBEDDED_INTER_SEMIBOLD, font_settings())
-                .expect("Error al inicializar fuente Inter SemiBold");
+            fontdue::Font::from_bytes(EMBEDDED_INTER_SEMIBOLD, font_settings()).expect(
+                "invariante: fuente embebida Inter SemiBold válida en tiempo de compilación",
+            );
         let lucide_font = fontdue::Font::from_bytes(EMBEDDED_LUCIDE, font_settings())
-            .expect("Error al inicializar fuente Lucide");
+            .expect("invariante: fuente embebida Lucide válida en tiempo de compilación");
 
         let mut renderer = Self {
             regular_font,
@@ -142,7 +141,7 @@ impl TerminalRenderer {
         renderer
     }
 
-    pub fn update_scale(&mut self, config: &AxonConfig, scale_factor: f64) {
+    pub(crate) fn update_scale(&mut self, config: &AxonConfig, scale_factor: f64) {
         self.scale_factor = scale_factor;
         self.font_size = (config.appearance.font_size * scale_factor as f32)
             .round()
@@ -179,7 +178,11 @@ impl TerminalRenderer {
     }
 
     /// Calcula las columnas y filas que caben en un panel según sus dimensiones en píxeles
-    pub fn compute_pane_grid_size(&self, pane_width: usize, pane_height: usize) -> (usize, usize) {
+    pub(crate) fn compute_pane_grid_size(
+        &self,
+        pane_width: usize,
+        pane_height: usize,
+    ) -> (usize, usize) {
         let avail_w = pane_width.saturating_sub(self.margin_x * 2);
         let avail_h = pane_height.saturating_sub(self.margin_y * 2);
         let cols = (avail_w / self.char_width).max(10);
@@ -189,7 +192,7 @@ impl TerminalRenderer {
 
     /// Calcula las columnas y filas que caben en el tamaño actual de la ventana
     #[cfg(test)]
-    pub fn compute_grid_size(
+    pub(crate) fn compute_grid_size(
         &self,
         window_width: usize,
         window_height: usize,

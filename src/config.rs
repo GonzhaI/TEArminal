@@ -1,78 +1,79 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AxonConfig {
-    pub appearance: AppearanceConfig,
-    pub terminal: TerminalConfig,
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub(crate) struct AxonConfig {
+    pub(crate) appearance: AppearanceConfig,
+    pub(crate) terminal: TerminalConfig,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct AppearanceConfig {
-    pub font_family: String,
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub(crate) struct AppearanceConfig {
+    pub(crate) font_family: String,
     #[serde(default)]
-    pub font_path: Option<String>,
+    pub(crate) font_path: Option<String>,
     #[serde(default = "default_font_size")]
-    pub font_size: f32,
+    pub(crate) font_size: f32,
     #[serde(default = "default_ui_font_size")]
-    pub ui_font_size: f32,
-    pub window_opacity: f32,
+    pub(crate) ui_font_size: f32,
+    pub(crate) window_opacity: f32,
     /// Tema oscuro; `theme_light` es el claro. `theme_mode` decide cuál se usa
     /// ("dark", "light" o "system": el que corresponda al tema de Windows en cada momento).
-    pub theme: String,
+    pub(crate) theme: String,
     #[serde(default)]
-    pub theme_light: String,
-    pub line_spacing: f32,
+    pub(crate) theme_light: String,
+    pub(crate) line_spacing: f32,
     #[serde(default = "default_tab_layout")]
-    pub tab_layout: String,
+    pub(crate) tab_layout: String,
     #[serde(default = "default_theme_mode")]
-    pub theme_mode: String,
+    pub(crate) theme_mode: String,
     #[serde(default = "default_true")]
-    pub show_status_bar: bool,
+    pub(crate) show_status_bar: bool,
     #[serde(default = "default_false")]
-    pub show_file_explorer: bool,
+    pub(crate) show_file_explorer: bool,
     /// Lado de la ventana donde va el panel de navegación: "left" | "right".
     #[serde(default = "default_panel_side")]
-    pub panel_side: String,
+    pub(crate) panel_side: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct TerminalConfig {
-    pub default_shell: String,
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub(crate) struct TerminalConfig {
+    pub(crate) default_shell: String,
     #[serde(default = "default_true", alias = "ghostty_prompt")]
-    pub shell_integration: bool,
-    pub scrollback_lines: usize,
-    pub cursor_blink: bool,
-    pub copy_on_select: bool,
+    pub(crate) shell_integration: bool,
+    pub(crate) scrollback_lines: usize,
+    pub(crate) cursor_blink: bool,
+    pub(crate) copy_on_select: bool,
     #[serde(default = "default_true")]
-    pub restore_session: bool,
+    pub(crate) restore_session: bool,
     #[serde(default = "default_false")]
-    pub auto_save: bool,
+    pub(crate) auto_save: bool,
     /// Ajuste de línea del visor de archivos (los textos largos se parten dentro del recuadro)
     #[serde(default = "default_false")]
-    pub word_wrap: bool,
+    pub(crate) word_wrap: bool,
     /// Al abrir `ssh` desde Axon, el shell remoto (bash) informa de la rama git y el directorio
     #[serde(default = "default_true")]
-    pub ssh_integration: bool,
+    pub(crate) ssh_integration: bool,
     /// Deja que los programas de la terminal escriban en el portapapeles de Windows (OSC 52, máx. 100 KB).
     /// Activo por defecto (la lectura '?' siempre está bloqueada por seguridad).
     #[serde(default = "default_true")]
-    pub osc52: bool,
+    pub(crate) osc52: bool,
     /// Ligaduras tipográficas de programación (->, !=, ==, =>...)
     #[serde(default = "default_true")]
-    pub ligatures: bool,
+    pub(crate) ligatures: bool,
     /// Sin efecto: la GPU (Direct3D 11, con WARP de respaldo) es el único renderer. Se conserva solo
     /// para que un `axon.toml` antiguo con `gpu = ...` siga cargando. Nada debe leer este campo.
     #[serde(default = "default_true")]
-    pub gpu: bool,
+    pub(crate) gpu: bool,
     /// Comprobación automática de nuevas versiones al iniciar Axon
     #[serde(default = "default_true")]
-    pub auto_check_updates: bool,
+    pub(crate) auto_check_updates: bool,
     /// Consulta las cuotas reales de Claude (api.anthropic.com/api/oauth/usage) con la sesión de Claude Code
     /// (`~/.claude/.credentials.json`, solo lectura). Con `false` Axon no lee esa credencial ni hace la llamada.
     #[serde(default = "default_true")]
-    pub ai_limits: bool,
+    pub(crate) ai_limits: bool,
 }
 
 fn default_font_size() -> f32 {
@@ -109,12 +110,12 @@ fn default_theme_mode() -> String {
 
 impl AppearanceConfig {
     /// ¿El panel de navegación va a la derecha de la ventana?
-    pub fn panel_on_right(&self) -> bool {
+    pub(crate) fn panel_on_right(&self) -> bool {
         self.panel_side.eq_ignore_ascii_case("right")
     }
 
     /// ¿El modo configurado usa el tema claro? `system_light` es el modo claro de Windows.
-    pub fn uses_light_theme(&self, system_light: bool) -> bool {
+    pub(crate) fn uses_light_theme(&self, system_light: bool) -> bool {
         match self.theme_mode.to_ascii_lowercase().as_str() {
             "light" => true,
             "system" => system_light,
@@ -123,7 +124,7 @@ impl AppearanceConfig {
     }
 
     /// Tema activo según el modo y el tema de Windows.
-    pub fn resolve_theme(&self, system_light: bool) -> crate::theme::Theme {
+    pub(crate) fn resolve_theme(&self, system_light: bool) -> crate::theme::Theme {
         crate::theme::Theme::from_name(if self.uses_light_theme(system_light) {
             &self.theme_light
         } else {
@@ -186,6 +187,18 @@ impl Default for AxonConfig {
     }
 }
 
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        AxonConfig::default().appearance
+    }
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        AxonConfig::default().terminal
+    }
+}
+
 fn detect_preferred_shell() -> String {
     // Solo usar pwsh.exe si existe como binario Win32 nativo completo en Program Files.
     // Los alias de Windows Store (AppData\Local\Microsoft\WindowsApps\pwsh.exe) bloquean ConPTY en Windows 11.
@@ -196,8 +209,20 @@ fn detect_preferred_shell() -> String {
     "powershell.exe".to_string()
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ConfigError {
+    #[error("error de E/S al gestionar la configuración: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("error de serialización TOML: {0}")]
+    Serialize(#[from] toml::ser::Error),
+    #[error("error de deserialización TOML: {0}")]
+    Deserialize(#[from] toml::de::Error),
+    #[error("axon.toml tiene errores: corrígelo antes de guardar ajustes")]
+    InvalidExistingConfig,
+}
+
 impl AxonConfig {
-    pub fn config_path() -> PathBuf {
+    pub(crate) fn config_path() -> PathBuf {
         // Los tests no leen ni escriben la configuración real del usuario ni el axon.toml del repositorio
         if cfg!(test) {
             return dirs_or_fallback().join("axon.toml");
@@ -227,24 +252,39 @@ impl AxonConfig {
         base_dir.join("axon.toml")
     }
 
-    pub fn load_or_default() -> Self {
+    pub(crate) fn load_or_default() -> Self {
         Self::load_from(&Self::config_path())
+    }
+
+    /// Deserializa la configuración desde cualquier lector genérico en memoria o archivo
+    pub(crate) fn from_reader(mut reader: impl std::io::Read) -> Result<Self, ConfigError> {
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+        let mut cfg = toml::from_str::<Self>(&content)?;
+        cfg.appearance.migrate();
+        Ok(cfg)
+    }
+
+    /// Serializa la configuración hacia cualquier flujo de salida genérico en memoria o archivo
+    pub(crate) fn write_to(&self, mut writer: impl std::io::Write) -> Result<(), ConfigError> {
+        let content = toml::to_string_pretty(self)?;
+        writer.write_all(content.as_bytes())?;
+        Ok(())
     }
 
     /// Nunca sobrescribe un archivo existente: si no se puede interpretar, lo copia a
     /// `axon.toml.bak` y usa los valores por defecto solo en memoria.
     fn load_from(path: &std::path::Path) -> Self {
-        match fs::read_to_string(path) {
-            Ok(content) => match toml::from_str::<AxonConfig>(&content) {
-                Ok(mut cfg) => {
-                    cfg.appearance.migrate();
-                    cfg
-                }
+        match fs::File::open(path) {
+            Ok(file) => match Self::from_reader(BufReader::new(file)) {
+                Ok(cfg) => cfg,
                 Err(e) => {
                     crate::logger::log(&format!(
                         "-> axon.toml inválido ({e}); copia en axon.toml.bak, usando valores por defecto"
                     ));
-                    let _ = fs::write(path.with_extension("toml.bak"), content);
+                    if let Ok(content) = fs::read_to_string(path) {
+                        let _ = fs::write(path.with_extension("toml.bak"), content);
+                    }
                     notify_invalid_config(path, &e.to_string());
                     Self::default()
                 }
@@ -254,8 +294,10 @@ impl AxonConfig {
                 if let Some(parent) = path.parent() {
                     let _ = fs::create_dir_all(parent);
                 }
-                if let Ok(content) = toml::to_string_pretty(&default_cfg) {
-                    let _ = fs::write(path, content);
+                if let Ok(file) = fs::File::create(path) {
+                    let mut writer = BufWriter::new(file);
+                    let _ = default_cfg.write_to(&mut writer);
+                    let _ = writer.flush();
                 }
                 default_cfg
             }
@@ -263,11 +305,11 @@ impl AxonConfig {
         }
     }
 
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn save(&self) -> Result<(), ConfigError> {
         self.save_to(&Self::config_path())
     }
 
-    fn save_to(&self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn save_to(&self, path: &std::path::Path) -> Result<(), ConfigError> {
         // Un `axon.toml` que no se puede interpretar se carga con los valores por defecto; guardar encima
         // destruiría lo que el usuario escribió (queda también la copia `.bak`)
         if let Ok(existing) = fs::read_to_string(path) {
@@ -275,15 +317,19 @@ impl AxonConfig {
                 crate::logger::log(
                     "-> axon.toml inválido: no se guardan los ajustes hasta corregirlo",
                 );
-                return Err("axon.toml tiene errores: corrígelo antes de guardar ajustes".into());
+                return Err(ConfigError::InvalidExistingConfig);
             }
         }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let content = toml::to_string_pretty(self)?;
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, content)?;
+        {
+            let file = fs::File::create(&tmp)?;
+            let mut writer = BufWriter::new(file);
+            self.write_to(&mut writer)?;
+            writer.flush()?;
+        }
         fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -334,36 +380,36 @@ pub(crate) fn cache_dir_or_fallback() -> PathBuf {
 
 /// Sesión persistida: una entrada por ventana abierta (`session.toml`)
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
-pub struct SessionState {
-    pub windows: Vec<WindowSession>,
+pub(crate) struct SessionState {
+    pub(crate) windows: Vec<WindowSession>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct WindowSession {
+pub(crate) struct WindowSession {
     /// Posición entre las pestañas de terminal (ajustes y visores no se guardan)
-    pub active_tab_index: usize,
+    pub(crate) active_tab_index: usize,
     #[serde(default = "default_true")]
-    pub sidebar_visible: bool,
+    pub(crate) sidebar_visible: bool,
     #[serde(default = "default_false")]
-    pub file_explorer_visible: bool,
+    pub(crate) file_explorer_visible: bool,
     #[serde(default = "default_explorer_width")]
-    pub file_explorer_width: usize,
-    pub tabs: Vec<TabSession>,
+    pub(crate) file_explorer_width: usize,
+    pub(crate) tabs: Vec<TabSession>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct TabSession {
-    pub title: String,
-    pub layout: PaneSession,
+pub(crate) struct TabSession {
+    pub(crate) title: String,
+    pub(crate) layout: PaneSession,
     /// Panel activo: posición entre las hojas de `layout`, de izquierda a derecha
     #[serde(default)]
-    pub active_pane: usize,
+    pub(crate) active_pane: usize,
 }
 
 /// Árbol de paneles de una pestaña (espejo serializable de `app::PaneNode`)
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum PaneSession {
+pub(crate) enum PaneSession {
     Leaf {
         cwd: Option<String>,
     },
@@ -376,56 +422,102 @@ pub enum PaneSession {
     },
 }
 
+impl Default for PaneSession {
+    fn default() -> Self {
+        Self::Leaf { cwd: None }
+    }
+}
+
+impl Default for WindowSession {
+    fn default() -> Self {
+        Self {
+            active_tab_index: 0,
+            sidebar_visible: true,
+            file_explorer_visible: false,
+            file_explorer_width: default_explorer_width(),
+            tabs: Vec::new(),
+        }
+    }
+}
+
+impl Default for TabSession {
+    fn default() -> Self {
+        Self {
+            title: String::new(),
+            layout: PaneSession::default(),
+            active_pane: 0,
+        }
+    }
+}
+
 /// Ventanas vivas de este proceso y su última instantánea: `session.toml` guarda todas a la vez
 static OPEN_WINDOWS: std::sync::Mutex<std::collections::BTreeMap<u32, WindowSession>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 impl SessionState {
-    pub fn session_path() -> PathBuf {
+    pub(crate) fn session_path() -> PathBuf {
         let base_dir = dirs_or_fallback();
         base_dir.join("session.toml")
     }
 
-    pub fn load() -> Option<Self> {
-        let path = Self::session_path();
-        if let Ok(content) = fs::read_to_string(&path) {
-            toml::from_str::<Self>(&content).ok()
-        } else {
-            None
-        }
+    /// Deserializa el estado de sesión desde cualquier lector genérico
+    pub(crate) fn from_reader(mut reader: impl std::io::Read) -> Result<Self, ConfigError> {
+        let mut content = String::new();
+        reader.read_to_string(&mut content)?;
+        let state = toml::from_str::<Self>(&content)?;
+        Ok(state)
     }
 
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+    /// Serializa el estado de sesión hacia cualquier flujo de salida genérico
+    pub(crate) fn write_to(&self, mut writer: impl std::io::Write) -> Result<(), ConfigError> {
+        let content = toml::to_string_pretty(self)?;
+        writer.write_all(content.as_bytes())?;
+        Ok(())
+    }
+
+    pub(crate) fn load() -> Option<Self> {
+        let path = Self::session_path();
+        let file = fs::File::open(&path).ok()?;
+        Self::from_reader(BufReader::new(file)).ok()
+    }
+
+    pub(crate) fn save(&self) -> Result<(), ConfigError> {
         let path = Self::session_path();
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        let content = toml::to_string_pretty(self)?;
         let tmp = path.with_extension("tmp");
-        fs::write(&tmp, content)?;
+        {
+            let file = fs::File::create(&tmp)?;
+            let mut writer = BufWriter::new(file);
+            self.write_to(&mut writer)?;
+            writer.flush()?;
+        }
         fs::rename(&tmp, &path)?;
         Ok(())
     }
 
     /// Guarda la instantánea de la ventana `id` junto a las de las demás ventanas abiertas
-    pub fn save_window(id: u32, window: WindowSession) {
+    pub(crate) fn save_window(id: u32, window: WindowSession) {
         Self::update_open_windows(|open| {
             open.insert(id, window);
         });
     }
 
     /// La ventana `id` se cerró con otras aún abiertas: deja de formar parte de la sesión
-    pub fn forget_window(id: u32) {
+    pub(crate) fn forget_window(id: u32) {
         Self::update_open_windows(|open| {
             open.remove(&id);
         });
     }
 
     fn update_open_windows(f: impl FnOnce(&mut std::collections::BTreeMap<u32, WindowSession>)) {
-        let mut open = OPEN_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
-        f(&mut open);
-        let state = Self {
-            windows: open.values().cloned().collect(),
+        let state = {
+            let mut open = OPEN_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+            f(&mut open);
+            Self {
+                windows: open.values().cloned().collect(),
+            }
         };
         let _ = state.save();
     }
@@ -612,5 +704,27 @@ mod tests {
         assert!(text.contains("gpu = false"));
         let cfg = toml::from_str::<AxonConfig>(&text).unwrap();
         assert!(!cfg.terminal.gpu);
+    }
+
+    #[test]
+    fn test_config_and_session_read_write_traits_in_memory() {
+        // Probar serialización/deserialización en memoria sobre std::io::Read / Write sin tocar disco
+        let cfg = AxonConfig::default();
+        let mut bytes = Vec::new();
+        cfg.write_to(&mut bytes).expect("write_to debe tener éxito");
+
+        let loaded =
+            AxonConfig::from_reader(bytes.as_slice()).expect("from_reader debe tener éxito");
+        assert_eq!(loaded, cfg);
+
+        let session = SessionState::default();
+        let mut session_bytes = Vec::new();
+        session
+            .write_to(&mut session_bytes)
+            .expect("session write_to debe tener éxito");
+
+        let loaded_session = SessionState::from_reader(session_bytes.as_slice())
+            .expect("session from_reader debe tener éxito");
+        assert_eq!(loaded_session, session);
     }
 }

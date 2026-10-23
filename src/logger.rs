@@ -1,13 +1,13 @@
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
-static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+static LOG_FILE: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
 /// Indica si el registro en `axon.log` está activo (cacheado una sola vez por proceso).
 #[inline]
-pub fn enabled() -> bool {
+pub(crate) fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         cfg!(debug_assertions)
@@ -20,16 +20,21 @@ pub fn enabled() -> bool {
 /// pulsaciones puede capturar contraseñas tecleadas en un prompt, así que nunca está activa por defecto
 /// ni en compilaciones de depuración.
 #[inline]
-pub fn keys_enabled() -> bool {
+pub(crate) fn keys_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("AXON_LOG_KEYS").is_some())
 }
 
-pub fn log(msg: &str) {
+#[inline]
+pub(crate) fn log(msg: &str) {
     if !enabled() {
         return;
     }
+    log_impl(msg);
+}
 
+#[cold]
+fn log_impl(msg: &str) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
@@ -54,10 +59,12 @@ pub fn log(msg: &str) {
                         .append(true)
                         .open(std::env::temp_dir().join("axon.log"))
                 })
-                .ok();
+                .ok()
+                .map(BufWriter::new);
         }
-        if let Some(file) = guard.as_mut() {
-            let _ = file.write_all(line.as_bytes());
+        if let Some(writer) = guard.as_mut() {
+            let _ = writer.write_all(line.as_bytes());
+            let _ = writer.flush();
         }
     }
 }

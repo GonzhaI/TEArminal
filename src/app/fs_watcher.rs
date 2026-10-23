@@ -9,20 +9,20 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 use winit::event_loop::EventLoopProxy;
 
-pub struct FsWatcher {
+pub(super) struct FsWatcher {
     watched_path: PathBuf,
-    stop_flag: Arc<AtomicBool>,
+    stop_flag: Arc<super::CachePadded<AtomicBool>>,
     _thread: Option<JoinHandle<()>>,
 }
 
 impl FsWatcher {
-    pub fn new(path: &Path, proxy: EventLoopProxy<AxonEvent>) -> Option<Self> {
+    pub(super) fn new(path: &Path, proxy: EventLoopProxy<AxonEvent>) -> Option<Self> {
         if !path.exists() {
             return None;
         }
 
         let watched_path = path.to_path_buf();
-        let stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::new(super::CachePadded::new(AtomicBool::new(false)));
         let stop_for_thread = Arc::clone(&stop_flag);
         let path_for_thread = watched_path.clone();
 
@@ -44,7 +44,7 @@ impl FsWatcher {
         })
     }
 
-    pub fn watched_path(&self) -> &Path {
+    pub(super) fn watched_path(&self) -> &Path {
         &self.watched_path
     }
 }
@@ -56,7 +56,11 @@ impl Drop for FsWatcher {
 }
 
 #[cfg(target_os = "windows")]
-fn run_watcher_windows(dir: PathBuf, stop: Arc<AtomicBool>, proxy: EventLoopProxy<AxonEvent>) {
+fn run_watcher_windows(
+    dir: PathBuf,
+    stop: Arc<super::CachePadded<AtomicBool>>,
+    proxy: EventLoopProxy<AxonEvent>,
+) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::Storage::FileSystem::{
@@ -120,7 +124,7 @@ fn run_watcher_windows(dir: PathBuf, stop: Arc<AtomicBool>, proxy: EventLoopProx
 
 impl super::AxonApp {
     /// Sincroniza el observador de cambios en tiempo real según el repositorio o carpeta activa del explorador
-    pub fn sync_fs_watcher(&mut self) {
+    pub(crate) fn sync_fs_watcher(&mut self) {
         if !self.file_explorer.visible || self.file_explorer.remote_session.is_some() {
             self.fs_watcher = None;
             return;

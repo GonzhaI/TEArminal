@@ -3,7 +3,7 @@
 use super::*;
 
 impl AxonApp {
-    pub fn open_or_switch_settings_tab(&mut self) {
+    pub(crate) fn open_or_switch_settings_tab(&mut self) {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
             if active_tab.is_settings {
                 // Si la pestaña de ajustes ya está abierta y activa, permanecer en ella
@@ -20,8 +20,7 @@ impl AxonApp {
         if let Some(pos) = self.tabs.iter().position(|t| t.is_settings) {
             self.switch_to_tab(pos);
         } else {
-            let tab_id = self.next_tab_id;
-            self.next_tab_id += 1;
+            let tab_id = self.alloc_tab_id();
             self.tabs.push(TerminalTab::new_settings(tab_id));
             self.switch_to_tab(self.tabs.len() - 1);
         }
@@ -31,7 +30,7 @@ impl AxonApp {
     }
 
     /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
-    pub fn sync_file_explorer_root(&mut self) {
+    pub(crate) fn sync_file_explorer_root(&mut self) {
         if !self.file_explorer.visible || self.file_explorer.is_pinned {
             self.sync_fs_watcher();
             return;
@@ -77,7 +76,7 @@ impl AxonApp {
 
     /// Abre un archivo en una pestaña de visor. Sin `pin` es una vista previa que la siguiente vista previa
     /// reemplaza (un clic en el explorador); con `pin` (doble clic, Enter) queda fija.
-    pub fn open_file_in_viewer(&mut self, path: &std::path::Path, pin: bool) {
+    pub(crate) fn open_file_in_viewer(&mut self, path: &std::path::Path, pin: bool) {
         if let Some(rem) = self.file_explorer.remote_session.clone() {
             // Modo remoto: verificar si ya existe una pestaña con este archivo remoto
             if let Some(pos) = self.tabs.iter().position(|t| {
@@ -122,8 +121,7 @@ impl AxonApp {
             return;
         }
 
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
+        let tab_id = self.alloc_tab_id();
         let tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
         let fetch_git_base = !cfg!(test)
             && tab
@@ -189,7 +187,7 @@ impl AxonApp {
     }
 
     /// Con pestañas superiores el explorador vive en el panel y se muestra u oculta con él.
-    pub fn toggle_file_explorer(&mut self) {
+    pub(crate) fn toggle_file_explorer(&mut self) {
         if self.is_horizontal_tabs() {
             self.toggle_sidebar();
         } else {
@@ -218,22 +216,20 @@ impl AxonApp {
     }
 
     /// Sesión nueva en la carpeta por defecto del shell.
-    pub fn create_new_tab(&mut self) {
+    pub(crate) fn create_new_tab(&mut self) {
         self.create_tab_in(None);
     }
 
     /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).
     pub(super) fn create_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
-        let tab_id = self.next_tab_id;
-        self.next_tab_id += 1;
+        let tab_id = self.alloc_tab_id();
         let pane_id = alloc_pane_id();
 
         let (cols, rows) = if let (Some(renderer), Some(window)) = (&self.renderer, &self.window) {
             let size = window.inner_size();
-            let avail_w = (size.width as usize)
-                .saturating_sub(self.sidebar_offset() + self.file_explorer_offset());
-            let avail_h =
-                (size.height as usize).saturating_sub(self.top_offset() + self.status_bar_height());
+            let (offset, right_offset, top_offset, status_bar_h) = self.terminal_area_offsets();
+            let avail_w = (size.width as usize).saturating_sub(offset + right_offset);
+            let avail_h = (size.height as usize).saturating_sub(top_offset + status_bar_h);
             renderer.compute_pane_grid_size(avail_w, avail_h)
         } else {
             (100, 30)
@@ -276,7 +272,7 @@ impl AxonApp {
         }
     }
 
-    pub fn close_tab(&mut self, index: usize) {
+    pub(crate) fn close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
         }
@@ -309,6 +305,7 @@ impl AxonApp {
         self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
         self.update_window_title();
+        self.recompute_grid_for_all_tabs();
         self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -316,7 +313,7 @@ impl AxonApp {
     }
 
     /// Desprende la pestaña `index` y solicita al anfitrión transferirla a una nueva ventana
-    pub fn detach_tab_to_new_window(&mut self, index: usize) {
+    pub(crate) fn detach_tab_to_new_window(&mut self, index: usize) {
         if index >= self.tabs.len() || self.tabs.len() <= 1 || self.tabs[index].is_settings {
             return;
         }
@@ -344,6 +341,7 @@ impl AxonApp {
         self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
         self.update_window_title();
+        self.recompute_grid_for_all_tabs();
         self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
@@ -357,9 +355,8 @@ impl AxonApp {
     }
 
     /// Acopla una pestaña existente (transferida desde otra ventana) en esta ventana
-    pub fn attach_tab(&mut self, mut tab: TerminalTab) {
-        tab.id = self.next_tab_id;
-        self.next_tab_id += 1;
+    pub(crate) fn attach_tab(&mut self, mut tab: TerminalTab) {
+        tab.id = self.alloc_tab_id();
         let new_idx = self.tabs.len();
         self.tabs.push(tab);
         self.active_tab_index = new_idx;
@@ -377,7 +374,7 @@ impl AxonApp {
         }
     }
 
-    pub fn close_other_tabs(&mut self, keep: usize) {
+    pub(crate) fn close_other_tabs(&mut self, keep: usize) {
         let Some(id) = self.tabs.get(keep).map(|t| t.id) else {
             return;
         };
@@ -404,7 +401,7 @@ impl AxonApp {
         }
     }
 
-    pub fn split_active_pane(&mut self, direction: SplitDirection) {
+    pub(crate) fn split_active_pane(&mut self, direction: SplitDirection) {
         if self.tabs[self.active_tab_index].is_settings
             || self.tabs[self.active_tab_index].file_viewer.is_some()
         {
@@ -490,7 +487,7 @@ impl AxonApp {
         }
     }
 
-    pub fn close_active_pane(&mut self) {
+    pub(crate) fn close_active_pane(&mut self) {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
             if active_tab.is_settings || active_tab.file_viewer.is_some() {
                 self.close_tab(self.active_tab_index);
@@ -503,13 +500,13 @@ impl AxonApp {
 
     /// El shell de un panel terminó. Si había un agente en marcha (opencode se lleva la consola por delante
     /// al salir) se abre un shell nuevo en el mismo panel y carpeta; si no (un `exit` normal) se cierra el panel.
-    pub(super) fn on_shell_exit(&mut self, pane_id: usize) {
+    pub(super) fn on_shell_exit(&mut self, pane_id: PaneId) {
         if !self.respawn_shell_after_agent(pane_id) {
             self.close_pane_by_id(pane_id);
         }
     }
 
-    fn respawn_shell_after_agent(&mut self, pane_id: usize) -> bool {
+    fn respawn_shell_after_agent(&mut self, pane_id: PaneId) -> bool {
         let Some(pane) = self
             .tabs
             .iter_mut()
@@ -550,7 +547,7 @@ impl AxonApp {
         }
     }
 
-    pub fn close_pane_by_id(&mut self, pane_id: usize) {
+    pub(crate) fn close_pane_by_id(&mut self, pane_id: PaneId) {
         let mut tab_to_close = None;
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             if tab.panes.iter().any(|p| p.id == pane_id) {
@@ -575,7 +572,7 @@ impl AxonApp {
         }
     }
 
-    pub fn navigate_pane(&mut self, dir: PaneDirection) {
+    pub(crate) fn navigate_pane(&mut self, dir: PaneDirection) {
         if self.tabs[self.active_tab_index].is_settings
             || self.tabs[self.active_tab_index].file_viewer.is_some()
         {
@@ -610,7 +607,7 @@ impl AxonApp {
             let cx = cur_rect.x as isize + (cur_rect.width as isize / 2);
             let cy = cur_rect.y as isize + (cur_rect.height as isize / 2);
 
-            let mut best_candidate: Option<(usize, isize)> = None;
+            let mut best_candidate: Option<(PaneId, isize)> = None;
 
             for r in &rects {
                 if r.pane_id == active_tab.active_pane_id {
@@ -646,7 +643,7 @@ impl AxonApp {
         }
     }
 
-    pub fn switch_to_tab(&mut self, index: usize) {
+    pub(crate) fn switch_to_tab(&mut self, index: usize) {
         if index < self.tabs.len() && index != self.active_tab_index {
             if !self.tabs[self.active_tab_index].is_settings {
                 self.last_terminal_tab_index = self.active_tab_index;
@@ -655,6 +652,7 @@ impl AxonApp {
             self.tabs[index].has_unread = false;
             self.sync_file_explorer_root();
             self.update_window_title();
+            self.recompute_grid_for_all_tabs();
             self.save_session();
             if let Some(w) = &self.window {
                 w.request_redraw();
@@ -665,9 +663,9 @@ impl AxonApp {
     /// Área de paneles de terminal `(x, y, ancho, alto)` entre barras, barra lateral y explorador
     fn pane_area(&self) -> Option<(usize, usize, usize, usize)> {
         let size = self.window.as_ref()?.inner_size();
-        let (x, y) = (self.sidebar_offset(), self.top_offset());
-        let w = (size.width as usize).saturating_sub(x + self.file_explorer_offset());
-        let h = (size.height as usize).saturating_sub(y + self.status_bar_height());
+        let (x, right, y, status_h) = self.terminal_area_offsets();
+        let w = (size.width as usize).saturating_sub(x + right);
+        let h = (size.height as usize).saturating_sub(y + status_h);
         Some((x, y, w, h))
     }
 
@@ -700,7 +698,7 @@ impl AxonApp {
         let slot = if self.is_horizontal_tabs() {
             let width = self.window.as_ref()?.inner_size().width as usize;
             let rects = TopTabBarRects::compute(width, self.tabs.len());
-            (0..self.tabs.len()).find(|&idx| {
+            self.tabs.iter().enumerate().position(|(idx, _)| {
                 let r = rects.tab_rect(idx);
                 mx >= r.0 && mx < r.0 + r.2
             })?
@@ -713,7 +711,7 @@ impl AxonApp {
     }
 
     /// Mueve la pestaña `from` a la posición `to`; la activa sigue siendo la misma pestaña
-    pub fn move_tab(&mut self, from: usize, to: usize) {
+    pub(crate) fn move_tab(&mut self, from: usize, to: usize) {
         if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
             return;
         }
@@ -731,14 +729,14 @@ impl AxonApp {
         }
     }
 
-    pub fn next_tab(&mut self) {
+    pub(crate) fn next_tab(&mut self) {
         if self.tabs.len() > 1 {
             let next = (self.active_tab_index + 1) % self.tabs.len();
             self.switch_to_tab(next);
         }
     }
 
-    pub fn prev_tab(&mut self) {
+    pub(crate) fn prev_tab(&mut self) {
         if self.tabs.len() > 1 {
             let prev = if self.active_tab_index == 0 {
                 self.tabs.len() - 1
@@ -749,7 +747,7 @@ impl AxonApp {
         }
     }
 
-    pub fn toggle_sidebar(&mut self) {
+    pub(crate) fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
         if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
             self.flip_file_explorer();
@@ -761,7 +759,7 @@ impl AxonApp {
         }
     }
 
-    pub fn clamp_sidebar_scroll(&mut self) {
+    pub(crate) fn clamp_sidebar_scroll(&mut self) {
         let win_h = if let Some(w) = &self.window {
             w.inner_size().height as usize
         } else {
@@ -775,7 +773,7 @@ impl AxonApp {
 
     /// Navega el explorador remoto escribiendo `cd` en el shell remoto de la terminal activa
     /// (la nueva carpeta llega de vuelta por OSC 7 y AxonLs). `false` si no hay integración SSH.
-    pub fn remote_cd(&mut self, dir: &str) -> bool {
+    pub(crate) fn remote_cd(&mut self, dir: &str) -> bool {
         let Some(pane) = self
             .tabs
             .get_mut(self.active_tab_index)

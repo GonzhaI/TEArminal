@@ -1,35 +1,41 @@
 #![windows_subsystem = "windows"]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app;
 mod config;
-pub mod explorer;
+mod explorer;
 mod json;
-pub mod logger;
+mod logger;
 mod pty;
 mod renderer;
 mod ssh;
 mod terminal;
 mod theme;
-pub mod tools;
-pub mod ui;
-pub mod updater;
+mod tools;
+mod ui;
+mod updater;
 
+use anyhow::{Context, Result};
 use app::{AxonEvent, AxonHost};
 use config::AxonConfig;
 use winit::event_loop::EventLoop;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<()> {
     // 1. Cargar configuración de Axon
     let config = AxonConfig::load_or_default();
 
     // Limpieza única en arranque de directorio temporal obsoleto (%TEMP%\axon_clipboard)
     let legacy_clipboard = std::env::temp_dir().join("axon_clipboard");
     if legacy_clipboard.exists() {
-        let _ = std::fs::remove_dir_all(legacy_clipboard);
+        let _ = std::fs::remove_dir_all(&legacy_clipboard);
     }
 
     // 2. Crear EventLoop nativo de Windows con soporte para eventos asíncronos de ConPTY
-    let event_loop = EventLoop::<AxonEvent>::with_user_event().build()?;
+    let event_loop = EventLoop::<AxonEvent>::with_user_event()
+        .build()
+        .context("Fallo al inicializar el bucle de eventos nativo de Windows (EventLoop)")?;
     let proxy = event_loop.create_proxy();
 
     // 3. Comprobación de actualizaciones en segundo plano si está activado
@@ -50,7 +56,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut host = AxonHost::new(config, Some(proxy));
 
     // 5. Iniciar ciclo de eventos del sistema operativo
-    event_loop.run_app(&mut host)?;
+    event_loop
+        .run_app(&mut host)
+        .context("Fallo durante la ejecución del bucle de eventos de la aplicación")?;
 
     Ok(())
 }

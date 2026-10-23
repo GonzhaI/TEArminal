@@ -4,7 +4,7 @@ use super::*;
 
 impl TerminalRenderer {
     /// Renderiza el panel lateral derecho del explorador de archivos con estilo overlay translúcido (Floating Island)
-    pub fn render_file_explorer(
+    pub(crate) fn render_file_explorer(
         &mut self,
         canvas: &mut Canvas,
         top_offset: usize,
@@ -330,7 +330,7 @@ impl TerminalRenderer {
 
     /// Color de un estado de git: amarillo modificado, verde añadido o sin seguir, rojo borrado y cian
     /// renombrado. Lo usan el nombre y la letra del explorador (árbol y vista «Cambios»).
-    pub fn git_status_color(status: crate::explorer::GitFileStatus, theme: &Theme) -> Color {
+    pub(crate) fn git_status_color(status: crate::explorer::GitFileStatus, theme: &Theme) -> Color {
         use crate::explorer::GitFileStatus::*;
         match status {
             Modified => theme.ansi[3],
@@ -340,7 +340,7 @@ impl TerminalRenderer {
         }
     }
 
-    pub fn explorer_scrollbar_geometry(
+    pub(crate) fn explorer_scrollbar_geometry(
         width: usize,
         height: usize,
         top_offset: usize,

@@ -13,14 +13,14 @@ pub(super) fn lazy_clipboard(
 }
 
 /// Copia `text` al portapapeles; recibe el campo y no `&mut self` para poder usarse con el visor prestado
-pub(super) fn copy_text(slot: &mut Option<arboard::Clipboard>, text: String) {
+pub(super) fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) {
     if let Some(cb) = lazy_clipboard(slot) {
         let _ = cb.set_text(text);
     }
 }
 
 impl AxonApp {
-    pub(super) fn set_clipboard_text(&mut self, text: String) {
+    pub(super) fn set_clipboard_text(&mut self, text: &str) {
         copy_text(&mut self.clipboard, text);
     }
 
@@ -192,7 +192,8 @@ impl AxonApp {
             }
         }
 
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static COUNTER: super::CachePadded<std::sync::atomic::AtomicU64> =
+            super::CachePadded::new(std::sync::atomic::AtomicU64::new(0));
         let seq = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -214,17 +215,27 @@ impl AxonApp {
     }
 }
 
+use std::borrow::Cow;
+
 /// Prepara texto pegado para el PTY: saltos de línea a `\r` y se eliminan los caracteres de control.
 ///
 /// Sin esto, un portapapeles con `ESC [ 2 0 1 ~` cerraría el pegado entre corchetes antes de tiempo y el
 /// resto del texto se ejecutaría como si lo hubiera tecleado el usuario; `ESC` también permite emitir
 /// secuencias de terminal arbitrarias. Se conservan el tabulador y los saltos de línea.
-pub(super) fn sanitize_paste(text: &str) -> String {
-    text.replace("\r\n", "\r")
+pub(super) fn sanitize_paste<'a>(text: &'a str) -> Cow<'a, str> {
+    let needs_sanitize = text
+        .bytes()
+        .any(|b| b == b'\n' || (b < 0x20 && b != b'\t' && b != b'\r') || b == 0x7f);
+    if !needs_sanitize {
+        return Cow::Borrowed(text);
+    }
+    let cleaned: String = text
+        .replace("\r\n", "\r")
         .replace('\n', "\r")
         .chars()
         .filter(|&c| c == '\r' || c == '\t' || !(c.is_control()))
-        .collect()
+        .collect();
+    Cow::Owned(cleaned)
 }
 
 /// Limpia el comando de una tarjeta de bloque antes de copiarlo o escribirlo en el prompt.
@@ -232,20 +243,23 @@ pub(super) fn sanitize_paste(text: &str) -> String {
 /// El texto sale de la región OSC 133 de la pantalla, que controla el programa en ejecución: se descartan
 /// los caracteres de control y los de formato Unicode (bidi, ancho cero, marca de orden de bytes), que
 /// permitirían ocultar o reordenar lo que el usuario cree que va a escribir.
-pub(super) fn clean_block_command(text: &str) -> String {
-    text.chars()
-        .filter(|&c| {
-            !c.is_control()
-                && !matches!(
-                    c,
-                    '\u{00AD}'
-                        | '\u{061C}'
-                        | '\u{200B}'..='\u{200F}'
-                        | '\u{202A}'..='\u{202E}'
-                        | '\u{2060}'..='\u{2064}'
-                        | '\u{2066}'..='\u{206F}'
-                        | '\u{FEFF}'
-                )
-        })
-        .collect()
+pub(super) fn clean_block_command<'a>(text: &'a str) -> Cow<'a, str> {
+    let is_forbidden = |c: char| {
+        c.is_control()
+            || matches!(
+                c,
+                '\u{00AD}'
+                    | '\u{061C}'
+                    | '\u{200B}'..='\u{200F}'
+                    | '\u{202A}'..='\u{202E}'
+                    | '\u{2060}'..='\u{2064}'
+                    | '\u{2066}'..='\u{206F}'
+                    | '\u{FEFF}'
+            )
+    };
+    if !text.chars().any(is_forbidden) {
+        return Cow::Borrowed(text);
+    }
+    let cleaned: String = text.chars().filter(|&c| !is_forbidden(c)).collect();
+    Cow::Owned(cleaned)
 }

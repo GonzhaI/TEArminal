@@ -5,14 +5,14 @@ use super::*;
 use crate::config::SessionState;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
 
-pub struct AxonHost {
+pub(crate) struct AxonHost {
     proxy: Option<EventLoopProxy<AxonEvent>>,
     windows: Vec<AxonApp>,
 }
 
 impl AxonHost {
     /// Abre las ventanas de la sesión guardada (con `terminal.restore_session`) o una ventana nueva
-    pub fn new(config: AxonConfig, proxy: Option<EventLoopProxy<AxonEvent>>) -> Self {
+    pub(crate) fn new(config: AxonConfig, proxy: Option<EventLoopProxy<AxonEvent>>) -> Self {
         let saved = if config.terminal.restore_session {
             SessionState::load().map(|s| s.windows)
         } else {

@@ -12,7 +12,7 @@ impl<'a> Performer<'a> {
     fn command_text(&self, line: usize, start_col: usize) -> Option<String> {
         let row = self.state.get_buffer_line(line)?;
         let start = start_col.min(row.len());
-        let mut text = String::new();
+        let mut text = String::with_capacity(row.len().saturating_sub(start));
         for cell in row[start..].iter().filter(|c| c.width > 0) {
             self.state.append_cell_text(cell, &mut text);
         }
@@ -989,7 +989,8 @@ where
 impl<'a> Performer<'a> {
     fn handle_iterm2_image(&mut self, params: &[&[u8]]) {
         // Concatenar parámetros del comando OSC
-        let mut full_payload = Vec::new();
+        let total_payload_len = params.iter().map(|p| p.len() + 1).sum::<usize>();
+        let mut full_payload = Vec::with_capacity(total_payload_len);
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 full_payload.push(b';');
@@ -1011,11 +1012,13 @@ impl<'a> Performer<'a> {
                 }
 
                 // Filtrar espacios y saltos de línea de la cadena base64
-                let clean_b64: Vec<u8> = b64_bytes
-                    .iter()
-                    .copied()
-                    .filter(|b| !b.is_ascii_whitespace())
-                    .collect();
+                let mut clean_b64 = Vec::with_capacity(b64_bytes.len());
+                clean_b64.extend(
+                    b64_bytes
+                        .iter()
+                        .copied()
+                        .filter(|b| !b.is_ascii_whitespace()),
+                );
 
                 use base64::prelude::*;
                 if let Ok(decoded) = BASE64_STANDARD.decode(&clean_b64) {
@@ -1058,7 +1061,8 @@ impl<'a> Performer<'a> {
     }
 
     fn handle_osc_52(&mut self, params: &[&[u8]]) {
-        let mut full = Vec::new();
+        let total = params.iter().map(|p| p.len() + 1).sum::<usize>();
+        let mut full = Vec::with_capacity(total);
         for (i, p) in params.iter().enumerate() {
             if i > 0 {
                 full.push(b';');

@@ -5,7 +5,7 @@ use crate::app::FileViewerState;
 
 impl TerminalRenderer {
     /// Renderiza el visor de archivos/código en el área del terminal sin procesos ConPTY
-    pub fn render_file_viewer(
+    pub(crate) fn render_file_viewer(
         &mut self,
         canvas: &mut Canvas,
         x: usize,
@@ -161,7 +161,7 @@ impl TerminalRenderer {
         } else {
             format!("{:.2} MB", viewer.file_size as f64 / (1024.0 * 1024.0))
         };
-        let mut chips: Vec<(String, Color, Color)> = Vec::new();
+        let mut chips: smallvec::SmallVec<[(String, Color, Color); 4]> = smallvec::SmallVec::new();
         if viewer.save_error.is_some() {
             chips.push((
                 "ERROR AL GUARDAR".into(),
@@ -373,8 +373,8 @@ impl TerminalRenderer {
                     return blocks.clone();
                 }
             }
-            let blocks =
-                std::rc::Rc::new(crate::renderer::md_preview::classify_blocks(&viewer.lines));
+            let blocks: std::rc::Rc<[crate::renderer::md_preview::MdBlock]> =
+                std::rc::Rc::from(crate::renderer::md_preview::classify_blocks(&viewer.lines));
             self.md_blocks_cache = Some((viewer.path.clone(), viewer.edit_gen, blocks.clone()));
             blocks
         });
@@ -508,7 +508,7 @@ impl TerminalRenderer {
 
             // Selección: rectángulo sin bordes redondeados (filas contiguas sin huecos) y marcas de
             // espacios y tabuladores dentro de lo seleccionado para poder contar la sangría
-            let mut marks: Vec<(i32, bool)> = Vec::new();
+            let mut marks: smallvec::SmallVec<[(i32, bool); 32]> = smallvec::SmallVec::new();
             if let Some(((l1, c1), (l2, c2))) = selection {
                 if line_idx >= l1 && line_idx <= l2 {
                     let mut acc = cur_x;
@@ -712,7 +712,7 @@ impl TerminalRenderer {
     }
 
     /// Calcula la geometría exacta de la barra de desplazamiento del visor de archivos
-    pub fn file_viewer_scrollbar_geometry(
+    pub(crate) fn file_viewer_scrollbar_geometry(
         x: usize,
         y: usize,
         w: usize,
@@ -800,8 +800,11 @@ impl TerminalRenderer {
             if b < 128 {
                 (b as char, i + 1)
             } else {
-                let c = line[i..].chars().next().unwrap();
-                (c, i + c.len_utf8())
+                let c = line
+                    .get(i..)
+                    .and_then(|s| s.chars().next())
+                    .unwrap_or('\u{FFFD}');
+                (c, (i + c.len_utf8()).min(bytes.len()))
             }
         }
 
@@ -1049,11 +1052,10 @@ impl TerminalRenderer {
                 if run_len >= 2 {
                     let shaped = self.shape_punctuation_run(&op_buf[..run_len], false);
                     let symbol_fg = theme.ansi[6];
-                    for k in 0..run_len {
+                    for &gid in &shaped.gids[..run_len] {
                         if cur_x >= max_x_i32 {
                             break;
                         }
-                        let gid = shaped.gids[k];
                         let glyph = self.get_ligature_glyph(gid, false);
                         if glyph.width > 0 {
                             let gx = cur_x + glyph.x_offset;

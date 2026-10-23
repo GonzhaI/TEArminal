@@ -567,10 +567,8 @@ impl AxonApp {
                     } else {
                         Some(0)
                     };
-                    self.file_explorer.selected_path = self
-                        .file_explorer
-                        .selected_index
-                        .map(|i| self.file_explorer.items[i].path.clone());
+                    self.file_explorer.selected_path =
+                        self.file_explorer.items.first().map(|i| i.path.clone());
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -693,7 +691,7 @@ impl AxonApp {
                         return;
                     }
                     if let Some(sel_text) = viewer.selected_text() {
-                        super::clipboard::copy_text(&mut self.clipboard, sel_text);
+                        super::clipboard::copy_text(&mut self.clipboard, &sel_text);
                         viewer.delete_selection();
                         if auto_save {
                             viewer.schedule_autosave();
@@ -719,7 +717,7 @@ impl AxonApp {
                             .map(|line| format!("{}\n", line))
                     };
                     if let Some(txt) = text {
-                        super::clipboard::copy_text(&mut self.clipboard, txt);
+                        super::clipboard::copy_text(&mut self.clipboard, &txt);
                     }
                 }
                 return;

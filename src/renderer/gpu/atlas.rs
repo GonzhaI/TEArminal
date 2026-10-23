@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 /// Empaquetador por estantes: cada estante mide lo que el glifo más alto de su fila; 1 px de separación
 /// entre entradas (evita el sangrado del muestreo).
-pub struct ShelfPacker {
+pub(crate) struct ShelfPacker {
     w: u32,
     h: u32,
     shelves: Vec<Shelf>,
@@ -25,7 +25,7 @@ struct Shelf {
 }
 
 impl ShelfPacker {
-    pub fn new(w: u32, h: u32) -> Self {
+    pub(crate) fn new(w: u32, h: u32) -> Self {
         Self {
             w,
             h,
@@ -34,7 +34,7 @@ impl ShelfPacker {
     }
 
     /// Esquina superior izquierda de un hueco de `w`×`h`, o `None` si no cabe.
-    pub fn alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+    pub(crate) fn alloc(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
         let (pw, ph) = (w + 1, h + 1);
         if pw > self.w || ph > self.h {
             return None;
@@ -69,7 +69,7 @@ impl ShelfPacker {
         None
     }
 
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.shelves.clear();
     }
 
@@ -81,30 +81,40 @@ impl ShelfPacker {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct AtlasRect {
-    pub x: u16,
-    pub y: u16,
-    pub w: u16,
-    pub h: u16,
+pub(crate) struct AtlasRect {
+    pub(crate) x: u16,
+    pub(crate) y: u16,
+    pub(crate) w: u16,
+    pub(crate) h: u16,
 }
 
-#[derive(Debug)]
-pub enum AtlasError {
-    /// No cabe ni creciendo: el llamador vacía el atlas (`reset`) y reintenta.
-    Full,
-    Device(Error),
-}
-
-impl From<Error> for AtlasError {
-    fn from(e: Error) -> Self {
-        AtlasError::Device(e)
+impl From<(u16, u16, u16, u16)> for AtlasRect {
+    #[inline]
+    fn from((x, y, w, h): (u16, u16, u16, u16)) -> Self {
+        Self { x, y, w, h }
     }
+}
+
+impl From<AtlasRect> for (u16, u16, u16, u16) {
+    #[inline]
+    fn from(r: AtlasRect) -> Self {
+        (r.x, r.y, r.w, r.h)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum AtlasError {
+    /// No cabe ni creciendo: el llamador vacía el atlas (`reset`) y reintenta.
+    #[error("el atlas de texturas está lleno")]
+    Full,
+    #[error("error del dispositivo Direct3D: {0}")]
+    Device(#[from] Error),
 }
 
 const INITIAL_SIZE: u32 = 1024;
 const MAX_SIZE: u32 = 4096;
 
-pub struct GlyphAtlas {
+pub(crate) struct GlyphAtlas {
     tex: ID3D11Texture2D,
     srv: ID3D11ShaderResourceView,
     size: u32,
@@ -150,12 +160,12 @@ fn create_texture(
 }
 
 impl GlyphAtlas {
-    pub fn new(dev: &GpuDevice) -> Result<Self, AtlasError> {
+    pub(crate) fn new(dev: &GpuDevice) -> Result<Self, AtlasError> {
         Self::with_limits(dev, INITIAL_SIZE, MAX_SIZE)
     }
 
     /// Tamaño inicial y tope (acotado a la textura máxima del dispositivo).
-    pub fn with_limits(dev: &GpuDevice, initial: u32, max: u32) -> Result<Self, AtlasError> {
+    pub(crate) fn with_limits(dev: &GpuDevice, initial: u32, max: u32) -> Result<Self, AtlasError> {
         let max = max.min(dev.max_texture_dim());
         let size = initial.min(max);
         let (tex, srv) = create_texture(dev, size, size, DXGI_FORMAT_R8_UNORM, None)?;
@@ -169,24 +179,24 @@ impl GlyphAtlas {
         })
     }
 
-    pub fn srv(&self) -> &ID3D11ShaderResourceView {
+    pub(crate) fn srv(&self) -> &ID3D11ShaderResourceView {
         &self.srv
     }
 
     /// Lado actual de la textura cuadrada.
-    pub fn size(&self) -> u32 {
+    pub(crate) fn size(&self) -> u32 {
         self.size
     }
 
     /// Vacía el atlas (el tamaño alcanzado se conserva) y suelta los `Rc` retenidos.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.packer.reset();
         self.map.clear();
     }
 
     /// Rect del glifo en el atlas; lo sube si aún no está. Un glifo vacío (o con el bitmap truncado)
     /// da el rect vacío sin reservar nada. `Full` = no cabe ni creciendo.
-    pub fn rect_for(
+    pub(crate) fn rect_for(
         &mut self,
         dev: &GpuDevice,
         glyph: &Rc<CachedGlyph>,
@@ -264,7 +274,7 @@ impl GlyphAtlas {
 }
 
 /// Imagen RGBA subida como textura BGRA propia (una por imagen).
-pub struct ImageTexture {
+pub(crate) struct ImageTexture {
     srv: ID3D11ShaderResourceView,
     #[cfg(test)]
     width: u32,
@@ -274,7 +284,7 @@ pub struct ImageTexture {
 
 impl ImageTexture {
     /// `Ok(None)` (con aviso en el log) si la imagen es vacía, está truncada o excede la textura máxima.
-    pub fn new(
+    pub(crate) fn new(
         dev: &GpuDevice,
         rgba: &[u8],
         width: u32,
@@ -308,12 +318,12 @@ impl ImageTexture {
         }))
     }
 
-    pub fn srv(&self) -> &ID3D11ShaderResourceView {
+    pub(crate) fn srv(&self) -> &ID3D11ShaderResourceView {
         &self.srv
     }
 
     #[cfg(test)]
-    pub fn size(&self) -> (u32, u32) {
+    pub(crate) fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 }

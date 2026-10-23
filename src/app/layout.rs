@@ -2,29 +2,107 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitDirection {
+/// Identificador de un panel de terminal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub(crate) struct PaneId(pub(crate) usize);
+
+impl std::fmt::Display for PaneId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<usize> for PaneId {
+    fn from(v: usize) -> Self {
+        Self(v)
+    }
+}
+
+impl From<PaneId> for usize {
+    fn from(id: PaneId) -> Self {
+        id.0
+    }
+}
+
+impl std::ops::Add<usize> for PaneId {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs)
+    }
+}
+
+impl std::ops::AddAssign<usize> for PaneId {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs;
+    }
+}
+
+/// Identificador de una pestaña.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub(crate) struct TabId(pub(crate) usize);
+
+impl std::fmt::Display for TabId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<usize> for TabId {
+    fn from(v: usize) -> Self {
+        Self(v)
+    }
+}
+
+impl From<TabId> for usize {
+    fn from(id: TabId) -> Self {
+        id.0
+    }
+}
+
+impl std::ops::Add<usize> for TabId {
+    type Output = Self;
+    fn add(self, rhs: usize) -> Self {
+        Self(self.0 + rhs)
+    }
+}
+
+impl std::ops::AddAssign<usize> for TabId {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SplitDirection {
+    #[default]
     Horizontal,
     Vertical,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaneDirection {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PaneDirection {
+    #[default]
     Up,
     Down,
     Left,
     Right,
 }
 
-#[derive(Debug, Clone)]
-pub enum PaneNode {
-    Leaf(usize),
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PaneNode {
+    Leaf(PaneId),
     Split {
         direction: SplitDirection,
         ratio: f32,
         first: Box<PaneNode>,
         second: Box<PaneNode>,
     },
+}
+
+impl From<PaneId> for PaneNode {
+    fn from(id: PaneId) -> Self {
+        PaneNode::Leaf(id)
+    }
 }
 
 /// Grosor del divisor entre dos paneles
@@ -34,22 +112,22 @@ const MIN_PANE: f32 = 48.0;
 
 /// Divisor entre dos paneles
 #[derive(Debug, Clone, PartialEq)]
-pub struct Divider {
+pub(crate) struct Divider {
     /// `(x, y, ancho, alto)`
-    pub rect: (usize, usize, usize, usize),
+    pub(crate) rect: (usize, usize, usize, usize),
     /// Camino desde la raíz del árbol hasta el `Split` que lo origina (`false` = primer hijo)
-    pub path: Vec<bool>,
-    pub direction: SplitDirection,
+    pub(crate) path: Vec<bool>,
+    pub(crate) direction: SplitDirection,
     /// Inicio (y u x según `direction`) y largo disponible del `Split`, sin el divisor
-    pub origin: usize,
-    pub avail: usize,
+    pub(crate) origin: usize,
+    pub(crate) avail: usize,
 }
 
 impl Divider {
     /// Margen extra (px) a cada lado para poder agarrar un divisor de 2 px
     const GRAB: usize = 3;
 
-    pub fn contains(&self, mx: usize, my: usize) -> bool {
+    pub(crate) fn contains(&self, mx: usize, my: usize) -> bool {
         let (x, y, w, h) = self.rect;
         mx + Self::GRAB >= x
             && mx < x + w + Self::GRAB
@@ -58,7 +136,7 @@ impl Divider {
     }
 
     /// Proporción que deja el divisor con el borde del primer panel en `pos` (px de ventana)
-    pub fn ratio_at(&self, pos: usize) -> f32 {
+    pub(crate) fn ratio_at(&self, pos: usize) -> f32 {
         if self.avail == 0 {
             return 0.5;
         }
@@ -67,7 +145,7 @@ impl Divider {
             .clamp(min, 1.0 - min)
     }
 
-    pub fn cursor_icon(&self) -> winit::window::CursorIcon {
+    pub(crate) fn cursor_icon(&self) -> winit::window::CursorIcon {
         match self.direction {
             SplitDirection::Horizontal => winit::window::CursorIcon::RowResize,
             SplitDirection::Vertical => winit::window::CursorIcon::ColResize,
@@ -75,7 +153,7 @@ impl Divider {
     }
 
     /// Coordenada del ratón que mueve este divisor
-    pub fn axis(&self, mx: usize, my: usize) -> usize {
+    pub(crate) fn axis(&self, mx: usize, my: usize) -> usize {
         match self.direction {
             SplitDirection::Horizontal => my,
             SplitDirection::Vertical => mx,
@@ -83,32 +161,32 @@ impl Divider {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct PaneRect {
-    pub pane_id: usize,
-    pub x: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PaneRect {
+    pub(crate) pane_id: PaneId,
+    pub(crate) x: usize,
     /// Borde superior del área del terminal (ya descuenta la cabecera del panel)
-    pub y: usize,
-    pub width: usize,
-    pub height: usize,
+    pub(crate) y: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
     /// Borde superior del hueco completo, cabecera incluida: de ahí cuelga `PaneHeaderRects`
-    pub slot_y: usize,
+    pub(crate) slot_y: usize,
     /// El panel se dibuja con cabecera (pestaña dividida)
-    pub has_header: bool,
+    pub(crate) has_header: bool,
 }
 
-pub struct TerminalPane {
-    pub id: usize,
-    pub pty: PtyManager,
-    pub terminal: TerminalState,
-    pub last_grid_size: (usize, usize),
-    pub cached_git_branch: Option<String>,
-    pub cached_git_dir: Option<std::path::PathBuf>,
+pub(crate) struct TerminalPane {
+    pub(crate) id: PaneId,
+    pub(crate) pty: PtyManager,
+    pub(crate) terminal: TerminalState,
+    pub(crate) last_grid_size: (usize, usize),
+    pub(crate) cached_git_branch: Option<String>,
+    pub(crate) cached_git_dir: Option<std::path::PathBuf>,
 }
 
 impl TerminalPane {
-    pub fn new(
-        id: usize,
+    pub(crate) fn new(
+        id: PaneId,
         pty: PtyManager,
         mut terminal: TerminalState,
         last_grid_size: (usize, usize),
@@ -124,7 +202,7 @@ impl TerminalPane {
         }
     }
 
-    pub fn get_git_branch(&mut self) -> Option<String> {
+    pub(crate) fn get_git_branch(&mut self) -> Option<String> {
         let is_ssh = self
             .terminal
             .ssh_session
@@ -225,13 +303,13 @@ impl TerminalPane {
     }
 
     /// El panel corre un agente de IA (✧): lo avisa el wrapper del shell o el título de la ventana.
-    pub fn is_agent_pane(&self) -> bool {
+    pub(crate) fn is_agent_pane(&self) -> bool {
         self.terminal.agent_running || self.terminal.active_ai_agent() != AiAgentStatus::None
     }
 
     /// Título de la cabecera del panel: el título que el shell puso a su ventana (el del agente) y,
     /// si no hay, el de la pestaña.
-    pub fn header_title(&self, tab_title: &str) -> String {
+    pub(crate) fn header_title(&self, tab_title: &str) -> String {
         let raw = self
             .terminal
             .window_title
@@ -242,7 +320,7 @@ impl TerminalPane {
     }
 
     /// Subtítulo atenuado de la cabecera: destino SSH, carpeta del proyecto o el comando en marcha.
-    pub fn header_subtitle(&self) -> Option<String> {
+    pub(crate) fn header_subtitle(&self) -> Option<String> {
         if let Some(ssh) = self.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
             return Some(ssh.destination.clone());
         }
@@ -271,13 +349,13 @@ impl TerminalPane {
         // Mientras solo se teclea (sin OSC 133;C) el subtítulo sigue siendo la carpeta
         block.output_start?;
         let line = block.command_line?;
-        command_hint(&term.row_text_to_string(term.get_buffer_line(line)?))
+        command_hint(&term.row_text_to_string(term.get_buffer_line(line)?)).map(|c| c.into_owned())
     }
 }
 
 /// Texto del comando sin el prefijo del prompt (`PS C:\x> `, `$ `, `❯ `) y acotado para la
 /// cabecera. OSC 133 solo da la línea donde se escribió, no el comando aislado.
-pub(super) fn command_hint(line: &str) -> Option<String> {
+pub(super) fn command_hint<'a>(line: &'a str) -> Option<std::borrow::Cow<'a, str>> {
     let text = line.trim();
     if text.is_empty() {
         return None;
@@ -293,28 +371,32 @@ pub(super) fn command_hint(line: &str) -> Option<String> {
     if hint.is_empty() {
         return None;
     }
-    Some(hint.chars().take(48).collect())
+    if hint.chars().count() <= 48 {
+        Some(std::borrow::Cow::Borrowed(hint))
+    } else {
+        Some(std::borrow::Cow::Owned(hint.chars().take(48).collect()))
+    }
 }
 
-pub struct TerminalTab {
-    pub id: usize,
-    pub title: String,
-    pub panes: Vec<TerminalPane>,
-    pub active_pane_id: usize,
-    pub layout: PaneNode,
-    pub has_unread: bool,
-    pub is_settings: bool,
-    pub file_viewer: Option<FileViewerState>,
+pub(crate) struct TerminalTab {
+    pub(crate) id: TabId,
+    pub(crate) title: String,
+    pub(crate) panes: Vec<TerminalPane>,
+    pub(crate) active_pane_id: PaneId,
+    pub(crate) layout: PaneNode,
+    pub(crate) has_unread: bool,
+    pub(crate) is_settings: bool,
+    pub(crate) file_viewer: Option<FileViewerState>,
     /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
-    pub is_preview: bool,
+    pub(crate) is_preview: bool,
     /// Cuándo se abrió la pestaña (subtítulo «N min» de la lista de sesiones).
-    pub started_at: Instant,
+    pub(crate) started_at: Instant,
     /// Panel maximizado: ocupa todo el área y el resto del reparto queda oculto (solo mientras es el activo)
-    pub zoomed_pane: Option<usize>,
+    pub(crate) zoomed_pane: Option<PaneId>,
 }
 
 impl TerminalTab {
-    pub fn new(id: usize, title: String, first_pane: TerminalPane) -> Self {
+    pub(crate) fn new(id: TabId, title: String, first_pane: TerminalPane) -> Self {
         let active_pane_id = first_pane.id;
         let layout = PaneNode::Leaf(active_pane_id);
         Self {
@@ -333,12 +415,12 @@ impl TerminalTab {
     }
 
     /// Pestaña con varios paneles ya creados (restauración de sesión)
-    pub fn from_layout(
-        id: usize,
+    pub(crate) fn from_layout(
+        id: TabId,
         title: String,
         layout: PaneNode,
         panes: Vec<TerminalPane>,
-        active_pane_id: usize,
+        active_pane_id: PaneId,
     ) -> Self {
         Self {
             id,
@@ -355,13 +437,13 @@ impl TerminalTab {
         }
     }
 
-    pub fn new_settings(id: usize) -> Self {
+    pub(crate) fn new_settings(id: TabId) -> Self {
         Self {
             id,
             title: "Ajustes".to_string(),
             panes: Vec::new(),
-            active_pane_id: 0,
-            layout: PaneNode::Leaf(0),
+            active_pane_id: PaneId(0),
+            layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: true,
             file_viewer: None,
@@ -371,7 +453,7 @@ impl TerminalTab {
         }
     }
 
-    pub fn new_file_viewer(id: usize, path: std::path::PathBuf) -> Self {
+    pub(crate) fn new_file_viewer(id: TabId, path: std::path::PathBuf) -> Self {
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -480,8 +562,8 @@ impl TerminalTab {
             id,
             title: file_name,
             panes: Vec::new(),
-            active_pane_id: 0,
-            layout: PaneNode::Leaf(0),
+            active_pane_id: PaneId(0),
+            layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: false,
             file_viewer: Some(viewer),
@@ -492,8 +574,8 @@ impl TerminalTab {
     }
 
     /// Pestaña de visor para un archivo remoto ya leído (por SSH o por el propio terminal)
-    pub fn new_remote_file_viewer_from(
-        id: usize,
+    pub(crate) fn new_remote_file_viewer_from(
+        id: TabId,
         dest: String,
         path: std::path::PathBuf,
         remote_branch: Option<String>,
@@ -603,8 +685,8 @@ impl TerminalTab {
             id,
             title: file_name,
             panes: Vec::new(),
-            active_pane_id: 0,
-            layout: PaneNode::Leaf(0),
+            active_pane_id: PaneId(0),
+            layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: false,
             file_viewer: Some(viewer),
@@ -614,7 +696,7 @@ impl TerminalTab {
         }
     }
 
-    pub fn get_git_branch(&mut self) -> Option<String> {
+    pub(crate) fn get_git_branch(&mut self) -> Option<String> {
         if let Some(pane) = self.active_pane_mut() {
             pane.get_git_branch()
         } else if let Some(ref viewer) = self.file_viewer {
@@ -626,7 +708,7 @@ impl TerminalTab {
 
     /// Contexto real de la pestaña para la segunda línea de la barra lateral:
     /// carpeta contenedora, directorio remoto o número de paneles. Nada decorativo.
-    pub fn sidebar_detail(&self) -> Option<String> {
+    pub(crate) fn sidebar_detail(&self) -> Option<String> {
         if self.is_settings {
             return Some("Preferencias".to_string());
         }
@@ -671,7 +753,7 @@ impl TerminalTab {
         }
     }
 
-    pub fn display_title(&self) -> String {
+    pub(crate) fn display_title(&self) -> String {
         if self.is_settings {
             return "Ajustes".to_string();
         }
@@ -698,7 +780,7 @@ impl TerminalTab {
         Self::clean_display_title(&self.title, None)
     }
 
-    pub fn clean_display_title(raw: &str, cwd: Option<&std::path::Path>) -> String {
+    pub(crate) fn clean_display_title(raw: &str, cwd: Option<&std::path::Path>) -> String {
         use crate::renderer::contains_ignore_ascii_case;
         let trimmed = raw.trim();
         let ends_ci = |suf: &str| {
@@ -741,7 +823,7 @@ impl TerminalTab {
         raw.trim().to_string()
     }
 
-    pub fn active_pane(&self) -> Option<&TerminalPane> {
+    pub(crate) fn active_pane(&self) -> Option<&TerminalPane> {
         if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
             return None;
         }
@@ -751,7 +833,7 @@ impl TerminalTab {
             .or_else(|| self.panes.first())
     }
 
-    pub fn active_pane_mut(&mut self) -> Option<&mut TerminalPane> {
+    pub(crate) fn active_pane_mut(&mut self) -> Option<&mut TerminalPane> {
         if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
             return None;
         }
@@ -763,15 +845,15 @@ impl TerminalTab {
         }
     }
 
-    pub fn find_pane(&self, pane_id: usize) -> Option<&TerminalPane> {
+    pub(crate) fn find_pane(&self, pane_id: PaneId) -> Option<&TerminalPane> {
         self.panes.iter().find(|p| p.id == pane_id)
     }
 
-    pub fn find_pane_mut(&mut self, pane_id: usize) -> Option<&mut TerminalPane> {
+    pub(crate) fn find_pane_mut(&mut self, pane_id: PaneId) -> Option<&mut TerminalPane> {
         self.panes.iter_mut().find(|p| p.id == pane_id)
     }
 
-    pub fn compute_pane_rects(
+    pub(crate) fn compute_pane_rects(
         &self,
         total_x: usize,
         total_y: usize,
@@ -782,7 +864,7 @@ impl TerminalTab {
     }
 
     /// Divisores entre paneles: su rectángulo y lo necesario para arrastrarlos
-    pub fn compute_dividers(
+    pub(crate) fn compute_dividers(
         &self,
         total_x: usize,
         total_y: usize,
@@ -897,7 +979,7 @@ impl TerminalTab {
     }
 
     /// Mueve el divisor `path` (camino desde la raíz: `false` = primer hijo) a `ratio`
-    pub fn set_split_ratio(&mut self, path: &[bool], new_ratio: f32) {
+    pub(crate) fn set_split_ratio(&mut self, path: &[bool], new_ratio: f32) {
         let mut node = &mut self.layout;
         for &second in path {
             let PaneNode::Split {
@@ -914,7 +996,10 @@ impl TerminalTab {
     }
 
     /// Árbol de paneles en forma persistible; `cwd_of` da la carpeta local de cada panel
-    pub fn session_layout(&self, cwd_of: &dyn Fn(&TerminalPane) -> Option<String>) -> PaneSession {
+    pub(crate) fn session_layout(
+        &self,
+        cwd_of: &dyn Fn(&TerminalPane) -> Option<String>,
+    ) -> PaneSession {
         fn conv(
             tab: &TerminalTab,
             node: &PaneNode,
@@ -945,8 +1030,8 @@ impl TerminalTab {
     }
 
     /// Ids de los paneles de `layout` de izquierda a derecha
-    pub fn leaf_ids(&self) -> Vec<usize> {
-        fn walk(node: &PaneNode, out: &mut Vec<usize>) {
+    pub(crate) fn leaf_ids(&self) -> smallvec::SmallVec<[PaneId; 4]> {
+        fn walk(node: &PaneNode, out: &mut smallvec::SmallVec<[PaneId; 4]>) {
             match node {
                 PaneNode::Leaf(id) => out.push(*id),
                 PaneNode::Split { first, second, .. } => {
@@ -955,14 +1040,14 @@ impl TerminalTab {
                 }
             }
         }
-        let mut ids = Vec::new();
+        let mut ids = smallvec::SmallVec::new();
         walk(&self.layout, &mut ids);
         ids
     }
 
-    pub fn split_active_pane(
+    pub(crate) fn split_active_pane(
         &mut self,
-        new_pane_id: usize,
+        new_pane_id: PaneId,
         new_pane: TerminalPane,
         direction: SplitDirection,
     ) {
@@ -977,7 +1062,7 @@ impl TerminalTab {
 
     /// Maximiza `pane_id` (ocupa todo el área) o restaura el reparto si ya estaba maximizado.
     /// Devuelve `true` si el estado cambió.
-    pub fn toggle_pane_zoom(&mut self, pane_id: usize) -> bool {
+    pub(crate) fn toggle_pane_zoom(&mut self, pane_id: PaneId) -> bool {
         let next = if self.zoomed_pane == Some(pane_id) || self.panes.len() < 2 {
             None
         } else {
@@ -992,8 +1077,8 @@ impl TerminalTab {
 
     fn split_leaf_in_tree(
         node: PaneNode,
-        target_id: usize,
-        new_id: usize,
+        target_id: PaneId,
+        new_id: PaneId,
         direction: SplitDirection,
     ) -> PaneNode {
         match node {
@@ -1027,7 +1112,7 @@ impl TerminalTab {
         }
     }
 
-    pub fn close_pane(&mut self, pane_id: usize) {
+    pub(crate) fn close_pane(&mut self, pane_id: PaneId) {
         self.panes.retain(|p| p.id != pane_id);
         if let Some(new_tree) = Self::remove_leaf_from_tree(self.layout.clone(), pane_id) {
             self.layout = new_tree;
@@ -1042,7 +1127,7 @@ impl TerminalTab {
         }
     }
 
-    fn remove_leaf_from_tree(node: PaneNode, target_id: usize) -> Option<PaneNode> {
+    fn remove_leaf_from_tree(node: PaneNode, target_id: PaneId) -> Option<PaneNode> {
         match node {
             PaneNode::Leaf(id) => {
                 if id == target_id {

@@ -4,14 +4,14 @@
 use std::path::{Path, PathBuf};
 
 /// `bin\` junto al ejecutable (ZIP portable o carpeta de instalación), si existe.
-pub fn bundled_bin_dir() -> Option<PathBuf> {
+pub(crate) fn bundled_bin_dir() -> Option<PathBuf> {
     let dir = std::env::current_exe().ok()?.parent()?.join("bin");
     dir.is_dir().then_some(dir)
 }
 
 /// PATH para los procesos hijos. `bin\` de Axon va AL FINAL: las versiones que el usuario ya tiene
 /// instaladas tienen prioridad y las incluidas sirven de respaldo.
-pub fn path_with_bundled_tools() -> String {
+pub(crate) fn path_with_bundled_tools() -> String {
     append_dir(
         &std::env::var("PATH").unwrap_or_default(),
         bundled_bin_dir().as_deref(),

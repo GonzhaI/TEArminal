@@ -17,7 +17,7 @@ const STATUS_LABEL_SIZE: f32 = 10.5;
 impl TerminalRenderer {
     /// Renderiza la barra de estado informativa inferior (Status Bar) con tipografía Inter e iconos Lucide
     #[cfg(test)]
-    pub fn render_status_bar(
+    pub(crate) fn render_status_bar(
         &mut self,
         canvas: &mut Canvas,
         sidebar_offset: usize,
@@ -47,7 +47,7 @@ impl TerminalRenderer {
         );
     }
 
-    pub fn render_status_bar_with_ai(
+    pub(crate) fn render_status_bar_with_ai(
         &mut self,
         canvas: &mut Canvas,
         _sidebar_offset: usize,
@@ -338,7 +338,7 @@ impl TerminalRenderer {
     }
 
     /// Ancho total de los medidores con sus separaciones, para reservarles sitio en la barra.
-    pub fn status_meters_width(&self, meters: &[StatusMeter]) -> usize {
+    pub(crate) fn status_meters_width(&self, meters: &[StatusMeter]) -> usize {
         let mut total = 0;
         for (i, meter) in meters.iter().enumerate() {
             if i > 0 {
@@ -355,7 +355,7 @@ impl TerminalRenderer {
     }
 
     /// Medidores de la barra de estado a partir de los límites reales del agente de la pestaña.
-    pub fn status_meters_for(
+    pub(crate) fn status_meters_for(
         snapshot: &crate::app::AiUsageSnapshot,
         kind: AiAgentStatus,
     ) -> Vec<StatusMeter> {
@@ -370,7 +370,7 @@ impl TerminalRenderer {
             .collect()
     }
 
-    pub fn status_bar_badge_info(
+    pub(crate) fn status_bar_badge_info(
         ai_status: AiAgentStatus,
         ssh_host: Option<&str>,
         active_model: Option<&str>,
@@ -432,7 +432,7 @@ impl TerminalRenderer {
     }
 
     /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
-    pub fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
+    pub(crate) fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
         let mut h = 14; // padding superior
         h += 20; // cabecera: icono + título
         h += 8 + 1 + 10; // divisor 1
@@ -467,7 +467,7 @@ impl TerminalRenderer {
 
     /// Renderiza el menú flotante de consumo de IA: un bloque por agente de la pestaña (cada uno con su
     /// color, modelo y ventanas), el total de 24 h y los agentes configurados.
-    pub fn render_ai_usage_popup(
+    pub(crate) fn render_ai_usage_popup(
         &mut self,
         canvas: &mut Canvas,
         snapshot: &crate::app::AiUsageSnapshot,
@@ -846,7 +846,7 @@ fn pretty_model_name(raw: &str) -> String {
             name = rest;
         }
     }
-    let tokens: Vec<&str> = name
+    let tokens: smallvec::SmallVec<[&str; 8]> = name
         .split(['-', '_', ' '])
         .filter(|t| !t.is_empty())
         .collect();
@@ -854,9 +854,9 @@ fn pretty_model_name(raw: &str) -> String {
         return raw.trim().to_string();
     }
 
-    let mut head: Vec<&str> = Vec::new();
-    let mut version: Vec<&str> = Vec::new();
-    let mut tail: Vec<&str> = Vec::new();
+    let mut head: smallvec::SmallVec<[&str; 4]> = smallvec::SmallVec::new();
+    let mut version: smallvec::SmallVec<[&str; 2]> = smallvec::SmallVec::new();
+    let mut tail: smallvec::SmallVec<[&str; 4]> = smallvec::SmallVec::new();
     for token in tokens {
         let numeric = token.chars().all(|c| c.is_ascii_digit() || c == '.');
         if numeric {
@@ -876,7 +876,7 @@ fn pretty_model_name(raw: &str) -> String {
         }
     }
 
-    let mut out = String::new();
+    let mut out = String::with_capacity(name.len());
     for word in &head {
         if !out.is_empty() {
             out.push(' ');

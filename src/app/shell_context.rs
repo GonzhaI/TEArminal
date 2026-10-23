@@ -3,28 +3,39 @@
 use super::*;
 
 pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<String> {
+    use std::io::BufRead;
     let mut cur = start_dir?.to_path_buf();
+    let mut line_buf = String::with_capacity(128);
     for _ in 0..8 {
         let git_dir = cur.join(".git");
         let head_path = if git_dir.is_dir() {
             Some(git_dir.join("HEAD"))
         } else if git_dir.is_file() {
-            std::fs::read_to_string(&git_dir).ok().and_then(|c| {
-                c.lines()
-                    .next()?
+            line_buf.clear();
+            let file = std::fs::File::open(&git_dir).ok()?;
+            let mut reader = std::io::BufReader::new(file);
+            if reader.read_line(&mut line_buf).ok()? > 0 {
+                line_buf
+                    .trim()
                     .strip_prefix("gitdir: ")
                     .map(|p| cur.join(p.trim()).join("HEAD"))
-            })
+            } else {
+                None
+            }
         } else {
             None
         };
         if let Some(head_path) = head_path {
-            let content = std::fs::read_to_string(head_path).ok()?;
-            let line = content.lines().next()?.trim();
-            if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
-                return Some(branch.to_string());
-            } else if line.len() >= 7 {
-                return Some(line[..7].to_string());
+            line_buf.clear();
+            let file = std::fs::File::open(head_path).ok()?;
+            let mut reader = std::io::BufReader::new(file);
+            if reader.read_line(&mut line_buf).ok()? > 0 {
+                let trimmed = line_buf.trim();
+                if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+                    return Some(branch.to_string());
+                } else if trimmed.len() >= 7 {
+                    return Some(trimmed[..7].to_string());
+                }
             }
             return None;
         }
@@ -35,16 +46,16 @@ pub(super) fn get_git_branch(start_dir: Option<&std::path::Path>) -> Option<Stri
     None
 }
 
-pub(super) fn shorten_home(path: &std::path::Path) -> String {
+pub(super) fn shorten_home<'a>(path: &'a std::path::Path) -> std::borrow::Cow<'a, str> {
     static HOME: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     let home = HOME.get_or_init(|| std::env::var_os("USERPROFILE").map(std::path::PathBuf::from));
     if let Some(home) = home.as_deref() {
         if let Ok(rel) = path.strip_prefix(home) {
             let rel_str = rel.to_string_lossy();
             return if rel_str.is_empty() {
-                "~".to_string()
+                std::borrow::Cow::Borrowed("~")
             } else {
-                format!("~\\{}", rel_str.replace('/', "\\"))
+                std::borrow::Cow::Owned(format!("~\\{}", rel_str.replace('/', "\\")))
             };
         }
         let s = path.to_string_lossy();
@@ -52,22 +63,22 @@ pub(super) fn shorten_home(path: &std::path::Path) -> String {
         if s.len() >= h.len() && s[..h.len()].eq_ignore_ascii_case(&h) {
             let rest = &s[h.len()..];
             return if rest.is_empty() {
-                "~".to_string()
+                std::borrow::Cow::Borrowed("~")
             } else {
                 // OSC 7 entrega el cwd con `/`: la barra de estado usa `\` en todo el trayecto.
-                format!(
+                std::borrow::Cow::Owned(format!(
                     "~\\{}",
                     rest.trim_start_matches(['\\', '/']).replace('/', "\\")
-                )
+                ))
             };
         }
     }
     let s = path.to_string_lossy();
     // Solo rutas de unidad de Windows; las remotas (SSH) son POSIX y conservan `/`.
-    if s.as_bytes().get(1) == Some(&b':') {
-        s.replace('/', "\\")
+    if s.as_bytes().get(1) == Some(&b':') && s.contains('/') {
+        std::borrow::Cow::Owned(s.replace('/', "\\"))
     } else {
-        s.into_owned()
+        s
     }
 }
 

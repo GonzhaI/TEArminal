@@ -1,9 +1,9 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const FILE_EXPLORER_WIDTH: usize = 256;
-pub const FILE_EXPLORER_MIN_WIDTH: usize = 168;
+pub(crate) const FILE_EXPLORER_WIDTH: usize = 256;
+pub(crate) const FILE_EXPLORER_MIN_WIDTH: usize = 168;
 
 #[inline]
 fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
@@ -13,7 +13,7 @@ fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GitFileStatus {
+pub(crate) enum GitFileStatus {
     Modified,
     Untracked,
     Added,
@@ -37,7 +37,7 @@ fn git_command(repo: &Path) -> std::process::Command {
 
 /// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
 /// `Some(vacío)` si el archivo es nuevo en un repo (todo es añadido); `None` fuera de un repo.
-pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
+pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
     let repo = git_repo_root(path.parent()?)?;
     let rel = path
         .strip_prefix(&repo)
@@ -61,8 +61,8 @@ pub fn git_head_lines(path: &Path) -> Option<Vec<String>> {
 
 /// Estado de una carpeta según lo que cambió dentro: si todo es del mismo tipo, ese (verde añadido,
 /// rojo borrado); con una mezcla, o con modificados, amarillo. `None` si no cambió nada.
-pub fn dir_git_status(
-    git_map: &HashMap<PathBuf, GitFileStatus>,
+pub(crate) fn dir_git_status(
+    git_map: &FxHashMap<PathBuf, GitFileStatus>,
     dir: &Path,
 ) -> Option<GitFileStatus> {
     let mut found: Option<GitFileStatus> = None;
@@ -87,28 +87,28 @@ pub fn dir_git_status(
 /// Ejecuta `git status --porcelain -z` sobre `repo_root` y devuelve el estado por ruta absoluta.
 /// `--no-optional-locks`: sin él `git status` toma `index.lock` para refrescar el índice y hace fallar un
 /// `git add`/`commit` que el usuario o un agente lance a la vez.
-pub fn collect_git_statuses(
+pub(crate) fn collect_git_statuses(
     repo_root: &Path,
     changes_only: bool,
-) -> HashMap<PathBuf, GitFileStatus> {
+) -> FxHashMap<PathBuf, GitFileStatus> {
     let untracked_mode = if changes_only { "-uall" } else { "-unormal" };
     let Ok(output) = git_command(repo_root)
         .args(["--no-optional-locks", "status", "--porcelain", "-z"])
         .arg(untracked_mode)
         .output()
     else {
-        return HashMap::new();
+        return FxHashMap::default();
     };
     if !output.status.success() {
-        return HashMap::new();
+        return FxHashMap::default();
     }
     parse_porcelain_z(repo_root, &output.stdout)
 }
 
 /// Salida de `git status --porcelain -z`: entradas `XY ruta` separadas por NUL, sin comillas ni escapes (los
 /// nombres con tildes o espacios llegan tal cual); tras un renombrado/copia va otra entrada con el origen
-fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> HashMap<PathBuf, GitFileStatus> {
-    let mut map = HashMap::new();
+fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> FxHashMap<PathBuf, GitFileStatus> {
+    let mut map = FxHashMap::default();
     let text = String::from_utf8_lossy(stdout);
     let mut entries = text.split('\0');
     while let Some(entry) = entries.next() {
@@ -142,24 +142,42 @@ fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> HashMap<PathBuf, GitFil
     map
 }
 
-#[derive(Debug, Clone)]
-pub struct ExplorerItem {
-    pub path: PathBuf,
-    pub name: String,
-    pub is_dir: bool,
-    pub depth: usize,
-    pub is_expanded: bool,
-    pub git_status: Option<GitFileStatus>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ExplorerItem {
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
+    pub(crate) is_dir: bool,
+    pub(crate) depth: usize,
+    pub(crate) is_expanded: bool,
+    pub(crate) git_status: Option<GitFileStatus>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteSshSession {
-    pub destination: String,
-    pub remote_dir: String,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct RemoteSshSession {
+    pub(crate) destination: String,
+    pub(crate) remote_dir: String,
+}
+
+impl From<(&str, &str)> for RemoteSshSession {
+    fn from((destination, remote_dir): (&str, &str)) -> Self {
+        Self {
+            destination: destination.to_string(),
+            remote_dir: remote_dir.to_string(),
+        }
+    }
+}
+
+impl From<(String, String)> for RemoteSshSession {
+    fn from((destination, remote_dir): (String, String)) -> Self {
+        Self {
+            destination,
+            remote_dir,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct FileExplorer {
+pub(crate) struct FileExplorer {
     pub root_dir: PathBuf,
     pub items: Vec<ExplorerItem>,
     pub scroll_offset: usize,
@@ -182,7 +200,7 @@ pub struct FileExplorer {
     pub last_click_time: std::time::Instant,
     pub history: Vec<PathBuf>,
     pub history_index: usize,
-    pub git_statuses: HashMap<PathBuf, GitFileStatus>,
+    pub git_statuses: FxHashMap<PathBuf, GitFileStatus>,
     /// Rectángulo `(x, y, ancho, alto)` cuando vive dentro del panel lateral; con `None` se acopla al borde derecho
     pub dock: Option<(usize, usize, usize, usize)>,
     /// Raíz del repositorio del directorio actual (None si no hay repo)
@@ -210,25 +228,25 @@ pub struct FileExplorer {
 }
 
 /// Listado remoto por SSH lento: la raíz (`expand = None`) o el contenido de una carpeta del árbol
-#[derive(Debug, Clone)]
-pub struct RemoteLsReq {
-    pub gen: u64,
-    pub dest: String,
-    pub dir: String,
-    pub expand: Option<PathBuf>,
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct RemoteLsReq {
+    pub(crate) gen: u64,
+    pub(crate) dest: String,
+    pub(crate) dir: String,
+    pub(crate) expand: Option<PathBuf>,
 }
 
 impl FileExplorer {
-    pub const HEADER_HEIGHT: usize = 38;
+    pub(crate) const HEADER_HEIGHT: usize = 38;
     /// Aire entre la cabecera de sección y la lista (sin barra de herramientas).
-    pub const SUBHEADER_HEIGHT: usize = 0;
-    pub const ITEM_HEIGHT: usize = 26;
+    pub(crate) const SUBHEADER_HEIGHT: usize = 0;
+    pub(crate) const ITEM_HEIGHT: usize = 26;
     /// Aire entre el sub-encabezado y la primera fila de la lista
-    pub const LIST_TOP_PAD: usize = 4;
+    pub(crate) const LIST_TOP_PAD: usize = 4;
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[inline]
-    pub fn changes_btn_rect(
+    pub(crate) fn changes_btn_rect(
         panel_x: usize,
         panel_y: usize,
         panel_w: usize,
@@ -238,7 +256,7 @@ impl FileExplorer {
 
     /// Botón «Fijar» (Pin) del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[inline]
-    pub fn pin_btn_rect(
+    pub(crate) fn pin_btn_rect(
         panel_x: usize,
         panel_y: usize,
         panel_w: usize,
@@ -248,7 +266,7 @@ impl FileExplorer {
 
     /// Calcula la geometría del panel acoplado del explorador de archivos.
     #[inline]
-    pub fn panel_geometry(
+    pub(crate) fn panel_geometry(
         &self,
         win_w: usize,
         win_h: usize,
@@ -265,7 +283,7 @@ impl FileExplorer {
     }
 
     /// Acota `width` entre el mínimo y la mitad de la ventana (siempre queda sitio para el terminal)
-    pub fn clamp_width(width: usize, win_w: usize) -> usize {
+    pub(crate) fn clamp_width(width: usize, win_w: usize) -> usize {
         width.clamp(
             FILE_EXPLORER_MIN_WIDTH,
             (win_w / 2).max(FILE_EXPLORER_MIN_WIDTH),
@@ -273,12 +291,12 @@ impl FileExplorer {
     }
 
     /// Ancho que deja el borde izquierdo del panel bajo el ratón en `mx`
-    pub fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
+    pub(crate) fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
         self.width = Self::clamp_width(win_w.saturating_sub(mx), win_w);
     }
 
     /// ¿Está `(mx, my)` sobre el borde izquierdo del panel (franja de agarre para redimensionar)?
-    pub fn on_resize_edge(
+    pub(crate) fn on_resize_edge(
         &self,
         mx: usize,
         my: usize,
@@ -297,7 +315,7 @@ impl FileExplorer {
             && my < panel_y + panel_h
     }
 
-    pub fn new(initial_dir: Option<PathBuf>, visible: bool) -> Self {
+    pub(crate) fn new(initial_dir: Option<PathBuf>, visible: bool) -> Self {
         let root_dir = initial_dir
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
@@ -327,7 +345,7 @@ impl FileExplorer {
             last_click_time: std::time::Instant::now(),
             history: vec![root_dir],
             history_index: 0,
-            git_statuses: HashMap::new(),
+            git_statuses: FxHashMap::default(),
             dock: None,
             git_root: None,
             changes_only: false,
@@ -345,18 +363,18 @@ impl FileExplorer {
     }
 
     /// Alterna el estado de fijado del explorador
-    pub fn toggle_pinned(&mut self) {
+    pub(crate) fn toggle_pinned(&mut self) {
         self.is_pinned = !self.is_pinned;
     }
 
-    pub fn set_expanded(&mut self, path: &Path, expanded: bool) {
+    pub(crate) fn set_expanded(&mut self, path: &Path, expanded: bool) {
         if let Some(item) = self.items.iter_mut().find(|i| i.path == path && i.is_dir) {
             item.is_expanded = expanded;
         }
     }
 
     /// Siguiente carpeta remota sin abrir para «Expandir todo» (3 niveles, 1 000 entradas como máximo)
-    pub fn next_remote_dir_to_expand(&self) -> Option<usize> {
+    pub(crate) fn next_remote_dir_to_expand(&self) -> Option<usize> {
         const MAX_ITEMS: usize = 1000;
         const MAX_DEPTH: usize = 3;
         const SKIP: [&str; 4] = [".git", "node_modules", "target", "__pycache__"];
@@ -396,16 +414,16 @@ impl FileExplorer {
     }
 
     /// Inserta bajo la carpeta remota `dir` los nombres de su listado (recibido por el terminal)
-    pub fn expand_remote_dir(&mut self, dir: &Path, names: &[String]) {
+    pub(crate) fn expand_remote_dir(&mut self, dir: &Path, names: &[String]) {
         let Some(idx) = self.items.iter().position(|i| i.path == dir && i.is_dir) else {
             return;
         };
         let depth = self.items[idx].depth;
-        let mut end = idx + 1;
-        while end < self.items.len() && self.items[end].depth > depth {
-            end += 1;
-        }
-        self.items.drain(idx + 1..end);
+        let count = self.items[idx + 1..]
+            .iter()
+            .take_while(|item| item.depth > depth)
+            .count();
+        self.items.drain(idx + 1..idx + 1 + count);
         self.items[idx].is_expanded = true;
         let base = dir.to_string_lossy().trim_end_matches('/').to_string();
         let children = Self::remote_items(&base, depth + 1, names);
@@ -413,7 +431,7 @@ impl FileExplorer {
     }
 
     /// Cierra todas las carpetas abiertas y deja solo el primer nivel
-    pub fn collapse_all(&mut self) {
+    pub(crate) fn collapse_all(&mut self) {
         self.items.retain(|i| i.depth == 0);
         for item in &mut self.items {
             item.is_expanded = false;
@@ -423,7 +441,7 @@ impl FileExplorer {
     }
 
     /// Abre todas las carpetas locales (hasta 4 niveles y 2 000 entradas; sin `.git`, `target`, etc.)
-    pub fn expand_all(&mut self) {
+    pub(crate) fn expand_all(&mut self) {
         const MAX_ITEMS: usize = 2000;
         const MAX_DEPTH: usize = 4;
         const SKIP: [&str; 5] = [".git", "target", "node_modules", ".cargo", "dist"];
@@ -444,16 +462,16 @@ impl FileExplorer {
         }
     }
 
-    pub fn can_go_back(&self) -> bool {
+    pub(crate) fn can_go_back(&self) -> bool {
         !self.inband_remote && self.history_index > 0
     }
 
-    pub fn can_go_forward(&self) -> bool {
+    pub(crate) fn can_go_forward(&self) -> bool {
         !self.inband_remote && self.history_index + 1 < self.history.len()
     }
 
     /// Carpeta padre de la carpeta remota actual
-    pub fn remote_parent(&self) -> Option<String> {
+    pub(crate) fn remote_parent(&self) -> Option<String> {
         let cur = self
             .remote_session
             .as_ref()?
@@ -469,7 +487,7 @@ impl FileExplorer {
 
     /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 AxonLs).
     /// No hace nada si ya está aplicado, así que puede llamarse tras cada ráfaga de salida.
-    pub fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
+    pub(crate) fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
         let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);
         if same && self.listing_names_match(names) {
             return;
@@ -499,13 +517,13 @@ impl FileExplorer {
                 .all(|n| roots.iter().any(|i| i.name == n.trim_end_matches('/')))
     }
 
-    pub fn go_back(&mut self) {
+    pub(crate) fn go_back(&mut self) {
         if self.can_go_back() {
             self.step_history(self.history_index - 1);
         }
     }
 
-    pub fn go_forward(&mut self) {
+    pub(crate) fn go_forward(&mut self) {
         if self.can_go_forward() {
             self.step_history(self.history_index + 1);
         }
@@ -529,7 +547,7 @@ impl FileExplorer {
     }
 
     /// Actualiza el directorio raíz y refresca la lista de elementos
-    pub fn set_root(&mut self, new_root: PathBuf) {
+    pub(crate) fn set_root(&mut self, new_root: PathBuf) {
         if let Some(ref mut sess) = self.remote_session {
             let r_str = new_root.to_string_lossy().replace('\\', "/");
             if r_str != sess.remote_dir {
@@ -564,7 +582,7 @@ impl FileExplorer {
 
     /// Configura o desactiva la sesión SSH remota para el explorador. El listado llega después, por la vía
     /// lenta (`take_ssh_requests` + `apply_remote_listing`).
-    pub fn set_remote_session(&mut self, session: Option<RemoteSshSession>) {
+    pub(crate) fn set_remote_session(&mut self, session: Option<RemoteSshSession>) {
         if self.remote_session == session {
             return;
         }
@@ -593,7 +611,7 @@ impl FileExplorer {
     }
 
     /// Pide el listado de la raíz remota por SSH (sin bloquear: lo lanza la app en un hilo)
-    pub fn refresh_remote(&mut self) {
+    pub(crate) fn refresh_remote(&mut self) {
         if self.inband_remote {
             return;
         }
@@ -612,13 +630,13 @@ impl FileExplorer {
     }
 
     /// Listados pedidos hasta ahora (la app los ejecuta en hilos)
-    pub fn take_ssh_requests(&mut self) -> Vec<RemoteLsReq> {
+    pub(crate) fn take_ssh_requests(&mut self) -> Vec<RemoteLsReq> {
         std::mem::take(&mut self.ssh_requests)
     }
 
     /// Aplica el resultado de un listado remoto; devuelve la rama git si era el de la raíz.
     /// Se ignora si la vista cambió mientras tanto (otra sesión, otra generación o listado en banda).
-    pub fn apply_remote_listing(
+    pub(crate) fn apply_remote_listing(
         &mut self,
         req: &RemoteLsReq,
         result: Result<crate::ssh::Output, String>,
@@ -710,7 +728,7 @@ impl FileExplorer {
     }
 
     /// Petición de `git status` pendiente de ejecutar en un hilo
-    pub fn take_git_status_request(&mut self) -> Option<(PathBuf, bool)> {
+    pub(crate) fn take_git_status_request(&mut self) -> Option<(PathBuf, bool)> {
         if self.git_status_running {
             return None;
         }
@@ -720,15 +738,15 @@ impl FileExplorer {
     }
 
     /// El hilo de `git status` no pudo lanzarse: libera la guarda para el siguiente intento
-    pub fn cancel_git_status(&mut self) {
+    pub(crate) fn cancel_git_status(&mut self) {
         self.git_status_running = false;
     }
 
     /// Aplica el mapa de estados de `git status` obtenido en segundo plano
-    pub fn apply_git_statuses(
+    pub(crate) fn apply_git_statuses(
         &mut self,
         repo_root: &Path,
-        statuses: HashMap<PathBuf, GitFileStatus>,
+        statuses: FxHashMap<PathBuf, GitFileStatus>,
     ) {
         self.git_status_running = false;
         if self.remote_session.is_some() || self.git_root.as_deref() != Some(repo_root) {
@@ -750,7 +768,7 @@ impl FileExplorer {
     }
 
     /// Consulta el estado Git del repositorio activo (en un hilo en la GUI; síncrono en tests)
-    pub fn refresh_git_status(&mut self) {
+    pub(crate) fn refresh_git_status(&mut self) {
         let new_root = git_repo_root(&self.root_dir);
         if new_root != self.git_root {
             self.git_statuses.clear();
@@ -769,7 +787,7 @@ impl FileExplorer {
     }
 
     /// Archivos con cambios de git (sin los borrados): el contador de la pestaña «Cambios».
-    pub fn change_count(&self) -> usize {
+    pub(crate) fn change_count(&self) -> usize {
         if self.changes_only {
             return self.items.len();
         }
@@ -780,7 +798,7 @@ impl FileExplorer {
     }
 
     /// Alterna entre el árbol de archivos y la lista de archivos con cambios (solo sesiones locales)
-    pub fn toggle_changes_only(&mut self) {
+    pub(crate) fn toggle_changes_only(&mut self) {
         if self.remote_session.is_some() {
             return;
         }
@@ -826,7 +844,7 @@ impl FileExplorer {
     }
 
     /// Refresca los contenidos del directorio raíz conservando las carpetas expandidas
-    pub fn refresh(&mut self) {
+    pub(crate) fn refresh(&mut self) {
         if self.remote_session.is_some() {
             self.refresh_remote();
             return;
@@ -840,7 +858,7 @@ impl FileExplorer {
             return;
         }
 
-        let expanded_paths: HashSet<PathBuf> = self
+        let expanded_paths: FxHashSet<PathBuf> = self
             .items
             .iter()
             .filter(|it| it.is_dir && it.is_expanded)
@@ -860,16 +878,16 @@ impl FileExplorer {
     fn read_directory(
         dir: &Path,
         depth: usize,
-        expanded_paths: &HashSet<PathBuf>,
-        git_map: &HashMap<PathBuf, GitFileStatus>,
+        expanded_paths: &FxHashSet<PathBuf>,
+        git_map: &FxHashMap<PathBuf, GitFileStatus>,
         out: &mut Vec<ExplorerItem>,
     ) {
         let Ok(read_dir) = fs::read_dir(dir) else {
             return;
         };
 
-        let mut dirs = Vec::new();
-        let mut files = Vec::new();
+        let mut dirs = Vec::with_capacity(32);
+        let mut files = Vec::with_capacity(64);
 
         for entry in read_dir.flatten() {
             let path = entry.path();
@@ -927,7 +945,7 @@ impl FileExplorer {
     }
 
     /// Alterna el estado de expansión de un directorio
-    pub fn toggle_expand(&mut self, index: usize) {
+    pub(crate) fn toggle_expand(&mut self, index: usize) {
         if index >= self.items.len() || !self.items[index].is_dir {
             return;
         }
@@ -936,14 +954,10 @@ impl FileExplorer {
             // Colapsar: remover todos los elementos hijos que tengan mayor profundidad
             self.items[index].is_expanded = false;
             let current_depth = self.items[index].depth;
-            let mut remove_count = 0;
-            for i in (index + 1)..self.items.len() {
-                if self.items[i].depth > current_depth {
-                    remove_count += 1;
-                } else {
-                    break;
-                }
-            }
+            let remove_count = self.items[index + 1..]
+                .iter()
+                .take_while(|item| item.depth > current_depth)
+                .count();
             if remove_count > 0 {
                 self.items.drain((index + 1)..(index + 1 + remove_count));
             }
@@ -962,7 +976,7 @@ impl FileExplorer {
                     expand: Some(dir_path),
                 });
             } else {
-                let expanded_set: HashSet<PathBuf> = self
+                let expanded_set: FxHashSet<PathBuf> = self
                     .items
                     .iter()
                     .filter(|it| it.is_dir && it.is_expanded)
@@ -987,7 +1001,7 @@ impl FileExplorer {
     }
 
     /// Sube al directorio padre
-    pub fn navigate_up(&mut self) {
+    pub(crate) fn navigate_up(&mut self) {
         if let Some(ref mut sess) = self.remote_session {
             let cur = sess.remote_dir.trim_end_matches('/');
             if let Some(pos) = cur.rfind('/') {
@@ -1018,7 +1032,7 @@ impl FileExplorer {
     }
 
     /// Desplaza la lista verticalmente con la rueda del ratón
-    pub fn scroll(&mut self, delta: isize, max_visible_lines: usize) {
+    pub(crate) fn scroll(&mut self, delta: isize, max_visible_lines: usize) {
         let max_offset = self.items.len().saturating_sub(max_visible_lines);
         if delta < 0 {
             self.scroll_offset = (self.scroll_offset + delta.unsigned_abs()).min(max_offset);
@@ -1028,7 +1042,7 @@ impl FileExplorer {
     }
 
     /// Alterna la visibilidad del explorador de archivos lateral
-    pub fn toggle(&mut self) {
+    pub(crate) fn toggle(&mut self) {
         self.visible = !self.visible;
         if self.visible && self.items.is_empty() && self.remote_session.is_none() {
             self.refresh();
@@ -1036,7 +1050,7 @@ impl FileExplorer {
     }
 
     /// Obtiene el índice del elemento en la posición Y considerando el desplazamiento superior
-    pub fn item_at_y(&self, my: usize, top_offset: usize) -> Option<usize> {
+    pub(crate) fn item_at_y(&self, my: usize, top_offset: usize) -> Option<usize> {
         let list_top =
             top_offset + Self::HEADER_HEIGHT + Self::SUBHEADER_HEIGHT + Self::LIST_TOP_PAD;
         if my < list_top {
@@ -1052,7 +1066,7 @@ impl FileExplorer {
     }
 
     /// Mueve la selección hacia arriba o hacia abajo y ajusta el scroll si es necesario
-    pub fn navigate_selection(&mut self, delta: isize, max_visible: usize) {
+    pub(crate) fn navigate_selection(&mut self, delta: isize, max_visible: usize) {
         if self.items.is_empty() {
             return;
         }
@@ -1068,7 +1082,7 @@ impl FileExplorer {
     }
 
     /// Garantiza que un elemento sea visible dentro de la ventana de scroll
-    pub fn ensure_visible(&mut self, index: usize, max_visible: usize) {
+    pub(crate) fn ensure_visible(&mut self, index: usize, max_visible: usize) {
         if max_visible == 0 {
             return;
         }
@@ -1080,7 +1094,7 @@ impl FileExplorer {
     }
 
     /// Maneja la pulsación de Flecha Izquierda: colapsa carpeta, sube al directorio padre o a nivel raíz
-    pub fn handle_arrow_left(&mut self, max_visible: usize) {
+    pub(crate) fn handle_arrow_left(&mut self, max_visible: usize) {
         if self.items.is_empty() {
             return;
         }
@@ -1111,12 +1125,12 @@ impl FileExplorer {
             // En nivel raíz: subir de directorio (..)
             self.navigate_up();
             self.selected_index = if self.items.is_empty() { None } else { Some(0) };
-            self.selected_path = self.selected_index.map(|i| self.items[i].path.clone());
+            self.selected_path = self.items.first().map(|i| i.path.clone());
         }
     }
 
     /// Maneja la pulsación de Flecha Derecha: expande carpeta, entra al primer hijo, o devuelve archivo para abrir
-    pub fn handle_arrow_right(&mut self, max_visible: usize) -> Option<PathBuf> {
+    pub(crate) fn handle_arrow_right(&mut self, max_visible: usize) -> Option<PathBuf> {
         if self.items.is_empty() {
             return None;
         }
@@ -1147,7 +1161,7 @@ impl FileExplorer {
     }
 
     /// Maneja la pulsación de Enter: alterna carpeta o devuelve archivo para abrir en visor
-    pub fn handle_enter(&mut self, _max_visible: usize) -> Option<PathBuf> {
+    pub(crate) fn handle_enter(&mut self, _max_visible: usize) -> Option<PathBuf> {
         if self.items.is_empty() {
             return None;
         }
@@ -1175,7 +1189,7 @@ mod tests {
     #[test]
     fn test_dir_git_status_uses_one_color_per_kind_and_yellow_for_mixes() {
         use GitFileStatus::*;
-        let map = |entries: &[(&str, GitFileStatus)]| -> HashMap<PathBuf, GitFileStatus> {
+        let map = |entries: &[(&str, GitFileStatus)]| -> FxHashMap<PathBuf, GitFileStatus> {
             entries
                 .iter()
                 .map(|(p, s)| (PathBuf::from(p), *s))
@@ -1238,7 +1252,7 @@ mod tests {
         assert!(ex.take_git_status_request().is_some());
         ex.git_status_req = Some((PathBuf::from("a"), false));
         assert!(ex.take_git_status_request().is_none());
-        ex.apply_git_statuses(Path::new("a"), HashMap::new());
+        ex.apply_git_statuses(Path::new("a"), FxHashMap::default());
         assert!(ex.take_git_status_request().is_some());
     }
 

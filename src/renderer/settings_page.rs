@@ -311,7 +311,7 @@ impl TerminalRenderer {
     }
 
     /// Renderiza la página completa de la pestaña de Ajustes y Personalización de Axon
-    pub fn render_settings_page(
+    pub(crate) fn render_settings_page(
         &mut self,
         canvas: &mut Canvas,
         page_x: usize,
@@ -555,17 +555,18 @@ impl TerminalRenderer {
             Theme::canonical_name(&config.appearance.theme),
             Theme::canonical_name(&config.appearance.theme_light),
         ];
-        for (i, (rect, label)) in [
+        for (i, ((rect, label), slot_name)) in [
             (rects.theme_slot_dark_btn, "Oscuro"),
             (rects.theme_slot_light_btn, "Claro"),
         ]
         .into_iter()
+        .zip(slot_names)
         .enumerate()
         {
             self.draw_button(
                 canvas,
                 rect,
-                &format!("{label} · {}", slot_names[i]),
+                &format!("{label} · {slot_name}"),
                 state.hovered_theme_slot == Some(i),
                 state.theme_slot_light == (i == 1),
                 theme,
@@ -658,10 +659,12 @@ impl TerminalRenderer {
                 false,
             );
         }
-        for i in 0..SettingsPageRects::THEME_ROWS {
-            let Some(&name) = matches.get(first + i) else {
-                break;
-            };
+        for (i, &name) in matches
+            .iter()
+            .skip(first)
+            .take(SettingsPageRects::THEME_ROWS)
+            .enumerate()
+        {
             let r = rects.theme_row(i);
             let is_current = name == current;
             let is_hover = state.hovered_theme == Some(i);
@@ -746,9 +749,9 @@ impl TerminalRenderer {
         let swatch_w = (avail_w.saturating_sub(15 * gap)) / 16;
         let extra = (avail_w.saturating_sub(15 * gap)) % 16;
         let start_x = content_x + pad_x + extra / 2;
-        for i in 0..16 {
+        for (i, &ansi_color) in theme.ansi.iter().take(16).enumerate() {
             let sx = start_x + i * (swatch_w + gap);
-            canvas.rounded_fill(sx, swatch_y, swatch_w, 16, 2, theme.ansi[i]);
+            canvas.rounded_fill(sx, swatch_y, swatch_w, 16, 2, ansi_color);
         }
 
         // Tarjeta 2: Interfaz (modo, disposición y opacidad)

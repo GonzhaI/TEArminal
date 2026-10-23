@@ -1,7 +1,8 @@
 [package]
 name = "axon"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
+license = "MIT"
 description = "Axon: Terminal nativa veloz para Windows optimizada para agentes CLI"
 authors = ["Axon Team"]
 repository = "https://github.com/GonzhaI/axon"
@@ -47,6 +48,10 @@ windows = { version = "0.52", default-features = false, features = [
 # Portapapeles del sistema nativo
 arboard = "3.6"
 
+# Gestión de errores tipados y contexto en binarios/CLI
+thiserror = "2.0"
+anyhow = "1.0"
+
 # Configuración ligera en TOML
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
@@ -60,13 +65,33 @@ base64 = "0.22"
 unicode-width = "0.1"
 unicode-segmentation = "1.12"
 
+# Optimización de asignaciones en el stack para colecciones pequeñas
+smallvec = "1.16"
+
+# Tablas hash de alto rendimiento para claves internas sin riesgo HashDoS
+rustc-hash = "2.1"
+
+# Asignador global de memoria de alto rendimiento (Microsoft Research)
+mimalloc = { version = "0.1", default-features = false }
+
 # Optimización para binarios de producción (GitHub Releases)
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+opt-level = 3           # Máxima optimización de velocidad
+lto = "fat"             # Link-Time Optimization: optimiza e inlinea a través de todos los crates
+codegen-units = 1       # Compila todo en una sola unidad (compilación más lenta, binario más rápido)
+panic = "abort"         # Elimina el código de desenrollado de pila (unwinding), reduciendo tamaño y mejorando caché de CPU
+strip = "symbols"       # Limpia símbolos de depuración para un binario ligero
 
 [build-dependencies]
 winres = "0.1.12"
+
+[lints.rust]
+unreachable_pub = "warn"
+
+[lints.clippy]
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "warn"
+
+[dev-dependencies]
+proptest = "1.12.0"

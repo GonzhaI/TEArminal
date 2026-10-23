@@ -378,36 +378,49 @@ fn test_powershell_full_startup_stream() {
     let raw = b"\x1b[?9001h\x1b[?1004h\x1b[?25l\x1b[2J\x1b[m\x1b[HWindows PowerShell\r\nCopyright (C) Microsoft Corporation. All rights reserved.\x1b]0;C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\x07\x1b[?25h\x1b[?25l\x1b[4;1H\x1b[?25hPS C:\\Users\\gmora> ";
     term.process_bytes(raw);
 
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    use std::io::Write;
+
     for (i, row) in term.grid.iter().enumerate() {
         let s: String = row.iter().map(|c| c.c).collect();
         let trimmed = s.trim_end();
         if !trimmed.is_empty() {
-            println!(
+            let _ = writeln!(
+                out,
                 "ROW {}: {:?} (cell[0].fg: {:?}, bg: {:?})",
                 i, trimmed, row[0].fg, row[0].bg
             );
         }
     }
-    println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+    let _ = writeln!(
+        out,
+        "cursor_x: {}, cursor_y: {}",
+        term.cursor_x, term.cursor_y
+    );
 
     // Simular redimensionamiento de ventana al inicio (de 24 a 20 filas)
-    println!("--- AFTER RESIZE to 20 rows ---");
+    let _ = writeln!(out, "--- AFTER RESIZE to 20 rows ---");
     term.resize(80, 20);
     for (i, row) in term.grid.iter().enumerate() {
         let s: String = row.iter().map(|c| c.c).collect();
         let trimmed = s.trim_end();
         if !trimmed.is_empty() {
-            println!("GRID ROW {}: {:?}", i, trimmed);
+            let _ = writeln!(out, "GRID ROW {}: {:?}", i, trimmed);
         }
     }
     for (i, row) in term.scrollback.iter().enumerate() {
         let s: String = row.iter().map(|c| c.c).collect();
         let trimmed = s.trim_end();
         if !trimmed.is_empty() {
-            println!("SCROLLBACK ROW {}: {:?}", i, trimmed);
+            let _ = writeln!(out, "SCROLLBACK ROW {}: {:?}", i, trimmed);
         }
     }
-    println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+    let _ = writeln!(
+        out,
+        "cursor_x: {}, cursor_y: {}",
+        term.cursor_x, term.cursor_y
+    );
     assert!(term.cursor_x > 0);
 }
 
@@ -669,14 +682,21 @@ fn test_pwsh_startup_prompt() {
     let mut term = TerminalState::new(80, 24, 1000, theme);
     let raw = b"\x1b[?9001h\x1b[?1004h\x1b[2J\x1b[?25l\x1b[2J\x1b[m\x1b[H\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\x1b[H\x1b]0;pwsh.exe\x07\x1b[?25h\x1b[38;2;78;146;249m\xef\x81\xbb ~\x1b[38;2;81;226;122m\r\n\xef\x90\xb2 ";
     term.process_bytes(raw);
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    use std::io::Write;
     for (i, row) in term.grid.iter().enumerate() {
         let s: String = row.iter().map(|c| c.c).collect();
         let trimmed = s.trim_end();
         if !trimmed.is_empty() {
-            println!("ROW {}: {:?}", i, trimmed);
+            let _ = writeln!(out, "ROW {}: {:?}", i, trimmed);
         }
     }
-    println!("cursor_x: {}, cursor_y: {}", term.cursor_x, term.cursor_y);
+    let _ = writeln!(
+        out,
+        "cursor_x: {}, cursor_y: {}",
+        term.cursor_x, term.cursor_y
+    );
     assert!(term.cursor_x > 0);
 }
 

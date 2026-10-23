@@ -35,7 +35,7 @@ pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
 }
 
 impl TerminalRenderer {
-    pub fn pane_scrollbar_geometry(
+    pub(crate) fn pane_scrollbar_geometry(
         &self,
         rect_x: usize,
         rect_y: usize,
@@ -84,7 +84,7 @@ impl TerminalRenderer {
     /// Cabecera de un panel dividido (38 px): icono, título, subtítulo atenuado, acciones
     /// (dividir · maximizar · cerrar) y línea de acento en el panel enfocado.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_pane_header(
+    pub(crate) fn render_pane_header(
         &mut self,
         canvas: &mut Canvas,
         slot: (usize, usize, usize),
@@ -206,7 +206,7 @@ impl TerminalRenderer {
     #[allow(clippy::too_many_arguments)]
     /// Renderiza un panel de terminal en un rectángulo específico del framebuffer.
     #[allow(clippy::too_many_arguments)]
-    pub fn render_pane(
+    pub(crate) fn render_pane(
         &mut self,
         canvas: &mut Canvas,
         rect_x: usize,
@@ -445,10 +445,13 @@ impl TerminalRenderer {
 
                     if run_len >= 2 {
                         let shaped = self.shape_punctuation_run(&p_buf[..run_len], cell.bold());
-                        for k in 0..run_len {
+                        for (k, (&gid, cur_cell)) in shaped.gids[..run_len]
+                            .iter()
+                            .zip(&row_slice[col_idx..col_idx + run_len])
+                            .enumerate()
+                        {
                             let cur_col = col_idx + k;
                             let cur_cell_x = base_x + (cur_col * self.char_width);
-                            let cur_cell = &row_slice[cur_col];
 
                             if k > 0 {
                                 if cur_cell.underline() {
@@ -477,7 +480,6 @@ impl TerminalRenderer {
                                 }
                             }
 
-                            let gid = shaped.gids[k];
                             let glyph = self.get_ligature_glyph(gid, cell.bold());
                             if glyph.width > 0 {
                                 let glyph_x = cur_cell_x as i32 + glyph.x_offset;
@@ -654,7 +656,7 @@ impl TerminalRenderer {
     }
 
     /// Renderiza un divisor entre paneles de terminal
-    pub fn render_pane_divider(
+    pub(crate) fn render_pane_divider(
         canvas: &mut Canvas,
         x: usize,
         y: usize,
@@ -667,7 +669,7 @@ impl TerminalRenderer {
 
     /// Renderiza directamente la cuadrícula del terminal al framebuffer de píxeles 32-bit de Windows
     #[cfg(test)]
-    pub fn render(
+    pub(crate) fn render(
         &mut self,
         canvas: &mut Canvas,
         sidebar_offset: usize,

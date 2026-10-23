@@ -13,7 +13,7 @@ pub(super) enum MdBlock {
     FenceClose,
     /// Fila de tabla con los anchos (en caracteres) de las columnas de toda la tabla
     Table {
-        widths: std::rc::Rc<Vec<usize>>,
+        widths: std::rc::Rc<[usize]>,
         header: bool,
     },
 }
@@ -43,7 +43,7 @@ fn mark_tables(lines: &[String], blocks: &mut [MdBlock]) {
         while i < lines.len() && is_row(i, blocks) {
             i += 1;
         }
-        let mut widths: Vec<usize> = Vec::new();
+        let mut widths: Vec<usize> = Vec::with_capacity(8);
         for line in lines[start..i].iter().filter(|l| !is_table_rule(l)) {
             for (c, cell) in table_cells(line).enumerate() {
                 let w = cell.chars().count();
@@ -53,7 +53,7 @@ fn mark_tables(lines: &[String], blocks: &mut [MdBlock]) {
                 }
             }
         }
-        let widths = std::rc::Rc::new(widths);
+        let widths: std::rc::Rc<[usize]> = std::rc::Rc::from(widths);
         for (n, block) in blocks[start..i].iter_mut().enumerate() {
             *block = MdBlock::Table {
                 widths: widths.clone(),
@@ -720,7 +720,7 @@ mod tests {
         let MdBlock::Table { widths, header } = &b[0] else {
             panic!("la primera fila debe ser tabla");
         };
-        assert_eq!(**widths, vec![3, 2]);
+        assert_eq!(&widths[..], &[3, 2]);
         assert!(*header);
         assert!(matches!(&b[2], MdBlock::Table { header: false, .. }));
         assert_eq!(b[3], MdBlock::Text);

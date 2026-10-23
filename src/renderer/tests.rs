@@ -206,10 +206,10 @@ mod bench {
         }
         let _ = std::fs::write(&md_path, &md_text);
 
-        let fv_rs = crate::app::TerminalTab::new_file_viewer(1, rs_path.clone())
+        let fv_rs = crate::app::TerminalTab::new_file_viewer(crate::app::TabId(1), rs_path.clone())
             .file_viewer
             .unwrap();
-        let fv_md = crate::app::TerminalTab::new_file_viewer(2, md_path.clone())
+        let fv_md = crate::app::TerminalTab::new_file_viewer(crate::app::TabId(2), md_path.clone())
             .file_viewer
             .unwrap();
 
@@ -1386,7 +1386,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
     // 5. Visor de archivos
     let path = fixture.join("src/renderer/pane.rs");
-    let mut tab = crate::app::TerminalTab::new_file_viewer(90, path);
+    let mut tab = crate::app::TerminalTab::new_file_viewer(crate::app::TabId(90), path);
     // El encabezado del visor muestra la carpeta del archivo: se lee de la carpeta temporal de la máquina, y la
     // escena no puede depender del usuario ni de dónde esté `%TEMP%` (en CI sale otra ruta). Ruta fija, ya leído el texto.
     tab.file_viewer.as_mut().unwrap().path =
@@ -2279,9 +2279,10 @@ fn preview_panel_card() {
     // Visor en modo «Cambios» (diff) de un archivo modificado del repositorio
     {
         let path = std::env::current_dir().unwrap().join("src/app/click.rs");
-        let mut viewer = crate::app::TerminalTab::new_file_viewer(1, path.clone())
-            .file_viewer
-            .unwrap();
+        let mut viewer =
+            crate::app::TerminalTab::new_file_viewer(crate::app::TabId(1), path.clone())
+                .file_viewer
+                .unwrap();
         viewer.git_base = crate::explorer::git_head_lines(&path);
         viewer.toggle_diff();
         let mut canvas = test_support::new_canvas(w, h);
@@ -4296,5 +4297,31 @@ mod gpu_scenes {
         let gpu = GpuDevice::new_at_most(DriverKind::Warp, D3D_FEATURE_LEVEL_10_0).unwrap();
         assert_eq!(gpu.feature_level, D3D_FEATURE_LEVEL_10_0);
         assert_scenes_match(gpu, "warp-fl10_0");
+    }
+
+    #[test]
+    fn test_gpu_pipeline_and_atlas_traits() {
+        use super::gpu::{AtlasRect, Kind};
+
+        // Kind (Pipeline)
+        let k = Kind::Glyph;
+        let k_num: u32 = k.into();
+        assert_eq!(k_num, 3);
+        assert_eq!(Kind::try_from(3), Ok(Kind::Glyph));
+        assert!(Kind::try_from(99).is_err());
+
+        // AtlasRect
+        let rect: AtlasRect = (10, 20, 30, 40).into();
+        assert_eq!(
+            rect,
+            AtlasRect {
+                x: 10,
+                y: 20,
+                w: 30,
+                h: 40
+            }
+        );
+        let rect_tuple: (u16, u16, u16, u16) = rect.into();
+        assert_eq!(rect_tuple, (10, 20, 30, 40));
     }
 }
