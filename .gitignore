@@ -4,6 +4,6 @@
 /tools/*/target
 **/*.rs.bk
 
-# Local de cada desarrollador (la configuración de ejemplo está en examples/axon.toml)
-/axon.toml
+# Local de cada desarrollador (la configuración de ejemplo está en examples/tearminal.toml)
+/tearminal.toml
 *.log

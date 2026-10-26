@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use vte::{Params, Parser, Perform};
 
 /// Tamaño máximo de una secuencia OSC. El de vte por defecto (1 KB) descarta el resto en silencio: cortaba
-/// los listados remotos (`AxonLs`), los trozos de `AxonFile` (32 KB) y OSC 52 (hasta 100 KB).
+/// los listados remotos (`TearminalLs`), los trozos de `TearminalFile` (32 KB) y OSC 52 (hasta 100 KB).
 pub(crate) const OSC_BUF_SIZE: usize = 128 * 1024;
 type OscParser = Parser<OSC_BUF_SIZE>;
 
@@ -69,20 +69,20 @@ pub(crate) struct TerminalState {
 
     // Sesión SSH remota activa y título de ventana notificado vía OSC 0 / OSC 2
     pub ssh_session: Option<SshSession>,
-    /// Token secreto del panel (`PtyManager::token`, variable `AXON_PANE_TOKEN` del shell): autentica los
-    /// marcadores `AxonSSH=start` que emite el wrapper `ssh` de `init.ps1`. Vacío = ningún marcador es válido.
+    /// Token secreto del panel (`PtyManager::token`, variable `TEARMINAL_PANE_TOKEN` del shell): autentica los
+    /// marcadores `TearminalSSH=start` que emite el wrapper `ssh` de `init.ps1`. Vacío = ningún marcador es válido.
     pub pane_token: String,
-    /// El wrapper de agentes de `init.ps1` avisó (OSC 1337 AxonAgent) de que hay un agente en marcha
+    /// El wrapper de agentes de `init.ps1` avisó (OSC 1337 TearminalAgent) de que hay un agente en marcha
     pub agent_running: bool,
     pub ai_agent: crate::renderer::AiAgentStatus,
     pub window_title: Option<String>,
-    /// El bash remoto lanzado por el wrapper `ssh` de Axon informa de rama git (OSC 1337 AxonGit) y listado
+    /// El bash remoto lanzado por el wrapper `ssh` de TEArminal informa de rama git (OSC 1337 TearminalGit) y listado
     pub remote_integration: bool,
     /// Entradas de la carpeta remota actual (`ls -1Ap`, las carpetas acaban en `/`), no confiables
     pub remote_listing: Option<Vec<String>>,
-    /// El prompt remoto está esperando entrada (llega `AxonGit` en cada prompt; Enter lo apaga)
+    /// El prompt remoto está esperando entrada (llega `TearminalGit` en cada prompt; Enter lo apaga)
     pub remote_at_prompt: bool,
-    /// Respuestas completas a peticiones en banda (`AxonFile`), pendientes de que la app las recoja
+    /// Respuestas completas a peticiones en banda (`TearminalFile`), pendientes de que la app las recoja
     pub remote_file_results: Vec<RemoteFileResult>,
     remote_file_parts: Vec<RemoteFileAsm>,
 
@@ -249,6 +249,113 @@ impl TerminalState {
         format!("\x1b[?2031;{code}$y").into_bytes()
     }
 
+    /// Actualiza el tema de la terminal migrando coherentemente el estado del emulador y las celdas
+    /// existentes en la rejilla, historial y pantalla alternativa.
+    pub(crate) fn update_theme(&mut self, new_theme: Theme) {
+        if self.theme == new_theme {
+            return;
+        }
+        let old_theme = std::mem::replace(&mut self.theme, new_theme);
+
+        // 1. Actualizar colores activos de escritura
+        if self.current_fg == old_theme.foreground || self.current_fg == Color::TRANSPARENT {
+            self.current_fg = self.theme.foreground;
+        } else {
+            for i in 0..16 {
+                if self.current_fg == old_theme.ansi[i] {
+                    self.current_fg = self.theme.ansi[i];
+                    break;
+                }
+            }
+        }
+
+        if self.current_bg == old_theme.background || self.current_bg == Color::TRANSPARENT {
+            self.current_bg = Color::TRANSPARENT;
+        } else {
+            for i in 0..16 {
+                if self.current_bg == old_theme.ansi[i] {
+                    self.current_bg = self.theme.ansi[i];
+                    break;
+                }
+            }
+        }
+
+        // 2. Mapear colores de subrayado si coincidían
+        for col in &mut self.underline_colors {
+            if *col == old_theme.foreground {
+                *col = self.theme.foreground;
+            } else {
+                for i in 0..16 {
+                    if *col == old_theme.ansi[i] {
+                        *col = self.theme.ansi[i];
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 3. Mapear celdas en grid, scrollback y alt_grid
+        let is_mode_switch = old_theme.is_dark() != self.theme.is_dark();
+        let remap_cell = |cell: &mut Cell| {
+            // Foreground
+            if cell.fg == old_theme.foreground || cell.fg == Color::TRANSPARENT {
+                cell.fg = self.theme.foreground;
+            } else {
+                let mut matched = false;
+                for i in 0..16 {
+                    if cell.fg == old_theme.ansi[i] {
+                        let new_col = self.theme.ansi[i];
+                        if is_mode_switch
+                            && crate::theme::contrast_ratio(new_col, self.theme.background) < 2.0
+                        {
+                            cell.fg = self.theme.foreground;
+                        } else {
+                            cell.fg = new_col;
+                        }
+                        matched = true;
+                        break;
+                    }
+                }
+                // Si no coincide con un color ANSI indexado y cambiamos entre modo claro y oscuro,
+                // verificamos si el color pierde contraste contra el nuevo fondo (ej. texto blanco sobre fondo claro).
+                if !matched && is_mode_switch {
+                    let cr = crate::theme::contrast_ratio(cell.fg, self.theme.background);
+                    if cr < 2.2 {
+                        cell.fg = self.theme.foreground;
+                    }
+                }
+            }
+
+            // Background
+            if cell.bg == old_theme.background {
+                cell.bg = Color::TRANSPARENT;
+            } else if cell.bg != Color::TRANSPARENT {
+                for i in 0..16 {
+                    if cell.bg == old_theme.ansi[i] {
+                        cell.bg = self.theme.ansi[i];
+                        break;
+                    }
+                }
+            }
+        };
+
+        for row in &mut self.grid {
+            for cell in row {
+                remap_cell(cell);
+            }
+        }
+        for row in &mut self.scrollback {
+            for cell in row {
+                remap_cell(cell);
+            }
+        }
+        for row in &mut self.alt_grid {
+            for cell in row {
+                remap_cell(cell);
+            }
+        }
+    }
+
     /// El marcador trae el token de este panel (comparación en tiempo constante). Un token vacío nunca vale.
     pub(crate) fn pane_token_matches(&self, token: &str) -> bool {
         let (a, b) = (self.pane_token.as_bytes(), token.as_bytes());
@@ -257,9 +364,9 @@ impl TerminalState {
             && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
     }
 
-    /// Bytes que Axon escribe en el bash remoto para pedir algo sin abrir otra conexión: escribe la
-    /// petición tras `#AXR#` en la línea de edición y pulsa una combinación que el gancho de Axon
-    /// tiene enlazada (`bind -x`); el gancho borra la petición y responde con `OSC 1337 AxonFile`.
+    /// Bytes que TEArminal escribe en el bash remoto para pedir algo sin abrir otra conexión: escribe la
+    /// petición tras `#AXR#` en la línea de edición y pulsa una combinación que el gancho de TEArminal
+    /// tiene enlazada (`bind -x`); el gancho borra la petición y responde con `OSC 1337 TearminalFile`.
     /// Solo con integración activa y el prompt esperando entrada (si no, los bytes irían a otro programa).
     pub(crate) fn remote_request_bytes(&self, op: &str, id: u32, payload: &str) -> Option<Vec<u8>> {
         let safe = |s: &str, extra: &[char]| {

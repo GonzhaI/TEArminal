@@ -1,4 +1,4 @@
-use crate::app::{AxonEvent, PaneId};
+use crate::app::{PaneId, TearminalEvent};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +35,22 @@ fn ssh_command_line(destination: &str, remote_dir: Option<&str>) -> String {
 /// Inicialización de PowerShell (prompt OSC 7/133, ls, agentes de IA, ssh): ver `assets/shell/init.ps1`
 const INIT_SCRIPT: &str = include_str!("../assets/shell/init.ps1");
 
+/// Escribe o actualiza `init.ps1` en la carpeta de caché (`%LOCALAPPDATA%\tearminal\tearminal\cache\shell\init.ps1`).
+/// Ejecutar el script desde un archivo en disco con `-File` en lugar de inyectar 15 KB en `-Command` evita
+/// que los antivirus (como Kaspersky) disparen falsos positivos heurísticos (`HEUR:Trojan.Multi.Powecod`).
+pub(crate) fn ensure_init_script_on_disk() -> Option<std::path::PathBuf> {
+    let dir = crate::config::cache_dir_or_fallback().join("shell");
+    let path = dir.join("init.ps1");
+    if let Ok(existing) = std::fs::read(&path) {
+        if existing == INIT_SCRIPT.as_bytes() {
+            return Some(path);
+        }
+    }
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::write(&path, INIT_SCRIPT.as_bytes()).ok()?;
+    Some(path)
+}
+
 impl Drop for PtyManager {
     /// Cerrar un panel/pestaña (o la ventana) debe terminar siempre el shell. Soltar el ConPTY por sí solo
     /// cierra su consola, pero no alcanza a un shell que aún está arrancando: sobrevivía como proceso huérfano
@@ -44,7 +60,7 @@ impl Drop for PtyManager {
     }
 }
 
-/// Mensaje de error nativo. Axon usa el subsistema "windows" (sin consola) y `panic = "abort"`:
+/// Mensaje de error nativo. TEArminal usa el subsistema "windows" (sin consola) y `panic = "abort"`:
 /// sin esto, un fallo de ConPTY cerraría la app sin que el usuario viera nada.
 #[cold]
 pub(crate) fn report_spawn_error(shell: &str, err: &dyn std::fmt::Display) {
@@ -52,11 +68,11 @@ pub(crate) fn report_spawn_error(shell: &str, err: &dyn std::fmt::Display) {
     crate::logger::log(&format!("Error al iniciar la terminal ({shell}): {err}"));
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
     let text = wide(&format!(
-        "Axon no pudo iniciar la terminal.\n\nShell: {shell}\nError: {err}\n\n\
-         Axon necesita Windows 10 versión 1809 (build 17763) o superior (ConPTY) y que la shell \
-         configurada exista. Revisa `default_shell` en axon.toml."
+        "TEArminal no pudo iniciar la terminal.\n\nShell: {shell}\nError: {err}\n\n\
+         TEArminal necesita Windows 10 versión 1809 (build 17763) o superior (ConPTY) y que la shell \
+         configurada exista. Revisa `default_shell` en tearminal.toml."
     ));
-    let title = wide("Axon");
+    let title = wide("TEArminal");
     // SAFETY: cadenas UTF-16 terminadas en nulo que viven durante la llamada
     unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
 }
@@ -109,8 +125,8 @@ pub(crate) struct PtyManager {
     /// Hay un `PtyData` en vuelo: el lector no encola otro hasta que el consumidor vacíe el canal.
     /// Alineado a 64 bytes (`CachePadded`) para evitar false sharing entre el hilo lector del PTY y la UI.
     output_pending: Arc<crate::app::CachePadded<AtomicBool>>,
-    /// Secreto de este shell (`AXON_PANE_TOKEN`): solo el wrapper `ssh` de `init.ps1` lo conoce y lo adjunta a
-    /// `AxonSSH=start`. Vacío en los paneles que no ejecutan `init.ps1` (ningún marcador es válido).
+    /// Secreto de este shell (`TEARMINAL_PANE_TOKEN`): solo el wrapper `ssh` de `init.ps1` lo conoce y lo adjunta a
+    /// `TearminalSSH=start`. Vacío en los paneles que no ejecutan `init.ps1` (ningún marcador es válido).
     pub(crate) token: String,
 }
 
@@ -135,7 +151,7 @@ pub(crate) enum PtyError {
 fn spawn_io_threads(
     master: &(dyn MasterPty + Send),
     id: PaneId,
-    proxy: Option<EventLoopProxy<AxonEvent>>,
+    proxy: Option<EventLoopProxy<TearminalEvent>>,
 ) -> Result<IoChannels, PtyError> {
     let mut reader = master
         .try_clone_reader()
@@ -153,7 +169,7 @@ fn spawn_io_threads(
     let pending_reader = pending.clone();
 
     thread::Builder::new()
-        .name("axon-pty-reader".into())
+        .name("tearminal-pty-reader".into())
         .stack_size(THREAD_STACK)
         .spawn(move || {
             let mut buffer = [0u8; 32768];
@@ -164,7 +180,7 @@ fn spawn_io_threads(
                 // Coalescer: un solo evento por ráfaga, no uno por lectura
                 if !pending_reader.swap(true, Ordering::SeqCst) {
                     if let Some(p) = &proxy {
-                        let _ = p.send_event(AxonEvent::PtyData(id));
+                        let _ = p.send_event(TearminalEvent::PtyData(id));
                     }
                 }
             }
@@ -172,12 +188,12 @@ fn spawn_io_threads(
                 // ConPTY cierra el pipe unos milisegundos antes de que `try_wait()` vea el fin del proceso:
                 // esperar aquí (en el hilo lector) evita bloquear el hilo de la interfaz.
                 thread::sleep(std::time::Duration::from_millis(30));
-                let _ = p.send_event(AxonEvent::PtyClosed(id));
+                let _ = p.send_event(TearminalEvent::PtyClosed(id));
             }
         })?;
 
     thread::Builder::new()
-        .name("axon-pty-writer".into())
+        .name("tearminal-pty-writer".into())
         .stack_size(THREAD_STACK)
         .spawn(move || {
             while let Ok(data) = to_pty_rx.recv() {
@@ -205,20 +221,29 @@ fn build_shell_command(
     path_env: &str,
 ) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
-    if let Some(dir) = cwd.filter(|d| d.exists()) {
+    if let Some(dir) = cwd.filter(|d| d.is_dir()) {
         cmd.cwd(dir);
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    cmd.env("AXON_PANE_TOKEN", token);
+    cmd.env("TEARMINAL_PANE_TOKEN", token);
     cmd.env("PATH", path_env);
     if shell_integration {
         let lower = shell.to_lowercase();
         if lower.contains("powershell") || lower.contains("pwsh") {
-            cmd.arg("-NoLogo");
-            cmd.arg("-NoExit");
-            cmd.arg("-Command");
-            cmd.arg(INIT_SCRIPT);
+            if let Some(script_path) = ensure_init_script_on_disk() {
+                cmd.arg("-ExecutionPolicy");
+                cmd.arg("Bypass");
+                cmd.arg("-NoLogo");
+                cmd.arg("-NoExit");
+                cmd.arg("-File");
+                cmd.arg(script_path);
+            } else {
+                cmd.arg("-NoLogo");
+                cmd.arg("-NoExit");
+                cmd.arg("-Command");
+                cmd.arg(INIT_SCRIPT);
+            }
         }
     }
     cmd
@@ -232,7 +257,7 @@ impl PtyManager {
         cols: u16,
         rows: u16,
         cwd: Option<&std::path::Path>,
-        proxy: Option<EventLoopProxy<AxonEvent>>,
+        proxy: Option<EventLoopProxy<TearminalEvent>>,
     ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -245,7 +270,7 @@ impl PtyManager {
             .map_err(|e| PtyError::Pty(e.to_string()))?;
 
         let token = random_token();
-        // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
+        // `bin\` de TEArminal (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
         let cmd = build_shell_command(shell, shell_integration, cwd, &token, &path_env);
 
@@ -288,7 +313,7 @@ impl PtyManager {
         remote_dir: Option<&str>,
         cols: u16,
         rows: u16,
-        proxy: Option<EventLoopProxy<AxonEvent>>,
+        proxy: Option<EventLoopProxy<TearminalEvent>>,
     ) -> Result<Self, PtyError> {
         if !is_safe_ssh_destination(destination) {
             return Err(PtyError::InvalidSshDestination(destination.to_string()));
@@ -307,7 +332,7 @@ impl PtyManager {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
 
-        // `bin\` de Axon (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
+        // `bin\` de TEArminal (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
         cmd.env("PATH", &path_env);
 
@@ -366,7 +391,7 @@ impl PtyManager {
 mod tests {
     use super::*;
 
-    /// El shell recibe el token del panel (lo adjunta el wrapper `ssh` a `AxonSSH=start`) y es único por panel
+    /// El shell recibe el token del panel (lo adjunta el wrapper `ssh` a `TearminalSSH=start`) y es único por panel
     #[test]
     fn test_pane_token_reaches_shell_and_is_unique() {
         let pty = PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
@@ -375,7 +400,7 @@ mod tests {
         assert_eq!(pty.token.len(), 32);
         assert_ne!(pty.token, other.token);
         std::thread::sleep(std::time::Duration::from_millis(1500)); // arranque de PowerShell
-        pty.write_input(b"Write-Output ('T=' + $env:AXON_PANE_TOKEN)\r\n");
+        pty.write_input(b"Write-Output ('T=' + $env:TEARMINAL_PANE_TOKEN)\r\n");
         let mut out = String::new();
         for _ in 0..50 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -386,7 +411,7 @@ mod tests {
                 return;
             }
         }
-        panic!("el shell no recibió AXON_PANE_TOKEN: {out:?}");
+        panic!("el shell no recibió TEARMINAL_PANE_TOKEN: {out:?}");
     }
 
     #[test]
@@ -473,7 +498,7 @@ mod tests {
         let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 120, 30, None, None).unwrap();
         // Esperar al prompt (no a un tiempo fijo): si PowerShell aún arranca, descarta lo que se teclea.
         let (ready, boot) = read_until(&pty, "]133;B", 40_000);
-        assert!(ready, "el prompt de Axon no apareció: {boot:?}");
+        assert!(ready, "el prompt de TEArminal no apareció: {boot:?}");
 
         // 1. Probar 0x17 (Ctrl+W)
         pty.write_input(b"echo first second");
@@ -561,13 +586,13 @@ mod tests {
     /// prompt con OSC 7 y OSC 133, rama git leída de .git/HEAD, búsqueda de programas y sin errores.
     #[test]
     fn test_init_script_in_every_installed_powershell() {
-        let repo = std::env::temp_dir().join(format!("axon_test_repo_{}", std::process::id()));
+        let repo = std::env::temp_dir().join(format!("tearminal_test_repo_{}", std::process::id()));
         let cwd = repo.join("src");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
         std::fs::create_dir_all(&cwd).unwrap();
         std::fs::write(
             repo.join(".git").join("HEAD"),
-            "ref: refs/heads/axon-test-branch\n",
+            "ref: refs/heads/tearminal-test-branch\n",
         )
         .unwrap();
 
@@ -597,7 +622,7 @@ mod tests {
             let (ok, boot) = read_until(&pty, "]133;B", 40_000);
             assert!(
                 ok,
-                "{shell}: el prompt de Axon no apareció. Salida: {boot:?}"
+                "{shell}: el prompt de TEArminal no apareció. Salida: {boot:?}"
             );
             assert!(
                 boot.contains("]7;file://localhost/"),
@@ -608,7 +633,7 @@ mod tests {
                 "{shell}: falta OSC 133;A: {boot:?}"
             );
             assert!(
-                boot.contains("axon-test-branch"),
+                boot.contains("tearminal-test-branch"),
                 "{shell}: rama git no detectada: {boot:?}"
             );
             for e in ERRORS {
@@ -631,12 +656,15 @@ mod tests {
                 "{shell}: el script de inicio registró errores: ERRS={report:?}"
             );
 
-            // 2. Funciones del script: Find-AxonApp (existente / inexistente) y `ls` propio o eza
+            // 2. Funciones del script: Find-TearminalApp (existente / inexistente) y `ls` propio o eza
             pty.write_input(
-                b"Write-Output ('FIND_' + ((Find-AxonApp 'cmd') -ne $null) + '_' + ((Find-AxonApp 'zzz-no-existe') -eq $null) + '_' + (6*7))\r\n",
+                b"Write-Output ('FIND_' + ((Find-TearminalApp 'cmd') -ne $null) + '_' + ((Find-TearminalApp 'zzz-no-existe') -eq $null) + '_' + (6*7))\r\n",
             );
             let (ok, out) = read_until(&pty, "FIND_True_True_42", 20_000);
-            assert!(ok, "{shell}: Find-AxonApp no funciona. Salida: {out:?}");
+            assert!(
+                ok,
+                "{shell}: Find-TearminalApp no funciona. Salida: {out:?}"
+            );
             pty.write_input(b"ls .; Write-Output ('LS_DONE_' + (6*7))\r\n");
             let (ok, out) = read_until(&pty, "LS_DONE_42", 20_000);
             assert!(ok, "{shell}: `ls` falló. Salida: {out:?}");
@@ -649,7 +677,7 @@ mod tests {
 
             // 3. Subcomandos de agentes (`agy update`, `--version`…) no deben limpiar la pantalla ni borrar su estado
             pty.write_input(
-                b"$script:AxonApps['agy'] = (Join-Path $PWD 'fake-agy.cmd'); agy update; Write-Output ('AGY_DONE_' + (6*7))\r\n",
+                b"$script:TearminalApps['agy'] = (Join-Path $PWD 'fake-agy.cmd'); agy update; Write-Output ('AGY_DONE_' + (6*7))\r\n",
             );
             let (ok, agy_out) = read_until(&pty, "AGY_DONE_42", 20_000);
             assert!(ok, "{shell}: `agy update` no terminó. Salida: {agy_out:?}");
@@ -818,7 +846,7 @@ mod tests {
             .collect()
     }
 
-    /// Cerrar un panel (soltar el `PtyManager`) o morir Axon no debe dejar PowerShell ni sus hijos vivos.
+    /// Cerrar un panel (soltar el `PtyManager`) o morir TEArminal no debe dejar PowerShell ni sus hijos vivos.
     #[test]
     fn test_dropping_pty_kills_shell_and_its_children() {
         let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 100, 30, None, None).unwrap();
@@ -898,5 +926,27 @@ mod tests {
                 "{shell}: shells huérfanos tras soltar el PTY al arrancar: {alive:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_ensure_init_script_on_disk() {
+        let path = ensure_init_script_on_disk().expect("debe crear init.ps1 en disco");
+        assert!(path.is_file());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, INIT_SCRIPT);
+
+        // Si el archivo en disco fue modificado o corrompido, ensure_init_script_on_disk lo repara
+        // En Windows, otro test paralelo (ej. test_init_script_in_every_installed_powershell) puede tenerlo abierto brevemente
+        for attempt in 0..10 {
+            match std::fs::write(&path, "script obsoleto") {
+                Ok(_) => break,
+                Err(_) if attempt < 9 => std::thread::sleep(std::time::Duration::from_millis(50)),
+                Err(e) => panic!("error al escribir: {e}"),
+            }
+        }
+        let path2 = ensure_init_script_on_disk().expect("debe actualizar init.ps1");
+        assert_eq!(path2, path);
+        let repaired = std::fs::read_to_string(&path2).unwrap();
+        assert_eq!(repaired, INIT_SCRIPT);
     }
 }

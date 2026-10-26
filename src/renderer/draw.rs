@@ -48,7 +48,11 @@ impl TerminalRenderer {
         } else {
             &self.inter_font
         };
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = if self.pixel_snap {
+            (size_px * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (size_px * self.ui_scale_ratio()).max(6.0)
+        };
         let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
@@ -95,7 +99,11 @@ impl TerminalRenderer {
         tracking: f32,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = if self.pixel_snap {
+            (size_px * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (size_px * self.ui_scale_ratio()).max(6.0)
+        };
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
@@ -156,6 +164,67 @@ impl TerminalRenderer {
         cur_x.round() as usize
     }
 
+    /// Trunca un texto de UI para que al dibujarlo con `font_size` y `semibold` quepa en `max_w` píxeles.
+    /// Si no cabe, añade puntos suspensivos ("...") al final.
+    pub(crate) fn truncate_ui_text(
+        &mut self,
+        text: &str,
+        max_w: usize,
+        font_size: f32,
+        semibold: bool,
+    ) -> String {
+        let total_w = self.measure_ui_text(text, font_size, semibold);
+        if total_w <= max_w {
+            return text.to_string();
+        }
+        let ellipsis = "...";
+        let ellipsis_w = self.measure_ui_text(ellipsis, font_size, semibold);
+        if max_w <= ellipsis_w {
+            return String::new();
+        }
+        let avail_w = max_w.saturating_sub(ellipsis_w);
+        let mut cur_w = 0;
+        let mut char_count = 0;
+        for c in text.chars() {
+            let mut buf = [0u8; 4];
+            let c_str = c.encode_utf8(&mut buf);
+            let cw = self.measure_ui_text(c_str, font_size, semibold);
+            if cur_w + cw > avail_w {
+                break;
+            }
+            cur_w += cw;
+            char_count += c.len_utf8();
+        }
+        format!("{}{}", &text[..char_count], ellipsis)
+    }
+
+    /// Dibuja texto de UI recortado con puntos suspensivos ("...") hacia la derecha si excede `max_x`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_ui_text_truncated(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        x: usize,
+        baseline_y: usize,
+        max_x: usize,
+        color: Color,
+        font_size: f32,
+        semibold: bool,
+    ) -> usize {
+        if x >= max_x {
+            return x;
+        }
+        let max_w = max_x - x;
+        let truncated = self.truncate_ui_text(text, max_w, font_size, semibold);
+        if !truncated.is_empty() {
+            self.draw_ui_text(
+                canvas, &truncated, x, baseline_y, max_x, color, font_size, semibold,
+            )
+        } else {
+            x
+        }
+    }
+
     /// Fuente monoespaciada para un carácter: JetBrains Mono (regular/negrita) y, si falta el glifo,
     /// el fallback del sistema. Nunca Inter: los valores de máquina se miden en mono.
     fn mono_font_for(&self, c: char, bold: bool) -> &fontdue::Font {
@@ -174,7 +243,11 @@ impl TerminalRenderer {
 
     /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
     pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = if self.pixel_snap {
+            (size_px * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (size_px * self.ui_scale_ratio()).max(6.0)
+        };
         let size_bits = effective_size.to_bits();
         let mut cache = self.mono_advance_cache.borrow_mut();
         let width: f32 = text
@@ -204,7 +277,11 @@ impl TerminalRenderer {
         bold: bool,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = if self.pixel_snap {
+            (size_px * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (size_px * self.ui_scale_ratio()).max(6.0)
+        };
         let size_bits = effective_size.to_bits();
         let mut cur_x = start_x as f32;
         // `std::mem::take` evita el préstamo mutable de la caché mientras `mono_font_for` lee `self`.
@@ -291,7 +368,11 @@ impl TerminalRenderer {
         color: Color,
     ) {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = if self.pixel_snap {
+            (size_px * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (size_px * self.ui_scale_ratio()).max(6.0)
+        };
         let c = icon.as_char();
         let size_bits = effective_size.to_bits();
         let lucide_ref = &self.lucide_font;
@@ -367,5 +448,103 @@ impl TerminalRenderer {
             theme.ansi[8]
         };
         canvas.rounded_fill(thumb.0, thumb.1, thumb.2, thumb.3, 3, thumb_color);
+    }
+
+    /// Dibuja el contenido de un `TextInput` (texto, placeholder, selección de fondo y cursor parpadeante).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_text_input_content(
+        &mut self,
+        canvas: &mut Canvas,
+        input: &crate::ui::TextInput,
+        text_start_x: usize,
+        text_y: usize,
+        text_max_x: usize,
+        box_y: usize,
+        box_h: usize,
+        cursor_visible: bool,
+        placeholder: &str,
+        is_active: bool,
+        theme: &Theme,
+    ) {
+        let text = input.text();
+        if text.is_empty() && !is_active {
+            self.draw_ui_text(
+                canvas,
+                placeholder,
+                text_start_x,
+                text_y,
+                text_max_x,
+                theme.text_muted(),
+                tokens::BODY,
+                false,
+            );
+            return;
+        }
+
+        if text.is_empty() && is_active {
+            if cursor_visible {
+                canvas.rounded_fill(
+                    text_start_x,
+                    box_y + 7,
+                    2,
+                    box_h.saturating_sub(14),
+                    1,
+                    theme.accent_color(),
+                );
+            }
+            self.draw_ui_text(
+                canvas,
+                placeholder,
+                text_start_x + 8,
+                text_y,
+                text_max_x,
+                theme.mix(theme.foreground, theme.background, 0.42),
+                tokens::BODY,
+                false,
+            );
+            return;
+        }
+
+        // Resaltado de selección si existe
+        if let Some((start, end)) = input.selection() {
+            let x_start = text_start_x + self.measure_ui_text(&text[..start], tokens::BODY, true);
+            let x_end = text_start_x + self.measure_ui_text(&text[..end], tokens::BODY, true);
+            let sel_x = x_start.min(text_max_x);
+            let sel_w = (x_end.saturating_sub(x_start)).min(text_max_x.saturating_sub(sel_x));
+            if sel_w > 0 {
+                canvas.rounded_fill(
+                    sel_x,
+                    box_y + 6,
+                    sel_w,
+                    box_h.saturating_sub(12),
+                    2,
+                    theme.accent_soft(80),
+                );
+            }
+        }
+
+        self.draw_ui_text(
+            canvas,
+            text,
+            text_start_x,
+            text_y,
+            text_max_x,
+            theme.foreground,
+            tokens::BODY,
+            true,
+        );
+
+        if is_active && cursor_visible {
+            let cur_offset = self.measure_ui_text(&text[..input.cursor], tokens::BODY, true);
+            let cur_x = (text_start_x + cur_offset).min(text_max_x);
+            canvas.rounded_fill(
+                cur_x,
+                box_y + 7,
+                2,
+                box_h.saturating_sub(14),
+                1,
+                theme.accent_color(),
+            );
+        }
     }
 }

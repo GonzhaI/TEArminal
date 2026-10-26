@@ -1,7 +1,7 @@
 //! Tests y benchmarks del renderer.
 
 use super::*;
-use crate::config::AxonConfig;
+use crate::config::TearminalConfig;
 
 #[cfg(test)]
 mod bench {
@@ -13,7 +13,7 @@ mod bench {
     /// `bench_gpu_encode_and_submit_full_frame`.
     #[test]
     fn bench_render_pane_full_frame() {
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
@@ -48,7 +48,7 @@ mod bench {
         use windows::Win32::Graphics::Direct3D11::*;
         use windows::Win32::Graphics::Dxgi::Common::*;
 
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
@@ -181,11 +181,11 @@ mod bench {
 
     #[test]
     fn bench_render_file_viewer_code_and_markdown() {
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
-        let dir = std::env::temp_dir().join(format!("axon_bench_fv_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tearminal_bench_fv_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let rs_path = dir.join("sample.rs");
         let md_path = dir.join("README.md");
@@ -198,7 +198,7 @@ mod bench {
         }
         let _ = std::fs::write(&rs_path, &rs_code);
 
-        let mut md_text = String::from("# Guía de Rendimiento de Axon\n\nTexto con **negrita**, *cursiva* y `código inline`.\n\n");
+        let mut md_text = String::from("# Guía de Rendimiento de TEArminal\n\nTexto con **negrita**, *cursiva* y `código inline`.\n\n");
         for i in 0..40 {
             md_text.push_str(&format!(
                 "## Sección {i}\n- Punto de verificación {i} con ruta `src/renderer/pane.rs`\n- [x] Tarea completada {i}\n\n```rust\nfn demo_{i}() {{ println!(\"hola {i}\"); }}\n```\n\n"
@@ -278,7 +278,7 @@ mod bench {
 
     #[test]
     fn bench_render_ui_chrome() {
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let theme = Theme::from_name(&cfg.appearance.theme);
         let mut r = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (1920usize, 1080usize);
@@ -286,8 +286,8 @@ mod bench {
             .map(|i| SidebarTabItem {
                 index: 0,
                 status: None,
-                title: format!("pwsh — axon/src #{i}"),
-                detail: Some("C:\\Users\\dev\\axon".to_string()),
+                title: format!("pwsh — tearminal/src #{i}"),
+                detail: Some("C:\\Users\\dev\\tearminal".to_string()),
                 is_active: i == 2,
                 has_unread: i % 3 == 0,
                 pane_count: 1 + (i % 2),
@@ -333,7 +333,7 @@ mod bench {
         r.render_status_bar(
             &mut canvas,
             190,
-            Some("~/dev/axon"),
+            Some("~/dev/tearminal"),
             Some("main"),
             None,
             180,
@@ -342,7 +342,17 @@ mod bench {
             true,
             &theme,
         );
-        r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
+        r.render_settings_page(
+            &mut canvas,
+            190,
+            0,
+            0,
+            26,
+            &cfg,
+            &settings_state,
+            true,
+            &theme,
+        );
 
         let n = if cfg!(debug_assertions) { 3 } else { 120 };
         let t_chrome = Instant::now();
@@ -380,7 +390,7 @@ mod bench {
             r.render_status_bar(
                 &mut canvas,
                 190,
-                Some("~/dev/axon"),
+                Some("~/dev/tearminal"),
                 Some("main"),
                 None,
                 180,
@@ -395,7 +405,17 @@ mod bench {
         let t_settings = Instant::now();
         for _ in 0..n {
             canvas.begin(w as u32, h as u32);
-            r.render_settings_page(&mut canvas, 190, 0, 0, 26, &cfg, &settings_state, &theme);
+            r.render_settings_page(
+                &mut canvas,
+                190,
+                0,
+                0,
+                26,
+                &cfg,
+                &settings_state,
+                true,
+                &theme,
+            );
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("bench_render_ui_chrome (SOLO grabar): sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
@@ -404,7 +424,7 @@ mod bench {
 
 #[test]
 fn test_native_renderer_metrics() {
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     println!(
         "char_width: {}, row_height: {}, baseline: {}",
@@ -416,7 +436,7 @@ fn test_native_renderer_metrics() {
 
 #[test]
 fn test_nerd_font_icons_and_color_rendering() {
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
 
     // 1. Probar que los iconos de Nerd Font existen y se rasterizan en JetBrains Mono Nerd Font
@@ -445,7 +465,7 @@ fn test_nerd_font_icons_and_color_rendering() {
     let mut terminal =
         crate::terminal::TerminalState::new(80, 24, 1000, crate::theme::Theme::default());
     // Escribir texto con color verde (#51e27a / RGB 81, 226, 122) y un icono Nerd Font
-    let colored_seq = b"\x1b[38;2;81;226;122m\xee\x82\xa0 Axon\x1b[0m";
+    let colored_seq = b"\x1b[38;2;81;226;122m\xee\x82\xa0 TEArminal\x1b[0m";
     terminal.process_bytes(colored_seq);
 
     let mut canvas = Canvas::new();
@@ -494,7 +514,7 @@ fn test_nerd_font_icons_and_color_rendering() {
 fn test_sidebar_rendering_and_layout() {
     use crate::renderer::SidebarTabItem;
 
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
 
     // 1. Validar cómputo de columnas con y sin barra lateral
@@ -611,6 +631,7 @@ fn test_sidebar_rendering_and_layout() {
         26,
         &config,
         &settings_state,
+        true,
         &default_theme,
     );
     let rects = crate::renderer::SettingsPageRects::compute(190, 0, 1000 - 190, 600);
@@ -645,7 +666,7 @@ fn test_ai_agent_detection_and_status_bar() {
         AiAgentStatus::Ollama
     );
     assert_eq!(detect_ai_agent(Some("pwsh")), AiAgentStatus::None);
-    assert_eq!(detect_ai_agent(Some("axon")), AiAgentStatus::None);
+    assert_eq!(detect_ai_agent(Some("tearminal")), AiAgentStatus::None);
 
     // Validar que con AiAgentStatus::None no se muestre el modelo de IA en el badge
     let theme = crate::theme::Theme::default();
@@ -686,7 +707,7 @@ fn test_ai_agent_detection_and_status_bar() {
     }
 
     // Validar que render_status_bar cubre todo el ancho inferior (0..width)
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let theme = crate::theme::Theme::default();
     let sidebar_offset = 180;
@@ -767,7 +788,7 @@ fn test_top_tab_bar_geometry_and_layout() {
 
 #[test]
 fn test_render_frame_latency_and_fps_benchmark() {
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let mut term =
         crate::terminal::TerminalState::new(120, 40, 1000, crate::theme::Theme::default());
@@ -775,7 +796,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     // Llenar grilla con texto y colores realistas
     for i in 0..40 {
         let line = format!(
-                "\x1b[38;2;81;226;122m[Line {:02}]\x1b[0m fn main() {{ println!(\"Axon fast renderer #{} \u{e0a0}\"); }} // OK\r\n",
+                "\x1b[38;2;81;226;122m[Line {:02}]\x1b[0m fn main() {{ println!(\"TEArminal fast renderer #{} \u{e0a0}\"); }} // OK\r\n",
                 i, i
             );
         term.process_bytes(line.as_bytes());
@@ -821,7 +842,7 @@ fn test_render_frame_latency_and_fps_benchmark() {
     let potential_fps = frames as f64 / total_elapsed.as_secs_f64();
 
     println!(
-            "\n⚡ [Axon Render Benchmark 1080p Fullscreen, SOLO grabar la escena] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
+            "\n⚡ [TEArminal Render Benchmark 1080p Fullscreen, SOLO grabar la escena] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
             frames, total_elapsed, avg_frame_ms, potential_fps
         );
 
@@ -837,11 +858,11 @@ fn test_render_frame_latency_and_fps_benchmark() {
 
 #[test]
 fn test_ui_font_size_scaling() {
-    let mut config = AxonConfig::load_or_default();
+    let mut config = TearminalConfig::load_or_default();
     config.appearance.ui_font_size = 13.0;
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
 
-    let text = "Configuración y Ajustes de Axon";
+    let text = "Configuración y Ajustes de TEArminal";
     let w_13 = renderer.measure_ui_text(text, 11.5, false);
 
     // Ajustar a 16.0 pt
@@ -867,7 +888,7 @@ fn test_ui_font_size_scaling() {
 #[test]
 fn test_settings_page_scrolls_only_the_content() {
     use crate::renderer::{SettingsPageRects, SettingsPageState, SettingsSection};
-    let config = crate::config::AxonConfig::default();
+    let config = crate::config::TearminalConfig::default();
     let theme = crate::theme::Theme::default();
     let mut renderer = TerminalRenderer::new(&config, 1.0);
     let (w, h, status) = (1000usize, 300usize, 26usize);
@@ -878,7 +899,17 @@ fn test_settings_page_scrolls_only_the_content() {
             scroll_y: scroll,
             ..SettingsPageState::default()
         };
-        renderer.render_settings_page(&mut canvas, 190, 0, 0, status, &config, &state, &theme);
+        renderer.render_settings_page(
+            &mut canvas,
+            190,
+            0,
+            0,
+            status,
+            &config,
+            &state,
+            true,
+            &theme,
+        );
         canvas.snapshot()
     };
     let (top, scrolled) = (render(0), render(120));
@@ -945,7 +976,7 @@ fn test_settings_scrollbar_geometry_spans_the_track() {
 
 #[test]
 fn test_font_ligature_shaping() {
-    let cfg = AxonConfig::default();
+    let cfg = TearminalConfig::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     assert!(r.ligatures);
 
@@ -980,7 +1011,7 @@ fn test_font_ligature_shaping() {
 
 #[test]
 fn test_render_pane_with_and_without_ligatures() {
-    let cfg = AxonConfig::default();
+    let cfg = TearminalConfig::default();
     let theme = Theme::from_name(&cfg.appearance.theme);
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let (w, h) = (400usize, 100usize);
@@ -1021,7 +1052,7 @@ fn test_settings_ligatures_toggle_rect() {
 
 #[test]
 fn test_config_gpu_option_defaults_to_true() {
-    let cfg = AxonConfig::default();
+    let cfg = TearminalConfig::default();
     assert!(cfg.terminal.gpu);
 }
 
@@ -1032,7 +1063,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     use crate::renderer::{SettingsPageState, SidebarTabItem};
     use crate::theme::Theme;
 
-    let cfg = AxonConfig::default();
+    let cfg = TearminalConfig::default();
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
@@ -1087,7 +1118,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     let header = crate::renderer::SidebarHeader {
         title: "Sesiones".into(),
         branch: Some("main".into()),
-        path: Some("C:\\Users\\dev\\axon".into()),
+        path: Some("C:\\Users\\dev\\tearminal".into()),
         on_right: false,
         list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, false),
     };
@@ -1098,21 +1129,21 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
     let mut term = crate::terminal::TerminalState::new(110, 34, 2000, theme.clone());
     let script = concat!(
-        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test\x1b]133;C\x07\r\n",
-        "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07cargo test\x1b]133;C\x07\r\n",
+        "\x1b[38;5;114m   Compiling\x1b[0m tearminal v0.9.0\r\n",
         "\x1b[38;5;114m    Finished\x1b[0m `test` profile [unoptimized] target(s) in 4.21s\r\n",
         "\x1b[38;5;114m     Running\x1b[0m unittests src\\main.rs\r\n",
         "\x1b[1mtest result: \x1b[38;5;114mok\x1b[0m\x1b[1m. 204 passed; 0 failed; finished in 22.9s\x1b[0m\r\n",
         "\x1b]133;D;0\x07",
-        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
         "\x1b[38;5;221m M\x1b[0m src\\renderer\\pane.rs\r\n",
         "\x1b[38;5;221m M\x1b[0m src\\renderer\\status_bar.rs\r\n",
         "\x1b[38;5;114m??\x1b[0m PRODUCT.md\r\n",
         "\x1b]133;D;0\x07",
-        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
         "\x1b[38;5;203merror:\x1b[0m script \"build\" no encontrado\r\n",
         "\x1b]133;D;1\x07",
-        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m ",
+        "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m ",
     );
     term.process_bytes(script.as_bytes());
 
@@ -1121,7 +1152,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
-        "axon",
+        "tearminal",
         Some("main"),
         false,
         false,
@@ -1163,7 +1194,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         SIDEBAR_WIDTH,
-        Some("~/dev/axon"),
+        Some("~/dev/tearminal"),
         Some("main"),
         None,
         110,
@@ -1233,7 +1264,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         0,
-        Some("~/dev/axon"),
+        Some("~/dev/tearminal"),
         Some("main"),
         None,
         110,
@@ -1268,7 +1299,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
-        "axon",
+        "tearminal",
         Some("main"),
         false,
         false,
@@ -1309,7 +1340,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         0,
-        Some("~/dev/axon"),
+        Some("~/dev/tearminal"),
         Some("main"),
         None,
         110,
@@ -1365,6 +1396,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         status_h,
         &cfg,
         &settings,
+        true,
         &theme,
     );
     r.render_status_bar_with_ai(
@@ -1390,7 +1422,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     // El encabezado del visor muestra la carpeta del archivo: se lee de la carpeta temporal de la máquina, y la
     // escena no puede depender del usuario ni de dónde esté `%TEMP%` (en CI sale otra ruta). Ruta fija, ya leído el texto.
     tab.file_viewer.as_mut().unwrap().path =
-        std::path::PathBuf::from("C:/Users/dev/axon/src/renderer/pane.rs");
+        std::path::PathBuf::from("C:/Users/dev/tearminal/src/renderer/pane.rs");
     let viewer = tab.file_viewer.as_ref().unwrap();
     let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
@@ -1435,7 +1467,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         0,
-        Some("~/dev/axon/src/renderer"),
+        Some("~/dev/tearminal/src/renderer"),
         Some("main"),
         None,
         110,
@@ -1458,7 +1490,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
-        "axon",
+        "tearminal",
         Some("main"),
         false,
         false,
@@ -1523,7 +1555,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         0,
-        Some("~/dev/axon"),
+        Some("~/dev/tearminal"),
         Some("main"),
         None,
         110,
@@ -1552,7 +1584,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     canvas.clear(theme.background);
     r.render_top_title_bar(
         &mut canvas,
-        "axon",
+        "tearminal",
         Some("main"),
         false,
         false,
@@ -1592,7 +1624,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         SIDEBAR_WIDTH,
-        Some("C:\\Users\\dev\\axon"),
+        Some("C:\\Users\\dev\\tearminal"),
         Some("main"),
         None,
         110,
@@ -1611,7 +1643,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         SidebarTabItem {
             index: 0,
             status: Some(crate::renderer::SessionStatus::Idle),
-            title: "axon".into(),
+            title: "tearminal".into(),
             detail: Some("pwsh".into()),
             is_active: true,
             has_unread: false,
@@ -1692,7 +1724,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     r.render_status_bar_with_ai(
         &mut canvas,
         SIDEBAR_WIDTH,
-        Some("C:\\Users\\dev\\axon"),
+        Some("C:\\Users\\dev\\tearminal"),
         Some("main"),
         None,
         110,
@@ -1738,7 +1770,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         let mut shell = crate::terminal::TerminalState::new(40, 18, 2000, theme.clone());
         shell.process_bytes(
             concat!(
-                "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+                "\x1b[38;5;114m   Compiling\x1b[0m tearminal v0.9.0\r\n",
                 "\x1b[38;5;114m    Finished\x1b[0m `release` profile in 1m 06s\r\n",
                 "\x1b[38;5;114m     Running\x1b[0m unittests src\\main.rs\r\n",
                 "\r\n",
@@ -1766,7 +1798,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         canvas.clear(theme.background);
         r.render_top_title_bar(
             &mut canvas,
-            "axon",
+            "tearminal",
             Some("main"),
             false,
             false,
@@ -1811,7 +1843,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
                 content_h,
                 &agent,
                 "Rediseño de UI",
-                "axon",
+                "tearminal",
                 LucideIcon::Sparkles,
                 true,
                 true,
@@ -1884,7 +1916,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         r.render_status_bar_with_ai(
             &mut canvas,
             0,
-            Some("C:\\Users\\dev\\axon"),
+            Some("C:\\Users\\dev\\tearminal"),
             Some("main"),
             None,
             110,
@@ -1903,28 +1935,28 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     {
         use crate::ui::LucideIcon;
         let mut cards_term = crate::terminal::TerminalState::new(110, 30, 2000, theme.clone());
-        cards_term.current_dir = Some(std::path::PathBuf::from("C:\\Users\\dev\\axon"));
+        cards_term.current_dir = Some(std::path::PathBuf::from("C:\\Users\\dev\\tearminal"));
         cards_term.process_bytes(
             concat!(
                 "\r\n\r\n",
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07cargo test --release\x1b]133;C\x07\r\n",
-                "\x1b[38;5;114m   Compiling\x1b[0m axon v0.9.0\r\n",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07cargo test --release\x1b]133;C\x07\r\n",
+                "\x1b[38;5;114m   Compiling\x1b[0m tearminal v0.9.0\r\n",
                 "\x1b[38;5;114m    Finished\x1b[0m `release` profile [optimized] in 1m 06s\r\n",
                 "     Running unittests src\\main.rs\r\n",
                 "\x1b[1mtest result: \x1b[38;5;114mok\x1b[0m\x1b[1m. 205 passed; 0 failed\x1b[0m\r\n",
                 "\x1b]133;D;0\x07",
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07git status --short\x1b]133;C\x07\r\n",
                 "\x1b[38;5;221m M\x1b[0m src\\theme.rs\r\n",
                 "\x1b[38;5;221m M\x1b[0m src\\config.rs\r\n",
                 "\x1b[38;5;221m M\x1b[0m src\\renderer\\tokens.rs\r\n",
                 "\x1b[38;5;114m??\x1b[0m mock\\a.html\r\n",
                 "\x1b]133;D;0\x07",
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07pnpm build\x1b]133;C\x07\r\n",
                 "\x1b[38;5;203merror:\x1b[0m script \"build\" no encontrado en package.json\r\n",
                 "\x1b[38;5;245mDid you mean one of these?\x1b[0m\r\n",
                 "    build:release  build:debug\r\n",
                 "\x1b]133;D;1\x07",
-                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\axon>\x1b[0m \x1b]133;B\x07claude\x1b]133;C\x07\r\n",
+                "\x1b]133;A\x07\x1b[38;5;39mPS C:\\Users\\dev\\tearminal>\x1b[0m \x1b]133;B\x07claude\x1b]133;C\x07\r\n",
                 " \x1b[38;5;114m●\x1b[0m Actualizo la lista de sesiones con el estado del agente.\r\n",
                 "   \x1b[38;5;245mUpdate(src/renderer/sidebar.rs)\x1b[0m \x1b[38;5;114m+38\x1b[0m \x1b[38;5;203m-12\x1b[0m\r\n",
             )
@@ -1982,7 +2014,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         r.render_pane_header(
             &mut canvas,
             (pane_x, pane_y, pane_w),
-            "axon",
+            "tearminal",
             Some("cargo test"),
             LucideIcon::Terminal,
             theme.text_secondary(),
@@ -2007,7 +2039,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         r.render_status_bar_with_ai(
             &mut canvas,
             SIDEBAR_WIDTH,
-            Some("C:\\Users\\dev\\axon"),
+            Some("C:\\Users\\dev\\tearminal"),
             Some("main"),
             None,
             110,
@@ -2034,13 +2066,13 @@ pub(super) fn build_scenes(w: usize, h: usize) -> Vec<(&'static str, Vec<u32>)> 
 }
 
 /// Previsualización manual de la interfaz (no forma parte de la suite):
-/// `cargo test preview_ui_scenes -- --ignored --nocapture` deja PPM y PNG por escena en `%TEMP%/axon-preview`.
+/// `cargo test preview_ui_scenes -- --ignored --nocapture` deja PPM y PNG por escena en `%TEMP%/tearminal-preview`.
 #[test]
 #[ignore]
 fn preview_ui_scenes() {
-    let out = std::env::var_os("AXON_PREVIEW_DIR")
+    let out = std::env::var_os("TEARMINAL_PREVIEW_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
+        .unwrap_or_else(|| std::env::temp_dir().join("tearminal-preview"));
     std::fs::create_dir_all(&out).unwrap();
     let (w, h) = (1440usize, 900usize);
 
@@ -2087,7 +2119,7 @@ fn test_signature_distance_is_zero_for_identical_and_grows_with_difference() {
 }
 
 /// Las firmas de bloques de cada escena dibujada por la GPU deben coincidir con `golden/signatures.bin` (congeladas
-/// con la antigua CPU) dentro de `SIGNATURE_TOLERANCE`. Con `AXON_BLESS=1` reescribe el archivo desde la GPU: ver la
+/// con la antigua CPU) dentro de `SIGNATURE_TOLERANCE`. Con `TEARMINAL_BLESS=1` reescribe el archivo desde la GPU: ver la
 /// advertencia de `test_support::bless_requested` (solo tras revisar las imágenes y con `--test-threads=1`).
 /// Formato: por escena, `u8` largo del nombre, nombre UTF-8, `u32` LE largo de la firma, firma.
 #[test]
@@ -2116,8 +2148,8 @@ fn test_golden_scene_signatures_match() {
         std::fs::write(GOLDEN, out).unwrap();
         return;
     }
-    let data =
-        std::fs::read(GOLDEN).expect("falta golden/signatures.bin: generarlo con AXON_BLESS=1");
+    let data = std::fs::read(GOLDEN)
+        .expect("falta golden/signatures.bin: generarlo con TEARMINAL_BLESS=1");
     let mut pos = 0;
     let mut take = |n: usize| {
         let s = &data[pos..pos + n];
@@ -2132,7 +2164,7 @@ fn test_golden_scene_signatures_match() {
         let d = signature_distance(sig, expected);
         assert!(
             d <= SIGNATURE_TOLERANCE,
-            "firma de la escena {name} distinta: {d} > {SIGNATURE_TOLERANCE} (si es intencional, AXON_BLESS=1)"
+            "firma de la escena {name} distinta: {d} > {SIGNATURE_TOLERANCE} (si es intencional, TEARMINAL_BLESS=1)"
         );
     }
     assert_eq!(pos, data.len(), "signatures.bin tiene escenas de más");
@@ -2142,7 +2174,7 @@ fn test_golden_scene_signatures_match() {
 fn test_status_bar_draws_limit_meters_only_when_given() {
     use crate::renderer::{AiAgentStatus, StatusMeter};
 
-    let config = AxonConfig::load_or_default();
+    let config = TearminalConfig::load_or_default();
     let mut r = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let theme = crate::theme::Theme::default();
     let (w, h) = (1200usize, 300usize);
@@ -2173,9 +2205,9 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     }]);
     assert_ne!(without, with, "los medidores deben dibujar algo");
     // Sin sitio (ventana estrecha) no se dibujan: no pisan la ruta ni la rama
-    let mut narrow = test_support::new_canvas(400, h);
+    let mut narrow = test_support::new_canvas(280, h);
     narrow.clear(theme.background);
-    let mut narrow_with = test_support::new_canvas(400, h);
+    let mut narrow_with = test_support::new_canvas(280, h);
     narrow_with.clear(theme.background);
     let meter = [StatusMeter {
         label: "5 h".into(),
@@ -2202,7 +2234,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
 }
 
 /// Previsualización manual del panel superior (marco, selección en «Cambios») y del visor en diff:
-/// `cargo test preview_panel_card -- --ignored --nocapture` deja PNG en `%TEMP%/axon-preview`.
+/// `cargo test preview_panel_card -- --ignored --nocapture` deja PNG en `%TEMP%/tearminal-preview`.
 #[test]
 #[ignore]
 fn preview_panel_card() {
@@ -2210,14 +2242,14 @@ fn preview_panel_card() {
     use crate::renderer::SidebarRects;
     use crate::theme::Theme;
 
-    let cfg = AxonConfig::default();
+    let cfg = TearminalConfig::default();
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let (w, h) = (900usize, 560usize);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
-    let out = std::env::var_os("AXON_PREVIEW_DIR")
+    let out = std::env::var_os("TEARMINAL_PREVIEW_DIR")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("axon-preview"));
+        .unwrap_or_else(|| std::env::temp_dir().join("tearminal-preview"));
     std::fs::create_dir_all(&out).unwrap();
     let save = |buf: &[u32], name: &str| {
         let rgb: Vec<u8> = buf
@@ -2976,7 +3008,7 @@ mod gpu_pipeline {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/renderer/gpu/shaders");
         let hlsl = std::fs::read_to_string(format!("{dir}/quad.hlsl")).unwrap();
         // Mismo criterio que tools/compile-shaders.ps1: finales de línea normalizados a LF
-        let tmp = std::env::temp_dir().join(format!("axon-hlsl-{}.txt", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("tearminal-hlsl-{}.txt", std::process::id()));
         std::fs::write(&tmp, hlsl.replace("\r\n", "\n")).unwrap();
         let actual = crate::updater::sha256_hex(&tmp).unwrap();
         let _ = std::fs::remove_file(&tmp);
@@ -3065,7 +3097,7 @@ mod gpu_renderer {
     /// Compara `gpu` (`w` x `h`) con la referencia congelada `golden/refs/<name>.png` por canal, con tolerancia
     /// `PARITY_TOLERANCE`.
     ///
-    /// **Con `AXON_BLESS=1` ESCRIBE la referencia desde `gpu` y no compara.** Bendecir congela como correcto lo que
+    /// **Con `TEARMINAL_BLESS=1` ESCRIBE la referencia desde `gpu` y no compara.** Bendecir congela como correcto lo que
     /// salga: hacerlo únicamente tras mirar el PNG resultante, con `-- --test-threads=1` y solo para un caso
     /// nuevo o un cambio de diseño deliberado (nunca para "arreglar" un fallo).
     fn check_reference(name: &str, gpu: &[u32], w: usize, h: usize) {
@@ -4014,7 +4046,7 @@ mod gpu_surface {
 
     impl TestWindow {
         fn new() -> Self {
-            let class_name: Vec<u16> = "AxonGpuSurfaceTestClass\0".encode_utf16().collect();
+            let class_name: Vec<u16> = "TearminalGpuSurfaceTestClass\0".encode_utf16().collect();
             unsafe {
                 let wc = WNDCLASSW {
                     lpfnWndProc: Some(DefWindowProcW),
@@ -4223,7 +4255,7 @@ mod gpu_scenes {
         reference: Option<(f32, Diff)>,
     }
 
-    /// Distancia a las firmas y diferencia por canal GPU/referencia PNG de cada escena. Con `AXON_BLESS=1` escribe
+    /// Distancia a las firmas y diferencia por canal GPU/referencia PNG de cada escena. Con `TEARMINAL_BLESS=1` escribe
     /// `golden/scenes/<escena>.png` desde los fotogramas de la GPU y no compara con ellos.
     ///
     /// **Bendecir congela lo que dibuje la GPU como correcto**: solo tras mirar las imágenes (`preview_ui_scenes`)
@@ -4323,5 +4355,45 @@ mod gpu_scenes {
         );
         let rect_tuple: (u16, u16, u16, u16) = rect.into();
         assert_eq!(rect_tuple, (10, 20, 30, 40));
+    }
+
+    #[test]
+    fn test_renderer_render_tuning_and_pixel_snap() {
+        use super::TerminalRenderer;
+        use crate::config::TearminalConfig;
+
+        let mut cfg = TearminalConfig::default();
+        cfg.appearance.pixel_snap = true;
+        let r = TerminalRenderer::new(&cfg, 1.25);
+        assert!(r.pixel_snap);
+
+        let dev = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
+        let mut gpu_r = GpuRenderer::new(dev).unwrap();
+        assert_eq!(gpu_r.font_contrast, 1.0);
+        assert!(!gpu_r.linear_images);
+        gpu_r.font_contrast = 1.4;
+        gpu_r.linear_images = true;
+        assert_eq!(gpu_r.font_contrast, 1.4);
+        assert!(gpu_r.linear_images);
+    }
+
+    #[test]
+    fn test_truncate_ui_text_with_ellipsis() {
+        use crate::config::TearminalConfig;
+        use crate::renderer::{tokens, TerminalRenderer};
+
+        let cfg = TearminalConfig::default();
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let short = "Corto";
+        let res_short = r.truncate_ui_text(short, 100, tokens::BODY, false);
+        assert_eq!(res_short, short);
+
+        let long = "Este texto es intencionalmente muy largo para comprobar que se trunca con puntos suspensivos hacia la derecha";
+        let res_long = r.truncate_ui_text(long, 80, tokens::BODY, false);
+        assert!(
+            res_long.ends_with("..."),
+            "debe terminar en '...': got '{res_long}'"
+        );
+        assert!(r.measure_ui_text(&res_long, tokens::BODY, false) <= 80);
     }
 }

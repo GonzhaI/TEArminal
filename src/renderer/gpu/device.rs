@@ -20,13 +20,13 @@ pub(crate) struct GpuDevice {
     pub feature_level: D3D_FEATURE_LEVEL,
 }
 
-/// Nivel mínimo que Axon acepta: los shaders son SM 4.0
+/// Nivel mínimo que TEArminal acepta: los shaders son SM 4.0
 const MIN_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_10_0;
 const MAX_LEVEL: D3D_FEATURE_LEVEL = D3D_FEATURE_LEVEL_11_1;
 
-/// `AXON_RENDERER=warp` fuerza WARP (diagnóstico y CI).
+/// `TEARMINAL_RENDERER=warp` fuerza WARP (diagnóstico y CI).
 pub(super) fn requested_driver() -> Option<DriverKind> {
-    requested_driver_from(std::env::var("AXON_RENDERER").ok().as_deref())
+    requested_driver_from(std::env::var("TEARMINAL_RENDERER").ok().as_deref())
 }
 
 pub(crate) fn requested_driver_from(value: Option<&str>) -> Option<DriverKind> {

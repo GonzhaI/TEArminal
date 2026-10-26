@@ -183,18 +183,11 @@ impl ContextMenu {
     }
 }
 
-impl AxonApp {
+impl TearminalApp {
     /// Abre el menú contextual según lo que haya bajo el ratón. `false` = no hay menú para ese
     /// elemento (o la aplicación del terminal captura el ratón) y el clic sigue su curso normal.
     pub(super) fn open_context_menu(&mut self, mx: usize, my: usize) -> bool {
-        let (win_w, win_h) = self
-            .window
-            .as_ref()
-            .map(|w| {
-                let s = w.inner_size();
-                (s.width as usize, s.height as usize)
-            })
-            .unwrap_or((800, 600));
+        let (win_w, win_h) = self.window_size();
         let offset = self.sidebar_offset();
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
@@ -300,13 +293,12 @@ impl AxonApp {
                     if my >= content_y {
                         let clicked_row = viewer.scroll_offset + (my - content_y) / row_h.max(16);
                         let lay = self.renderer.as_ref().map(|r| {
-                            let viewer_w = win_w.saturating_sub(offset + right_offset);
-                            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+                            let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
                             crate::renderer::FileViewerLayout::compute(
-                                offset,
-                                top_offset,
-                                viewer_w,
-                                viewer_h,
+                                cx,
+                                cy,
+                                cw,
+                                ch,
                                 r.row_height,
                                 r.char_width,
                                 viewer.lines.len(),
@@ -329,12 +321,11 @@ impl AxonApp {
                 };
             self.viewer_menu(clicked_url)
         } else {
-            let area_w = win_w.saturating_sub(offset + right_offset);
-            let area_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
             let shift = self.modifiers.shift_key();
             let tab = &mut self.tabs[self.active_tab_index];
             let hit = tab
-                .compute_pane_rects(offset, top_offset, area_w, area_h)
+                .compute_pane_rects(cx, cy, cw, ch)
                 .into_iter()
                 .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height);
             let Some(rect) = hit else {
@@ -460,7 +451,7 @@ impl AxonApp {
         }
         if crate::updater::get_available_update().is_some() {
             items.push(MenuItem::new(
-                "Actualizar Axon",
+                "Actualizar TEArminal",
                 LucideIcon::ArrowUp,
                 "",
                 MenuAction::TriggerUpdate,

@@ -1,4 +1,4 @@
-# demo_axon.ps1 - Demostración de capacidades de Axon Terminal
+# demo_tearminal.ps1 - Demostración de capacidades de TEArminal
 # Prueba: Tipografía JetBrains Mono Nerd Font, Paleta ANSI, TrueColor e Iconos
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -17,7 +17,7 @@ $strike = "$esc[9m"
 Write-Host "$esc[2J$esc[H" -NoNewline
 
 Write-Host ""
-Write-Host "$bold$esc[32m  >_ Axon Terminal - Prueba de capacidades$reset"
+Write-Host "$bold$esc[32m  >_ TEArminal - Prueba de capacidades$reset"
 Write-Host "$dim     Emulador nativo Windows 11 con renderizado propio$reset"
 Write-Host ""
 
@@ -30,14 +30,14 @@ $file   = [char]0xf15b
 $apple  = [char]0xf179
 $win    = [char]0xe70f
 $term   = [char]0xf489
-Write-Host "    $esc[32m$branch main$reset   $esc[33m$github github$reset   $esc[34m$folder dev\axon$reset   $esc[31m$file Cargo.toml$reset   $esc[39m$apple macos$reset   $esc[94m$win windows$reset   $esc[32m$term axon$reset"
+Write-Host "    $esc[32m$branch main$reset   $esc[33m$github github$reset   $esc[34m$folder dev\tearminal$reset   $esc[31m$file Cargo.toml$reset   $esc[39m$apple macos$reset   $esc[94m$win windows$reset   $esc[32m$term tearminal$reset"
 Write-Host ""
 
 # 2. PRUEBA DE POWERLINE PROMPTS (Estilo Starship / Oh-My-Posh)
 Write-Host "$bold$esc[34m[2] Segmentos Powerline & Prompts Modernos:$reset"
 $arrow = [char]0xe0b0
 $prompt_arrow = [char]0xf432
-$p1 = "$esc[44;30m $folder axon $reset$esc[34;42m$arrow$reset"
+$p1 = "$esc[44;30m $folder tearminal $reset$esc[34;42m$arrow$reset"
 $p2 = "$esc[42;30m $branch main $reset$esc[32;43m$arrow$reset"
 $p3 = "$esc[43;30m $term v0.2.0 $reset$esc[33m$arrow$reset"
 Write-Host "    $p1$p2$p3 $esc[32m$prompt_arrow$reset cargo build"

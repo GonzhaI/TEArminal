@@ -1,6 +1,6 @@
-//! Aplicación: estado global (`AxonApp`), pestañas/paneles y bucle de eventos de winit.
+//! Aplicación: estado global (`TearminalApp`), pestañas/paneles y bucle de eventos de winit.
 //!
-//! `AxonApp` reparte sus métodos por responsabilidad en submódulos (`tabs`, `settings`, `clipboard`, ...);
+//! `TearminalApp` reparte sus métodos por responsabilidad en submódulos (`tabs`, `settings`, `clipboard`, ...);
 //! los eventos de winit entran por `handler` y se despachan a `redraw`, `keyboard`, `cursor`, `click` y `wheel`.
 
 mod ai_usage;
@@ -14,6 +14,7 @@ mod host;
 mod keyboard;
 mod keys;
 mod layout;
+mod palette;
 mod panel;
 pub(crate) mod platform;
 mod redraw;
@@ -25,11 +26,13 @@ mod tabs;
 mod viewer;
 mod wheel;
 
+pub(crate) use crate::renderer::PaletteRects;
 pub(crate) use ai_usage::*;
 pub(crate) use context_menu::*;
-pub(crate) use host::AxonHost;
+pub(crate) use host::TearminalHost;
 pub(crate) use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub(crate) use layout::*;
+pub(crate) use palette::*;
 pub(crate) use shell_context::detect_ai_agent;
 pub(crate) use viewer::*;
 
@@ -38,7 +41,7 @@ use platform::{
 };
 use shell_context::get_git_branch;
 
-use crate::config::{AxonConfig, PaneSession, TabSession, WindowSession};
+use crate::config::{PaneSession, TabSession, TearminalConfig, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, PaneHeaderButton, PaneHeaderRects, SessionStatus,
@@ -57,10 +60,10 @@ use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey, SmolS
 use winit::window::{Icon, Window, WindowAttributes, WindowId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AxonEvent {
+pub(crate) enum TearminalEvent {
     PtyData(PaneId),
     PtyClosed(PaneId),
-    /// Terminó un trabajo SSH en segundo plano (`AxonApp::process_ssh_results`)
+    /// Terminó un trabajo SSH en segundo plano (`TearminalApp::process_ssh_results`)
     SshDone,
     /// Cambio detectado en el sistema de archivos del espacio de trabajo
     FsChanged,
@@ -76,10 +79,10 @@ pub(crate) struct TabDropAction {
     pub(crate) screen_pos: (i32, i32),
 }
 
-pub(crate) struct AxonApp {
-    pub config: AxonConfig,
+pub(crate) struct TearminalApp {
+    pub config: TearminalConfig,
     pub theme: Theme,
-    proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+    proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
     next_tab_id: TabId,
@@ -96,6 +99,7 @@ pub(crate) struct AxonApp {
     hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
+    pub palette: Option<PaletteState>,
     pub file_explorer: crate::explorer::FileExplorer,
     hovered_files_btn: bool,
     pub last_terminal_tab_index: usize,
@@ -121,7 +125,7 @@ pub(crate) struct AxonApp {
     cursor_on: bool,
     /// Peticiones en banda al bash remoto aún sin respuesta
     pending_remote: Vec<remote_files::PendingRemote>,
-    /// Resultados de los hilos SSH (`ssh_jobs`); cada hilo envía el suyo y avisa con `AxonEvent::SshDone`
+    /// Resultados de los hilos SSH (`ssh_jobs`); cada hilo envía el suyo y avisa con `TearminalEvent::SshDone`
     ssh_tx: std::sync::mpsc::Sender<ssh_jobs::SshDone>,
     ssh_rx: std::sync::mpsc::Receiver<ssh_jobs::SshDone>,
     next_remote_id: u32,
@@ -144,6 +148,8 @@ pub(crate) struct AxonApp {
     viewer_hscrollbar_dragging: bool,
     settings_scrollbar_dragging: bool,
     settings_scrollbar_drag_offset_y: f32,
+    pub(crate) palette_scrollbar_dragging: bool,
+    pub(crate) palette_scrollbar_drag_offset_y: f32,
     viewer_hscrollbar_drag_offset_x: f32,
     viewer_drag_selecting: bool,
     viewer_drag_start: Option<(usize, usize)>,
@@ -159,6 +165,8 @@ pub(crate) struct AxonApp {
     last_terminal_click_pane_id: Option<PaneId>,
     terminal_click_count: usize,
     last_window_move: Instant,
+    last_input_click_time: Instant,
+    last_input_click_count: usize,
     last_scroll_time: Instant,
     /// Fracción de línea pendiente de la rueda (los touchpads envían deltas pequeños)
     wheel_remainder: f32,
@@ -177,7 +185,7 @@ pub(crate) struct AxonApp {
     pub sidebar_scroll_offset: usize,
     /// Identificador de esta ventana en `session.toml`
     session_id: u32,
-    /// La ventana debe cerrarse: el anfitrión (`AxonHost`) la retira tras el evento
+    /// La ventana debe cerrarse: el anfitrión (`TearminalHost`) la retira tras el evento
     closing: bool,
     /// Se pidió abrir otra ventana (la crea el anfitrión, que posee el bucle de eventos)
     pub new_window_request: bool,
@@ -237,7 +245,7 @@ impl<T> std::ops::DerefMut for CachePadded<T> {
     }
 }
 
-/// Los ids de panel son únicos entre ventanas: `AxonEvent::PtyData` los usa para encontrar su dueña.
+/// Los ids de panel son únicos entre ventanas: `TearminalEvent::PtyData` los usa para encontrar su dueña.
 /// Se alinean a líneas de caché separadas para evitar False Sharing entre hilos de E/S y UI.
 static NEXT_PANE_ID: CachePadded<std::sync::atomic::AtomicUsize> =
     CachePadded::new(std::sync::atomic::AtomicUsize::new(0));
@@ -248,7 +256,207 @@ pub(crate) fn alloc_pane_id() -> PaneId {
     PaneId(NEXT_PANE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }
 
-impl AxonApp {
+impl TearminalApp {
+    /// Consulta el estado físico de las teclas modificadoras de manera consistente en todo el sistema.
+    #[inline]
+    pub(crate) fn physical_modifiers(&self) -> (bool, bool, bool, bool, bool) {
+        #[cfg(target_os = "windows")]
+        {
+            get_physical_modifiers()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            (
+                self.modifiers.control_key(),
+                self.modifiers.shift_key(),
+                self.modifiers.alt_key(),
+                false,
+                self.modifiers.super_key(),
+            )
+        }
+    }
+
+    /// Manejo unificado de teclado para cualquier campo de entrada de texto (navegación, borrado,
+    /// atajos estándar de portapapeles, escritura y refresco visual).
+    /// Devuelve `(consumido, texto_cambiado)`.
+    pub(crate) fn handle_text_input_key(
+        &mut self,
+        input: &mut crate::ui::TextInput,
+        logical_key: &winit::keyboard::Key,
+        physical_key: winit::keyboard::PhysicalKey,
+        text: Option<&str>,
+    ) -> (bool, bool) {
+        let (ctrl, shift, alt, _, _) = self.physical_modifiers();
+        let paste = if ctrl && !alt && key_is_char(logical_key, physical_key, 'v') {
+            self.get_clipboard_string()
+        } else {
+            None
+        };
+
+        let (res, to_copy) = input.handle_key(
+            logical_key,
+            physical_key,
+            text,
+            ctrl,
+            shift,
+            alt,
+            paste.as_deref(),
+        );
+
+        if let Some(copy_str) = to_copy {
+            self.set_clipboard_text(&copy_str);
+        }
+
+        match res {
+            crate::ui::text_input::TextInputKeyResult::Ignored => (false, false),
+            crate::ui::text_input::TextInputKeyResult::Navigated => {
+                self.cursor_on = true;
+                self.cursor_timer = std::time::Instant::now();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                (true, false)
+            }
+            crate::ui::text_input::TextInputKeyResult::Changed => {
+                self.cursor_on = true;
+                self.cursor_timer = std::time::Instant::now();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                (true, true)
+            }
+        }
+    }
+
+    /// Manejo unificado de clic del ratón sobre un campo de texto (posicionamiento de caret,
+    /// doble clic para palabra completa, triple clic para seleccionar todo y arrastre).
+    pub(crate) fn handle_text_input_click(
+        &mut self,
+        input: &mut crate::ui::TextInput,
+        mx: usize,
+        text_start_x: usize,
+    ) {
+        let char_idx = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                input.hit_test(mx, text_start_x, |s| {
+                    r.measure_ui_text(s, crate::renderer::tokens::BODY, true)
+                })
+            })
+            .unwrap_or(input.len());
+
+        let now = std::time::Instant::now();
+        let is_quick_click = now.duration_since(self.last_input_click_time).as_millis() < 400;
+        let (_, shift, _, _, _) = self.physical_modifiers();
+
+        if is_quick_click && self.last_input_click_count == 1 {
+            input.select_word_around(char_idx);
+            self.last_input_click_count = 2;
+        } else if is_quick_click && self.last_input_click_count == 2 {
+            input.select_all();
+            self.last_input_click_count = 3;
+        } else {
+            input.mouse_down(char_idx, shift);
+            self.last_input_click_count = 1;
+        }
+        self.last_input_click_time = now;
+        self.cursor_on = true;
+        self.cursor_timer = std::time::Instant::now();
+        self.request_redraw();
+    }
+
+    /// Manejo unificado de arrastre del ratón para selección continua de texto.
+    pub(crate) fn handle_text_input_drag(
+        &mut self,
+        input: &mut crate::ui::TextInput,
+        mx: usize,
+        text_start_x: usize,
+    ) -> bool {
+        if !input.is_dragging {
+            return false;
+        }
+        let char_idx = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                input.hit_test(mx, text_start_x, |s| {
+                    r.measure_ui_text(s, crate::renderer::tokens::BODY, true)
+                })
+            })
+            .unwrap_or(input.len());
+        input.mouse_drag(char_idx);
+        self.cursor_on = true;
+        self.cursor_timer = std::time::Instant::now();
+        self.request_redraw();
+        true
+    }
+
+    /// Solicita un redibujado de la ventana si está abierta.
+    #[inline]
+    pub(crate) fn request_redraw(&self) {
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Obtiene el tamaño interno actual de la ventana (ancho, alto), con fallback (800, 600) si no está abierta.
+    #[inline]
+    pub(crate) fn window_size(&self) -> (usize, usize) {
+        if let Some(w) = &self.window {
+            let s = w.inner_size();
+            (s.width as usize, s.height as usize)
+        } else {
+            (800, 600)
+        }
+    }
+
+    /// Obtiene el ancho interno de la ventana en píxeles.
+    #[inline]
+    pub(crate) fn window_width(&self) -> usize {
+        self.window_size().0
+    }
+
+    /// Obtiene el alto interno de la ventana en píxeles.
+    #[inline]
+    pub(crate) fn window_height(&self) -> usize {
+        self.window_size().1
+    }
+
+    /// Fija el cursor del ratón en la ventana si está abierta.
+    #[inline]
+    pub(crate) fn set_cursor_icon(&self, icon: winit::window::CursorIcon) {
+        if let Some(w) = &self.window {
+            w.set_cursor(icon);
+        }
+    }
+
+    /// Rectángulo del área de contenido principal (terminales, visor o ajustes) en coordenadas de ventana:
+    /// `(x, y, ancho, alto)`.
+    #[inline]
+    pub(crate) fn content_area_rect(
+        &self,
+        win_w: usize,
+        win_h: usize,
+    ) -> (usize, usize, usize, usize) {
+        let x = self.sidebar_offset();
+        let y = self.top_offset();
+        let right_offset = self.file_explorer_offset();
+        let status_bar_h = self.status_bar_height();
+        let w = win_w.saturating_sub(x + right_offset);
+        let h = win_h.saturating_sub(y + status_bar_h);
+        (x, y, w, h)
+    }
+
+    /// Rectángulos de los paneles de la pestaña activa en coordenadas de ventana.
+    pub(crate) fn active_tab_pane_rects(&self, win_w: usize, win_h: usize) -> Vec<PaneRect> {
+        let (x, y, w, h) = self.content_area_rect(win_w, win_h);
+        self.tabs
+            .get(self.active_tab_index)
+            .map(|t| t.compute_pane_rects(x, y, w, h))
+            .unwrap_or_default()
+    }
+
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {
         let id = self.next_tab_id;
         self.next_tab_id = TabId(id.0 + 1);
@@ -257,16 +465,16 @@ impl AxonApp {
 
     /// Ventana con una sola pestaña nueva
     pub(crate) fn new(
-        config: AxonConfig,
-        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        config: TearminalConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
     ) -> Self {
         Self::from_session(config, proxy, None)
     }
 
     /// Ventana restaurada desde `session` (sin sesión, o sin pestañas, una pestaña nueva)
     pub(crate) fn from_session(
-        config: AxonConfig,
-        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        config: TearminalConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
         session: Option<WindowSession>,
     ) -> Self {
         let system_light = crate::theme::is_windows_system_light_mode();
@@ -319,8 +527,8 @@ impl AxonApp {
 
     /// Ventana nueva inicializada con una pestaña existente transferida desde otra ventana
     pub(crate) fn from_tab(
-        config: AxonConfig,
-        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        config: TearminalConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
         mut tab: TerminalTab,
     ) -> Self {
         tab.id = TabId(0);
@@ -342,8 +550,8 @@ impl AxonApp {
     /// Estado inicial común de toda ventana: solo cambian las pestañas y la visibilidad de paneles
     #[allow(clippy::too_many_arguments)]
     fn build(
-        config: AxonConfig,
-        proxy: Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+        config: TearminalConfig,
+        proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
         theme: Theme,
         system_light: bool,
         tabs: Vec<TerminalTab>,
@@ -382,6 +590,7 @@ impl AxonApp {
             hovered_pane_btn: None,
             settings_page_state: SettingsPageState::default(),
             context_menu: None,
+            palette: None,
             file_explorer,
             hovered_files_btn: false,
             last_terminal_tab_index: 0,
@@ -421,6 +630,8 @@ impl AxonApp {
             viewer_hscrollbar_dragging: false,
             settings_scrollbar_dragging: false,
             settings_scrollbar_drag_offset_y: 0.0,
+            palette_scrollbar_dragging: false,
+            palette_scrollbar_drag_offset_y: 0.0,
             viewer_hscrollbar_drag_offset_x: 0.0,
             viewer_drag_selecting: false,
             viewer_drag_start: None,
@@ -436,6 +647,8 @@ impl AxonApp {
             last_terminal_click_pane_id: None,
             terminal_click_count: 0,
             last_window_move: Instant::now(),
+            last_input_click_time: Instant::now(),
+            last_input_click_count: 0,
             last_scroll_time: Instant::now(),
             wheel_remainder: 0.0,
             hovered_win_min: false,
@@ -642,17 +855,17 @@ impl AxonApp {
     fn update_window_title(&self) {
         if let (Some(w), Some(tab)) = (&self.window, self.tabs.get(self.active_tab_index)) {
             let full_title = if tab.is_settings {
-                "Axon - ⚙ Ajustes".to_string()
+                "TEArminal - ⚙ Ajustes".to_string()
             } else if let Some(ref v) = tab.file_viewer {
-                format!("Axon - ◈ {}", v.file_name)
+                format!("TEArminal - ◈ {}", v.file_name)
             } else if tab.panes.len() > 1 {
                 format!(
-                    "Axon - {} ({} paneles)",
+                    "TEArminal - {} ({} paneles)",
                     tab.display_title(),
                     tab.panes.len()
                 )
             } else {
-                format!("Axon - {}", tab.display_title())
+                format!("TEArminal - {}", tab.display_title())
             };
 
             // SetWindowText fuerza trabajo de DWM: solo si el título cambió
@@ -700,13 +913,13 @@ impl AxonApp {
 
 /// Lo necesario para lanzar shells al abrir o restaurar una ventana
 struct SpawnCtx<'a> {
-    config: &'a AxonConfig,
-    proxy: &'a Option<winit::event_loop::EventLoopProxy<AxonEvent>>,
+    config: &'a TearminalConfig,
+    proxy: &'a Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
     theme: &'a Theme,
 }
 
 impl SpawnCtx<'_> {
-    /// Panel con un shell nuevo en `cwd`; el tamaño real lo fija `AxonApp::init_window`
+    /// Panel con un shell nuevo en `cwd`; el tamaño real lo fija `TearminalApp::init_window`
     fn pane(&self, cwd: Option<&std::path::Path>) -> TerminalPane {
         let (cols, rows) = (100, 30);
         let id = alloc_pane_id();

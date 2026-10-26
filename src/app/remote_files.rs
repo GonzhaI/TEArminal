@@ -1,6 +1,6 @@
 //! Peticiones en banda al bash remoto de una sesión SSH con integración: leer o guardar un archivo y
 //! listar carpetas por la propia sesión (sin segunda conexión), así que funcionan también con contraseña.
-//! El protocolo (`TerminalState::remote_request_bytes` y `AxonFile`) está documentado en `AGENTS.md`.
+//! El protocolo (`TerminalState::remote_request_bytes` y `TearminalFile`) está documentado en `AGENTS.md`.
 
 use super::*;
 use std::path::{Path, PathBuf};
@@ -55,7 +55,7 @@ pub(super) struct PendingRemote {
 }
 
 /// `cksum` de POSIX (CRC-32 con polinomio 0x04C11DB7 sin reflejar, más los bytes de la longitud): el
-/// gancho remoto lo calcula sobre lo que escribió y Axon lo compara con lo que envió.
+/// gancho remoto lo calcula sobre lo que escribió y TEArminal lo compara con lo que envió.
 fn posix_cksum(data: &[u8]) -> u32 {
     let mut crc = 0u32;
     let mut feed = |byte: u8| {
@@ -106,7 +106,7 @@ fn remote_path_str(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-impl AxonApp {
+impl TearminalApp {
     /// Envía una petición al panel con sesión `job.dest()`; `false` si no hay integración o el prompt no está libre
     fn remote_send(&mut self, job: RemoteJob, op: &str, payload: &str) -> bool {
         let id = self.next_remote_id;
@@ -442,7 +442,7 @@ mod tests {
     }
 
     /// El gancho REAL de `init.ps1` (bash) responde `ok` con el `cksum` de lo que escribió, y ese valor coincide
-    /// con el que calcula Axon; si el contenido llega alterado, el valor difiere
+    /// con el que calcula TEArminal; si el contenido llega alterado, el valor difiere
     #[test]
     fn test_hook_put_reports_checksum_of_what_it_wrote() {
         let Ok(out) = std::process::Command::new("bash")
@@ -459,9 +459,9 @@ mod tests {
         let hook = &init[start..start + init[start..].find("\n'@").expect("fin del gancho")];
 
         let run = |request_content: &str| -> (String, String) {
-            let file = format!("/tmp/axon_hook_test_{}", std::process::id());
+            let file = format!("/tmp/tearminal_hook_test_{}", std::process::id());
             let script_content = format!(
-                "{hook}\nREADLINE_LINE='#AXR#7 put {} {request_content}'\nREADLINE_POINT=0\n__axon_req 2>/dev/null\nprintf '\\n@@@'\ncat {file}\nrm -f {file}\n",
+                "{hook}\nREADLINE_LINE='#AXR#7 put {} {request_content}'\nREADLINE_POINT=0\n__tearminal_req 2>/dev/null\nprintf '\\n@@@'\ncat {file}\nrm -f {file}\n",
                 pct_encode(file.as_bytes())
             );
             use std::io::Write;
@@ -481,10 +481,10 @@ mod tests {
             let text = String::from_utf8_lossy(&out.stdout).replace('\r', "");
             let (osc, written) = text.split_once("\n@@@").expect("salida del gancho");
             let body = osc
-                .split("AxonFile=")
+                .split("TearminalFile=")
                 .nth(1)
                 .and_then(|r| r.split('\x07').next())
-                .expect("respuesta AxonFile");
+                .expect("respuesta TearminalFile");
             let f: Vec<&str> = body.split(';').collect();
             assert_eq!((f[0], f[1]), ("7", "ok"), "{body:?}");
             let hex = f[4];
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn test_ssh_open_results_open_one_tab_and_pin() {
         use super::super::ssh_jobs::SshDone;
-        let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
+        let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
         let tabs_before = app.tabs.len();
         let done = |pin| {
             SshDone::Open(Box::new(super::super::ssh_jobs::SshOpenDone {
@@ -540,7 +540,7 @@ mod tests {
     /// Un panel no puede responder por una petición hecha a otro (mismo id): solo vale la respuesta del suyo
     #[test]
     fn test_remote_result_only_resolves_request_of_its_own_pane() {
-        let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
+        let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
         let pane_id = app.tabs[0].panes[0].id;
         let result = || crate::terminal::RemoteFileResult {
             id: 7,
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn test_remote_save_verifies_cksum_and_closing_tab_cancels_pending_requests() {
-        let mut app = AxonApp::new(crate::config::AxonConfig::default(), None);
+        let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
         app.create_new_tab();
         let pane_id = app.tabs[1].panes[0].id;
         let path = PathBuf::from("/srv/app.toml");

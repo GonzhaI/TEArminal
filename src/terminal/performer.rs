@@ -590,7 +590,7 @@ impl<'a> Perform for Performer<'a> {
                         self.state.ai_agent = crate::renderer::AiAgentStatus::None;
                     }
                     // El título NO crea sesiones SSH (cualquier texto en pantalla puede fijarlo); solo
-                    // actualiza el directorio remoto de una sesión ya autenticada por `AxonSSH=start`
+                    // actualiza el directorio remoto de una sesión ya autenticada por `TearminalSSH=start`
                     if let Some((user_host, rest)) = title_str.split_once(':') {
                         if user_host.contains('@') {
                             if let Some(clean_dir) = crate::pty::safe_remote_dir(rest.trim()) {
@@ -607,10 +607,10 @@ impl<'a> Perform for Performer<'a> {
                     }
                 }
             }
-            // Protocolo de imagen iTerm2 (OSC 1337) y señalización SSH/Git de Axon
+            // Protocolo de imagen iTerm2 (OSC 1337) y señalización SSH/Git de TEArminal
             b"1337" if params.len() > 1 => {
                 let p1 = params[1];
-                if p1.starts_with(b"AxonSSH=start") {
+                if p1.starts_with(b"TearminalSSH=start") {
                     let mut dest = String::new();
                     let mut token = String::new();
                     for param in &params[1..] {
@@ -623,7 +623,7 @@ impl<'a> Perform for Performer<'a> {
                             }
                         }
                     }
-                    // Solo el wrapper `ssh` de `init.ps1` conoce el token de este panel (`AXON_PANE_TOKEN`):
+                    // Solo el wrapper `ssh` de `init.ps1` conoce el token de este panel (`TEARMINAL_PANE_TOKEN`):
                     // sin él, cualquier texto en pantalla (un `cat` de un archivo ajeno) fijaría el destino
                     if self.state.pane_token_matches(&token)
                         && crate::pty::is_safe_ssh_destination(&dest)
@@ -637,7 +637,7 @@ impl<'a> Perform for Performer<'a> {
                         self.state.remote_integration = false;
                         self.state.remote_listing = None;
                     }
-                } else if p1.starts_with(b"AxonSSH=end") {
+                } else if p1.starts_with(b"TearminalSSH=end") {
                     let mut token = String::new();
                     for param in &params[1..] {
                         let text = String::from_utf8_lossy(param);
@@ -656,7 +656,7 @@ impl<'a> Perform for Performer<'a> {
                         self.state.remote_listing = None;
                         self.state.current_dir = None;
                     }
-                } else if p1.starts_with(b"AxonAgent=start") {
+                } else if p1.starts_with(b"TearminalAgent=start") {
                     self.state.agent_running = true;
                     for param in &params[1..] {
                         let text = String::from_utf8_lossy(param);
@@ -675,7 +675,7 @@ impl<'a> Perform for Performer<'a> {
                             self.state.ai_agent = kind;
                         }
                     }
-                } else if p1.starts_with(b"AxonAgent=end") {
+                } else if p1.starts_with(b"TearminalAgent=end") {
                     self.state.agent_running = false;
                     self.state.ai_agent = crate::renderer::AiAgentStatus::None;
                     // Restaura región de scroll y modos TUI sin mover el cursor a (0,0) como haría CSI r
@@ -691,10 +691,10 @@ impl<'a> Perform for Performer<'a> {
                     self.state.bracketed_paste_mode = false;
                     self.state.cursor_key_mode = false;
                     self.state.sync_update_mode = false;
-                } else if p1.starts_with(b"AxonGit=") || p1.starts_with(b"git_branch=") {
+                } else if p1.starts_with(b"TearminalGit=") || p1.starts_with(b"git_branch=") {
                     let text = String::from_utf8_lossy(p1);
                     let branch = text
-                        .strip_prefix("AxonGit=")
+                        .strip_prefix("TearminalGit=")
                         .or_else(|| text.strip_prefix("git_branch="))
                         .unwrap_or("")
                         .trim();
@@ -708,12 +708,12 @@ impl<'a> Perform for Performer<'a> {
                         self.state.remote_integration = true;
                         self.state.remote_at_prompt = true;
                     }
-                } else if let Some(id) = p1.strip_prefix(b"AxonFile=") {
+                } else if let Some(id) = p1.strip_prefix(b"TearminalFile=") {
                     if self.state.ssh_session.is_some() {
                         self.state.remote_integration = true;
                         self.handle_remote_file(id, &params[2..]);
                     }
-                } else if let Some(b64) = p1.strip_prefix(b"AxonLs=") {
+                } else if let Some(b64) = p1.strip_prefix(b"TearminalLs=") {
                     if self.state.ssh_session.is_some() {
                         self.state.remote_listing = parse_remote_listing(b64);
                         self.state.remote_integration = true;
@@ -748,7 +748,7 @@ impl<'a> Perform for Performer<'a> {
                         // Host remoto vía OSC 7 (el directorio solo se guarda si es seguro de reutilizar)
                         let remote_dir =
                             crate::pty::safe_remote_dir(&decoded_path).map(str::to_string);
-                        // Solo actualiza una sesión ya autenticada (`AxonSSH=start`): OSC 7 no puede crearla
+                        // Solo actualiza una sesión ya autenticada (`TearminalSSH=start`): OSC 7 no puede crearla
                         if let Some(sess) = &mut self.state.ssh_session {
                             sess.remote_dir = remote_dir;
                         }
@@ -834,8 +834,20 @@ pub(crate) fn accept_cwd(dir: &str) -> Option<std::path::PathBuf> {
     let is_sep = |c: char| matches!(c, '/' | '\\');
     let mut chars = dir.chars();
     let network = chars.next().is_some_and(is_sep) && chars.next().is_some_and(is_sep);
-    (!dir.is_empty() && !network && !dir.chars().any(char::is_control))
-        .then(|| std::path::PathBuf::from(dir))
+    if dir.is_empty() || network || dir.chars().any(char::is_control) {
+        return None;
+    }
+    let p = std::path::PathBuf::from(dir);
+    let lower = dir.to_ascii_lowercase();
+    if p.is_file()
+        || lower.contains("cache\\clipboard")
+        || lower.contains("cache/clipboard")
+        || lower.ends_with(".png")
+        || lower.ends_with(".jpg")
+    {
+        return None;
+    }
+    Some(p)
 }
 
 /// Decodifica los `%XX` de una URI `file://` (OSC 7); lo que no es un escape válido se deja tal cual
@@ -1206,7 +1218,7 @@ pub(crate) fn clean_listing(text: &str) -> Vec<String> {
 }
 
 impl<'a> Performer<'a> {
-    /// Un trozo de respuesta `AxonFile=<id>;<ok|err>;<n>;<total>;<base64>`. Entrada no confiable: se
+    /// Un trozo de respuesta `TearminalFile=<id>;<ok|err>;<n>;<total>;<base64>`. Entrada no confiable: se
     /// limita el número de trozos, su tamaño y las respuestas en curso.
     fn handle_remote_file(&mut self, id: &[u8], rest: &[&[u8]]) {
         const MAX_PARTS: usize = 64;

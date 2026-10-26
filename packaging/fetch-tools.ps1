@@ -3,14 +3,14 @@
 #   <Out>\licenses\       licencias de cada herramienta + THIRD-PARTY.txt (obligatorio al redistribuir)
 #
 # Uso:
-#   pwsh packaging/fetch-tools.ps1 -Out dist\axon          # descarga y verifica
+#   pwsh packaging/fetch-tools.ps1 -Out dist\tearminal          # descarga y verifica
 #   pwsh packaging/fetch-tools.ps1 -Update                 # tras cambiar versiones/URLs: recalcula los hashes
 #
 # Funciona en Windows PowerShell 5.1 y en PowerShell 7. Nada se ejecuta: solo se descargan y extraen archivos.
 [CmdletBinding()]
 param(
     [string]$Out,
-    [string]$Cache = (Join-Path $env:TEMP 'axon-tools-cache'),
+    [string]$Cache = (Join-Path $env:TEMP 'tearminal-tools-cache'),
     [switch]$Update
 )
 $ErrorActionPreference = 'Stop'
@@ -72,7 +72,7 @@ if ($Out) {
     New-Item -ItemType Directory -Force $bin, $lic | Out-Null
 }
 $thirdParty = New-Object System.Collections.Generic.List[string]
-$thirdParty.Add("Herramientas de terceros incluidas con Axon (cada una conserva su licencia, en esta carpeta):`r`n")
+$thirdParty.Add("Herramientas de terceros incluidas con TEArminal (cada una conserva su licencia, en esta carpeta):`r`n")
 
 foreach ($t in $manifest.tools) {
     $zip, $sha = Get-Download $t.url $t.sha256

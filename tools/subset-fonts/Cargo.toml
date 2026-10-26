@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Herramienta de desarrollo, fuera del árbol de dependencias de axon
+# Herramienta de desarrollo, fuera del árbol de dependencias de tearminal
 [workspace]
 
 [dependencies]

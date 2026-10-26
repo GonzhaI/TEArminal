@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Rueda del ratón: scroll del historial, listas y TUIs.
     pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
         let bypass = self.modifiers.shift_key();
@@ -10,15 +10,25 @@ impl AxonApp {
         let mx = self.mouse_pos.x as usize;
         let my = self.mouse_pos.y as usize;
 
-        let (win_w, win_h) = if let Some(w) = &self.window {
-            let s = w.inner_size();
-            (s.width as usize, s.height as usize)
-        } else {
-            (800, 600)
+        let (win_w, win_h) = self.window_size();
+        let (scroll_x_lines, scroll_y_lines) = match delta {
+            MouseScrollDelta::LineDelta(x, y) => (x, y),
+            MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / 20.0, pos.y as f32 / 20.0),
         };
 
         let top_offset = self.top_offset();
         let status_bar_h = self.status_bar_height();
+
+        // Rueda con la paleta de comandos abierta: navega por los resultados
+        if let Some(palette) = &mut self.palette {
+            if scroll_y_lines.abs() > 0.01 {
+                let dir = if scroll_y_lines > 0.0 { -1 } else { 1 };
+                palette.scroll_by(dir);
+                self.request_redraw();
+            }
+            return;
+        }
+
         // Cualquier rueda despierta las barras de scroll (se auto-ocultan tras un instante)
         // Rueda sobre el menú contextual: no actúa; fuera de él lo cierra y sigue su curso
         if let Some(menu) = &self.context_menu {
@@ -27,16 +37,6 @@ impl AxonApp {
                 return;
             }
             self.context_menu = None;
-        }
-        if self.hovered_ai_badge
-            && self.config.appearance.show_status_bar
-            && !self.tabs[self.active_tab_index].is_settings
-        {
-            let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
-            let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
-            if StatusBarRects::inside(mx, my, popup_rect) {
-                return;
-            }
         }
         self.last_scroll_time = Instant::now();
 
@@ -55,37 +55,24 @@ impl AxonApp {
                     my
                 };
                 if rects.theme_row_at(mx, page_y).is_some() {
-                    let rows = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => (-y * 3.0).round() as isize,
-                        MouseScrollDelta::PixelDelta(pos) => {
-                            -(pos.y / SettingsPageRects::THEME_ROW_H as f64).round() as isize
-                        }
-                    };
+                    let rows = (-scroll_y_lines * 3.0).round() as isize;
                     self.scroll_theme_list(rows);
                     return;
                 }
             }
-            let dy = match delta {
-                MouseScrollDelta::LineDelta(_, y) => (y * 48.0) as isize,
-                MouseScrollDelta::PixelDelta(pos) => pos.y as isize,
-            };
+            let dy = (scroll_y_lines * 48.0).round() as isize;
             let viewport_h =
                 win_h.saturating_sub(top_offset + SettingsPageRects::CONTENT_TOP + status_bar_h);
             let max = SettingsPageRects::max_scroll(self.settings_page_state.section, viewport_h);
             self.settings_page_state.scroll_y =
                 (self.settings_scroll() as isize - dy).clamp(0, max as isize) as usize;
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
+            self.request_redraw();
             return;
         }
 
         // Scroll en la lista de pestañas verticales de la barra lateral
         if self.panel_local_x(mx, my, win_w).is_some() {
-            let scroll_steps = match delta {
-                MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
-                MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as isize,
-            };
+            let scroll_steps = scroll_y_lines.round() as isize;
             let usable_h = win_h.saturating_sub(status_bar_h);
             let (total, visible) = self.panel_scroll_extent(usable_h);
             let max_offset = total.saturating_sub(visible);
@@ -98,9 +85,7 @@ impl AxonApp {
                 self.sidebar_scroll_offset =
                     (self.sidebar_scroll_offset + scroll_steps.unsigned_abs()).min(max_offset);
             }
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
+            self.request_redraw();
             return;
         }
 
@@ -109,34 +94,24 @@ impl AxonApp {
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let lines = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => (y * 3.0).round() as isize,
-                    MouseScrollDelta::PixelDelta(pos) => (pos.y / 20.0).round() as isize,
-                };
+                let lines = (scroll_y_lines * 3.0).round() as isize;
                 let list_h = panel_h.saturating_sub(
                     crate::explorer::FileExplorer::HEADER_HEIGHT
                         + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
                 );
                 let max_lines = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
                 self.file_explorer.scroll(lines, max_lines);
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.request_redraw();
                 return;
             }
         }
 
         // Scroll en pestaña de visor de archivos (soporte vertical y horizontal)
         if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
-            let (dx, dy) = match delta {
-                MouseScrollDelta::LineDelta(x, y) => {
-                    ((x * 3.0).round() as isize, (y * 3.0).round() as isize)
-                }
-                MouseScrollDelta::PixelDelta(pos) => (
-                    (pos.x / 20.0).round() as isize,
-                    (pos.y / 20.0).round() as isize,
-                ),
-            };
+            let (dx, dy) = (
+                (scroll_x_lines * 3.0).round() as isize,
+                (scroll_y_lines * 3.0).round() as isize,
+            );
             let max_x = if viewer.wrap_active() {
                 0
             } else {
@@ -170,18 +145,13 @@ impl AxonApp {
                         .min(viewer.rows().len().saturating_sub(1));
                 }
             }
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
+            self.request_redraw();
             return;
         }
 
-        let right_offset = self.file_explorer_offset();
-        let term_area_w = win_w.saturating_sub(offset + right_offset);
-        let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
+        let (cx, cy, _, _) = self.content_area_rect(win_w, win_h);
+        let pane_rects = self.active_tab_pane_rects(win_w, win_h);
         let active_tab = &mut self.tabs[self.active_tab_index];
-        let pane_rects =
-            active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
         let target_pane_rect = pane_rects
             .iter()
@@ -193,8 +163,8 @@ impl AxonApp {
             .unwrap_or(active_tab.active_pane_id);
 
         if let Some(pane) = active_tab.find_pane_mut(target_pane_id) {
-            let rect_x = target_pane_rect.map(|r| r.x).unwrap_or(offset);
-            let rect_y = target_pane_rect.map(|r| r.y).unwrap_or(top_offset);
+            let rect_x = target_pane_rect.map(|r| r.x).unwrap_or(cx);
+            let rect_y = target_pane_rect.map(|r| r.y).unwrap_or(cy);
 
             if pane.terminal.is_mouse_reporting_active() && !bypass {
                 if let Some(renderer) = &self.renderer {
@@ -213,10 +183,7 @@ impl AxonApp {
                     }
                     .min(pane.terminal.rows);
 
-                    let is_up = match delta {
-                        MouseScrollDelta::LineDelta(_, y) => y > 0.0,
-                        MouseScrollDelta::PixelDelta(pos) => pos.y > 0.0,
-                    };
+                    let is_up = scroll_y_lines > 0.0;
 
                     let mut code = if is_up { 64 } else { 65 };
                     if self.modifiers.shift_key() {
@@ -247,11 +214,7 @@ impl AxonApp {
             } else {
                 // 3 líneas por muesca; el resto fraccionario se acumula para que un touchpad
                 // (muchos eventos con y < 1) avance al ritmo de sus dedos y no 3 líneas por evento
-                let notches = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y,
-                    MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
-                };
-                self.wheel_remainder += notches * 3.0;
+                self.wheel_remainder += scroll_y_lines * 3.0;
                 let lines = self.wheel_remainder.trunc();
                 self.wheel_remainder -= lines;
                 let lines = lines as isize;
@@ -263,9 +226,7 @@ impl AxonApp {
                 }
 
                 self.last_scroll_time = Instant::now();
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.request_redraw();
             }
         }
     }

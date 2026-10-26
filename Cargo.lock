@@ -125,34 +125,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
-name = "axon"
-version = "0.14.0"
-dependencies = [
- "anyhow",
- "arboard",
- "base64",
- "directories",
- "fontdue",
- "image",
- "mimalloc",
- "portable-pty",
- "proptest",
- "rustc-hash",
- "rustybuzz",
- "serde",
- "smallvec",
- "thiserror 2.0.21",
- "toml 0.8.23",
- "unicode-segmentation",
- "unicode-width",
- "vte",
- "windows",
- "windows-sys 0.52.0",
- "winit",
- "winres",
-]
-
-[[package]]
 name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1950,6 +1922,34 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "tearminal"
+version = "0.15.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "base64",
+ "directories",
+ "fontdue",
+ "image",
+ "mimalloc",
+ "portable-pty",
+ "proptest",
+ "rustc-hash",
+ "rustybuzz",
+ "serde",
+ "smallvec",
+ "thiserror 2.0.21",
+ "toml 0.8.23",
+ "unicode-segmentation",
+ "unicode-width",
+ "vte",
+ "windows",
+ "windows-sys 0.52.0",
+ "winit",
+ "winres",
 ]
 
 [[package]]

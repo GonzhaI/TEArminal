@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     pub(crate) fn open_or_switch_settings_tab(&mut self) {
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
             if active_tab.is_settings {
@@ -416,7 +416,9 @@ impl AxonApp {
         let ssh_session = active_pane.and_then(|p| p.terminal.ssh_session.clone());
 
         // Heredar el directorio de trabajo del pane activo
-        let cwd_path = active_pane.and_then(|p| p.terminal.current_dir.clone());
+        let cwd_path = active_pane
+            .and_then(|p| p.terminal.current_dir.clone())
+            .filter(|d| !d.is_file() && !d.to_string_lossy().contains("clipboard"));
         let cwd_ref = cwd_path.as_deref();
 
         let (cols, rows) = (80, 24);
@@ -772,7 +774,7 @@ impl AxonApp {
     }
 
     /// Navega el explorador remoto escribiendo `cd` en el shell remoto de la terminal activa
-    /// (la nueva carpeta llega de vuelta por OSC 7 y AxonLs). `false` si no hay integración SSH.
+    /// (la nueva carpeta llega de vuelta por OSC 7 y TEArminalLs). `false` si no hay integración SSH.
     pub(crate) fn remote_cd(&mut self, dir: &str) -> bool {
         let Some(pane) = self
             .tabs

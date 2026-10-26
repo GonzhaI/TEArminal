@@ -676,11 +676,11 @@ mod tests {
 
     #[test]
     fn test_html_tags_are_recognized_only_when_known() {
-        let c: Vec<char> = r#"<img src="a.png" alt="Axon" />"#.chars().collect();
+        let c: Vec<char> = r#"<img src="a.png" alt="TEArminal" />"#.chars().collect();
         let t = html_tag(&c, 0).unwrap();
         assert_eq!(
             (t.name.as_str(), t.alt.as_str(), t.closing),
-            ("img", "Axon", false)
+            ("img", "TEArminal", false)
         );
         assert_eq!(t.end, c.len() - 1);
         let c: Vec<char> = "</em>".chars().collect();

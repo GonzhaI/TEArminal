@@ -8,7 +8,7 @@
 param([string]$Commit = '86a776d947b6f0c95d35005cb67f3cea435362fc')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
-$tmp = Join-Path ([IO.Path]::GetTempPath()) "axon-themes-$([guid]::NewGuid().ToString('N'))"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) "tearminal-themes-$([guid]::NewGuid().ToString('N'))"
 
 function ToLinear([double]$c) { if ($c -lt 0.04045) { $c / 12.92 } else { [math]::Pow(($c + 0.055) / 1.055, 2.4) } }
 function FromLinear([double]$c) { if ($c -lt 0.0031308) { 12.92 * $c } else { 1.055 * [math]::Pow($c, 1 / 2.4) - 0.055 } }

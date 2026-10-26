@@ -3,6 +3,18 @@
 use super::*;
 
 pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
+    let bg = if cell.inverse() {
+        if cell.fg != Color::TRANSPARENT {
+            cell.fg
+        } else {
+            theme.foreground
+        }
+    } else if cell.bg != Color::TRANSPARENT {
+        cell.bg
+    } else {
+        theme.background
+    };
+
     let base = if cell.inverse() {
         if cell.bg != Color::TRANSPARENT {
             cell.bg
@@ -10,12 +22,16 @@ pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
             theme.background
         }
     } else if cell.fg != Color::TRANSPARENT {
-        // Garantizar contraste mínimo contra el fondo de la terminal
-        let dr = (cell.fg.r as i32 - theme.background.r as i32).abs();
-        let dg = (cell.fg.g as i32 - theme.background.g as i32).abs();
-        let db = (cell.fg.b as i32 - theme.background.b as i32).abs();
-        if dr + dg + db < 18 {
-            theme.foreground
+        // Garantizar contraste mínimo legible contra el fondo de la celda
+        let cr = crate::theme::contrast_ratio(cell.fg, bg);
+        if cr < 1.8 {
+            if bg == theme.background {
+                theme.foreground
+            } else if crate::theme::contrast_ratio(theme.background, bg) >= 3.0 {
+                theme.background
+            } else {
+                theme.foreground
+            }
         } else {
             cell.fg
         }
@@ -629,26 +645,34 @@ impl TerminalRenderer {
             let (btn_x, btn_y, btn_w, btn_h) =
                 crate::renderer::pane_scroll_to_bottom_btn_rect(rect_x, rect_y, rect_w, rect_h);
             if btn_x + btn_w <= width && btn_y + btn_h <= height {
+                // Sombra sutil para despegar el botón flotante del texto de fondo
+                let shadow_color = Color::from_rgba(0, 0, 0, 110);
+                canvas.rounded_fill(btn_x, btn_y + 2, btn_w, btn_h, 6, shadow_color);
+
                 let bg_color = if terminal.scroll_to_bottom_hovered {
                     theme.surface_hover()
                 } else {
                     theme.chrome_bg_elevated()
                 };
-                let border_color = theme.chrome_line();
-                let icon_color = if terminal.scroll_to_bottom_hovered {
-                    theme.foreground
+                let border_color = if terminal.scroll_to_bottom_hovered {
+                    theme.accent_color()
                 } else {
-                    theme.text_secondary()
+                    theme.chrome_line_strong()
+                };
+                let icon_color = if terminal.scroll_to_bottom_hovered {
+                    theme.accent_color()
+                } else {
+                    theme.foreground
                 };
 
-                canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 4, bg_color);
-                canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 4, border_color);
+                canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 6, bg_color);
+                canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 6, border_color);
                 self.draw_lucide_icon(
                     canvas,
                     crate::ui::LucideIcon::ChevronDown,
                     btn_x + btn_w / 2,
                     btn_y + btn_h / 2,
-                    13.0,
+                    16.0,
                     icon_color,
                 );
             }

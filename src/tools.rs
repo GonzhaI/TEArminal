@@ -1,5 +1,5 @@
-//! Herramientas CLI opcionales (eza, bat, rg, fd, zoxide, fzf) distribuidas junto a Axon en `bin\`.
-//! Axon no descarga nada en ejecución: el ZIP/instalador las trae y `assets/shell/init.ps1` las usa
+//! Herramientas CLI opcionales (eza, bat, rg, fd, zoxide, fzf) distribuidas junto a TEArminal en `bin\`.
+//! TEArminal no descarga nada en ejecución: el ZIP/instalador las trae y `assets/shell/init.ps1` las usa
 //! si están en PATH (con alternativas propias cuando faltan).
 use std::path::{Path, PathBuf};
 
@@ -9,7 +9,7 @@ pub(crate) fn bundled_bin_dir() -> Option<PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
-/// PATH para los procesos hijos. `bin\` de Axon va AL FINAL: las versiones que el usuario ya tiene
+/// PATH para los procesos hijos. `bin\` de TEArminal va AL FINAL: las versiones que el usuario ya tiene
 /// instaladas tienen prioridad y las incluidas sirven de respaldo.
 pub(crate) fn path_with_bundled_tools() -> String {
     append_dir(
@@ -32,13 +32,13 @@ mod tests {
 
     #[test]
     fn test_bundled_tools_go_last_and_user_path_is_untouched() {
-        let bin = Path::new(r"C:\Axon\bin");
+        let bin = Path::new(r"C:\TEArminal\bin");
         assert_eq!(
             append_dir(r"C:\a;C:\b", Some(bin)),
-            r"C:\a;C:\b;C:\Axon\bin"
+            r"C:\a;C:\b;C:\TEArminal\bin"
         );
-        assert_eq!(append_dir(r"C:\a;", Some(bin)), r"C:\a;C:\Axon\bin");
-        assert_eq!(append_dir("", Some(bin)), r"C:\Axon\bin");
+        assert_eq!(append_dir(r"C:\a;", Some(bin)), r"C:\a;C:\TEArminal\bin");
+        assert_eq!(append_dir("", Some(bin)), r"C:\TEArminal\bin");
         assert_eq!(append_dir(r"C:\a", None), r"C:\a");
     }
 }

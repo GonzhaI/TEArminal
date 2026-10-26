@@ -4,7 +4,7 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub(crate) struct AxonConfig {
+pub(crate) struct TearminalConfig {
     pub(crate) appearance: AppearanceConfig,
     pub(crate) terminal: TerminalConfig,
 }
@@ -36,6 +36,21 @@ pub(crate) struct AppearanceConfig {
     /// Lado de la ventana donde va el panel de navegación: "left" | "right".
     #[serde(default = "default_panel_side")]
     pub(crate) panel_side: String,
+    /// Realce de contraste gamma para texto sobre fondos oscuros (1.0 = estándar, 1.3-1.5 = nítido).
+    #[serde(default = "default_font_contrast")]
+    pub(crate) font_contrast: f32,
+    /// Filtrado de imágenes: "point" (más nítido para pixel art) o "linear" (suave para capturas y fotos).
+    #[serde(default = "default_image_filter")]
+    pub(crate) image_filter: String,
+    /// Ajuste de fuentes e iconos de UI a cuadrícula de píxel exacto (evita difuminado en DPI 125%/150%).
+    #[serde(default = "default_false")]
+    pub(crate) pixel_snap: bool,
+    /// Muestra el logo y nombre "TEArminal" en la esquina superior izquierda.
+    #[serde(default = "default_false")]
+    pub(crate) show_brand: bool,
+    /// Muestra las dimensiones de la rejilla (columnas × filas) en la esquina inferior derecha.
+    #[serde(default = "default_false")]
+    pub(crate) show_dimensions: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -53,7 +68,7 @@ pub(crate) struct TerminalConfig {
     /// Ajuste de línea del visor de archivos (los textos largos se parten dentro del recuadro)
     #[serde(default = "default_false")]
     pub(crate) word_wrap: bool,
-    /// Al abrir `ssh` desde Axon, el shell remoto (bash) informa de la rama git y el directorio
+    /// Al abrir `ssh` desde TEArminal, el shell remoto (bash) informa de la rama git y el directorio
     #[serde(default = "default_true")]
     pub(crate) ssh_integration: bool,
     /// Deja que los programas de la terminal escriban en el portapapeles de Windows (OSC 52, máx. 100 KB).
@@ -64,20 +79,28 @@ pub(crate) struct TerminalConfig {
     #[serde(default = "default_true")]
     pub(crate) ligatures: bool,
     /// Sin efecto: la GPU (Direct3D 11, con WARP de respaldo) es el único renderer. Se conserva solo
-    /// para que un `axon.toml` antiguo con `gpu = ...` siga cargando. Nada debe leer este campo.
+    /// para que un `tearminal.toml` antiguo con `gpu = ...` siga cargando. Nada debe leer este campo.
     #[serde(default = "default_true")]
     pub(crate) gpu: bool,
-    /// Comprobación automática de nuevas versiones al iniciar Axon
+    /// Comprobación automática de nuevas versiones al iniciar TEArminal
     #[serde(default = "default_true")]
     pub(crate) auto_check_updates: bool,
     /// Consulta las cuotas reales de Claude (api.anthropic.com/api/oauth/usage) con la sesión de Claude Code
-    /// (`~/.claude/.credentials.json`, solo lectura). Con `false` Axon no lee esa credencial ni hace la llamada.
+    /// (`~/.claude/.credentials.json`, solo lectura). Con `false` TEArminal no lee esa credencial ni hace la llamada.
     #[serde(default = "default_true")]
     pub(crate) ai_limits: bool,
 }
 
 fn default_font_size() -> f32 {
     15.0
+}
+
+fn default_font_contrast() -> f32 {
+    1.0
+}
+
+fn default_image_filter() -> String {
+    "point".to_string()
 }
 
 fn default_ui_font_size() -> f32 {
@@ -148,7 +171,7 @@ impl AppearanceConfig {
     }
 }
 
-impl Default for AxonConfig {
+impl Default for TearminalConfig {
     fn default() -> Self {
         let shell = detect_preferred_shell();
         Self {
@@ -166,6 +189,11 @@ impl Default for AxonConfig {
                 show_status_bar: true,
                 show_file_explorer: false,
                 panel_side: default_panel_side(),
+                font_contrast: 1.0,
+                image_filter: "point".to_string(),
+                pixel_snap: false,
+                show_brand: false,
+                show_dimensions: false,
             },
             terminal: TerminalConfig {
                 default_shell: shell,
@@ -189,13 +217,13 @@ impl Default for AxonConfig {
 
 impl Default for AppearanceConfig {
     fn default() -> Self {
-        AxonConfig::default().appearance
+        TearminalConfig::default().appearance
     }
 }
 
 impl Default for TerminalConfig {
     fn default() -> Self {
-        AxonConfig::default().terminal
+        TearminalConfig::default().terminal
     }
 }
 
@@ -217,30 +245,30 @@ pub(crate) enum ConfigError {
     Serialize(#[from] toml::ser::Error),
     #[error("error de deserialización TOML: {0}")]
     Deserialize(#[from] toml::de::Error),
-    #[error("axon.toml tiene errores: corrígelo antes de guardar ajustes")]
+    #[error("tearminal.toml tiene errores: corrígelo antes de guardar ajustes")]
     InvalidExistingConfig,
 }
 
-impl AxonConfig {
+impl TearminalConfig {
     pub(crate) fn config_path() -> PathBuf {
-        // Los tests no leen ni escriben la configuración real del usuario ni el axon.toml del repositorio
+        // Los tests no leen ni escriben la configuración real del usuario ni el tearminal.toml del repositorio
         if cfg!(test) {
-            return dirs_or_fallback().join("axon.toml");
+            return dirs_or_fallback().join("tearminal.toml");
         }
 
-        // 1. Solo en desarrollo: axon.toml del directorio actual. En release es un riesgo:
-        //    un repo clonado con `default_shell` malicioso ejecutaría su programa al abrir Axon ahí.
+        // 1. Solo en desarrollo: tearminal.toml del directorio actual. En release es un riesgo:
+        //    un repo clonado con `default_shell` malicioso ejecutaría su programa al abrir TEArminal ahí.
         if cfg!(debug_assertions) {
-            let local = PathBuf::from("axon.toml");
+            let local = PathBuf::from("tearminal.toml");
             if local.exists() {
                 return local;
             }
         }
 
-        // 2. Prioridad: axon.toml junto al ejecutable
+        // 2. Prioridad: tearminal.toml junto al ejecutable
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
-                let exe_cfg = parent.join("axon.toml");
+                let exe_cfg = parent.join("tearminal.toml");
                 if exe_cfg.exists() {
                     return exe_cfg;
                 }
@@ -249,7 +277,7 @@ impl AxonConfig {
 
         // 3. Fallback: Directorio de configuración de usuario en AppData
         let base_dir = dirs_or_fallback();
-        base_dir.join("axon.toml")
+        base_dir.join("tearminal.toml")
     }
 
     pub(crate) fn load_or_default() -> Self {
@@ -273,14 +301,14 @@ impl AxonConfig {
     }
 
     /// Nunca sobrescribe un archivo existente: si no se puede interpretar, lo copia a
-    /// `axon.toml.bak` y usa los valores por defecto solo en memoria.
+    /// `tearminal.toml.bak` y usa los valores por defecto solo en memoria.
     fn load_from(path: &std::path::Path) -> Self {
         match fs::File::open(path) {
             Ok(file) => match Self::from_reader(BufReader::new(file)) {
                 Ok(cfg) => cfg,
                 Err(e) => {
                     crate::logger::log(&format!(
-                        "-> axon.toml inválido ({e}); copia en axon.toml.bak, usando valores por defecto"
+                        "-> tearminal.toml inválido ({e}); copia en tearminal.toml.bak, usando valores por defecto"
                     ));
                     if let Ok(content) = fs::read_to_string(path) {
                         let _ = fs::write(path.with_extension("toml.bak"), content);
@@ -310,12 +338,12 @@ impl AxonConfig {
     }
 
     fn save_to(&self, path: &std::path::Path) -> Result<(), ConfigError> {
-        // Un `axon.toml` que no se puede interpretar se carga con los valores por defecto; guardar encima
+        // Un `tearminal.toml` que no se puede interpretar se carga con los valores por defecto; guardar encima
         // destruiría lo que el usuario escribió (queda también la copia `.bak`)
         if let Ok(existing) = fs::read_to_string(path) {
-            if toml::from_str::<AxonConfig>(&existing).is_err() {
+            if toml::from_str::<TearminalConfig>(&existing).is_err() {
                 crate::logger::log(
-                    "-> axon.toml inválido: no se guardan los ajustes hasta corregirlo",
+                    "-> tearminal.toml inválido: no se guardan los ajustes hasta corregirlo",
                 );
                 return Err(ConfigError::InvalidExistingConfig);
             }
@@ -335,18 +363,18 @@ impl AxonConfig {
     }
 }
 
-/// Avisa en pantalla de que `axon.toml` no se pudo interpretar (Axon usa el subsistema "windows": sin esto el
+/// Avisa en pantalla de que `tearminal.toml` no se pudo interpretar (TEArminal usa el subsistema "windows": sin esto el
 /// usuario solo vería sus ajustes ignorados). En tests no hay ventana.
 #[cfg(not(test))]
 fn notify_invalid_config(path: &std::path::Path, err: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
     let text = wide(&format!(
-        "Axon no pudo leer {}\n\n{err}\n\nSe usan los valores por defecto y no se guardarán ajustes hasta que \
-         lo corrijas. Se dejó una copia en axon.toml.bak.",
+        "TEArminal no pudo leer {}\n\n{err}\n\nSe usan los valores por defecto y no se guardarán ajustes hasta que \
+         lo corrijas. Se dejó una copia en tearminal.toml.bak.",
         path.display()
     ));
-    let title = wide("Axon");
+    let title = wide("TEArminal");
     // SAFETY: cadenas UTF-16 terminadas en nulo que viven durante la llamada
     unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONWARNING) };
 }
@@ -354,27 +382,27 @@ fn notify_invalid_config(path: &std::path::Path, err: &str) {
 #[cfg(test)]
 fn notify_invalid_config(_path: &std::path::Path, _err: &str) {}
 
-/// Carpeta de configuración y sesión del usuario (`%APPDATA%\axon\axon\config`)
+/// Carpeta de configuración y sesión del usuario (`%APPDATA%\tearminal\tearminal\config`)
 pub(crate) fn dirs_or_fallback() -> PathBuf {
     if cfg!(test) {
-        return std::env::temp_dir().join(format!("axon-test-{}", std::process::id()));
+        return std::env::temp_dir().join(format!("tearminal-test-{}", std::process::id()));
     }
-    if let Some(dirs) = directories::ProjectDirs::from("com", "axon", "axon") {
+    if let Some(dirs) = directories::ProjectDirs::from("com", "tearminal", "tearminal") {
         dirs.config_dir().to_path_buf()
     } else {
-        PathBuf::from("axon_config")
+        PathBuf::from("tearminal_config")
     }
 }
 
-/// Carpeta de caché local del usuario (`%LOCALAPPDATA%\axon\axon\cache`)
+/// Carpeta de caché local del usuario (`%LOCALAPPDATA%\tearminal\tearminal\cache`)
 pub(crate) fn cache_dir_or_fallback() -> PathBuf {
     if cfg!(test) {
-        return std::env::temp_dir().join(format!("axon-test-cache-{}", std::process::id()));
+        return std::env::temp_dir().join(format!("tearminal-test-cache-{}", std::process::id()));
     }
-    if let Some(dirs) = directories::ProjectDirs::from("com", "axon", "axon") {
+    if let Some(dirs) = directories::ProjectDirs::from("com", "tearminal", "tearminal") {
         dirs.cache_dir().to_path_buf()
     } else {
-        PathBuf::from("axon_cache")
+        PathBuf::from("tearminal_cache")
     }
 }
 
@@ -519,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_theme_slots_by_mode_and_system() {
-        let mut a = AxonConfig::default().appearance;
+        let mut a = TearminalConfig::default().appearance;
         a.theme = "Dracula".into();
         a.theme_light = "One Half Light".into();
         a.theme_mode = "system".into();
@@ -535,47 +563,47 @@ mod tests {
         assert_eq!(a.resolve_theme(true).background, light.background);
     }
 
-    /// Claves que ya no existen (p. ej. `bracketed_paste`) en un `axon.toml` antiguo se ignoran, no lo invalidan
+    /// Claves que ya no existen (p. ej. `bracketed_paste`) en un `tearminal.toml` antiguo se ignoran, no lo invalidan
     #[test]
     fn test_removed_keys_in_old_configs_are_ignored() {
-        let text = toml::to_string_pretty(&AxonConfig::default())
+        let text = toml::to_string_pretty(&TearminalConfig::default())
             .unwrap()
             .replace("[terminal]\n", "[terminal]\nbracketed_paste = true\n");
         assert!(text.contains("bracketed_paste"));
-        assert!(toml::from_str::<AxonConfig>(&text).is_ok());
+        assert!(toml::from_str::<TearminalConfig>(&text).is_ok());
     }
 
-    /// Un `axon.toml` ilegible nunca se sobrescribe al guardar ajustes
+    /// Un `tearminal.toml` ilegible nunca se sobrescribe al guardar ajustes
     #[test]
     fn test_save_never_overwrites_an_invalid_config() {
-        let dir = std::env::temp_dir().join(format!("axon-badcfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tearminal-badcfg-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("axon.toml");
+        let path = dir.join("tearminal.toml");
         fs::write(&path, "theme = [esto no es toml").unwrap();
-        assert!(AxonConfig::default().save_to(&path).is_err());
+        assert!(TearminalConfig::default().save_to(&path).is_err());
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
             "theme = [esto no es toml"
         );
         fs::write(
             &path,
-            toml::to_string_pretty(&AxonConfig::default()).unwrap(),
+            toml::to_string_pretty(&TearminalConfig::default()).unwrap(),
         )
         .unwrap();
-        assert!(AxonConfig::default().save_to(&path).is_ok());
+        assert!(TearminalConfig::default().save_to(&path).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_legacy_single_theme_is_migrated() {
-        let dir = std::env::temp_dir().join(format!("axon-mig-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tearminal-mig-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("axon.toml");
+        let path = dir.join("tearminal.toml");
         let load = |theme: &str| {
             // Configuración completa pero sin `theme_light`, como la escribían las versiones anteriores
-            let old: String = toml::to_string_pretty(&AxonConfig::default())
+            let old: String = toml::to_string_pretty(&TearminalConfig::default())
                 .unwrap()
                 .lines()
                 .filter(|l| !l.starts_with("theme_light"))
@@ -592,7 +620,7 @@ mod tests {
 ",
                 );
             fs::write(&path, old).unwrap();
-            AxonConfig::load_from(&path).appearance
+            TearminalConfig::load_from(&path).appearance
         };
         // Un `theme` oscuro conserva su ranura y el claro toma el valor por defecto
         let a = load("Dracula");
@@ -611,22 +639,22 @@ mod tests {
 
     #[test]
     fn test_invalid_toml_is_backed_up_not_overwritten() {
-        let dir = std::env::temp_dir().join(format!("axon-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("tearminal-cfg-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("axon.toml");
+        let path = dir.join("tearminal.toml");
 
         // Inexistente: se crea con los valores por defecto
-        AxonConfig::load_from(&path);
+        TearminalConfig::load_from(&path);
         assert!(path.exists());
 
         // Inválido: el archivo queda intacto y se guarda copia
         let broken = "# mi nota\n[appearance\nfont_size = \"";
         fs::write(&path, broken).unwrap();
-        AxonConfig::load_from(&path);
+        TearminalConfig::load_from(&path);
         assert_eq!(fs::read_to_string(&path).unwrap(), broken);
         assert_eq!(
-            fs::read_to_string(dir.join("axon.toml.bak")).unwrap(),
+            fs::read_to_string(dir.join("tearminal.toml.bak")).unwrap(),
             broken
         );
 
@@ -674,37 +702,42 @@ mod tests {
 
     #[test]
     fn test_osc52_is_on_by_default_also_for_old_configs() {
-        assert!(AxonConfig::default().terminal.osc52);
-        let mut old = toml::to_string(&AxonConfig::default()).unwrap();
+        assert!(TearminalConfig::default().terminal.osc52);
+        let mut old = toml::to_string(&TearminalConfig::default()).unwrap();
         old = old
             .lines()
             .filter(|l| !l.starts_with("osc52"))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!old.contains("osc52"));
-        assert!(toml::from_str::<AxonConfig>(&old).unwrap().terminal.osc52);
+        assert!(
+            toml::from_str::<TearminalConfig>(&old)
+                .unwrap()
+                .terminal
+                .osc52
+        );
     }
 
     #[test]
     fn test_config_gpu_key_is_accepted_and_ignored() {
-        // `terminal.gpu` solo existe para que un axon.toml antiguo siga cargando: ningún código lo lee.
-        let text = toml::to_string_pretty(&AxonConfig::default())
+        // `terminal.gpu` solo existe para que un tearminal.toml antiguo siga cargando: ningún código lo lee.
+        let text = toml::to_string_pretty(&TearminalConfig::default())
             .unwrap()
             .replace("gpu = true", "gpu = false");
         assert!(text.contains("gpu = false"));
-        let cfg = toml::from_str::<AxonConfig>(&text).unwrap();
+        let cfg = toml::from_str::<TearminalConfig>(&text).unwrap();
         assert!(!cfg.terminal.gpu);
     }
 
     #[test]
     fn test_config_and_session_read_write_traits_in_memory() {
         // Probar serialización/deserialización en memoria sobre std::io::Read / Write sin tocar disco
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let mut bytes = Vec::new();
         cfg.write_to(&mut bytes).expect("write_to debe tener éxito");
 
         let loaded =
-            AxonConfig::from_reader(bytes.as_slice()).expect("from_reader debe tener éxito");
+            TearminalConfig::from_reader(bytes.as_slice()).expect("from_reader debe tener éxito");
         assert_eq!(loaded, cfg);
 
         let session = SessionState::default();
@@ -716,5 +749,52 @@ mod tests {
         let loaded_session = SessionState::from_reader(session_bytes.as_slice())
             .expect("session from_reader debe tener éxito");
         assert_eq!(loaded_session, session);
+    }
+
+    #[test]
+    fn test_render_tuning_config_roundtrip_and_defaults() {
+        let default_cfg = TearminalConfig::default();
+        assert_eq!(default_cfg.appearance.font_contrast, 1.0);
+        assert_eq!(default_cfg.appearance.image_filter, "point");
+        assert!(!default_cfg.appearance.pixel_snap);
+        assert!(!default_cfg.appearance.show_brand);
+        assert!(!default_cfg.appearance.show_dimensions);
+
+        let toml_str = r#"
+[appearance]
+font_family = "JetBrains Mono Nerd Font"
+font_size = 16.0
+ui_font_size = 15.0
+window_opacity = 1.0
+theme = "Catppuccin Mocha"
+theme_light = "Catppuccin Latte"
+line_spacing = 1.0
+tab_layout = "horizontal"
+theme_mode = "system"
+show_status_bar = true
+show_file_explorer = false
+panel_side = "left"
+font_contrast = 1.4
+image_filter = "linear"
+pixel_snap = true
+
+[terminal]
+default_shell = "powershell.exe"
+scrollback_lines = 10000
+cursor_blink = true
+copy_on_select = false
+restore_session = true
+"#;
+        let cfg: TearminalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.appearance.font_contrast, 1.4);
+        assert_eq!(cfg.appearance.image_filter, "linear");
+        assert!(cfg.appearance.pixel_snap);
+
+        let mut bytes = Vec::new();
+        cfg.write_to(&mut bytes).unwrap();
+        let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
+        assert_eq!(reloaded.appearance.font_contrast, 1.4);
+        assert_eq!(reloaded.appearance.image_filter, "linear");
+        assert!(reloaded.appearance.pixel_snap);
     }
 }

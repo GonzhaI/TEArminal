@@ -1,19 +1,19 @@
 <div align="center">
-  <img src="assets/logo.png" width="120" height="120" alt="Axon" />
-  <h1>Axon</h1>
+  <img src="assets/logo.png" width="120" height="120" alt="TEArminal" />
+  <h1>TEArminal</h1>
   <p><em>Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI</em></p>
 </div>
 
-**Axon** es un emulador de terminal en Rust solo para Windows (ConPTY) y optimizado para **PowerShell**. Sin Electron ni WebView: ventana nativa (`winit`), dibujo con Direct3D 11 (la GPU, o el rasterizador por software WARP si no hay), texto con `rustybuzz` + `fontdue` y emulación VT propia sobre `vte`. Pensada para agentes de CLI (*Claude Code, Gemini CLI, Aider, OpenCode…*) y sesiones SSH.
+**TEArminal** es un emulador de terminal en Rust solo para Windows (ConPTY) y optimizado para **PowerShell**. Sin Electron ni WebView: ventana nativa (`winit`), dibujo con Direct3D 11 (la GPU, o el rasterizador por software WARP si no hay), texto con `rustybuzz` + `fontdue` y emulación VT propia sobre `vte`. Pensada para agentes de CLI (*Claude Code, Gemini CLI, Aider, OpenCode…*) y sesiones SSH.
 
 | | |
 | :--- | :--- |
-| `axon.exe` (release) | **~5,9 MB** |
+| `tearminal.exe` (release) | **~5,9 MB** |
 | RAM en reposo | **~111 MB** (privada ~126 MB) |
 | CPU en reposo | **< 1 %** |
 | Fotograma 1920×1080 con texto denso | **~0,3 ms** de CPU |
 
-> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). Son ejecuciones únicas en una sola máquina: la RAM y la CPU en reposo, con la sesión restaurada (2 pestañas, un panel dividido y el explorador), tras 8 s de arranque y 30 s sin tocar la ventana (CPU en tres ejecuciones: 0 a 0,7 % de un núcleo); el fotograma es la CPU que cuesta grabar la escena y enviarla a la GPU (`bench_gpu_encode_and_submit_full_frame`), no el tiempo de la GPU. La escena se graba en la CPU y la dibuja Direct3D 11 (hardware, o el rasterizador por software WARP si no hay GPU o falla el controlador); el texto se compone y rasteriza en la CPU (`rustybuzz`, `fontdue`). `AXON_RENDERER=warp` fuerza WARP. El cuello de botella al volcar salida es ConPTY, no el dibujo.
+> Medido en release en Windows 11 (`cargo test --release bench_ -- --nocapture`). Son ejecuciones únicas en una sola máquina: la RAM y la CPU en reposo, con la sesión restaurada (2 pestañas, un panel dividido y el explorador), tras 8 s de arranque y 30 s sin tocar la ventana (CPU en tres ejecuciones: 0 a 0,7 % de un núcleo); el fotograma es la CPU que cuesta grabar la escena y enviarla a la GPU (`bench_gpu_encode_and_submit_full_frame`), no el tiempo de la GPU. La escena se graba en la CPU y la dibuja Direct3D 11 (hardware, o el rasterizador por software WARP si no hay GPU o falla el controlador); el texto se compone y rasteriza en la CPU (`rustybuzz`, `fontdue`). `TEARMINAL_RENDERER=warp` fuerza WARP. El cuello de botella al volcar salida es ConPTY, no el dibujo.
 
 ## Características
 
@@ -42,19 +42,19 @@
 | `Ctrl+Shift+K` | Limpiar pantalla y scrollback |
 | `Ctrl+Shift+O` / `Ctrl+Shift+↑↓` | Copiar última salida / saltar entre prompts |
 | `Ctrl++` `Ctrl+-` `Ctrl+0` | Tamaño de fuente |
-| `Ctrl+Shift+,` | Recargar `axon.toml` |
+| `Ctrl+Shift+,` | Recargar `tearminal.toml` |
 | `Shift+PageUp/PageDown` | Historial |
 
 En el visor: `Ctrl+S` guardar, `Ctrl+E` lectura/edición, `Ctrl+Z/Y` deshacer/rehacer, `Alt+Z` ajuste de línea, `Esc` cerrar.
 
 ## Instalación
 
-Descarga desde [Releases](https://github.com/GonzhaI/axon/releases):
+Descarga desde [Releases](https://github.com/GonzhaI/TEArminal/releases):
 
-* **`axon-setup-X.Y.Z.exe`** (recomendado): instalador por usuario, sin administrador, en `%LOCALAPPDATA%\Programs\Axon`; se actualiza instalando encima.
-* **`axon-X.Y.Z-windows-x64.zip`**: portable. `SHA256SUMS.txt` verifica ambos.
+* **`tearminal-setup-X.Y.Z.exe`** (recomendado): instalador por usuario, sin administrador, en `%LOCALAPPDATA%\Programs\TEArminal`; se actualiza instalando encima.
+* **`tearminal-X.Y.Z-windows-x64.zip`**: portable. `SHA256SUMS.txt` verifica ambos.
 
-Incluye `axon.exe` autónomo (CRT estático, fuentes embebidas) y las herramientas opcionales `eza`, `bat`, `ripgrep`, `fd`, `zoxide` y `fzf` en `bin\` (al final del PATH: tus versiones tienen prioridad; versiones y licencias en `packaging/tools.json` y `licenses\`). Usa PowerShell 7 si está instalado y, si no, el 5.1 de Windows.
+Incluye `tearminal.exe` autónomo (CRT estático, fuentes embebidas) y las herramientas opcionales `eza`, `bat`, `ripgrep`, `fd`, `zoxide` y `fzf` en `bin\` (al final del PATH: tus versiones tienen prioridad; versiones y licencias en `packaging/tools.json` y `licenses\`). Usa PowerShell 7 si está instalado y, si no, el 5.1 de Windows.
 
 Requisitos: Windows 10 1809 o superior, x64. El instalador aún no está firmado, así que SmartScreen puede avisar la primera vez (*Más información → Ejecutar de todas formas*).
 
@@ -63,16 +63,16 @@ Requisitos: Windows 10 1809 o superior, x64. El instalador aún no está firmado
 Requiere [Rust](https://rustup.rs/) estable.
 
 ```powershell
-git clone https://github.com/GonzhaI/axon.git
-cd axon
+git clone https://github.com/GonzhaI/TEArminal.git
+cd tearminal
 cargo build --release
-.\target\release\axon.exe
+.\target\release\tearminal.exe
 ```
 
 Instalador y ZIP (requieren [Inno Setup 6](https://jrsoftware.org/isdl.php) y Visual Studio Build Tools con C++):
 
 ```powershell
-pwsh packaging/package.ps1          # dist\axon-setup-X.Y.Z.exe, el ZIP y SHA256SUMS.txt
+pwsh packaging/package.ps1          # dist\tearminal-setup-X.Y.Z.exe, el ZIP y SHA256SUMS.txt
 pwsh packaging/test-installer.ps1   # instala en silencio, prueba y desinstala
 ```
 
@@ -80,11 +80,11 @@ Pruebas: `cargo test` (incluye PowerShell 5.1 y 7 reales sobre ConPTY) y `cargo 
 
 ## Configuración
 
-`axon.toml` se busca junto al ejecutable o en `%APPDATA%\axon\axon\config` (se genera si falta). Solo en compilaciones de desarrollo (debug) se lee también el del directorio actual: en release se ignora para que un repo ajeno no pueda elegir qué programa se ejecuta. Se edita a mano o desde Ajustes (`Ctrl+,`) y se recarga con `Ctrl+Shift+,`. [`examples/axon.toml`](examples/axon.toml) documenta todas las claves.
+`tearminal.toml` se busca junto al ejecutable o en `%APPDATA%\tearminal\tearminal\config` (se genera si falta). Solo en compilaciones de desarrollo (debug) se lee también el del directorio actual: en release se ignora para que un repo ajeno no pueda elegir qué programa se ejecuta. Se edita a mano o desde Ajustes (`Ctrl+,`) y se recarga con `Ctrl+Shift+,`. [`examples/tearminal.toml`](examples/tearminal.toml) documenta todas las claves.
 
-**Red y credenciales:** Axon hace dos llamadas por su cuenta. La comprobación de versiones consulta la API de GitHub Releases (se apaga con `terminal.auto_check_updates = false`). Las cuotas de Claude que muestra la barra de estado se piden a `api.anthropic.com/api/oauth/usage` con el token de sesión de Claude Code (`~/.claude/.credentials.json`, solo lectura: nunca se renueva, no se registra ni se muestra); `terminal.ai_limits = false` evita leer esa credencial y hacer la llamada.
+**Red y credenciales:** TEArminal hace dos llamadas por su cuenta. La comprobación de versiones consulta la API de GitHub Releases (se apaga con `terminal.auto_check_updates = false`). Las cuotas de Claude que muestra la barra de estado se piden a `api.anthropic.com/api/oauth/usage` con el token de sesión de Claude Code (`~/.claude/.credentials.json`, solo lectura: nunca se renueva, no se registra ni se muestra); `terminal.ai_limits = false` evita leer esa credencial y hacer la llamada.
 
-Con `terminal.shell_integration = true` (por defecto) Axon inyecta su script en PowerShell: marcas OSC 7/133, rama git, `ls` con iconos y resaltado de sintaxis, todo con colores de la paleta ANSI del tema elegido. Con `false` el shell arranca limpio, sin nada inyectado.
+Con `terminal.shell_integration = true` (por defecto) TEArminal inyecta su script en PowerShell: marcas OSC 7/133, rama git, `ls` con iconos y resaltado de sintaxis, todo con colores de la paleta ANSI del tema elegido. Con `false` el shell arranca limpio, sin nada inyectado.
 
 ## Contribuir
 

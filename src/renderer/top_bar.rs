@@ -3,8 +3,11 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Marca de Axon: el prompt `>_` en acento y el wordmark. Sin decoración fuera de la marca.
+    /// Marca de TEArminal: el prompt `>_` en acento y el wordmark. Sin decoración fuera de la marca.
     fn draw_brand(&mut self, canvas: &mut Canvas, bar_h: usize, theme: &Theme) {
+        if !self.show_brand {
+            return;
+        }
         let cy = bar_h / 2;
         self.draw_mono_text(
             canvas,
@@ -18,7 +21,7 @@ impl TerminalRenderer {
         );
         self.draw_ui_text(
             canvas,
-            "Axon",
+            "TEArminal",
             42,
             cy + 5,
             TopTabBarRects::BRAND_W,

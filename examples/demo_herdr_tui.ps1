@@ -1,4 +1,4 @@
-# demo_herdr_tui.ps1 - Simulación Interactiva de Herdr TUI en Axon Terminal
+# demo_herdr_tui.ps1 - Simulación Interactiva de Herdr TUI en TEArminal
 # Valida: Alternate Screen Buffer, SGR 1006 Mouse Tracking, TrueColor y Paneles Multi-Agente
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -33,7 +33,7 @@ function Draw-Screen {
     # Paneles de Agentes
     $agents = @(
         @{ Name = "Planner";  Role = "Arquitecto / Planificador"; State = "ACTIVO"; Color = $fg_blue;  Icon = "󰒋" },
-        @{ Name = "Coder";    Role = "Desarrollador Rust (Axon)";  State = "RUNNING";Color = $fg_accent;Icon = "󰅩" },
+        @{ Name = "Coder";    Role = "Desarrollador Rust (TEArminal)";  State = "RUNNING";Color = $fg_accent;Icon = "󰅩" },
         @{ Name = "Reviewer"; Role = "Auditor de Código & QA";     State = "IDLE";   Color = $fg_amber; Icon = "󰄲" }
     )
 

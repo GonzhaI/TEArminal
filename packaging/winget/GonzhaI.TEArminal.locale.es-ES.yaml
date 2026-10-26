@@ -1,11 +1,11 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
-PackageIdentifier: GonzhaI.Axon
+PackageIdentifier: GonzhaI.TEArminal
 PackageVersion: <VERSION>
 PackageLocale: es-ES
-Publisher: Axon Team
+Publisher: TEArminal Team
 PublisherUrl: https://github.com/GonzhaI
-PackageName: Axon
-PackageUrl: https://github.com/GonzhaI/axon
+PackageName: TEArminal
+PackageUrl: https://github.com/GonzhaI/TEArminal
 License: Proprietary
 ShortDescription: Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI.
 Tags:

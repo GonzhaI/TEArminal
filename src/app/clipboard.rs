@@ -19,9 +19,27 @@ pub(super) fn copy_text(slot: &mut Option<arboard::Clipboard>, text: &str) {
     }
 }
 
-impl AxonApp {
+/// Si `copy_on_select` está activo y el panel tiene texto seleccionado, lo copia al portapapeles.
+pub(super) fn copy_pane_selection(
+    slot: &mut Option<arboard::Clipboard>,
+    copy_on_select: bool,
+    pane: &mut crate::app::TerminalPane,
+) {
+    if copy_on_select {
+        if let Some(text) = pane.terminal.copy_selection_text() {
+            copy_text(slot, &text);
+        }
+    }
+}
+
+impl TearminalApp {
     pub(super) fn set_clipboard_text(&mut self, text: &str) {
         copy_text(&mut self.clipboard, text);
+    }
+
+    pub(super) fn get_clipboard_string(&mut self) -> Option<String> {
+        lazy_clipboard(&mut self.clipboard);
+        self.clipboard.as_mut().and_then(|cb| cb.get_text().ok())
     }
 
     pub(super) fn paste_text(&mut self, text: &str) {
@@ -112,7 +130,7 @@ impl AxonApp {
             }
 
             // Si estamos en una sesión remota SSH, transferimos la imagen por ssh
-            // y pegamos la ruta remota /tmp/axon_img_... en lugar de una ruta local de Windows
+            // y pegamos la ruta remota /tmp/tearminal_img_... en lugar de una ruta local de Windows
             if is_ssh {
                 if let Some(session) = ssh_session {
                     if let (Some(local_path), Some(pane_id)) =
@@ -152,9 +170,9 @@ impl AxonApp {
         }
     }
 
-    /// Guarda una imagen del portapapeles en la carpeta de caché local de Axon (`%LOCALAPPDATA%\axon\axon\cache\clipboard`) como PNG.
+    /// Guarda una imagen del portapapeles en la carpeta de caché local de TEArminal (`%LOCALAPPDATA%\tearminal\tearminal\cache\clipboard`) como PNG.
     /// Realiza limpieza pasiva periódica de capturas antiguas (>24 horas) con aceleración (máximo una vez por hora)
-    /// y elimina cualquier carpeta temporal obsoleta en `%TEMP%\axon_clipboard` para evitar alertas heurísticas de antivirus.
+    /// y elimina cualquier carpeta temporal obsoleta en `%TEMP%\tearminal_clipboard` para evitar alertas heurísticas de antivirus.
     pub(crate) fn save_clipboard_image(&self, img: &arboard::ImageData) -> Option<String> {
         let clip_dir = crate::config::cache_dir_or_fallback().join("clipboard");
         let _ = std::fs::create_dir_all(&clip_dir);
@@ -185,8 +203,8 @@ impl AxonApp {
                 }
             }
 
-            // 2. Limpieza proactiva del directorio temporal obsoleto en %TEMP%\axon_clipboard
-            let legacy_temp = std::env::temp_dir().join("axon_clipboard");
+            // 2. Limpieza proactiva del directorio temporal obsoleto en %TEMP%\tearminal_clipboard
+            let legacy_temp = std::env::temp_dir().join("tearminal_clipboard");
             if legacy_temp.exists() {
                 let _ = std::fs::remove_dir_all(legacy_temp);
             }
@@ -199,7 +217,7 @@ impl AxonApp {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis();
-        let file_path = clip_dir.join(format!("axon_clip_{timestamp}_{seq}.png"));
+        let file_path = clip_dir.join(format!("tearminal_clip_{timestamp}_{seq}.png"));
 
         let width = img.width as u32;
         let height = img.height as u32;

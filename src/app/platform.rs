@@ -276,10 +276,10 @@ pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
 #[cold]
 pub(crate) fn gpu_error_message(err: &dyn std::fmt::Display) -> String {
     format!(
-        "Axon no pudo inicializar Direct3D 11 (ni siquiera el respaldo por software WARP).\n\n\
+        "TEArminal no pudo inicializar Direct3D 11 (ni siquiera el respaldo por software WARP).\n\n\
          Error: {err}\n\n\
-         Axon necesita Windows 10 versión 1809 (build 17763) o superior. Prueba a arrancarlo con \
-         la variable de entorno AXON_RENDERER=warp para forzar el render por software y \
+         TEArminal necesita Windows 10 versión 1809 (build 17763) o superior. Prueba a arrancarlo con \
+         la variable de entorno TEARMINAL_RENDERER=warp para forzar el render por software y \
          actualiza los controladores de la tarjeta gráfica."
     )
 }
@@ -292,7 +292,7 @@ pub(crate) fn fatal_gpu_error(err: &dyn std::fmt::Display) -> ! {
     crate::logger::log(&format!("Error al inicializar Direct3D 11: {err}"));
     let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
     let text = wide(&gpu_error_message(err));
-    let title = wide("Axon");
+    let title = wide("TEArminal");
     // SAFETY: cadenas UTF-16 terminadas en nulo que viven durante la llamada
     unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
     std::process::exit(1)

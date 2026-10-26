@@ -23,6 +23,7 @@ pub(crate) struct AiLimit {
 }
 
 impl AiLimit {
+    #[allow(dead_code)]
     pub(crate) fn resets_in_secs(&self) -> Option<u64> {
         let left = self.resets_at?.saturating_sub(now_unix_secs());
         (left > 0).then_some(left)
@@ -64,7 +65,7 @@ fn fetch_claude_limits(home: &Path, now_epoch: u64) -> Vec<AiLimit> {
         "-H",
         "anthropic-beta: oauth-2025-04-20",
         "-H",
-        "User-Agent: Axon-Terminal",
+        "User-Agent: TEArminal",
         USAGE_ENDPOINT,
     ])
     .stdin(Stdio::piped())
@@ -189,6 +190,7 @@ impl AiUsageSnapshot {
 
 impl AiAgentUsage {
     /// Hay tokens registrados localmente (Aider, Copilot y Ollama no dejan transcripciones)
+    #[allow(dead_code)]
     pub(crate) fn has_tokens(&self) -> bool {
         self.window_5h.total_tokens() > 0 || self.session.total_tokens() > 0
     }
@@ -935,6 +937,7 @@ pub(crate) fn format_tokens(n: u64) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn format_duration(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;
@@ -1011,7 +1014,7 @@ mod tests {
 
     #[test]
     fn test_ai_usage_popup_renders_and_hit_tests() {
-        let cfg = AxonConfig::default();
+        let cfg = TearminalConfig::default();
         let theme = Theme::default();
         let mut renderer = TerminalRenderer::new(&cfg, 1.0);
         let (w, h) = (900, 600);
@@ -1070,7 +1073,7 @@ mod tests {
         renderer.render_status_bar_with_ai(
             &mut canvas,
             0,
-            Some("~\\dev\\axon"),
+            Some("~\\dev\\tearminal"),
             Some("main"),
             None,
             100,
@@ -1092,17 +1095,17 @@ mod tests {
 
         let popup_h = TerminalRenderer::ai_usage_popup_height(&state.snapshot);
         let popup_rect = StatusBarRects::popup_rect(w, h, popup_h);
-        let sb_rects = StatusBarRects::compute(w, h, 180, None);
+        let badge_rect = (w.saturating_sub(100), h.saturating_sub(28), 80, 28);
         assert!(StatusBarRects::inside_badge_or_popup(
-            sb_rects.ai_badge.0 + 4,
-            sb_rects.ai_badge.1 + 4,
-            sb_rects.ai_badge,
+            badge_rect.0 + 4,
+            badge_rect.1 + 4,
+            badge_rect,
             popup_rect
         ));
         assert!(StatusBarRects::inside_badge_or_popup(
             popup_rect.0 + 10,
             popup_rect.1 + 10,
-            sb_rects.ai_badge,
+            badge_rect,
             popup_rect
         ));
     }
@@ -1200,7 +1203,8 @@ mod tests {
         assert_eq!(model_from_slash_command(chat), None);
 
         // El último `/model` de la transcripción manda sobre la respuesta anterior
-        let path = std::env::temp_dir().join(format!("axon_model_{}.jsonl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("tearminal_model_{}.jsonl", std::process::id()));
         let reply = r#"{"type":"assistant","timestamp":"2026-10-20T17:19:00Z","message":{"model":"claude-haiku-5-5","usage":{"input_tokens":1,"output_tokens":1}}}"#;
         std::fs::write(&path, format!("{reply}\n{set}\n")).unwrap();
         let scan = scan_claude_transcript(&path, now_unix_secs(), &mut None);

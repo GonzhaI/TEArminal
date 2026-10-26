@@ -219,7 +219,7 @@ pub(crate) struct FileExplorer {
     remote_requested: Option<RemoteSshSession>,
     /// Generación de la vista remota por SSH lento: las respuestas de una anterior se ignoran
     remote_gen: u64,
-    /// Listados pedidos y aún sin lanzar (la app los ejecuta en hilos: `AxonApp::pump_explorer_ssh`)
+    /// Listados pedidos y aún sin lanzar (la app los ejecuta en hilos: `TearminalApp::pump_explorer_ssh`)
     ssh_requests: Vec<RemoteLsReq>,
     /// Consulta de `git status` pendiente de lanzar en segundo plano (`(repo_root, changes_only)`)
     git_status_req: Option<(PathBuf, bool)>,
@@ -489,7 +489,7 @@ impl FileExplorer {
         })
     }
 
-    /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 AxonLs).
+    /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 TearminalLs).
     /// No hace nada si ya está aplicado, así que puede llamarse tras cada ráfaga de salida.
     pub(crate) fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
         let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);

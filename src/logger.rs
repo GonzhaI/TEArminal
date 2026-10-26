@@ -5,24 +5,24 @@ use std::time::SystemTime;
 
 static LOG_FILE: Mutex<Option<BufWriter<File>>> = Mutex::new(None);
 
-/// Indica si el registro en `axon.log` está activo (cacheado una sola vez por proceso).
+/// Indica si el registro en `tearminal.log` está activo (cacheado una sola vez por proceso).
 #[inline]
 pub(crate) fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         cfg!(debug_assertions)
-            || std::env::var_os("AXON_DEBUG").is_some()
-            || std::env::var_os("AXON_LOG").is_some()
+            || std::env::var_os("TEARMINAL_DEBUG").is_some()
+            || std::env::var_os("TEARMINAL_LOG").is_some()
     })
 }
 
-/// Traza de teclas (`AXON_LOG_KEYS=1`). Es opt-in y independiente de `AXON_DEBUG`/`AXON_LOG`: registrar
+/// Traza de teclas (`TEARMINAL_LOG_KEYS=1`). Es opt-in y independiente de `TEARMINAL_DEBUG`/`TEARMINAL_LOG`: registrar
 /// pulsaciones puede capturar contraseñas tecleadas en un prompt, así que nunca está activa por defecto
 /// ni en compilaciones de depuración.
 #[inline]
 pub(crate) fn keys_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("AXON_LOG_KEYS").is_some())
+    *ENABLED.get_or_init(|| std::env::var_os("TEARMINAL_LOG_KEYS").is_some())
 }
 
 #[inline]
@@ -48,7 +48,7 @@ fn log_impl(msg: &str) {
         if guard.is_none() {
             let dir = crate::config::dirs_or_fallback();
             let _ = std::fs::create_dir_all(&dir);
-            let path = dir.join("axon.log");
+            let path = dir.join("tearminal.log");
             *guard = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -57,7 +57,7 @@ fn log_impl(msg: &str) {
                     OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open(std::env::temp_dir().join("axon.log"))
+                        .open(std::env::temp_dir().join("tearminal.log"))
                 })
                 .ok()
                 .map(BufWriter::new);

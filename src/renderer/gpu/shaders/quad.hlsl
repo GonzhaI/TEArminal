@@ -6,11 +6,13 @@
 cbuffer Frame : register(b0)
 {
     float2 target_size; // píxeles del destino
-    float2 _pad;
+    float font_contrast; // 1.0 = normal, > 1.0 = realce de bordes gamma
+    float image_filter;  // 0.0 = punto (nearest), 1.0 = bilineal
 };
 
 Texture2D<float>  atlas : register(t0); // R8: cobertura de glifos
 Texture2D<float4> image : register(t1); // BGRA: imagen (el muestreo devuelve RGBA)
+SamplerState samp_linear : register(s0); // Lineal + clamp
 
 static const uint KIND_SOLID = 0;
 static const uint KIND_ROUNDED_FILL = 1;
@@ -102,6 +104,12 @@ float4 ps_main(VsOut i) : SV_Target
     else if (kind == KIND_GLYPH)
     {
         float cov = atlas.Load(int3(int2(i.uv) + off, 0));
+        if (font_contrast > 1.0)
+        {
+            float lum = dot(rgb, float3(0.299, 0.587, 0.114));
+            if (lum > 0.35)
+                cov = pow(saturate(cov), 1.0 / font_contrast);
+        }
         uint c8 = uint(cov * 255.0 + 0.5);
         if (c8 == 0u)
             discard; // cobertura 0 no toca el destino
@@ -112,9 +120,19 @@ float4 ps_main(VsOut i) : SV_Target
     {
         uint iw, ih;
         image.GetDimensions(iw, ih);
-        // Vecino más próximo con aritmética entera: src = off * src_size / target_size
-        uint2 src = (uint2(off) * uint2(iw, ih)) / uint2(i.rect.zw);
-        float4 t = image.Load(int3(int2(src), 0));
+        float4 t;
+        if (image_filter > 0.5)
+        {
+            // Muestreo bilineal suave y nítido para fotos y capturas
+            float2 uv = (float2(off) + 0.5) / float2(i.rect.zw);
+            t = image.SampleLevel(samp_linear, uv, 0.0);
+        }
+        else
+        {
+            // Vecino más próximo con aritmética entera: src = off * src_size / target_size
+            uint2 src = (uint2(off) * uint2(iw, ih)) / uint2(i.rect.zw);
+            t = image.Load(int3(int2(src), 0));
+        }
         uint a8 = uint(t.a * 255.0 + 0.5);
         if (a8 == 0u)
             discard;

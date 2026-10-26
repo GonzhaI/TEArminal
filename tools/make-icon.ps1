@@ -1,4 +1,4 @@
-# Genera el icono de Axon: assets/icon.ico (multi-resolución, PNG embebidos), assets/icon-256.png
+# Genera el icono de TEArminal: assets/icon.ico (multi-resolución, PNG embebidos), assets/icon-256.png
 # (icono de ventana y logo del README). Dibuja con GDI+ nativo a cada tamaño
 # (vectorial, sin reescalar) para que 16/24/32 px queden nítidos.
 #
@@ -7,7 +7,7 @@ Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 
-function New-AxonIcon([int]$S) {
+function New-TearminalIcon([int]$S) {
     $bmp = New-Object System.Drawing.Bitmap $S, $S, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'; $g.Clear([System.Drawing.Color]::Transparent)
@@ -45,7 +45,7 @@ function New-AxonIcon([int]$S) {
 function Get-PngBytes($bmp) { $ms = New-Object System.IO.MemoryStream; $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); return , $ms.ToArray() }
 
 $sizes = 16, 20, 24, 32, 40, 48, 64, 128, 256
-$frames = foreach ($s in $sizes) { , @($s, (Get-PngBytes (New-AxonIcon $s))) }
+$frames = foreach ($s in $sizes) { , @($s, (Get-PngBytes (New-TearminalIcon $s))) }
 
 # ICO con entradas PNG (Vista+)
 $ms = New-Object System.IO.MemoryStream; $bw = New-Object System.IO.BinaryWriter $ms

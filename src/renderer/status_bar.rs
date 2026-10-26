@@ -407,10 +407,12 @@ impl TerminalRenderer {
     }
 
     /// Alto de una fila de límite: etiqueta + barra + reinicio
+    #[allow(dead_code)]
     pub(crate) const LIMIT_ROW_H: usize = 38;
 
     /// Alto del bloque de un agente: cabecera + límites reales + (ventana 5h y sesión, o un aviso si no
     /// hay tokens) + hueco
+    #[allow(dead_code)]
     fn ai_agent_block_height(usage: &crate::app::AiAgentUsage, limits: usize) -> usize {
         let tokens = if usage.has_tokens() {
             16 + 18 + 16 + 18
@@ -427,11 +429,13 @@ impl TerminalRenderer {
 
     /// Aviso de los agentes sin fuente legítima de límites: AGY no guarda su cuota en disco y su servidor
     /// local exige un token CSRF interno, así que no se inventa un porcentaje.
+    #[allow(dead_code)]
     fn ai_limits_note(kind: AiAgentStatus) -> Option<&'static str> {
         (kind == AiAgentStatus::Agy).then_some("Límites no disponibles para AGY")
     }
 
     /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
+    #[allow(dead_code)]
     pub(crate) fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
         let mut h = 14; // padding superior
         h += 20; // cabecera: icono + título
@@ -467,6 +471,7 @@ impl TerminalRenderer {
 
     /// Renderiza el menú flotante de consumo de IA: un bloque por agente de la pestaña (cada uno con su
     /// color, modelo y ventanas), el total de 24 h y los agentes configurados.
+    #[allow(dead_code)]
     pub(crate) fn render_ai_usage_popup(
         &mut self,
         canvas: &mut Canvas,

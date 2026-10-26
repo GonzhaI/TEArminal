@@ -114,7 +114,7 @@ fn bench_throughput_massive_stream() {
     let lines_per_sec = iterations as f64 / elapsed.as_secs_f64();
 
     println!(
-        "\n⚡ [Axon Benchmark] Procesados {} bytes ({} líneas) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
+        "\n⚡ [TEArminal Benchmark] Procesados {} bytes ({} líneas) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
         total_bytes, iterations, elapsed, throughput_mb, lines_per_sec
     );
 
@@ -266,7 +266,7 @@ fn bench_massive_scrollback_100k_lines() {
     let lines_per_sec = count as f64 / elapsed.as_secs_f64();
 
     println!(
-        "\n🚀 [Axon Massive Stream Test] Procesadas {} líneas ({} MB) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
+        "\n🚀 [TEArminal Massive Stream Test] Procesadas {} líneas ({} MB) en {:.2?}: {:.2} MB/s | {:.0} líneas/segundo",
         count, (total_bytes / (1024 * 1024)), elapsed, throughput_mb, lines_per_sec
     );
 
@@ -737,10 +737,10 @@ fn test_osc_cwd_reporting() {
     let mut term = TerminalState::new(80, 24, 1000, theme);
 
     // Test OSC 7
-    term.process_bytes(b"\x1b]7;file://localhost/C:/Users/gmora/dev/axon\x07");
+    term.process_bytes(b"\x1b]7;file://localhost/C:/Users/gmora/dev/tearminal\x07");
     assert_eq!(
         term.current_dir.as_deref(),
-        Some(std::path::Path::new("C:/Users/gmora/dev/axon"))
+        Some(std::path::Path::new("C:/Users/gmora/dev/tearminal"))
     );
 
     // Test OSC 9;9
@@ -809,9 +809,9 @@ fn test_hook_osc_7_round_trips_special_directory_names() {
     let init = include_str!("../../assets/shell/init.ps1").replace("\r\n", "\n");
     let start = init.find("$hook = @'\n").expect("gancho") + "$hook = @'\n".len();
     let hook = &init[start..start + init[start..].find("\n'@").expect("fin del gancho")];
-    let dir = format!("/tmp/axon_osc7_{}/a b%41", std::process::id());
+    let dir = format!("/tmp/tearminal_osc7_{}/a b%41", std::process::id());
     let script_content = format!(
-        "mkdir -p '{dir}' && cd '{dir}'\nHOSTNAME=srv\n{hook}\nprintf '\\n@@@%s' \"$PWD\"\nrm -rf '/tmp/axon_osc7_{}'\n",
+        "mkdir -p '{dir}' && cd '{dir}'\nHOSTNAME=srv\n{hook}\nprintf '\\n@@@%s' \"$PWD\"\nrm -rf '/tmp/tearminal_osc7_{}'\n",
         std::process::id()
     );
     use std::io::Write;
@@ -848,7 +848,7 @@ fn test_title_with_path_only_sets_cwd_inside_an_authenticated_ssh_session() {
     assert_eq!(term.current_dir, None);
 
     // Dentro de una sesión SSH autenticada sí actualiza el directorio remoto que se muestra
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=user@host;token=t0k3n\x07");
     term.process_bytes(b"\x1b]0;user@host: /home/user/proyecto\x07");
     assert_eq!(
         term.ssh_session.as_ref().unwrap().remote_dir.as_deref(),
@@ -891,19 +891,21 @@ fn test_osc_window_title_does_not_infer_ssh() {
 }
 
 #[test]
-fn test_osc_axon_ssh_signaling() {
+fn test_osc_tearminal_ssh_signaling() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     term.pane_token = "t0k3n".into();
 
     // Sin token o con uno ajeno (p. ej. un `cat` de un archivo con la secuencia) se ignora
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example\x07");
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example;token=otro\x07");
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=evil.example;token=\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=evil.example\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=evil.example;token=otro\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=evil.example;token=\x07");
     assert!(term.ssh_session.is_none());
 
-    // Inicio de sesión SSH mediante protocolo OSC 1337 AxonSSH=start con el token del panel
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=ubuntu@production-node-1;token=t0k3n\x07");
+    // Inicio de sesión SSH mediante protocolo OSC 1337 TearminalSSH=start con el token del panel
+    term.process_bytes(
+        b"\x1b]1337;TearminalSSH=start;dest=ubuntu@production-node-1;token=t0k3n\x07",
+    );
     let sess = term
         .ssh_session
         .as_ref()
@@ -912,12 +914,12 @@ fn test_osc_axon_ssh_signaling() {
     assert!(sess.is_active);
 
     // Sin token o con uno ajeno no se puede cerrar la sesión de otro panel
-    term.process_bytes(b"\x1b]1337;AxonSSH=end\x07");
-    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=otro\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=end\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=otro\x07");
     assert!(term.ssh_session.is_some());
 
-    // Finalización de sesión SSH mediante OSC 1337 AxonSSH=end con el token del panel
-    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
+    // Finalización de sesión SSH mediante OSC 1337 TearminalSSH=end con el token del panel
+    term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=t0k3n\x07");
     assert!(
         term.ssh_session.is_none(),
         "Debe limpiar la sesión SSH al desconectarse"
@@ -935,7 +937,7 @@ fn test_osc_7_remote_host_ssh() {
     assert!(term.ssh_session.is_none());
 
     // Con la sesión ya autenticada, solo actualiza el directorio remoto
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=bastion.corp.internal;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=bastion.corp.internal;token=t0k3n\x07");
     term.process_bytes(b"\x1b]7;file://bastion.corp.internal/home/admin/projects\x07");
     let sess = term.ssh_session.as_ref().expect("sesión autenticada");
     assert_eq!(sess.destination, "bastion.corp.internal");
@@ -962,14 +964,14 @@ fn test_osc_8_explicit_hyperlinks() {
 
     // 1. Enlace explícito terminado con ST (\x1b\)
     let seq =
-        b"\x1b]8;id=xyz;https://axon.terminal/docs\x1b\\Documentacion\x1b]8;;\x1b\\ texto normal";
+        b"\x1b]8;id=xyz;https://tearminal.terminal/docs\x1b\\Documentacion\x1b]8;;\x1b\\ texto normal";
     term.process_bytes(seq);
 
     // Las celdas de "Documentacion" (cols 0..13) tienen el hipervínculo
     for col in 0..13 {
         assert_eq!(
             term.url_at(col, 0),
-            Some("https://axon.terminal/docs".to_string()),
+            Some("https://tearminal.terminal/docs".to_string()),
             "col {col} debe tener el URL explicito"
         );
         assert!(term.grid[0][col].hyperlink_id > 0);
@@ -1036,7 +1038,7 @@ fn test_osc_8_explicit_hyperlinks() {
     // 5. El texto plano sin secuencias OSC 8 no genera hipervínculos
     term2.cursor_x = 0;
     term2.cursor_y = 1;
-    term2.process_bytes(b"Visita https://github.com/GonzhaI/axon para mas info.");
+    term2.process_bytes(b"Visita https://github.com/GonzhaI/TEArminal para mas info.");
     assert_eq!(term2.url_at(0, 1), None);
     assert_eq!(term2.url_at(7, 1), None);
     assert_eq!(term2.url_at(20, 1), None);
@@ -1059,8 +1061,8 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
         b"\x1b]0;ssh: $(calc)\x07",
         b"\x1b]2;ssh: x|calc\x07",
         b"\x1b]2;ssh: -oProxyCommand=calc\x07",
-        b"\x1b]1337;AxonSSH=start;dest=$(calc);token=t0k3n\x07",
-        b"\x1b]1337;AxonSSH=start;dest=-oProxyCommand=calc;token=t0k3n\x07",
+        b"\x1b]1337;TearminalSSH=start;dest=$(calc);token=t0k3n\x07",
+        b"\x1b]1337;TearminalSSH=start;dest=-oProxyCommand=calc;token=t0k3n\x07",
         b"\x1b]7;file://evil$(calc)/home/x\x07",
     ] {
         let mut t = new();
@@ -1076,7 +1078,7 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
     // host válido por OSC 7 pero directorio con comillas: la sesión se crea sin directorio remoto
     let mut t = new();
     t.pane_token = "t0k3n".into();
-    t.process_bytes(b"\x1b]1337;AxonSSH=start;dest=server;token=t0k3n\x07");
+    t.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=server;token=t0k3n\x07");
     t.process_bytes(b"\x1b]7;file://server/tmp/'$(calc)'\x07");
     let s = t.ssh_session.as_ref().expect("host válido");
     assert_eq!(s.destination, "server");
@@ -1089,11 +1091,11 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
     let theme = crate::theme::Theme::default();
     let mut term = TerminalState::new(80, 24, 100, theme);
     term.pane_token = "t0k3n".into();
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=user@host;token=t0k3n\x07");
     assert!(!term.remote_integration);
 
     // La rama llega en cada prompt y se limpia al salir de un repositorio
-    term.process_bytes(b"\x1b]1337;AxonGit=qa\x07");
+    term.process_bytes(b"\x1b]1337;TearminalGit=qa\x07");
     assert!(term.remote_integration);
     assert_eq!(
         term.ssh_session
@@ -1103,10 +1105,10 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
             .as_deref(),
         Some("qa")
     );
-    term.process_bytes(b"\x1b]1337;AxonGit=\x07");
+    term.process_bytes(b"\x1b]1337;TearminalGit=\x07");
     assert_eq!(term.ssh_session.as_ref().unwrap().remote_git_branch, None);
 
-    term.process_bytes(b"\x1b]1337;AxonGit=feature/x\x07");
+    term.process_bytes(b"\x1b]1337;TearminalGit=feature/x\x07");
     assert_eq!(
         term.ssh_session
             .as_ref()
@@ -1115,7 +1117,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
             .as_deref(),
         Some("feature/x")
     );
-    term.process_bytes(b"\x1b]1337;AxonGit=-\x07");
+    term.process_bytes(b"\x1b]1337;TearminalGit=-\x07");
     assert_eq!(
         term.ssh_session.as_ref().unwrap().remote_git_branch,
         None,
@@ -1124,7 +1126,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
 
     // Listado: se descartan nombres peligrosos (rutas, control, . y ..)
     let raw = "src/\nREADME.md\n../\n./\na/b\nmalo\u{1b}[31m\n.env\n";
-    let osc = format!("\x1b]1337;AxonLs={}\x07", hex(raw));
+    let osc = format!("\x1b]1337;TearminalLs={}\x07", hex(raw));
     term.process_bytes(osc.as_bytes());
     assert_eq!(
         term.remote_listing.as_deref(),
@@ -1149,14 +1151,14 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
 "
         .into()])
         .collect();
-    let osc = format!("]1337;AxonLs={}", hex(&many));
+    let osc = format!("]1337;TearminalLs={}", hex(&many));
     term.process_bytes(osc.as_bytes());
     let listed = term.remote_listing.as_deref().unwrap();
     assert_eq!(listed.len(), 1001);
     assert_eq!(listed.last().map(String::as_str), Some(".env"));
 
     // Un listado desmesurado se ignora y al terminar la sesión todo se reinicia
-    let huge = format!("\x1b]1337;AxonLs={}\x07", "ab".repeat(300 * 1024));
+    let huge = format!("\x1b]1337;TearminalLs={}\x07", "ab".repeat(300 * 1024));
     term.remote_listing = None;
     term.process_bytes(huge.as_bytes());
     // El búfer OSC acota la secuencia: lo que queda no es un nombre válido
@@ -1164,7 +1166,7 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
         .remote_listing
         .as_deref()
         .is_none_or(<[String]>::is_empty));
-    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=t0k3n\x07");
     assert!(!term.remote_integration && term.remote_listing.is_none());
 
     // Sin sesión SSH nadie puede inyectar listado ni rama
@@ -1181,8 +1183,8 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
     // Sin integración no se puede pedir nada (los bytes irían a otro programa)
     assert!(term.remote_request_bytes("get", 1, "abc").is_none());
     term.pane_token = "t0k3n".into();
-    term.process_bytes(b"\x1b]1337;AxonSSH=start;dest=user@host;token=t0k3n\x07");
-    term.process_bytes(b"\x1b]1337;AxonGit=\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=user@host;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalGit=\x07");
     assert!(term.remote_at_prompt);
     let req = term
         .remote_request_bytes("get", 7, "%2Fetc%2Fhosts")
@@ -1205,9 +1207,9 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
     // Respuesta en dos trozos, llegando desordenados
     let data = hex("hola mundo");
     let (a, b) = data.split_at(8);
-    term.process_bytes(format!("\x1b]1337;AxonFile=7;ok;1;2;{b}\x07").as_bytes());
+    term.process_bytes(format!("\x1b]1337;TearminalFile=7;ok;1;2;{b}\x07").as_bytes());
     assert!(term.remote_file_results.is_empty());
-    term.process_bytes(format!("\x1b]1337;AxonFile=7;ok;0;2;{a}\x07").as_bytes());
+    term.process_bytes(format!("\x1b]1337;TearminalFile=7;ok;0;2;{a}\x07").as_bytes());
     assert_eq!(
         term.remote_file_results,
         vec![RemoteFileResult {
@@ -1219,8 +1221,8 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
 
     // Error del servidor y datos corruptos
     term.remote_file_results.clear();
-    term.process_bytes(b"\x1b]1337;AxonFile=8;err;0;1;\x07");
-    term.process_bytes(b"\x1b]1337;AxonFile=9;ok;0;1;zz\x07");
+    term.process_bytes(b"\x1b]1337;TearminalFile=8;err;0;1;\x07");
+    term.process_bytes(b"\x1b]1337;TearminalFile=9;ok;0;1;zz\x07");
     assert_eq!(term.remote_file_results.len(), 2);
     assert!(term
         .remote_file_results
@@ -1229,11 +1231,11 @@ fn test_remote_file_responses_are_reassembled_and_bounded() {
 
     // Límites: demasiados trozos, índice fuera de rango, sin sesión
     term.remote_file_results.clear();
-    term.process_bytes(b"\x1b]1337;AxonFile=10;ok;0;9999;ab\x07");
-    term.process_bytes(b"\x1b]1337;AxonFile=10;ok;5;2;ab\x07");
+    term.process_bytes(b"\x1b]1337;TearminalFile=10;ok;0;9999;ab\x07");
+    term.process_bytes(b"\x1b]1337;TearminalFile=10;ok;5;2;ab\x07");
     assert!(term.remote_file_results.is_empty());
-    term.process_bytes(b"\x1b]1337;AxonSSH=end;token=t0k3n\x07");
-    term.process_bytes(b"\x1b]1337;AxonFile=11;ok;0;1;6162\x07");
+    term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=t0k3n\x07");
+    term.process_bytes(b"\x1b]1337;TearminalFile=11;ok;0;1;6162\x07");
     assert!(term.remote_file_results.is_empty());
 }
 
@@ -1252,13 +1254,13 @@ fn test_private_marker_csi_m_is_not_sgr() {
     assert!(term.grid[0][1].underline());
 }
 
-/// El wrapper de agentes avisa con OSC 1337 AxonAgent; Axon lo usa para reabrir el shell si muere con el agente.
+/// El wrapper de agentes avisa con OSC 1337 TearminalAgent; TEArminal lo usa para reabrir el shell si muere con el agente.
 #[test]
-fn test_axon_agent_osc_tracks_running_agent() {
+fn test_tearminal_agent_osc_tracks_running_agent() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);
     assert!(!term.agent_running);
-    term.process_bytes(b"\x1b]1337;AxonAgent=start;name=claude\x07");
+    term.process_bytes(b"\x1b]1337;TearminalAgent=start;name=claude\x07");
     assert!(term.agent_running);
     assert_eq!(
         term.active_ai_agent(),
@@ -1272,20 +1274,20 @@ fn test_axon_agent_osc_tracks_running_agent() {
         crate::renderer::AiAgentStatus::Claude
     );
 
-    term.process_bytes(b"\x1b]1337;AxonAgent=end\x07");
+    term.process_bytes(b"\x1b]1337;TearminalAgent=end\x07");
     assert!(!term.agent_running);
     assert_eq!(term.active_ai_agent(), crate::renderer::AiAgentStatus::None);
 
-    // Al terminar un agente, Axon restaura la región de scroll y modos TUI sin mover el cursor a (0,0)
+    // Al terminar un agente, TEArminal restaura la región de scroll y modos TUI sin mover el cursor a (0,0)
     term.process_bytes(
-        b"\x1b]1337;AxonAgent=start\x07\x1b[2;20r\x1b[?1000h\x1b[?2004h\x1b[10;5HUpdated to 1.2.3",
+        b"\x1b]1337;TearminalAgent=start\x07\x1b[2;20r\x1b[?1000h\x1b[?2004h\x1b[10;5HUpdated to 1.2.3",
     );
     assert_eq!(term.scroll_region_top, 1);
     assert_eq!(term.scroll_region_bottom, 19);
     assert!(term.mouse_reporting_normal);
     assert!(term.bracketed_paste_mode);
     let cy_before = term.cursor_y;
-    term.process_bytes(b"\x1b]1337;AxonAgent=end\x07");
+    term.process_bytes(b"\x1b]1337;TearminalAgent=end\x07");
     assert_eq!(term.scroll_region_top, 0);
     assert_eq!(term.scroll_region_bottom, 23);
     assert!(!term.mouse_reporting_normal);
@@ -1340,7 +1342,7 @@ fn bench_csi_cursor_and_erase_churn() {
     let mut payload = Vec::with_capacity(64 * 1024);
     for row in 1..=48 {
         let chunk = format!(
-            "\x1b[{row};1H\x1b[48;2;24;26;31;38;2;190;210;255mStatus row {row:02}: compiling crate axon::terminal::performer...\x1b[K\x1b[{row};20H\x1b[8X\x1b[4@\x1b[4P\x1b[0m"
+            "\x1b[{row};1H\x1b[48;2;24;26;31;38;2;190;210;255mStatus row {row:02}: compiling crate tearminal::terminal::performer...\x1b[K\x1b[{row};20H\x1b[8X\x1b[4@\x1b[4P\x1b[0m"
         );
         payload.extend_from_slice(chunk.as_bytes());
     }
@@ -1536,7 +1538,7 @@ fn test_kitty_graphics_file_medium_and_animation_frames() {
 
     // 1. Crear imagen PNG de prueba en disco (%TEMP%)
     let temp_file =
-        std::env::temp_dir().join(format!("axon_kitty_test_{}.png", std::process::id()));
+        std::env::temp_dir().join(format!("tearminal_kitty_test_{}.png", std::process::id()));
     let img = image::RgbaImage::new(4, 4);
     img.save(&temp_file).unwrap();
     assert!(temp_file.exists());
@@ -1797,4 +1799,46 @@ fn test_scrollback_preserves_reading_position_when_new_output_arrives() {
     assert!(visible_bottom
         .iter()
         .any(|line| line.contains("Nueva linea 12")));
+}
+
+#[test]
+fn test_terminal_update_theme_migrates_colors_and_preserves_contrast() {
+    let dark_theme = Theme::from_name(Theme::DEFAULT_DARK);
+    let light_theme = Theme::from_name(Theme::DEFAULT_LIGHT);
+    let mut term = TerminalState::new(80, 5, 100, dark_theme.clone());
+
+    // Escribir texto por defecto y con secuencias ANSI
+    // "Hola": texto default fg (en dark_theme = dark_theme.foreground)
+    // "\x1b[31mRojo": color ANSI 1
+    // "\x1b[90mGris": color ANSI 8
+    term.process_bytes(b"Hola \x1b[31mRojo\x1b[0m \x1b[90mGris\x1b[0m\r\n");
+
+    let row = &term.grid[0];
+    let cell_hola = row[0]; // 'H'
+    let cell_rojo = row[5]; // 'R'
+    let cell_gris = row[10]; // 'G'
+
+    assert_eq!(cell_hola.fg, dark_theme.foreground);
+    assert_eq!(cell_rojo.fg, dark_theme.ansi[1]);
+    assert_eq!(cell_gris.fg, dark_theme.ansi[8]);
+    assert_eq!(term.current_fg, dark_theme.foreground);
+
+    // Cambiar a tema claro
+    term.update_theme(light_theme.clone());
+
+    let row_after = &term.grid[0];
+    let cell_hola_after = row_after[0];
+    let cell_rojo_after = row_after[5];
+    let cell_gris_after = row_after[10];
+
+    // Ahora los colores se han migrado coherentemente para el nuevo tema claro
+    assert_eq!(cell_hola_after.fg, light_theme.foreground);
+    assert_eq!(cell_rojo_after.fg, light_theme.ansi[1]);
+    assert_eq!(term.current_fg, light_theme.foreground);
+
+    // El contraste de todos ellos sobre el fondo claro es perfectamente legible (>= 2.0)
+    // El contraste de todos ellos sobre el fondo claro es perfectamente legible (>= 2.0)
+    assert!(crate::theme::contrast_ratio(cell_hola_after.fg, light_theme.background) >= 3.0);
+    assert!(crate::theme::contrast_ratio(cell_rojo_after.fg, light_theme.background) >= 2.0);
+    assert!(crate::theme::contrast_ratio(cell_gris_after.fg, light_theme.background) >= 2.0);
 }

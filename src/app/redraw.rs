@@ -26,13 +26,14 @@ struct SceneParams<'a> {
     hovered_ai_badge: bool,
     sidebar_scroll_offset: usize,
     sidebar_scrollbar_hovered: bool,
+    palette_scrollbar_hovered: bool,
     active_idx: usize,
     tab_items: &'a [SidebarTabItem],
     header: &'a SidebarHeader,
     panel_right: bool,
 }
 
-impl AxonApp {
+impl TearminalApp {
     /// Dibuja un fotograma completo (`WindowEvent::RedrawRequested`).
     pub(super) fn on_redraw(&mut self) {
         if self.occluded {
@@ -117,6 +118,23 @@ impl AxonApp {
             self.last_scroll_time.elapsed() < std::time::Duration::from_millis(1250);
         let is_maximized = window.is_maximized();
 
+        let palette_scrollbar_hovered = self.palette.as_ref().is_some_and(|p| {
+            let rects = PaletteRects::compute_with_scroll(
+                size.width as usize,
+                size.height as usize,
+                p.filtered.len(),
+                p.scroll_offset,
+            );
+            rects.scrollbar.is_some_and(|(track, _)| {
+                crate::renderer::ScrollbarRects::hit(
+                    track,
+                    rects.card.0 + rects.card.2,
+                    self.mouse_pos.x as usize,
+                    self.mouse_pos.y as usize,
+                )
+            })
+        });
+
         let params = SceneParams {
             is_horizontal,
             offset,
@@ -139,6 +157,7 @@ impl AxonApp {
             hovered_ai_badge: self.hovered_ai_badge,
             sidebar_scroll_offset: self.sidebar_scroll_offset,
             sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
+            palette_scrollbar_hovered,
             active_idx,
             tab_items: &tab_items,
             header: &header,
@@ -156,6 +175,7 @@ impl AxonApp {
             &self.settings_page_state,
             &self.ai_usage.snapshot,
             &self.context_menu,
+            &self.palette,
             &params,
             size.width as usize,
             size.height as usize,
@@ -164,6 +184,13 @@ impl AxonApp {
         let Some(gpu) = &mut self.gpu_surface else {
             return;
         };
+        gpu.set_render_tuning(
+            self.config.appearance.font_contrast,
+            self.config
+                .appearance
+                .image_filter
+                .eq_ignore_ascii_case("linear"),
+        );
         match gpu.present(self.canvas.scene()) {
             Ok(Presented::Ok) => {}
             Ok(Presented::Recovered) => {
@@ -190,11 +217,12 @@ fn draw_full_scene(
     renderer: &mut TerminalRenderer,
     tabs: &mut [TerminalTab],
     theme: &Theme,
-    config: &AxonConfig,
+    config: &TearminalConfig,
     file_explorer: &crate::explorer::FileExplorer,
     settings_page_state: &SettingsPageState,
     ai_snapshot: &ai_usage::AiUsageSnapshot,
     context_menu: &Option<ContextMenu>,
+    palette: &Option<PaletteState>,
     p: &SceneParams,
     width: usize,
     height: usize,
@@ -255,6 +283,7 @@ fn draw_full_scene(
             p.status_bar_h,
             config,
             settings_page_state,
+            p.cursor_visible,
             theme,
         );
     } else if let Some(ref mut viewer) = active_tab.file_viewer {
@@ -486,14 +515,20 @@ fn draw_full_scene(
             p.explorer_visible,
             theme,
         );
-
-        if p.hovered_ai_badge && context_menu.is_none() {
-            renderer.render_ai_usage_popup(canvas, ai_snapshot, theme);
-        }
     }
 
     if let Some(menu) = context_menu {
         renderer.render_context_menu(canvas, menu, theme);
+    }
+
+    if let Some(palette) = palette {
+        renderer.render_palette(
+            canvas,
+            palette,
+            p.cursor_visible,
+            p.palette_scrollbar_hovered,
+            theme,
+        );
     }
 }
 

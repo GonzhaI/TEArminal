@@ -1,4 +1,4 @@
-//! Mecanismo de comprobación y ejecución de actualizaciones automáticas para Axon.
+//! Mecanismo de comprobación y ejecución de actualizaciones automáticas para TEArminal.
 //! Consulta la API de GitHub Releases en segundo plano sin dependencias pesadas ni sobrecoste de CPU.
 
 use crate::app::platform::hide_console;
@@ -18,7 +18,7 @@ pub(crate) struct Unverified;
 /// Marcador zero-sized: instalador cuyo hash SHA-256 coincide estrictamente con el oficial de la release.
 pub(crate) struct Verified;
 
-/// Instalador de Axon con estados en tiempo de compilación (Patrón Typestate).
+/// Instalador de TEArminal con estados en tiempo de compilación (Patrón Typestate).
 ///
 /// El método `launch()` **solo existe** en `UpdateInstaller<Verified>`. Es un error
 /// de compilación intentar ejecutar un instalador en estado `Unverified`, garantizando por tipo
@@ -85,7 +85,7 @@ pub(crate) struct UpdateInfo {
 }
 
 /// Único origen aceptado para descargar el instalador y sus sumas de verificación
-const RELEASE_PREFIX: &str = "https://github.com/GonzhaI/axon/releases/download/";
+const RELEASE_PREFIX: &str = "https://github.com/GonzhaI/TEArminal/releases/download/";
 
 static AVAILABLE_UPDATE: RwLock<Option<UpdateInfo>> = RwLock::new(None);
 
@@ -140,7 +140,7 @@ fn extract_asset_url(json: &str, accept: impl Fn(&str) -> bool) -> Option<String
     None
 }
 
-/// Busca en el JSON de GitHub Releases la URL de descarga directa del instalador de Axon
+/// Busca en el JSON de GitHub Releases la URL de descarga directa del instalador de TEArminal
 pub(crate) fn extract_installer_download_url(json: &str) -> Option<String> {
     extract_asset_url(json, |v| {
         v.ends_with(".exe") && (v.contains("setup") || v.contains("Setup"))
@@ -186,7 +186,7 @@ pub(crate) fn sha256_hex(path: &Path) -> Option<String> {
         .then(|| hash.to_ascii_lowercase())
 }
 
-/// GET con `curl.exe` (incluido desde Windows 10 1803; Axon exige 1809): solo HTTPS, falla en códigos HTTP
+/// GET con `curl.exe` (incluido desde Windows 10 1803; TEArminal exige 1809): solo HTTPS, falla en códigos HTTP
 /// de error y devuelve el cuerpo
 fn curl_get(url: &str, max_time: &str, extra: &[&str]) -> Option<Vec<u8>> {
     let out = hide_console(&mut Command::new("curl.exe"))
@@ -212,7 +212,7 @@ pub(crate) fn check_for_updates_sync() -> Option<UpdateInfo> {
     }
 
     let html_url = extract_json_str(&json_text, "html_url")
-        .unwrap_or_else(|| "https://github.com/GonzhaI/axon/releases/latest".to_string());
+        .unwrap_or_else(|| "https://github.com/GonzhaI/TEArminal/releases/latest".to_string());
 
     let download_url = extract_installer_download_url(&json_text);
     let checksums_url = extract_checksums_url(&json_text);
@@ -229,11 +229,11 @@ pub(crate) fn check_for_updates_sync() -> Option<UpdateInfo> {
 /// Última release de GitHub (JSON) con `curl.exe`
 fn fetch_releases_json() -> Option<String> {
     let body = curl_get(
-        "https://api.github.com/repos/GonzhaI/axon/releases/latest",
+        "https://api.github.com/repos/GonzhaI/TEArminal/releases/latest",
         "5",
         &[
             "-H",
-            "User-Agent: Axon-Terminal",
+            "User-Agent: TEArminal",
             "-H",
             "Accept: application/vnd.github.v3+json",
         ],
@@ -244,19 +244,19 @@ fn fetch_releases_json() -> Option<String> {
 
 /// Lanza la comprobación de actualización en un hilo en segundo plano y notifica al EventLoop
 pub(crate) fn check_for_updates_background(
-    proxy: Option<winit::event_loop::EventLoopProxy<crate::app::AxonEvent>>,
+    proxy: Option<winit::event_loop::EventLoopProxy<crate::app::TearminalEvent>>,
 ) {
     std::thread::Builder::new()
-        .name("axon-update-checker".to_string())
+        .name("tearminal-update-checker".to_string())
         .spawn(move || {
             if let Some(info) = check_for_updates_sync() {
                 crate::logger::log(&format!(
-                    "Nueva versión de Axon disponible: v{} (actual: v{})",
+                    "Nueva versión de TEArminal disponible: v{} (actual: v{})",
                     info.latest_version, info.current_version
                 ));
                 set_available_update(Some(info));
                 if let Some(proxy) = proxy {
-                    let _ = proxy.send_event(crate::app::AxonEvent::UpdateCheckDone);
+                    let _ = proxy.send_event(crate::app::TearminalEvent::UpdateCheckDone);
                 }
             }
         })
@@ -283,7 +283,7 @@ fn download_verified_installer(info: &UpdateInfo) -> Option<UpdateInstaller<Veri
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("axon-update-{}-{nanos}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tearminal-update-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(name);
     let downloaded =
@@ -316,11 +316,11 @@ pub(crate) fn trigger_update() {
     };
 
     std::thread::Builder::new()
-        .name("axon-updater".to_string())
+        .name("tearminal-updater".to_string())
         .spawn(move || {
             if let Some(installer) = download_verified_installer(&info) {
                 crate::logger::log(&format!(
-                    "Lanzando instalador de Axon: {}",
+                    "Lanzando instalador de TEArminal: {}",
                     installer.path().display()
                 ));
                 if installer.launch().is_ok() {
@@ -367,12 +367,12 @@ mod tests {
         let sample = r#"{
             "assets": [
                 {
-                    "name": "axon-0.7.0-windows-x64.zip",
-                    "browser_download_url": "https://github.com/GonzhaI/axon/releases/download/v0.7.0/axon-0.7.0-windows-x64.zip"
+                    "name": "tearminal-0.7.0-windows-x64.zip",
+                    "browser_download_url": "https://github.com/GonzhaI/TEArminal/releases/download/v0.7.0/tearminal-0.7.0-windows-x64.zip"
                 },
                 {
-                    "name": "axon-setup-0.7.0.exe",
-                    "browser_download_url": "https://github.com/GonzhaI/axon/releases/download/v0.7.0/axon-setup-0.7.0.exe"
+                    "name": "tearminal-setup-0.7.0.exe",
+                    "browser_download_url": "https://github.com/GonzhaI/TEArminal/releases/download/v0.7.0/tearminal-setup-0.7.0.exe"
                 }
             ]
         }"#;
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(
             url,
             Some(
-                "https://github.com/GonzhaI/axon/releases/download/v0.7.0/axon-setup-0.7.0.exe"
+                "https://github.com/GonzhaI/TEArminal/releases/download/v0.7.0/tearminal-setup-0.7.0.exe"
                     .to_string()
             )
         );
@@ -391,19 +391,19 @@ mod tests {
     #[test]
     fn test_asset_urls_must_come_from_the_release_origin() {
         let sample = r#"{"assets":[
-            {"browser_download_url": "https://evil.example/axon-setup-9.9.9.exe"},
+            {"browser_download_url": "https://evil.example/tearminal-setup-9.9.9.exe"},
             {"browser_download_url": "https://evil.example/SHA256SUMS.txt"}]}"#;
         assert_eq!(extract_installer_download_url(sample), None);
         assert_eq!(extract_checksums_url(sample), None);
-        let ok = r#"{"browser_download_url": "https://github.com/GonzhaI/axon/releases/download/v1/SHA256SUMS.txt"}"#;
+        let ok = r#"{"browser_download_url": "https://github.com/GonzhaI/TEArminal/releases/download/v1/SHA256SUMS.txt"}"#;
         assert!(extract_checksums_url(ok).is_some());
     }
 
     #[test]
     fn test_expected_hash_finds_the_installer_line() {
-        let sums = "AAAA  axon-0.7.0-windows-x64.zip\nBBBB  axon-setup-0.7.0.exe\n";
+        let sums = "AAAA  tearminal-0.7.0-windows-x64.zip\nBBBB  tearminal-setup-0.7.0.exe\n";
         assert_eq!(
-            expected_hash(sums, "axon-setup-0.7.0.exe"),
+            expected_hash(sums, "tearminal-setup-0.7.0.exe"),
             Some("bbbb".to_string())
         );
         assert_eq!(expected_hash(sums, "otro.exe"), None);
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_sha256_hex_matches_known_vector() {
-        let path = std::env::temp_dir().join(format!("axon-sha-{}.txt", std::process::id()));
+        let path = std::env::temp_dir().join(format!("tearminal-sha-{}.txt", std::process::id()));
         std::fs::write(&path, b"abc").unwrap();
         let hash = sha256_hex(&path);
         let _ = std::fs::remove_file(&path);
@@ -423,8 +423,10 @@ mod tests {
 
     #[test]
     fn test_typestate_update_installer_verification() {
-        let path =
-            std::env::temp_dir().join(format!("axon-test-installer-{}.exe", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "tearminal-test-installer-{}.exe",
+            std::process::id()
+        ));
         std::fs::write(&path, b"dummy installer content").unwrap();
 
         let real_hash = sha256_hex(&path).unwrap();

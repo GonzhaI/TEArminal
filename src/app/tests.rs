@@ -1,12 +1,12 @@
 //! Tests de la aplicación: pestañas, paneles, ajustes, atajos y portapapeles.
 
 use super::*;
-use crate::config::AxonConfig;
+use crate::config::TearminalConfig;
 
 #[test]
 fn test_clipboard_image_saving_and_paste_formatting() {
-    let config = AxonConfig::load_or_default();
-    let app = AxonApp::new(config, None);
+    let config = TearminalConfig::load_or_default();
+    let app = TearminalApp::new(config, None);
 
     // Crear una imagen RGBA de prueba (4x4 píxeles de un color sólido)
     let width = 4;
@@ -34,7 +34,7 @@ fn test_clipboard_image_saving_and_paste_formatting() {
     );
     assert!(
         path.starts_with(crate::config::cache_dir_or_fallback()),
-        "El PNG debe guardarse en la carpeta de caché de Axon"
+        "El PNG debe guardarse en la carpeta de caché de TEArminal"
     );
 
     // Formato para chat de IA: ruta entrecomillada con espacio al final
@@ -57,14 +57,14 @@ fn test_settings_tab_actions_and_theme_switching() {
     impl Drop for ConfigRestorer {
         fn drop(&mut self) {
             if let Some(content) = &self.0 {
-                let _ = std::fs::write(AxonConfig::config_path(), content);
+                let _ = std::fs::write(TearminalConfig::config_path(), content);
             }
         }
     }
-    let _restorer = ConfigRestorer(std::fs::read_to_string(AxonConfig::config_path()).ok());
+    let _restorer = ConfigRestorer(std::fs::read_to_string(TearminalConfig::config_path()).ok());
 
-    let config = AxonConfig::load_or_default();
-    let mut app = AxonApp::new(config, None);
+    let config = TearminalConfig::load_or_default();
+    let mut app = TearminalApp::new(config, None);
 
     // 1. Abrir o cambiar a pestaña de Ajustes (siempre navega a Ajustes sin intercambiar)
     assert!(!app.tabs[app.active_tab_index].is_settings);
@@ -146,14 +146,14 @@ fn test_settings_reset_to_defaults() {
     impl Drop for ConfigRestorer {
         fn drop(&mut self) {
             if let Some(content) = &self.0 {
-                let _ = std::fs::write(AxonConfig::config_path(), content);
+                let _ = std::fs::write(TearminalConfig::config_path(), content);
             }
         }
     }
-    let _restorer = ConfigRestorer(std::fs::read_to_string(AxonConfig::config_path()).ok());
+    let _restorer = ConfigRestorer(std::fs::read_to_string(TearminalConfig::config_path()).ok());
 
-    let config = AxonConfig::load_or_default();
-    let mut app = AxonApp::new(config, None);
+    let config = TearminalConfig::load_or_default();
+    let mut app = TearminalApp::new(config, None);
 
     // Modificar varios parámetros a valores no predeterminados
     app.config.appearance.font_size = 22.0;
@@ -179,8 +179,8 @@ fn test_settings_reset_to_defaults() {
 
 #[test]
 fn test_app_tab_switching_and_toggle() {
-    let config = AxonConfig::load_or_default();
-    let mut app = AxonApp::new(config, None);
+    let config = TearminalConfig::load_or_default();
+    let mut app = TearminalApp::new(config, None);
 
     assert!(
         !app.tabs.is_empty(),
@@ -206,7 +206,8 @@ fn test_app_tab_switching_and_toggle() {
 #[test]
 fn test_command_hint_strips_the_shell_prompt() {
     assert_eq!(
-        super::layout::command_hint("PS C:\\Users\\dev\\axon> cargo test --release").as_deref(),
+        super::layout::command_hint("PS C:\\Users\\dev\\tearminal> cargo test --release")
+            .as_deref(),
         Some("cargo test --release")
     );
     assert_eq!(
@@ -414,7 +415,7 @@ fn test_file_viewer_tab_creation_and_title() {
 #[test]
 fn test_file_viewer_editing_and_dirty_state() {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("axon_test_edit_{}.rs", std::process::id()));
+    let temp_file = temp_dir.join(format!("tearminal_test_edit_{}.rs", std::process::id()));
     let _ = std::fs::write(&temp_file, "");
 
     let mut tab = TerminalTab::new_file_viewer(TabId(99), temp_file.clone());
@@ -470,7 +471,8 @@ fn test_remote_viewer_save_keeps_line_endings() {
 /// explícito avisa y solo sobrescribe si se repite
 #[test]
 fn test_viewer_does_not_overwrite_external_changes() {
-    let path = std::env::temp_dir().join(format!("axon_test_extchg_{}.txt", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("tearminal_test_extchg_{}.txt", std::process::id()));
     std::fs::write(&path, "uno").unwrap();
     let mut tab = TerminalTab::new_file_viewer(TabId(102), path.clone());
     let viewer = tab.file_viewer.as_mut().unwrap();
@@ -499,7 +501,7 @@ fn test_viewer_does_not_overwrite_external_changes() {
 #[test]
 fn test_file_viewer_undo_redo() {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("axon_test_undo_{}.txt", std::process::id()));
+    let temp_file = temp_dir.join(format!("tearminal_test_undo_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "hello world");
 
     let mut tab = TerminalTab::new_file_viewer(TabId(100), temp_file.clone());
@@ -530,7 +532,7 @@ fn test_file_viewer_undo_redo() {
 #[test]
 fn test_file_viewer_word_navigation_and_deletion() {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("axon_test_words_{}.txt", std::process::id()));
+    let temp_file = temp_dir.join(format!("tearminal_test_words_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "foo bar_baz  qux");
 
     let mut tab = TerminalTab::new_file_viewer(TabId(101), temp_file.clone());
@@ -561,7 +563,7 @@ fn test_file_viewer_word_navigation_and_deletion() {
 #[test]
 fn test_file_viewer_git_diff_status() {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("axon_test_diff_{}.txt", std::process::id()));
+    let temp_file = temp_dir.join(format!("tearminal_test_diff_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "line1\nline2\nline3");
 
     let mut tab = TerminalTab::new_file_viewer(TabId(102), temp_file.clone());
@@ -591,7 +593,7 @@ fn test_file_viewer_git_diff_status() {
 #[test]
 fn test_file_viewer_selection_and_deletion() {
     let temp_dir = std::env::temp_dir();
-    let temp_file = temp_dir.join(format!("axon_test_sel_{}.txt", std::process::id()));
+    let temp_file = temp_dir.join(format!("tearminal_test_sel_{}.txt", std::process::id()));
     let _ = std::fs::write(&temp_file, "hello beautiful world\nsecond line here");
 
     let mut tab = TerminalTab::new_file_viewer(TabId(103), temp_file.clone());
@@ -824,7 +826,7 @@ fn test_file_viewer_read_only_and_modes() {
     assert!(viewer.render_markdown);
 
     // Auto-guardar global en configuración
-    let mut config = crate::config::AxonConfig::default();
+    let mut config = crate::config::TearminalConfig::default();
     assert!(!config.terminal.auto_save);
     config.terminal.auto_save = true;
     assert!(config.terminal.auto_save);
@@ -842,7 +844,7 @@ fn test_file_viewer_read_only_and_modes() {
 
 #[test]
 fn test_status_bar_ssh_with_cwd_and_branch() {
-    let config = crate::config::AxonConfig::default();
+    let config = crate::config::TearminalConfig::default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let theme = crate::theme::Theme::default();
 
@@ -880,7 +882,7 @@ fn test_branch_from_output_line_multilanguage() {
 
 #[test]
 fn test_file_viewer_read_only_blocks_every_mutation() {
-    let path = std::env::temp_dir().join(format!("axon_test_ro_{}.txt", std::process::id()));
+    let path = std::env::temp_dir().join(format!("tearminal_test_ro_{}.txt", std::process::id()));
     std::fs::write(
         &path,
         "hola mundo
@@ -927,7 +929,8 @@ segunda"
 
 #[test]
 fn test_file_viewer_selection_stats_and_horizontal_scroll_limits() {
-    let path = std::env::temp_dir().join(format!("axon_test_stats_{}.txt", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("tearminal_test_stats_{}.txt", std::process::id()));
     std::fs::write(&path, "    indentado\n\ttab\nlínea larguísima de prueba").expect("write");
     let mut tab = TerminalTab::new_file_viewer(TabId(99), path.clone());
     let v = tab.file_viewer.as_mut().expect("viewer");
@@ -947,7 +950,7 @@ fn test_file_viewer_selection_stats_and_horizontal_scroll_limits() {
 }
 
 fn viewer_with(name: &str, content: &str) -> (TerminalTab, std::path::PathBuf) {
-    let path = std::env::temp_dir().join(format!("axon_test_{}_{}", std::process::id(), name));
+    let path = std::env::temp_dir().join(format!("tearminal_test_{}_{}", std::process::id(), name));
     std::fs::write(&path, content).expect("write");
     (TerminalTab::new_file_viewer(TabId(99), path.clone()), path)
 }
@@ -1114,7 +1117,7 @@ fn test_explorer_shows_in_band_remote_listing_without_ssh() {
 #[test]
 fn test_explorer_collapse_and_expand_all() {
     use crate::explorer::FileExplorer;
-    let root = std::env::temp_dir().join(format!("axon_test_tree_{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("tearminal_test_tree_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("a/b/c")).expect("mkdir");
     std::fs::create_dir_all(root.join("target/x")).expect("mkdir");
@@ -1194,9 +1197,9 @@ fn test_explorer_remote_tree_expands_in_band_and_survives_root_refresh() {
 
 #[test]
 fn test_single_click_opens_replaceable_preview_and_double_click_pins() {
-    let config = crate::config::AxonConfig::default();
-    let mut app = AxonApp::new(config, None);
-    let dir = std::env::temp_dir().join(format!("axon_test_preview_{}", std::process::id()));
+    let config = crate::config::TearminalConfig::default();
+    let mut app = TearminalApp::new(config, None);
+    let dir = std::env::temp_dir().join(format!("tearminal_test_preview_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("mkdir");
     let files: Vec<_> = ["a.txt", "b.txt", "c.txt"]
         .iter()
@@ -1206,7 +1209,7 @@ fn test_single_click_opens_replaceable_preview_and_double_click_pins() {
             p
         })
         .collect();
-    let viewers = |app: &AxonApp| {
+    let viewers = |app: &TearminalApp| {
         app.tabs
             .iter()
             .filter(|t| t.file_viewer.is_some())
@@ -1292,7 +1295,7 @@ fn test_diff_marks_separate_hunks_and_deletion() {
 
 #[test]
 fn test_explorer_changes_view_lists_only_git_changes() {
-    let dir = std::env::temp_dir().join(format!("axon_test_changes_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tearminal_test_changes_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     let git = |args: &[&str]| {
@@ -1374,7 +1377,8 @@ fn test_unified_diff_and_toggle() {
     assert!(crate::app::viewer::unified_diff(&v("a"), &v("a"), 3).is_empty());
 
     // Alternar: el diff sustituye al texto y volver restaura archivo, cursor y scroll
-    let path = std::env::temp_dir().join(format!("axon_test_difftab_{}.txt", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("tearminal_test_difftab_{}.txt", std::process::id()));
     std::fs::write(
         &path, "a
 c
@@ -1408,7 +1412,7 @@ c
 
 #[test]
 fn test_file_viewer_save_preserves_format_and_never_corrupts() {
-    let dir = std::env::temp_dir().join(format!("axon_test_save_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tearminal_test_save_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let open = |name: &str, bytes: &[u8]| {
         let p = dir.join(name);
@@ -1429,7 +1433,7 @@ fn test_file_viewer_save_preserves_format_and_never_corrupts() {
         v.insert_char('x');
         v.save_to_disk().unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), after, "{name}");
-        assert!(!p.with_file_name(format!("{name}.axon-tmp")).exists());
+        assert!(!p.with_file_name(format!("{name}.tearminal-tmp")).exists());
     }
 
     // Un archivo que no es UTF-8 (Latin-1) no se puede editar ni se reescribe
@@ -1448,12 +1452,12 @@ fn test_file_viewer_save_preserves_format_and_never_corrupts() {
     // Si no se puede guardar, el original queda intacto y el error se expone
     let (mut tab, p) = open("keep.txt", b"original\n");
     let v = tab.file_viewer.as_mut().unwrap();
-    std::fs::create_dir(dir.join("keep.txt.axon-tmp")).unwrap();
+    std::fs::create_dir(dir.join("keep.txt.tearminal-tmp")).unwrap();
     v.insert_char('x');
     v.autosave_local();
     assert!(v.save_error.is_some() && v.is_dirty);
     assert_eq!(std::fs::read_to_string(&p).unwrap(), "original\n");
-    std::fs::remove_dir(dir.join("keep.txt.axon-tmp")).unwrap();
+    std::fs::remove_dir(dir.join("keep.txt.tearminal-tmp")).unwrap();
     v.save_to_disk().unwrap();
     assert!(v.save_error.is_none());
 
@@ -1461,7 +1465,7 @@ fn test_file_viewer_save_preserves_format_and_never_corrupts() {
 }
 
 /// Pestaña de terminal con `n` paneles en cadena vertical (lado a lado)
-fn tab_with_panes(app: &mut AxonApp, n: usize) {
+fn tab_with_panes(app: &mut TearminalApp, n: usize) {
     for _ in 1..n {
         app.split_active_pane(SplitDirection::Vertical);
     }
@@ -1489,7 +1493,7 @@ fn test_explorer_edge_drag_resizes_and_clamps_width() {
 
 #[test]
 fn test_divider_drag_moves_split_and_respects_minimum_size() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     tab_with_panes(&mut app, 2);
     let tab = &mut app.tabs[0];
 
@@ -1521,7 +1525,7 @@ fn test_divider_drag_moves_split_and_respects_minimum_size() {
 
 #[test]
 fn test_nested_divider_path_targets_the_right_split() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     tab_with_panes(&mut app, 2);
     app.split_active_pane(SplitDirection::Horizontal); // divide el panel derecho
     let tab = &mut app.tabs[0];
@@ -1549,7 +1553,7 @@ fn test_move_tab_reorders_and_keeps_active_tab() {
     let order: Vec<usize> = (0..5).map(|i| super::tabs::moved_index(i, 3, 1)).collect();
     assert_eq!(order, vec![0, 2, 3, 1, 4]);
 
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     app.create_new_tab();
     app.create_new_tab();
     let ids: Vec<TabId> = app.tabs.iter().map(|t| t.id).collect();
@@ -1568,7 +1572,7 @@ fn test_move_tab_reorders_and_keeps_active_tab() {
 
 #[test]
 fn test_session_restores_tabs_and_split_layout() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     tab_with_panes(&mut app, 2);
     app.split_active_pane(SplitDirection::Horizontal);
     app.tabs[0].set_split_ratio(&[], 0.3);
@@ -1580,7 +1584,7 @@ fn test_session_restores_tabs_and_split_layout() {
     assert_eq!(snap.tabs.len(), 2, "solo pestañas de terminal");
     assert_eq!(snap.active_tab_index, 0);
 
-    let restored = AxonApp::from_session(AxonConfig::default(), None, Some(snap.clone()));
+    let restored = TearminalApp::from_session(TearminalConfig::default(), None, Some(snap.clone()));
     assert_eq!(restored.tabs.len(), 2);
     assert_eq!(restored.tabs[0].panes.len(), 3);
     assert_eq!(restored.tabs[1].panes.len(), 1);
@@ -1593,7 +1597,7 @@ fn test_session_restores_tabs_and_split_layout() {
 fn test_restore_ignores_missing_folders_and_empty_sessions() {
     use crate::config::{PaneSession, TabSession, WindowSession};
     let gone = PaneSession::Leaf {
-        cwd: Some("Z:/no/existe/axon".to_string()),
+        cwd: Some("Z:/no/existe/tearminal".to_string()),
     };
     let session = WindowSession {
         active_tab_index: 7, // fuera de rango
@@ -1606,7 +1610,7 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
             active_pane: 9,
         }],
     };
-    let app = AxonApp::from_session(AxonConfig::default(), None, Some(session));
+    let app = TearminalApp::from_session(TearminalConfig::default(), None, Some(session));
     assert_eq!(app.tabs.len(), 1);
     assert_eq!(app.active_tab_index, 0);
     assert!(app.tabs[0].active_pane().is_some());
@@ -1619,7 +1623,7 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
         file_explorer_width: 240,
         tabs: Vec::new(),
     };
-    let app = AxonApp::from_session(AxonConfig::default(), None, Some(empty));
+    let app = TearminalApp::from_session(TearminalConfig::default(), None, Some(empty));
     assert_eq!(
         app.tabs.len(),
         1,
@@ -1629,8 +1633,8 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
 
 #[test]
 fn test_pane_ids_are_unique_across_windows() {
-    let a = AxonApp::new(AxonConfig::default(), None);
-    let b = AxonApp::new(AxonConfig::default(), None);
+    let a = TearminalApp::new(TearminalConfig::default(), None);
+    let b = TearminalApp::new(TearminalConfig::default(), None);
     let (pa, pb) = (a.tabs[0].panes[0].id, b.tabs[0].panes[0].id);
     assert_ne!(pa, pb);
     assert!(a.owns_pane(pa) && !a.owns_pane(pb));
@@ -1639,7 +1643,7 @@ fn test_pane_ids_are_unique_across_windows() {
 
 #[test]
 fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     let term = &mut app.tabs[0].panes[0].terminal;
     term.remote_integration = true;
     term.remote_at_prompt = false;
@@ -1670,7 +1674,7 @@ fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
 
 #[test]
 fn test_get_git_branch_worktree_detached_head() {
-    let dir = std::env::temp_dir().join(format!("axon_test_wt_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("tearminal_test_wt_{}", std::process::id()));
     let real_git = dir.join("real_git");
     std::fs::create_dir_all(&real_git).unwrap();
     std::fs::write(dir.join(".git"), "gitdir: real_git\n").unwrap();
@@ -1762,15 +1766,15 @@ fn test_viewer_save_preserves_undo_redo_and_autosave_blank_lines() {
 
 #[test]
 fn test_reset_font_size_default() {
-    let config = AxonConfig::load_or_default();
-    let mut app = AxonApp::new(config, None);
+    let config = TearminalConfig::load_or_default();
+    let mut app = TearminalApp::new(config, None);
     app.config.appearance.font_size = 22.0;
     app.config.appearance.ui_font_size = 18.0;
 
     app.reset_font_size();
     assert_eq!(
         app.config.appearance.font_size,
-        AxonConfig::default().appearance.font_size
+        TearminalConfig::default().appearance.font_size
     );
     assert_eq!(app.config.appearance.ui_font_size, 18.0);
 }
@@ -1800,9 +1804,11 @@ fn test_scroll_offset_for_thumb_y_helper() {
 
 #[test]
 fn test_close_other_tabs_flushes_pending_autosave() {
-    let mut app = AxonApp::new(AxonConfig::default(), None);
-    let temp_dir =
-        std::env::temp_dir().join(format!("axon-test-close-others-{}", std::process::id()));
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "tearminal-test-close-others-{}",
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&temp_dir);
     let file_path = temp_dir.join("test.txt");
     std::fs::write(&file_path, "initial").unwrap();
@@ -1832,7 +1838,7 @@ fn test_close_other_tabs_flushes_pending_autosave() {
 #[test]
 fn test_fs_changed_event_refreshes_explorer_and_git_status() {
     let temp_dir =
-        std::env::temp_dir().join(format!("axon-test-fs-changed-{}", std::process::id()));
+        std::env::temp_dir().join(format!("tearminal-test-fs-changed-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&temp_dir);
     let _ = std::fs::create_dir_all(&temp_dir);
 
@@ -1851,9 +1857,9 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
         // Sin identidad (runner de CI) el commit falla y el archivo queda como «Added».
         .args([
             "-c",
-            "user.name=axon-test",
+            "user.name=tearminal-test",
             "-c",
-            "user.email=axon-test@example.invalid",
+            "user.email=tearminal-test@example.invalid",
             "commit",
             "-m",
             "init",
@@ -1862,7 +1868,7 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
         .current_dir(&temp_dir)
         .output();
 
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     app.file_explorer.visible = true;
     app.file_explorer.set_root(temp_dir.clone());
     app.file_explorer.refresh();
@@ -1874,7 +1880,7 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
     std::fs::write(&file_path, "v2 modified").unwrap();
 
     // Disparar FsChanged
-    app.on_user_event(AxonEvent::FsChanged);
+    app.on_user_event(TearminalEvent::FsChanged);
 
     // Debe haber detectado el archivo modificado
     assert_eq!(
@@ -1887,11 +1893,13 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
 
 #[test]
 fn test_sync_fs_watcher_behavior() {
-    let temp_dir =
-        std::env::temp_dir().join(format!("axon-test-watcher-sync-{}", std::process::id()));
+    let temp_dir = std::env::temp_dir().join(format!(
+        "tearminal-test-watcher-sync-{}",
+        std::process::id()
+    ));
     let _ = std::fs::create_dir_all(&temp_dir);
 
-    let mut app = AxonApp::new(AxonConfig::default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
     app.file_explorer.visible = false;
     app.sync_fs_watcher();
     assert!(app.fs_watcher.is_none());
@@ -1910,9 +1918,9 @@ fn test_border_resize_direction_all_edges() {
     use winit::window::ResizeDirection::*;
     let (w, h) = (1000, 700);
     for layout in ["horizontal", "vertical"] {
-        let mut config = AxonConfig::default();
+        let mut config = TearminalConfig::default();
         config.appearance.tab_layout = layout.to_string();
-        let app = AxonApp::new(config, None);
+        let app = TearminalApp::new(config, None);
         let dir = |x, y| app.compute_border_resize_direction(x, y, w, h);
 
         // Ocho direcciones: lados, esquinas y también la barra superior.
@@ -1933,8 +1941,8 @@ fn test_border_resize_direction_all_edges() {
 
 #[test]
 fn test_detach_tab_to_new_window() {
-    let config = AxonConfig::load_or_default();
-    let mut app = AxonApp::new(config.clone(), None);
+    let config = TearminalConfig::load_or_default();
+    let mut app = TearminalApp::new(config.clone(), None);
 
     // Añadir una segunda pestaña
     app.create_new_tab();
@@ -1951,7 +1959,7 @@ fn test_detach_tab_to_new_window() {
 
     // Crear la nueva ventana con la pestaña transferida
     let detached_tab = app.new_window_with_tab.take().unwrap();
-    let new_window = AxonApp::from_tab(config, None, detached_tab);
+    let new_window = TearminalApp::from_tab(config, None, detached_tab);
     assert_eq!(new_window.tabs.len(), 1);
     assert_eq!(new_window.active_tab_index, 0);
     assert!(!new_window.tabs[0].is_settings);
@@ -1959,9 +1967,9 @@ fn test_detach_tab_to_new_window() {
 
 #[test]
 fn test_attach_tab_and_re_docking() {
-    let config = AxonConfig::load_or_default();
-    let mut app1 = AxonApp::new(config.clone(), None);
-    let mut app2 = AxonApp::new(config.clone(), None);
+    let config = TearminalConfig::load_or_default();
+    let mut app1 = TearminalApp::new(config.clone(), None);
+    let mut app2 = TearminalApp::new(config.clone(), None);
 
     // Añadir una segunda pestaña a app1
     app1.create_new_tab();
@@ -2184,7 +2192,7 @@ fn test_encode_kitty_key_various_combinations() {
 fn test_panel_side_reserves_space_and_hosts_the_explorer() {
     use crate::renderer::SidebarRects;
 
-    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     app.config.appearance.tab_layout = "vertical".to_string();
     app.sidebar_visible = true;
     app.config.appearance.panel_side = "left".to_string();
@@ -2233,7 +2241,7 @@ fn test_panel_side_reserves_space_and_hosts_the_explorer() {
 
 #[test]
 fn test_top_tabs_panel_shows_and_hides_the_explorer_with_it() {
-    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     app.config.appearance.tab_layout = "horizontal".to_string();
 
     app.sidebar_visible = true;
@@ -2263,19 +2271,19 @@ fn test_clean_block_command_and_path_helpers() {
     assert!(matches!(clean_unicode, std::borrow::Cow::Borrowed(_)));
 
     // Acortado de rutas con tilde y barras de Windows
-    let p = std::path::Path::new("D:/proyectos/axon");
-    assert_eq!(shorten_home(p), r"D:\proyectos\axon");
+    let p = std::path::Path::new("D:/proyectos/tearminal");
+    assert_eq!(shorten_home(p), r"D:\proyectos\tearminal");
     let p = std::path::Path::new("/home/user/proyecto");
     assert_eq!(shorten_home(p), "/home/user/proyecto");
     if let Some(home) = std::env::var_os("USERPROFILE") {
-        let p = std::path::PathBuf::from(format!("{}/GitHub/axon", home.to_string_lossy()));
-        assert_eq!(shorten_home(&p), r"~\GitHub\axon");
+        let p = std::path::PathBuf::from(format!("{}/GitHub/TEArminal", home.to_string_lossy()));
+        assert_eq!(shorten_home(&p), r"~\GitHub\TEArminal");
     }
 }
 
 #[test]
 fn test_settings_hides_the_side_panels_with_top_tabs() {
-    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     app.config.appearance.tab_layout = "horizontal".to_string();
     app.config.appearance.panel_side = "left".to_string();
     app.sidebar_visible = true;
@@ -2293,12 +2301,12 @@ fn test_settings_hides_the_side_panels_with_top_tabs() {
 
 #[test]
 fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
-    let base = std::env::temp_dir().join(format!("axon-focus-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("tearminal-focus-{}", std::process::id()));
     let (a, b) = (base.join("a"), base.join("b"));
     std::fs::create_dir_all(&a).unwrap();
     std::fs::create_dir_all(&b).unwrap();
 
-    let mut app = AxonApp::new(AxonConfig::load_or_default(), None);
+    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     app.file_explorer.visible = true;
     app.file_explorer.is_pinned = false;
     tab_with_panes(&mut app, 2);
@@ -2322,17 +2330,17 @@ fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
 #[test]
 fn test_gpu_error_message_mentions_warp_and_requirements() {
     let m = platform::gpu_error_message(&"HRESULT 0x887A0004");
-    assert!(m.contains("WARP") && m.contains("AXON_RENDERER=warp"));
+    assert!(m.contains("WARP") && m.contains("TEARMINAL_RENDERER=warp"));
     assert!(m.contains("1809") && m.contains("0x887A0004"));
 }
 
 #[test]
 fn test_terminal_area_offsets_not_corrupted_by_settings_tab() {
-    let mut config = AxonConfig::load_or_default();
+    let mut config = TearminalConfig::load_or_default();
     config.appearance.tab_layout = "horizontal".to_string();
     config.appearance.panel_side = "left".to_string();
     config.appearance.show_status_bar = true;
-    let mut app = AxonApp::new(config, None);
+    let mut app = TearminalApp::new(config, None);
     app.sidebar_visible = true;
 
     // Con la terminal activa, el área de terminal descuenta la barra lateral izquierda y la de estado
@@ -2432,7 +2440,7 @@ fn test_standard_traits_and_conversions() {
 fn test_cache_alignment_and_enum_size_regressions() {
     // Mechanical Sympathy & Enum Bloat checks
     assert_eq!(std::mem::size_of::<crate::terminal::Cell>(), 16);
-    assert_eq!(std::mem::size_of::<AxonEvent>(), 16);
+    assert_eq!(std::mem::size_of::<TearminalEvent>(), 16);
     assert_eq!(std::mem::size_of::<crate::app::ssh_jobs::SshDone>(), 64);
     assert_eq!(
         std::mem::size_of::<crate::app::remote_files::RemoteJob>(),

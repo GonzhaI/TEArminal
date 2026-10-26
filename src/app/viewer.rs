@@ -1235,7 +1235,7 @@ impl FileViewerState {
         writer.write_all(content.as_bytes())
     }
 
-    /// Escribe en `<archivo>.axon-tmp` y renombra encima: un fallo (disco lleno…) deja el original intacto
+    /// Escribe en `<archivo>.tearminal-tmp` y renombra encima: un fallo (disco lleno…) deja el original intacto
     fn write_local(&self) -> Result<(), std::io::Error> {
         // Un enlace simbólico se conserva: se reemplaza su destino, no el enlace
         let target = if std::fs::symlink_metadata(&self.path).is_ok_and(|m| m.is_symlink()) {
@@ -1244,7 +1244,7 @@ impl FileViewerState {
             self.path.clone()
         };
         let mut tmp = target.clone().into_os_string();
-        tmp.push(".axon-tmp");
+        tmp.push(".tearminal-tmp");
         let tmp = std::path::PathBuf::from(tmp);
         // Un temporal viejo (o un enlace plantado) se borra y se crea de nuevo con `create_new`: nunca se escribe a través de él
         let _ = std::fs::remove_file(&tmp);
@@ -1280,7 +1280,7 @@ impl FileViewerState {
         }
 
         if self.remote_destination.is_some() {
-            // El guardado remoto es asíncrono (`AxonApp::ssh_save_viewer`): nunca bloquea aquí
+            // El guardado remoto es asíncrono (`TearminalApp::ssh_save_viewer`): nunca bloquea aquí
             return Err(ViewerSaveError::RemoteFile);
         }
 

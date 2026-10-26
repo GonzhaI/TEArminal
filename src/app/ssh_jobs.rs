@@ -1,6 +1,6 @@
 //! Vías lentas por SSH (sin integración en banda, o cuando esta falla): abrir y guardar archivos remotos, listar
 //! carpetas del explorador y subir capturas. Cada una corre en su propio hilo (`ssh.exe` tarda hasta varios
-//! segundos en conectar) y avisa por `AxonEvent::SshDone`; el bucle de eventos nunca espera a la red.
+//! segundos en conectar) y avisa por `TearminalEvent::SshDone`; el bucle de eventos nunca espera a la red.
 
 use super::*;
 use crate::explorer::RemoteLsReq;
@@ -61,15 +61,15 @@ fn remote_path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-impl AxonApp {
+impl TearminalApp {
     fn spawn_ssh(&self, work: impl FnOnce() -> SshDone + Send + 'static) -> bool {
         let (tx, proxy) = (self.ssh_tx.clone(), self.proxy.clone());
         let spawned = std::thread::Builder::new()
-            .name("axon-ssh".into())
+            .name("tearminal-ssh".into())
             .spawn(move || {
                 let _ = tx.send(work());
                 if let Some(p) = proxy {
-                    let _ = p.send_event(AxonEvent::SshDone);
+                    let _ = p.send_event(TearminalEvent::SshDone);
                 }
             });
         match spawned {

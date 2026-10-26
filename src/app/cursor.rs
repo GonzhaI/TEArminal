@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Movimiento del ratón: hover, arrastres, selección y reporte de ratón a TUIs.
     pub(super) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         self.mouse_pos = position;
@@ -11,12 +11,7 @@ impl AxonApp {
         let mx = position.x as usize;
         let my = position.y as usize;
 
-        let (win_w, win_h) = if let Some(w) = &self.window {
-            let s = w.inner_size();
-            (s.width as usize, s.height as usize)
-        } else {
-            (800, 600)
-        };
+        let (win_w, win_h) = self.window_size();
 
         let mut needs_redraw = false;
         let mut is_pointer = false;
@@ -29,13 +24,9 @@ impl AxonApp {
         // Manejo de arrastre activo del pulgar de la barra de desplazamiento en el panel seleccionado
         if self.scrollbar_dragging {
             if let Some(pid) = self.scrollbar_drag_pane_id {
-                let status_bar_h = self.status_bar_height();
-                let right_offset = self.file_explorer_offset();
+                let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
                 let active_tab = &mut self.tabs[self.active_tab_index];
-                let term_area_w = win_w.saturating_sub(offset + right_offset);
-                let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
-                let pane_rects =
-                    active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
+                let pane_rects = active_tab.compute_pane_rects(cx, cy, cw, ch);
                 if let Some(target_rect) = pane_rects.iter().find(|r| r.pane_id == pid) {
                     if let Some(pane) = active_tab.find_pane_mut(pid) {
                         if let Some(renderer) = &self.renderer {
@@ -63,18 +54,14 @@ impl AxonApp {
                                     pane.terminal.scroll_offset =
                                         new_offset.min(pane.terminal.scrollback.len());
                                     self.last_scroll_time = Instant::now();
-                                    if let Some(w) = &self.window {
-                                        w.request_redraw();
-                                    }
+                                    self.request_redraw();
                                 }
                             }
                         }
                     }
                 }
             }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-            }
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
             return;
         }
 
@@ -100,14 +87,10 @@ impl AxonApp {
                 ) {
                     self.sidebar_scroll_offset = off;
                     self.last_scroll_time = Instant::now();
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                    self.request_redraw();
                 }
             }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-            }
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
             return;
         }
 
@@ -140,33 +123,24 @@ impl AxonApp {
                 ) {
                     self.file_explorer.scroll_offset = off;
                     self.last_scroll_time = Instant::now();
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                    self.request_redraw();
                 }
             }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-            }
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
             return;
         }
 
         // Manejo de arrastre de la barra de desplazamiento del visor de archivos
         if self.viewer_scrollbar_dragging {
-            let offset = self.sidebar_offset();
-            let top_offset = self.top_offset();
-            let status_bar_h = self.status_bar_height();
-            let right_offset = self.file_explorer_offset();
-            let viewer_w = win_w.saturating_sub(offset + right_offset);
-            let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
             let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
 
             if let Some(ref mut tab) = self.tabs.get_mut(self.active_tab_index) {
                 if let Some(ref mut viewer) = tab.file_viewer {
                     if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
-                        offset, top_offset, viewer_w, viewer_h, viewer, row_h,
+                        cx, cy, cw, ch, viewer, row_h,
                     ) {
-                        let content_h = viewer_h.saturating_sub(38);
+                        let content_h = ch.saturating_sub(38);
                         let visible_lines = (content_h / row_h.max(16)).max(1);
                         let max_offset = viewer.rows().len().saturating_sub(visible_lines);
 
@@ -178,16 +152,12 @@ impl AxonApp {
                         ) {
                             viewer.scroll_offset = off;
                             self.last_scroll_time = Instant::now();
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
+                            self.request_redraw();
                         }
                     }
                 }
             }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-            }
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
             return;
         }
 
@@ -195,10 +165,18 @@ impl AxonApp {
         if self.settings_scrollbar_dragging {
             let top = (my as f32 - self.settings_scrollbar_drag_offset_y).max(0.0) as usize;
             self.settings_scroll_to_thumb(top);
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-                w.request_redraw();
-            }
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
+            self.request_redraw();
+            return;
+        }
+
+        // Arrastre de la barra de desplazamiento de la paleta de comandos
+        if self.palette_scrollbar_dragging {
+            let top = (my as f32 - self.palette_scrollbar_drag_offset_y).max(0.0) as usize;
+            self.palette_scroll_to_thumb(top);
+            self.last_scroll_time = Instant::now();
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
+            self.request_redraw();
             return;
         }
 
@@ -301,6 +279,56 @@ impl AxonApp {
             return;
         }
 
+        // Con la paleta de comandos abierta solo se resalta su opción bajo el ratón
+        if self.palette.is_some() {
+            let (is_dragging, filtered_len, scroll_offset, selected) = {
+                let p = self.palette.as_ref().unwrap();
+                (
+                    p.input.is_dragging,
+                    p.filtered.len(),
+                    p.scroll_offset,
+                    p.selected,
+                )
+            };
+            let rects =
+                PaletteRects::compute_with_scroll(win_w, win_h, filtered_len, scroll_offset);
+            if is_dragging {
+                let text_start_x = rects.input.0 + 40;
+                if let Some(p) = &mut self.palette {
+                    let mut input = std::mem::take(&mut p.input);
+                    self.handle_text_input_drag(&mut input, mx, text_start_x);
+                    if let Some(p) = &mut self.palette {
+                        p.input = input;
+                    }
+                }
+            }
+            let is_scrollbar_hovered = rects.scrollbar.is_some_and(|(track, _)| {
+                crate::renderer::ScrollbarRects::hit(track, rects.card.0 + rects.card.2, mx, my)
+            });
+            let hovered_item = rects.item_at_with_offset(mx, my, scroll_offset);
+            if let Some(idx) = hovered_item {
+                if selected != idx {
+                    if let Some(p) = &mut self.palette {
+                        p.selected = idx;
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            if let Some(w) = &self.window {
+                let cursor = if hovered_item.is_some() || is_scrollbar_hovered {
+                    winit::window::CursorIcon::Pointer
+                } else if PaletteRects::inside(mx, my, rects.input) {
+                    winit::window::CursorIcon::Text
+                } else {
+                    winit::window::CursorIcon::Default
+                };
+                w.set_cursor(cursor);
+            }
+            return;
+        }
+
         let mut new_hovered_min = false;
         let mut new_hovered_max = false;
         let mut new_hovered_close_win = false;
@@ -335,6 +363,10 @@ impl AxonApp {
                     && my < top_rects.plus_btn.1 + top_rects.plus_btn.3
                 {
                     new_hovered_new_tab = true;
+                    is_pointer = true;
+                }
+                // Check search button
+                if TopTabBarRects::inside(mx, my, top_rects.search_btn) {
                     is_pointer = true;
                 }
                 // Check files button
@@ -409,6 +441,9 @@ impl AxonApp {
                 }
                 if TopTabBarRects::inside(mx, my, title_rects.files_btn) {
                     new_hovered_files = true;
+                    is_pointer = true;
+                }
+                if TopTabBarRects::inside(mx, my, title_rects.search_box) {
                     is_pointer = true;
                 }
                 if TopTabBarRects::inside(mx, my, title_rects.settings_btn) {
@@ -606,6 +641,18 @@ impl AxonApp {
 
             match self.settings_page_state.section {
                 SettingsSection::Appearance => {
+                    if SettingsPageRects::inside(mx, my, rects.theme_search_box) {
+                        is_text = true;
+                    }
+                    if self.settings_page_state.theme_search_input.is_dragging {
+                        let text_start_x = rects.theme_search_box.0 + 30;
+                        let mut input =
+                            std::mem::take(&mut self.settings_page_state.theme_search_input);
+                        if self.handle_text_input_drag(&mut input, mx, text_start_x) {
+                            needs_redraw = true;
+                        }
+                        self.settings_page_state.theme_search_input = input;
+                    }
                     h_theme = rects.theme_row_at(mx, my);
                     h_ts = if SettingsPageRects::inside(mx, my, rects.theme_slot_dark_btn) {
                         Some(0)
@@ -827,14 +874,9 @@ impl AxonApp {
         // Coordenadas relativas a paneles en la terminal activa
         if !is_settings_active && self.tabs[self.active_tab_index].file_viewer.is_none() {
             let bypass = self.modifiers.shift_key();
-            let status_bar_h = self.status_bar_height();
-            let right_offset = self.file_explorer_offset();
-            let term_area_w = win_w.saturating_sub(offset + right_offset);
-            let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
+            let pane_rects = self.active_tab_pane_rects(win_w, win_h);
             let active_tab = &mut self.tabs[self.active_tab_index];
             let active_pane_id = active_tab.active_pane_id;
-            let pane_rects =
-                active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
             // Botones de la cabecera de cada panel dividido (dividir · maximizar · cerrar)
             let pane_btn = pane_rects.iter().find_map(|rect| {
@@ -1257,17 +1299,18 @@ impl AxonApp {
                 (None, AiAgentStatus::None, (100, 30))
             };
             let active_model = self.ai_usage.snapshot.model_for(ai_status);
-            let (_, badge_label, _) = TerminalRenderer::status_bar_badge_info(
+            let badge_info = TerminalRenderer::status_bar_badge_info(
                 ai_status,
                 ssh_host,
                 active_model,
                 &self.theme,
             );
+            let (_, label, _) = &badge_info;
             let label_w = self
                 .renderer
                 .as_ref()
-                .map(|r| r.measure_ui_text(&badge_label, 10.5, true))
-                .unwrap_or(badge_label.len() * 7);
+                .map(|r| r.measure_ui_text(label, 10.5, true))
+                .unwrap_or(label.len() * 7);
 
             let update_info = crate::updater::get_available_update();
             let update_text = update_info
@@ -1296,17 +1339,10 @@ impl AxonApp {
             let sb_rects = StatusBarRects::compute_with_status(
                 win_w, win_h, label_w, update_w, dims_w, meters_w,
             );
-            let ai_hov = if self.hovered_ai_badge {
-                let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
-                let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
-                StatusBarRects::inside_badge_or_popup(mx, my, sb_rects.ai_badge, popup_rect)
-            } else {
-                StatusBarRects::inside(mx, my, sb_rects.ai_badge)
-            };
             let update_hov = sb_rects
                 .update_badge
                 .is_some_and(|r| StatusBarRects::inside(mx, my, r));
-            (ai_hov, update_hov)
+            (false, update_hov)
         } else {
             (false, false)
         };
@@ -1407,11 +1443,9 @@ impl AxonApp {
         } else {
             winit::window::CursorIcon::Default
         };
-        if let Some(w) = &self.window {
-            w.set_cursor(cursor_icon);
-            if needs_redraw {
-                w.request_redraw();
-            }
+        self.set_cursor_icon(cursor_icon);
+        if needs_redraw {
+            self.request_redraw();
         }
     }
 }

@@ -1,5 +1,5 @@
 //! Soporte de los tests de regresión visual: dibujo de una `Scene` en la GPU (WARP), referencias PNG y firmas,
-//! modo `AXON_BLESS`, fase fija del spinner y un árbol de archivos fijo que sustituye al directorio de trabajo real.
+//! modo `TEARMINAL_BLESS`, fase fija del spinner y un árbol de archivos fijo que sustituye al directorio de trabajo real.
 
 use super::gpu::{DriverKind, GpuDevice, GpuRenderer};
 use super::scene::Scene;
@@ -21,7 +21,7 @@ pub(super) fn spinner_phase_override() -> Option<usize> {
     SPINNER_PHASE.with(|c| c.get())
 }
 
-/// `AXON_BLESS=1`: los tests de referencias REESCRIBEN los PNG (y `signatures.bin`) con lo que dibuja la GPU en vez
+/// `TEARMINAL_BLESS=1`: los tests de referencias REESCRIBEN los PNG (y `signatures.bin`) con lo que dibuja la GPU en vez
 /// de compararlos.
 ///
 /// **Bendecir congela lo que salga como correcto.** Hazlo solo tras mirar las imágenes (`preview_ui_scenes` las
@@ -29,7 +29,7 @@ pub(super) fn spinner_phase_override() -> Option<usize> {
 /// escriben los mismos archivos. Una referencia que "necesita" cambiar sin un cambio de diseño deliberado es un
 /// fallo del dibujo, no de la referencia.
 pub(super) fn bless_requested() -> bool {
-    std::env::var("AXON_BLESS").is_ok_and(|v| v == "1")
+    std::env::var("TEARMINAL_BLESS").is_ok_and(|v| v == "1")
 }
 
 /// Ruta de la referencia PNG de `name` en `golden/<kind>/` (`kind` = `refs` para primitivas, `scenes` para las
@@ -73,7 +73,7 @@ pub(super) fn read_reference(path: &std::path::Path) -> (Vec<u32>, usize, usize)
     let img = image::open(path)
         .unwrap_or_else(|e| {
             panic!(
-                "referencia {} no disponible ({e}): genérala con AXON_BLESS=1 tras revisarla a ojo",
+                "referencia {} no disponible ({e}): genérala con TEARMINAL_BLESS=1 tras revisarla a ojo",
                 path.display()
             )
         })
@@ -110,7 +110,7 @@ pub(super) fn read_golden_signatures() -> Vec<(String, Vec<u8>)> {
         env!("CARGO_MANIFEST_DIR"),
         "/src/renderer/golden/signatures.bin"
     ))
-    .expect("falta golden/signatures.bin: generarlo con AXON_BLESS=1");
+    .expect("falta golden/signatures.bin: generarlo con TEARMINAL_BLESS=1");
     let (mut pos, mut out) = (0, Vec::new());
     while pos < data.len() {
         let n = data[pos] as usize;
@@ -222,7 +222,7 @@ use std::path::PathBuf;
 
 /// Ruta de ejemplo para la escena del visor.
 pub fn example_path() -> PathBuf {
-    let base = PathBuf::from(\"C:\\\\Users\\\\dev\\\\axon\");
+    let base = PathBuf::from(\"C:\\\\Users\\\\dev\\\\tearminal\");
     base.join(\"src\").join(\"renderer\").join(\"pane.rs\")
 }
 
@@ -231,13 +231,15 @@ pub fn sum_cells(cells: &[u32]) -> u64 {
 }
 ";
 
-/// Árbol fijo `%TEMP%/axon-golden/axon` (fuera de cualquier repositorio git) que usan las escenas del explorador
+/// Árbol fijo `%TEMP%/tearminal-golden/tearminal` (fuera de cualquier repositorio git) que usan las escenas del explorador
 /// y del visor. Así el dibujo no depende del directorio de trabajo, del estado de git ni de la máquina.
 pub(super) fn fixture_root() -> PathBuf {
-    let root = std::env::temp_dir().join("axon-golden").join("axon");
+    let root = std::env::temp_dir()
+        .join("tearminal-golden")
+        .join("tearminal");
     let files: [(&str, &str); 4] = [
-        ("Cargo.toml", "[package]\nname = \"axon\"\n"),
-        ("README.md", "# Axon\n"),
+        ("Cargo.toml", "[package]\nname = \"tearminal\"\n"),
+        ("README.md", "# TEArminal\n"),
         ("src/main.rs", "fn main() {}\n"),
         ("src/renderer/pane.rs", PANE_RS),
     ];

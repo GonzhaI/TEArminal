@@ -55,14 +55,15 @@ pub(crate) struct TopTabBarRects {
 
 impl TopTabBarRects {
     pub(crate) const HEIGHT: usize = 38;
-    /// La marca ocupa el extremo izquierdo en ambos modos; las pestañas empiezan después.
-    pub(crate) const BRAND_W: usize = 88;
+    /// Las pestañas empiezan en el extremo izquierdo al eliminarse la marca.
+    pub(crate) const BRAND_W: usize = 0;
     pub(crate) const TAB_GAP: usize = 3;
     pub(crate) const CLOSE_W: usize = 24;
     pub(crate) const PLUS_W: usize = 28;
     /// Lado de los botones de acción del chrome (buscar, panel, ajustes).
     pub(crate) const ACTION: usize = 32;
 
+    #[allow(dead_code)]
     pub(crate) fn compute(width: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
@@ -178,6 +179,7 @@ impl TopTitleBarRects {
     pub(crate) const SEARCH_W: usize = 420;
     pub(crate) const SEARCH_H: usize = 30;
 
+    #[allow(dead_code)]
     pub(crate) fn compute(width: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
@@ -313,6 +315,7 @@ impl SettingsPageRects {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
         let max_card_w = 980;
         let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
@@ -508,6 +511,7 @@ pub(crate) struct FileViewerHeaderRects {
 }
 
 impl FileViewerHeaderRects {
+    #[allow(dead_code)]
     pub(crate) fn compute(
         x: usize,
         y: usize,
@@ -570,6 +574,7 @@ pub(crate) struct FileViewerLayout {
 impl FileViewerLayout {
     pub(crate) const HEADER_H: usize = 38;
 
+    #[allow(dead_code)]
     pub(crate) fn compute(
         x: usize,
         y: usize,
@@ -867,6 +872,7 @@ pub(crate) struct StatusBarRects {
 
 impl StatusBarRects {
     pub(crate) const BAR_H: usize = 28;
+    #[allow(dead_code)]
     pub(crate) const POPUP_W: usize = 392;
     /// Margen derecho del grupo de estado (las dimensiones cierran la barra).
     pub(crate) const RIGHT_PAD: usize = 14;
@@ -881,6 +887,7 @@ impl StatusBarRects {
     /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
     /// incluyendo el indicador opcional de nueva versión disponible
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn compute(
         width: usize,
         height: usize,
@@ -943,6 +950,7 @@ impl StatusBarRects {
     }
 
     /// Rectángulo del menú flotante de consumo encima de la barra de estado.
+    #[allow(dead_code)]
     pub(crate) fn popup_rect(width: usize, height: usize, popup_h: usize) -> Rect {
         let w = Self::POPUP_W.min(width.saturating_sub(16));
         let x = width.saturating_sub(w + 10);
@@ -962,6 +970,7 @@ impl StatusBarRects {
     }
 
     /// Mantiene abierto el menú flotante si el ratón está en el badge, en la tarjeta o en el puente de 6px entre ambos.
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
         let bridge = (popup.0, popup.1, popup.2, popup.3 + 8);
@@ -1003,6 +1012,7 @@ impl PaneHeaderRects {
     pub(crate) const ICON_X: usize = 24;
     pub(crate) const TEXT_X: usize = 41;
 
+    #[allow(dead_code)]
     pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {
         let right = x + w;
         let by = y + (Self::HEIGHT.saturating_sub(Self::BTN)) / 2;
@@ -1087,6 +1097,7 @@ pub(crate) struct ExplorerTabsRects {
 }
 
 impl ExplorerTabsRects {
+    #[allow(dead_code)]
     pub(crate) fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
         let inner = panel_w.saturating_sub(16);
         let half = inner / 2;
@@ -1106,5 +1117,135 @@ impl ExplorerTabsRects {
         } else {
             None
         }
+    }
+}
+
+/// Geometría de la paleta de comandos y búsqueda central (Ctrl + K, WP5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct PaletteRects {
+    pub(crate) card: Rect,
+    pub(crate) input: Rect,
+    pub(crate) divider_y: usize,
+    pub(crate) list: Rect,
+    pub(crate) items_count: usize,
+    pub(crate) item_h: usize,
+    pub(crate) scrollbar: Option<(Rect, Rect)>,
+}
+
+impl PaletteRects {
+    pub(crate) const WIDTH: usize = 560;
+    pub(crate) const INPUT_H: usize = 46;
+    pub(crate) const ITEM_H: usize = 40;
+    pub(crate) const MAX_VISIBLE: usize = 8;
+    pub(crate) const CARD_RADIUS: usize = 8;
+
+    #[allow(dead_code)]
+    #[allow(dead_code)]
+    pub(crate) fn compute(win_w: usize, win_h: usize, items_count: usize) -> Self {
+        Self::compute_with_scroll(win_w, win_h, items_count, 0)
+    }
+
+    pub(crate) fn compute_with_scroll(
+        win_w: usize,
+        win_h: usize,
+        items_count: usize,
+        scroll_offset: usize,
+    ) -> Self {
+        let card_w = Self::WIDTH.min(win_w.saturating_sub(40));
+        let card_x = (win_w.saturating_sub(card_w)) / 2;
+        let card_y = 54.min(win_h / 6);
+        let visible_items = items_count.min(Self::MAX_VISIBLE);
+        let list_h = visible_items * Self::ITEM_H;
+        let card_h = Self::INPUT_H
+            + if visible_items > 0 {
+                list_h + 8
+            } else if items_count == 0 {
+                44
+            } else {
+                0
+            };
+
+        let card = (card_x, card_y, card_w, card_h);
+        let input = (card_x, card_y, card_w, Self::INPUT_H);
+        let divider_y = card_y + Self::INPUT_H;
+        let list = (card_x, divider_y + 4, card_w, list_h);
+
+        let scrollbar = if items_count > Self::MAX_VISIBLE {
+            ScrollbarRects::vertical(
+                card_x + card_w,
+                divider_y + 6,
+                list_h.saturating_sub(4),
+                items_count,
+                Self::MAX_VISIBLE,
+                scroll_offset,
+            )
+        } else {
+            None
+        };
+
+        Self {
+            card,
+            input,
+            divider_y,
+            list,
+            items_count,
+            item_h: Self::ITEM_H,
+            scrollbar,
+        }
+    }
+
+    pub(crate) fn item_rect(&self, idx: usize) -> Rect {
+        let y = self.list.1 + idx * self.item_h;
+        let w = if self.scrollbar.is_some() {
+            self.card.2.saturating_sub(26)
+        } else {
+            self.card.2.saturating_sub(12)
+        };
+        (self.card.0 + 6, y, w, self.item_h)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn item_at(&self, mx: usize, my: usize) -> Option<usize> {
+        self.item_at_with_offset(mx, my, 0)
+    }
+
+    pub(crate) fn item_at_with_offset(
+        &self,
+        mx: usize,
+        my: usize,
+        scroll_offset: usize,
+    ) -> Option<usize> {
+        if let Some((track, _)) = self.scrollbar {
+            let right = self.card.0 + self.card.2;
+            if ScrollbarRects::hit(track, right, mx, my) {
+                return None;
+            }
+        }
+        let (lx, ly, lw, lh) = self.list;
+        let list_w = if self.scrollbar.is_some() {
+            lw.saturating_sub(26)
+        } else {
+            lw
+        };
+        if mx >= lx && mx < lx + list_w && my >= ly && my < ly + lh {
+            let visual_idx = (my - ly) / self.item_h;
+            if visual_idx < self.items_count.min(Self::MAX_VISIBLE) {
+                let real_idx = scroll_offset + visual_idx;
+                if real_idx < self.items_count {
+                    return Some(real_idx);
+                }
+            }
+        }
+        None
+    }
+
+    #[inline]
+    pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
+        rect.2 > 0
+            && rect.3 > 0
+            && mx >= rect.0
+            && mx < rect.0 + rect.2
+            && my >= rect.1
+            && my < rect.1 + rect.3
     }
 }

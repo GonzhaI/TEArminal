@@ -1,6 +1,6 @@
 //! Tipos de estado de la interfaz que `app` construye y el renderer dibuja.
 
-/// Estado de una sesión según OSC 133: lo único que Axon sabe de forma fiable de un comando.
+/// Estado de una sesión según OSC 133: lo único que TEArminal sabe de forma fiable de un comando.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SessionStatus {
     /// Prompt libre y sin comandos terminados.
@@ -47,7 +47,7 @@ pub(crate) struct SidebarHeader {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct SidebarTabItem {
-    /// Posición de la pestaña en `AxonApp::tabs`.
+    /// Posición de la pestaña en `TearminalApp::tabs`.
     pub index: usize,
     /// `None` en Ajustes y visores de archivo.
     pub status: Option<SessionStatus>,
@@ -181,6 +181,7 @@ pub(crate) struct SettingsPageState {
     pub editing_setting: Option<EditingSettingField>,
     pub setting_input_buffer: String,
     /// Texto del buscador de temas y primera fila visible de la lista filtrada
+    pub theme_search_input: crate::ui::TextInput,
     pub theme_filter: String,
     pub filtered_themes: Vec<&'static str>,
     pub theme_scroll: usize,
@@ -295,6 +296,7 @@ impl Default for SettingsPageState {
             scroll_y: 0,
             editing_setting: None,
             setting_input_buffer: String::new(),
+            theme_search_input: crate::ui::TextInput::default(),
             theme_filter: String::new(),
             filtered_themes: crate::theme::Theme::names().collect(),
             theme_scroll: 0,

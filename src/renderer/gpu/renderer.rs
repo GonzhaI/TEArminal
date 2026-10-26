@@ -322,6 +322,8 @@ pub(crate) struct GpuRenderer {
     // Memoria de trabajo reutilizada entre fotogramas
     instances: Vec<Instance>,
     batches: Vec<Batch>,
+    pub(crate) font_contrast: f32,
+    pub(crate) linear_images: bool,
 }
 
 fn create_instance_buffer(dev: &GpuDevice, count: u32) -> Result<ID3D11Buffer> {
@@ -361,6 +363,8 @@ impl GpuRenderer {
             capacity: INITIAL_INSTANCES,
             instances: Vec::new(),
             batches: Vec::new(),
+            font_contrast: 1.0,
+            linear_images: false,
         })
     }
 
@@ -428,7 +432,12 @@ impl GpuRenderer {
     /// Estado fijo del fotograma: destino, viewport, shaders, mezcla y tamaño en el constant buffer.
     fn bind_frame(&self, target: &ID3D11RenderTargetView, (w, h): (u32, u32)) -> Result<()> {
         let (ctx, p) = (&self.dev.context, &self.pipeline);
-        let constants = [w as f32, h as f32, 0.0, 0.0];
+        let constants = [
+            w as f32,
+            h as f32,
+            self.font_contrast.max(0.5),
+            if self.linear_images { 1.0 } else { 0.0 },
+        ];
         let viewport = D3D11_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,

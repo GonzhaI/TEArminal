@@ -1,16 +1,16 @@
-//! Eventos de winit de UNA ventana: `AxonHost` (host.rs) los enruta hasta aquí y cada uno se despacha
+//! Eventos de winit de UNA ventana: `TearminalHost` (host.rs) los enruta hasta aquí y cada uno se despacha
 //! al método que lo trata.
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Evento de usuario de esta ventana (`PtyData`/`PtyClosed` de uno de sus paneles, o `SshDone`)
-    pub(super) fn on_user_event(&mut self, event: AxonEvent) {
+    pub(super) fn on_user_event(&mut self, event: TearminalEvent) {
         match event {
-            AxonEvent::SshDone => {
+            TearminalEvent::SshDone => {
                 self.process_ssh_results();
             }
-            AxonEvent::FsChanged => {
+            TearminalEvent::FsChanged => {
                 if self.file_explorer.visible && self.file_explorer.remote_session.is_none() {
                     self.file_explorer.refresh();
                     self.pump_explorer_ssh();
@@ -21,14 +21,14 @@ impl AxonApp {
                     }
                 }
             }
-            AxonEvent::UpdateCheckDone => {
+            TearminalEvent::UpdateCheckDone => {
                 if !self.occluded {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
             }
-            AxonEvent::PtyData(pane_id) => {
+            TearminalEvent::PtyData(pane_id) => {
                 let osc52 = self.config.terminal.osc52;
                 let mut redraw = false;
                 let mut should_sync_root = false;
@@ -48,7 +48,7 @@ impl AxonApp {
                         }
                         if chunks >= 32 {
                             if let Some(p) = &self.proxy {
-                                let _ = p.send_event(AxonEvent::PtyData(pane_id));
+                                let _ = p.send_event(TearminalEvent::PtyData(pane_id));
                             }
                         }
                         for data in pane.terminal.pty_write_queue.drain(..) {
@@ -56,8 +56,8 @@ impl AxonApp {
                         }
                         for text in pane.terminal.clipboard_queue.drain(..) {
                             // OSC 52 solo con `terminal.osc52`: si no, se descarta (nada de portapapeles silencioso)
-                            if let (true, Some(cb)) = (osc52, &mut self.clipboard) {
-                                cb.set_text(text).ok();
+                            if osc52 {
+                                clipboard::copy_text(&mut self.clipboard, &text);
                             }
                         }
                         let in_sync = pane.terminal.is_in_sync_update();
@@ -90,7 +90,7 @@ impl AxonApp {
                     }
                 }
             }
-            AxonEvent::PtyClosed(pane_id) => {
+            TearminalEvent::PtyClosed(pane_id) => {
                 crate::logger::log(&format!("PtyClosed recibido para pane_id {}", pane_id));
                 // Drenar cualquier byte residual que haya quedado en el canal antes de cerrar
                 for tab in &mut self.tabs {
@@ -120,11 +120,11 @@ impl AxonApp {
             return;
         }
 
-        // Crear icono nativo de Axon ('>' verde sin fondo)
+        // Crear icono nativo de TEArminal ('>' verde sin fondo)
         let icon = create_native_icon();
 
         let window_attributes = WindowAttributes::default()
-            .with_title("Axon")
+            .with_title("TEArminal")
             .with_visible(false)
             .with_inner_size(PhysicalSize::new(1080, 680))
             .with_min_inner_size(PhysicalSize::new(540, 320))
@@ -364,8 +364,8 @@ impl AxonApp {
                     pane.pty.write_input(&data);
                 }
                 for text in pane.terminal.clipboard_queue.drain(..) {
-                    if let (true, Some(cb)) = (osc52, &mut self.clipboard) {
-                        cb.set_text(text).ok();
+                    if osc52 {
+                        clipboard::copy_text(&mut self.clipboard, &text);
                     }
                 }
                 if pane_got_bytes {

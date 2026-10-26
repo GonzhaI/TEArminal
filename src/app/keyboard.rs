@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Teclado: atajos de la aplicación y traducción de teclas a bytes para el PTY con soporte de eventos Kitty.
     pub(super) fn on_key_event(
         &mut self,
@@ -21,16 +21,7 @@ impl AxonApp {
             if let Some(active) = self.tabs[self.active_tab_index].active_pane() {
                 let flags = active.terminal.kitty_keyboard_flags;
                 if (flags & 2) != 0 {
-                    #[cfg(target_os = "windows")]
-                    let (ctrl, shift, alt, _altgr, win) = get_physical_modifiers();
-                    #[cfg(not(target_os = "windows"))]
-                    let (ctrl, shift, alt, _altgr, win) = (
-                        self.modifiers.control_key(),
-                        self.modifiers.shift_key(),
-                        self.modifiers.alt_key(),
-                        false,
-                        self.modifiers.super_key(),
-                    );
+                    let (ctrl, shift, alt, _altgr, win) = self.physical_modifiers();
                     if let Some(seq) = encode_kitty_key(
                         &logical_key,
                         physical_key,
@@ -62,6 +53,11 @@ impl AxonApp {
             }
         }
 
+        // Con la paleta de comandos abierta, interceptar teclado por completo
+        if self.palette.is_some() && self.handle_palette_key(&logical_key, physical_key, &text) {
+            return;
+        }
+
         // Debounce de foco: suprimir Enter/Tab residuales generados al alternar ventanas con Alt+Tab / Task View
         if self.last_focus_gained.elapsed().as_millis() < 150
             && (logical_key == Key::Named(NamedKey::Enter)
@@ -71,21 +67,33 @@ impl AxonApp {
             return;
         }
 
-        #[cfg(target_os = "windows")]
-        let (ctrl, shift, alt, altgr, win) = get_physical_modifiers();
-
-        #[cfg(not(target_os = "windows"))]
-        let (ctrl, shift, alt, altgr, win) = (
-            self.modifiers.control_key(),
-            self.modifiers.shift_key(),
-            self.modifiers.alt_key(),
-            false,
-            self.modifiers.super_key(),
-        );
+        let (ctrl, shift, alt, altgr, win) = self.physical_modifiers();
 
         // Si la tecla Windows/Super está presionada (o atajos de Windows como Win+Shift+Flechas):
         if win || self.modifiers.super_key() {
             crate::logger::log("-> Ignorada tecla con Windows/Super activo");
+            return;
+        }
+
+        // Teclas modificadoras por sí solas (Shift, Ctrl, Alt, Super) nunca deben desplazar el scroll ni escribir
+        if is_modifier {
+            if let Some(active) = self.tabs[self.active_tab_index].active_pane() {
+                let flags = active.terminal.kitty_keyboard_flags;
+                if (flags & 1) != 0 || (flags & 2) != 0 {
+                    if let Some(seq) = encode_kitty_key(
+                        &logical_key,
+                        physical_key,
+                        ctrl,
+                        shift,
+                        alt,
+                        win,
+                        event_type,
+                        flags,
+                    ) {
+                        active.pty.write_input(&seq);
+                    }
+                }
+            }
             return;
         }
 
@@ -106,7 +114,7 @@ impl AxonApp {
             return;
         }
 
-        // Solo con AXON_LOG_KEYS=1; nunca se registra el texto producido, solo su longitud
+        // Solo con TEARMINAL_LOG_KEYS=1; nunca se registra el texto producido, solo su longitud
         if crate::logger::keys_enabled() {
             crate::logger::log(&format!(
                 "KEY: phys={:?}, log={:?}, text_len={}, ctrl={}, shift={}, alt={}, altgr={}",
@@ -176,7 +184,7 @@ impl AxonApp {
             .unwrap_or(false);
         if active_is_settings {
             if self.settings_page_state.editing_setting == Some(EditingSettingField::ThemeSearch) {
-                self.edit_theme_search(&logical_key, text.as_deref());
+                self.edit_theme_search(&logical_key, physical_key, text.as_deref());
                 return;
             }
             // Edición inline de campo numérico
@@ -282,6 +290,13 @@ impl AxonApp {
         if ctrl && !shift && key_is_char(&logical_key, physical_key, ',') {
             crate::logger::log("-> Hotkey: Abrir / alternar Ajustes (Ctrl+,)");
             self.open_or_switch_settings_tab();
+            return;
+        }
+
+        // Paleta de comandos y búsqueda central (Ctrl + K)
+        if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'k') {
+            crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+K)");
+            self.toggle_palette();
             return;
         }
 
@@ -1037,6 +1052,7 @@ impl AxonApp {
         // 1. Alt + Backspace: Secuencia estándar VT (ESC + DEL: \x1b\x7f).
         if alt && is_backspace {
             crate::logger::log("-> Enviando \\x1b\\x7f (Alt+Backspace)");
+            active.terminal.reset_scroll();
             active.pty.write_input(b"\x1b\x7f");
             return;
         }
@@ -1044,6 +1060,7 @@ impl AxonApp {
         // 2. Ctrl + Backspace: Byte estándar werase (Ctrl+W: 0x17) utilizado por Windows Terminal.
         if ctrl && is_backspace {
             crate::logger::log("-> Enviando 0x17 (Ctrl+Backspace / Ctrl+W)");
+            active.terminal.reset_scroll();
             active.pty.write_input(&[0x17]);
             return;
         }
@@ -1051,18 +1068,9 @@ impl AxonApp {
         // 3. Backspace normal (o Shift+Backspace):
         if is_backspace {
             crate::logger::log("-> Enviando 0x7f (borrado de caracter)");
+            active.terminal.reset_scroll();
             active.pty.write_input(&[0x7f]);
             return;
-        }
-
-        // Siempre devolver scroll al prompt activo al pulsar teclas normales (excepto PageUp/Down y Shift+Home/End)
-        if logical_key != Key::Named(NamedKey::PageUp)
-            && logical_key != Key::Named(NamedKey::PageDown)
-            && !(shift
-                && (logical_key == Key::Named(NamedKey::Home)
-                    || logical_key == Key::Named(NamedKey::End)))
-        {
-            active.terminal.reset_scroll();
         }
 
         // Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
@@ -1073,13 +1081,9 @@ impl AxonApp {
                 && active.terminal.has_selection())
         {
             if let Some(sel_text) = active.terminal.copy_selection_text() {
-                if let Some(cb) = &mut self.clipboard {
-                    cb.set_text(sel_text).ok();
-                }
+                clipboard::copy_text(&mut self.clipboard, &sel_text);
                 active.terminal.selection = None;
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.request_redraw();
             }
             return;
         }
@@ -1191,9 +1195,7 @@ impl AxonApp {
         // Copiar salida del último comando del agente (Ctrl + Shift + O)
         if ctrl && shift && key_is_char(&logical_key, physical_key, 'o') {
             if let Some(output) = active.terminal.get_last_output_text() {
-                if let Some(cb) = &mut self.clipboard {
-                    cb.set_text(output).ok();
-                }
+                clipboard::copy_text(&mut self.clipboard, &output);
             }
             return;
         }
@@ -1313,6 +1315,7 @@ impl AxonApp {
             if let Key::Character(ref s) = logical_key {
                 let c = s.chars().next().unwrap_or(' ').to_ascii_lowercase();
                 if c.is_ascii_lowercase() {
+                    active.terminal.reset_scroll();
                     let code = (c as u8) - b'a' + 1;
                     active.pty.write_input(&[code]);
                     return;
@@ -1346,6 +1349,7 @@ impl AxonApp {
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
         ) || matches!(&logical_key, Key::Named(NamedKey::Enter));
         if is_enter && !ctrl {
+            active.terminal.reset_scroll();
             active.terminal.note_enter_sent();
             if shift || alt {
                 active.pty.write_input(b"\x1b\r");
@@ -1432,6 +1436,7 @@ impl AxonApp {
                 // Entrada de texto regular (letras, números, símbolos, emojis)
                 if let Some(t) = text {
                     if !t.is_empty() && t != "\r" && t != "\n" && t != "\t" {
+                        active.terminal.reset_scroll();
                         active.pty.write_input(t.as_bytes());
                     }
                 }

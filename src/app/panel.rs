@@ -34,7 +34,7 @@ pub(super) fn session_status(tab: &TerminalTab) -> Option<SessionStatus> {
     )
 }
 
-impl AxonApp {
+impl TearminalApp {
     pub(super) fn panel_on_right(&self) -> bool {
         self.config.appearance.panel_on_right()
     }

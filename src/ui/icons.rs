@@ -1,4 +1,4 @@
-/// Catálogo de iconos Lucide vectoriales embebidos para Axon
+/// Catálogo de iconos Lucide vectoriales embebidos para TEArminal
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LucideIcon {

@@ -33,14 +33,14 @@ def create_sample_png():
     iend = chunk(b"IEND", b"")
     return header + ihdr + idat + iend
 
-def show_image_in_axon(png_bytes):
+def show_image_in_tearminal(png_bytes):
     b64 = base64.b64encode(png_bytes).decode("ascii")
-    # Protocolo de imagen OSC 1337 nativo de Axon
+    # Protocolo de imagen OSC 1337 nativo de TEArminal
     sys.stdout.write(f"\033]1337;File=inline=1:{b64}\a\n")
     sys.stdout.flush()
 
 if __name__ == "__main__":
     png = create_sample_png()
-    print("--- [Axon Image Protocol Test: Curva de Entrenamiento PyTorch / Loss] ---")
-    show_image_in_axon(png)
-    print("Imagen renderizada nativamente por GPU dentro del buffer de Axon.")
+    print("--- [TEArminal Image Protocol Test: Curva de Entrenamiento PyTorch / Loss] ---")
+    show_image_in_tearminal(png)
+    print("Imagen renderizada nativamente por GPU dentro del buffer de TEArminal.")

@@ -17,6 +17,7 @@ mod geometry;
 mod glyphs;
 mod gpu;
 mod md_preview;
+mod palette;
 mod pane;
 mod scene;
 mod settings_page;
@@ -25,7 +26,7 @@ mod state;
 mod status_bar;
 #[cfg(test)]
 mod test_support;
-mod tokens;
+pub(crate) mod tokens;
 mod top_bar;
 
 use draw::Clip;
@@ -42,7 +43,7 @@ pub(crate) use gpu::{GpuSurface, Presented};
 pub(crate) use scene::ImageRef;
 pub(crate) use state::*;
 
-use crate::config::AxonConfig;
+use crate::config::TearminalConfig;
 use crate::terminal::{Cell, TerminalState};
 use crate::theme::{Color, Theme};
 use std::cell::{OnceCell, RefCell};
@@ -79,6 +80,11 @@ pub(crate) struct TerminalRenderer {
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
     pub ligatures: bool,
+    pub pixel_snap: bool,
+    #[allow(dead_code)]
+    pub show_brand: bool,
+    #[allow(dead_code)]
+    pub show_dimensions: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
     ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
@@ -87,7 +93,7 @@ pub(crate) struct TerminalRenderer {
 }
 
 impl TerminalRenderer {
-    pub(crate) fn new(config: &AxonConfig, scale_factor: f64) -> Self {
+    pub(crate) fn new(config: &TearminalConfig, scale_factor: f64) -> Self {
         // JetBrains Mono Nerd Font Regular (o la fuente del usuario); negrita y fallback son perezosas
         let (regular_font, custom_font) = Self::load_regular_font(config);
         let regular_face = if custom_font {
@@ -131,6 +137,9 @@ impl TerminalRenderer {
             margin_y: 0,
             scrollbars_awake: false,
             ligatures: config.terminal.ligatures,
+            pixel_snap: config.appearance.pixel_snap,
+            show_brand: config.appearance.show_brand,
+            show_dimensions: config.appearance.show_dimensions,
             regular_face,
             bold_face_rb: OnceCell::new(),
             ligature_cache: FastMap::default(),
@@ -141,8 +150,11 @@ impl TerminalRenderer {
         renderer
     }
 
-    pub(crate) fn update_scale(&mut self, config: &AxonConfig, scale_factor: f64) {
+    pub(crate) fn update_scale(&mut self, config: &TearminalConfig, scale_factor: f64) {
         self.scale_factor = scale_factor;
+        self.pixel_snap = config.appearance.pixel_snap;
+        self.show_brand = config.appearance.show_brand;
+        self.show_dimensions = config.appearance.show_dimensions;
         self.font_size = (config.appearance.font_size * scale_factor as f32)
             .round()
             .max(10.0);

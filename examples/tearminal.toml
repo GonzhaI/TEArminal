@@ -1,6 +1,6 @@
-# Configuración de ejemplo de Axon. Copia este archivo a la carpeta de configuración del usuario
-# (%APPDATA%\axon\axon\config\axon.toml), junto a axon.exe o al directorio desde el que lo lanzas.
-# Axon lo genera con estos valores si no existe; todas las claves son opcionales.
+# Configuración de ejemplo de TEArminal. Copia este archivo a la carpeta de configuración del usuario
+# (%APPDATA%\tearminal\tearminal\config\tearminal.toml), junto a tearminal.exe o al directorio desde el que lo lanzas.
+# TEArminal lo genera con estos valores si no existe; todas las claves son opcionales.
 
 [appearance]
 font_family = "JetBrains Mono Nerd Font"
@@ -19,7 +19,7 @@ show_file_explorer = false
 
 [terminal]
 default_shell = "powershell.exe"   # por defecto: pwsh.exe 7 (Program Files) si existe, si no powershell.exe
-shell_integration = true              # inyecta el prompt de Axon (OSC 7/133, rama git, ls con iconos, agentes)
+shell_integration = true              # inyecta el prompt de TEArminal (OSC 7/133, rama git, ls con iconos, agentes)
 scrollback_lines = 10000           # la memoria crece con las líneas escritas, no con el máximo
 cursor_blink = true
 copy_on_select = false

@@ -324,10 +324,16 @@ impl TerminalPane {
         if let Some(ssh) = self.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
             return Some(ssh.destination.clone());
         }
+        let is_valid_dir = |d: &std::path::Path| {
+            !d.is_file()
+                && !d.to_string_lossy().contains("clipboard")
+                && !d.to_string_lossy().ends_with(".png")
+        };
         let cwd_name = self
             .terminal
             .current_dir
             .as_deref()
+            .filter(|d| is_valid_dir(d))
             .and_then(|d| d.file_name())
             .and_then(|n| n.to_str())
             .filter(|n| !n.is_empty())
@@ -336,7 +342,9 @@ impl TerminalPane {
         if self.is_agent_pane() {
             return cwd_name;
         }
-        self.running_command().or(cwd_name)
+        self.running_command()
+            .filter(|cmd| !cmd.contains("clipboard") && !cmd.ends_with(".png"))
+            .or(cwd_name)
     }
 
     /// Comando en curso según OSC 133 (entre «salida empieza» y «comando terminado»).
@@ -799,14 +807,31 @@ impl TerminalTab {
             || contains_ignore_ascii_case(trimmed, "system32\\cmd.exe")
             || contains_ignore_ascii_case(trimmed, "windowspowershell");
 
+        let is_valid_cwd = |p: &std::path::Path| {
+            !p.is_file()
+                && !p.to_string_lossy().contains("clipboard")
+                && !p.to_string_lossy().ends_with(".png")
+        };
+
         if is_shell_or_path {
-            if let Some(path) = cwd {
+            if let Some(path) = cwd.filter(|p| is_valid_cwd(p)) {
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if !name.is_empty() {
                         return name.to_string();
                     }
                 }
                 return path.display().to_string();
+            }
+            return "PowerShell".to_string();
+        }
+
+        if trimmed.contains("clipboard") || ends_ci(".png") {
+            if let Some(path) = cwd.filter(|p| is_valid_cwd(p)) {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !name.is_empty() {
+                        return name.to_string();
+                    }
+                }
             }
             return "PowerShell".to_string();
         }

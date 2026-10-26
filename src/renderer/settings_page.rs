@@ -310,7 +310,7 @@ impl TerminalRenderer {
         );
     }
 
-    /// Renderiza la página completa de la pestaña de Ajustes y Personalización de Axon
+    /// Renderiza la página completa de la pestaña de Ajustes y Personalización de TEArminal
     pub(crate) fn render_settings_page(
         &mut self,
         canvas: &mut Canvas,
@@ -318,8 +318,9 @@ impl TerminalRenderer {
         right_inset: usize,
         page_y: usize,
         status_bar_h: usize,
-        config: &AxonConfig,
+        config: &TearminalConfig,
         state: &SettingsPageState,
+        cursor_visible: bool,
         theme: &Theme,
     ) {
         let (width, height) = canvas.size();
@@ -496,8 +497,17 @@ impl TerminalRenderer {
             (width, tmp_h),
             window,
             |c| match state.section {
-                SettingsSection::Appearance => self
-                    .draw_settings_appearance(c, content_x, card_w, top, config, state, &v, theme),
+                SettingsSection::Appearance => self.draw_settings_appearance(
+                    c,
+                    content_x,
+                    card_w,
+                    top,
+                    config,
+                    state,
+                    cursor_visible,
+                    &v,
+                    theme,
+                ),
                 SettingsSection::Terminal => {
                     self.draw_settings_terminal(c, content_x, card_w, top, config, state, &v, theme)
                 }
@@ -535,8 +545,9 @@ impl TerminalRenderer {
         content_x: usize,
         card_w: usize,
         card_y: usize,
-        config: &AxonConfig,
+        config: &TearminalConfig,
         state: &SettingsPageState,
+        cursor_visible: bool,
         rects: &SettingsPageRects,
         theme: &Theme,
     ) {
@@ -622,23 +633,20 @@ impl TerminalRenderer {
             tokens::MICRO,
             false,
         );
-        let (query, query_color) = if state.theme_filter.is_empty() && !searching {
-            ("Buscar tema…".to_string(), theme.text_muted())
-        } else {
-            (
-                format!("{}{}", state.theme_filter, if searching { "|" } else { "" }),
-                theme.foreground,
-            )
-        };
-        self.draw_ui_text(
+        let text_start_x = sb.0 + 30;
+        let text_max_x = sb.0 + sb.2 - count_w - 20;
+        self.render_text_input_content(
             canvas,
-            &query,
-            sb.0 + 30,
+            &state.theme_search_input,
+            text_start_x,
             text_y,
-            sb.0 + sb.2 - count_w - 20,
-            query_color,
-            tokens::BODY,
-            false,
+            text_max_x,
+            sb.1,
+            sb.3,
+            cursor_visible,
+            "Buscar tema…",
+            searching,
+            theme,
         );
 
         // Lista desplazable de temas
@@ -1027,7 +1035,7 @@ impl TerminalRenderer {
         content_x: usize,
         card_w: usize,
         card_y: usize,
-        config: &AxonConfig,
+        config: &TearminalConfig,
         state: &SettingsPageState,
         rects: &SettingsPageRects,
         theme: &Theme,
@@ -1168,7 +1176,7 @@ impl TerminalRenderer {
         self.draw_button(
             canvas,
             rects.open_file_btn,
-            "Abrir axon.toml",
+            "Abrir tearminal.toml",
             state.hovered_open_file,
             false,
             theme,
@@ -1181,7 +1189,7 @@ impl TerminalRenderer {
             false,
             theme,
         );
-        let path = AxonConfig::config_path();
+        let path = TearminalConfig::config_path();
         self.draw_mono_text(
             canvas,
             &path.to_string_lossy(),
@@ -1301,7 +1309,7 @@ impl TerminalRenderer {
         let right = content_x + card_w - 20;
         self.draw_ui_text(
             canvas,
-            "Axon Terminal",
+            "TEArminal",
             left,
             card_y + 76,
             right,
@@ -1341,7 +1349,7 @@ impl TerminalRenderer {
             theme.chrome_line(),
         );
 
-        let config_path = AxonConfig::config_path();
+        let config_path = TearminalConfig::config_path();
         let themes = Theme::names().count().to_string();
         let data = [
             ("VERSIÓN", version.clone()),
@@ -1386,7 +1394,7 @@ impl TerminalRenderer {
         self.draw_button(
             canvas,
             rects.about_open_file_btn,
-            "Abrir axon.toml",
+            "Abrir tearminal.toml",
             state.hovered_open_file,
             false,
             theme,

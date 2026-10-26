@@ -1,6 +1,6 @@
 //! `ssh` no interactivo (BatchMode) con salida acotada para las vías lentas del explorador y el visor
 //! remotos (sin integración en banda, o cuando esta falla). BLOQUEAN (conexión + transferencia): llámalas solo
-//! desde un hilo (`AxonApp::spawn_ssh`), nunca desde el bucle de eventos.
+//! desde un hilo (`TearminalApp::spawn_ssh`), nunca desde el bucle de eventos.
 
 use std::io::{Read, Write};
 use std::marker::PhantomData;
@@ -343,7 +343,7 @@ pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Primeros `MAX_FILE_BYTES + 1` bytes del archivo: el remoto nunca envía más de lo que Axon va a leer
+/// Primeros `MAX_FILE_BYTES + 1` bytes del archivo: el remoto nunca envía más de lo que TEArminal va a leer
 pub(crate) fn read_file_cmd(path: &str) -> String {
     format!("head -c {} -- {}", MAX_FILE_BYTES + 1, quote(path))
 }
@@ -480,11 +480,11 @@ pub(crate) fn run_command(
     })
 }
 
-/// Orden remota que guarda stdin como `name` en una carpeta propia (`<TMPDIR|/tmp>/axon-<uid>`, modo 700) y
+/// Orden remota que guarda stdin como `name` en una carpeta propia (`<TMPDIR|/tmp>/tearminal-<uid>`, modo 700) y
 /// escribe su ruta: una captura puede contener secretos y `/tmp` lo leen todos los usuarios del servidor
 fn upload_cmd(name: &str) -> String {
     let script = format!(
-        r#"umask 077; d="${{TMPDIR:-/tmp}}/axon-$(id -u)"; mkdir -p "$d" && [ -O "$d" ] && cat >"$d/{name}" && printf %s "$d/{name}""#
+        r#"umask 077; d="${{TMPDIR:-/tmp}}/tearminal-$(id -u)"; mkdir -p "$d" && [ -O "$d" ] && cat >"$d/{name}" && printf %s "$d/{name}""#
     );
     format!("sh -c {}", quote(&script))
 }
@@ -500,7 +500,7 @@ pub(crate) fn upload_image_safe(
         .unwrap_or_default()
         .as_millis();
     let bytes = std::fs::read(local_path).ok()?;
-    let remote_filename = format!("axon_img_{}.png", timestamp);
+    let remote_filename = format!("tearminal_img_{}.png", timestamp);
     crate::logger::log(&format!(
         "SSH Upload: transfiriendo captura a {destination} ({remote_filename})"
     ));
@@ -575,7 +575,7 @@ mod tests {
             return; // sin `sh` en esta máquina
         }
         let path = std::env::temp_dir()
-            .join(format!("axon_write_cmd_{}.txt", std::process::id()))
+            .join(format!("tearminal_write_cmd_{}.txt", std::process::id()))
             .to_string_lossy()
             .replace('\\', "/");
         std::fs::write(&path, "original").unwrap();

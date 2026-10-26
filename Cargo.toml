@@ -1,11 +1,11 @@
 [package]
-name = "axon"
-version = "0.14.0"
+name = "tearminal"
+version = "0.15.0"
 edition = "2021"
 license = "MIT"
-description = "Axon: Terminal nativa veloz para Windows optimizada para agentes CLI"
-authors = ["Axon Team"]
-repository = "https://github.com/GonzhaI/axon"
+description = "TEArminal: Terminal nativa veloz para Windows optimizada para agentes CLI"
+authors = ["TEArminal Team"]
+repository = "https://github.com/GonzhaI/TEArminal"
 readme = "README.md"
 keywords = ["terminal", "powershell", "conpty", "windows"]
 categories = ["command-line-utilities"]

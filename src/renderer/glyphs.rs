@@ -98,7 +98,7 @@ pub(crate) struct CachedGlyph {
 
 impl TerminalRenderer {
     /// Devuelve la fuente regular y si es una fuente personalizada del usuario
-    pub(super) fn load_regular_font(config: &AxonConfig) -> (fontdue::Font, bool) {
+    pub(super) fn load_regular_font(config: &TearminalConfig) -> (fontdue::Font, bool) {
         if let Some(custom) = &config.appearance.font_path {
             if let Some(font) = std::fs::read(custom)
                 .ok()

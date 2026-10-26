@@ -1,31 +1,34 @@
-//! Anfitrión de ventanas: posee todas las `AxonApp` (una por ventana) y enruta hasta ellas los eventos de
+//! Anfitrión de ventanas: posee todas las `TearminalApp` (una por ventana) y enruta hasta ellas los eventos de
 //! winit. Es el único que toca el `ActiveEventLoop`: abre y retira ventanas, y fija el próximo despertar.
 
 use super::*;
 use crate::config::SessionState;
 use winit::event_loop::{ControlFlow, EventLoopProxy};
 
-pub(crate) struct AxonHost {
-    proxy: Option<EventLoopProxy<AxonEvent>>,
-    windows: Vec<AxonApp>,
+pub(crate) struct TearminalHost {
+    proxy: Option<EventLoopProxy<TearminalEvent>>,
+    windows: Vec<TearminalApp>,
 }
 
-impl AxonHost {
+impl TearminalHost {
     /// Abre las ventanas de la sesión guardada (con `terminal.restore_session`) o una ventana nueva
-    pub(crate) fn new(config: AxonConfig, proxy: Option<EventLoopProxy<AxonEvent>>) -> Self {
+    pub(crate) fn new(
+        config: TearminalConfig,
+        proxy: Option<EventLoopProxy<TearminalEvent>>,
+    ) -> Self {
         let saved = if config.terminal.restore_session {
             SessionState::load().map(|s| s.windows)
         } else {
             None
         };
-        let mut windows: Vec<AxonApp> = saved
+        let mut windows: Vec<TearminalApp> = saved
             .into_iter()
             .flatten()
             .filter(|w| !w.tabs.is_empty())
-            .map(|w| AxonApp::from_session(config.clone(), proxy.clone(), Some(w)))
+            .map(|w| TearminalApp::from_session(config.clone(), proxy.clone(), Some(w)))
             .collect();
         if windows.is_empty() {
-            windows.push(AxonApp::new(config, proxy.clone()));
+            windows.push(TearminalApp::new(config, proxy.clone()));
         }
         // `session.toml` guarda todas las ventanas a la vez: que ninguna falte aunque otra guarde antes
         for w in &windows {
@@ -45,7 +48,7 @@ impl AxonHost {
             })
             .collect();
         for (config, session) in requested {
-            let mut app = AxonApp::from_session(config, self.proxy.clone(), Some(session));
+            let mut app = TearminalApp::from_session(config, self.proxy.clone(), Some(session));
             app.init_window(event_loop);
             app.save_session();
             self.windows.push(app);
@@ -61,7 +64,7 @@ impl AxonHost {
             })
             .collect();
         for (config, tab) in requested_tabs {
-            let mut app = AxonApp::from_tab(config, self.proxy.clone(), tab);
+            let mut app = TearminalApp::from_tab(config, self.proxy.clone(), tab);
             app.init_window(event_loop);
             app.save_session();
             self.windows.push(app);
@@ -152,7 +155,7 @@ impl AxonHost {
                     .get(from_w_idx)
                     .map(|w| w.config.clone())
                     .unwrap_or_else(|| self.windows[0].config.clone());
-                let mut app = AxonApp::from_tab(config, self.proxy.clone(), drop.tab);
+                let mut app = TearminalApp::from_tab(config, self.proxy.clone(), drop.tab);
                 app.init_window(event_loop);
                 if let Some(win) = &app.window {
                     win.set_outer_position(winit::dpi::PhysicalPosition::new(sx.max(0), sy.max(0)));
@@ -184,15 +187,17 @@ impl AxonHost {
     }
 }
 
-impl ApplicationHandler<AxonEvent> for AxonHost {
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AxonEvent) {
+impl ApplicationHandler<TearminalEvent> for TearminalHost {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: TearminalEvent) {
         match event {
-            AxonEvent::SshDone | AxonEvent::FsChanged | AxonEvent::UpdateCheckDone => {
+            TearminalEvent::SshDone
+            | TearminalEvent::FsChanged
+            | TearminalEvent::UpdateCheckDone => {
                 for w in &mut self.windows {
                     w.on_user_event(event);
                 }
             }
-            AxonEvent::PtyData(pane_id) | AxonEvent::PtyClosed(pane_id) => {
+            TearminalEvent::PtyData(pane_id) | TearminalEvent::PtyClosed(pane_id) => {
                 if let Some(w) = self.windows.iter_mut().find(|w| w.owns_pane(pane_id)) {
                     w.on_user_event(event);
                 }
@@ -225,7 +230,7 @@ impl ApplicationHandler<AxonEvent> for AxonHost {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Próximo despertar = el más cercano de todas las ventanas; sin temporizadores, 0 % CPU en reposo
-        let wake = self.windows.iter_mut().filter_map(AxonApp::tick).min();
+        let wake = self.windows.iter_mut().filter_map(TearminalApp::tick).min();
         self.settle(event_loop);
         event_loop.set_control_flow(match wake {
             Some(t) => ControlFlow::WaitUntil(t),

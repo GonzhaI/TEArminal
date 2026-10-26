@@ -1,5 +1,5 @@
 //! Pipeline de quads: una instancia por primitiva (ver `shaders/quad.hlsl`). Los shaders SM 4.0 van
-//! precompilados en el binario (`tools/compile-shaders.ps1`): compilar Axon no exige el Windows SDK.
+//! precompilados en el binario (`tools/compile-shaders.ps1`): compilar TEArminal no exige el Windows SDK.
 
 use super::GpuDevice;
 use windows::core::{s, Result};
@@ -91,7 +91,7 @@ pub(crate) struct Pipeline {
     pub ps: ID3D11PixelShader,
     pub layout: ID3D11InputLayout,
     pub blend: ID3D11BlendState,
-    /// Punto + clamp. Los shaders leen con `Load` (sin filtrar); queda enlazado por si un tipo futuro muestrea
+    /// Lineal + clamp para imágenes; los glifos leen con `Load` (sin filtrar).
     pub sampler: ID3D11SamplerState,
     pub raster: ID3D11RasterizerState,
     /// `float2` con el tamaño del destino (16 bytes); se actualiza con `UpdateSubresource`
@@ -142,7 +142,7 @@ impl Pipeline {
             d.CreateBlendState(&blend_desc, Some(&mut blend))?;
 
             let sampler_desc = D3D11_SAMPLER_DESC {
-                Filter: D3D11_FILTER_MIN_MAG_MIP_POINT,
+                Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
                 AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
                 AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
                 AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,

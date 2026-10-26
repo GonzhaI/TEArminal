@@ -6,8 +6,8 @@
 param([Parameter(Mandatory)][string]$Version)
 $ErrorActionPreference = 'Stop'
 $repo = (Get-Item $PSScriptRoot).Parent.FullName
-$line = Get-Content (Join-Path $repo 'dist\SHA256SUMS.txt') | Where-Object { $_ -match "axon-setup-$([regex]::Escape($Version))\.exe$" } | Select-Object -First 1
-if (-not $line) { throw "No hay axon-setup-$Version.exe en dist\SHA256SUMS.txt (ejecuta packaging\package.ps1)" }
+$line = Get-Content (Join-Path $repo 'dist\SHA256SUMS.txt') | Where-Object { $_ -match "tearminal-setup-$([regex]::Escape($Version))\.exe$" } | Select-Object -First 1
+if (-not $line) { throw "No hay tearminal-setup-$Version.exe en dist\SHA256SUMS.txt (ejecuta packaging\package.ps1)" }
 $sha = ($line -split '\s+')[0].ToUpper()
 $out = Join-Path $repo 'dist\winget'
 New-Item -ItemType Directory -Force $out | Out-Null

@@ -2,18 +2,13 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Botones del ratón: pestañas, paneles, explorador, ajustes, selección y TUIs.
     pub(super) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
         let mx = self.mouse_pos.x as usize;
         let my = self.mouse_pos.y as usize;
 
-        let (win_w, win_h) = if let Some(w) = &self.window {
-            let s = w.inner_size();
-            (s.width as usize, s.height as usize)
-        } else {
-            (800, 600)
-        };
+        let (win_w, win_h) = self.window_size();
 
         let offset = self.sidebar_offset();
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
@@ -42,6 +37,73 @@ impl AxonApp {
                 return;
             }
         }
+
+        // Paleta de comandos abierta: un clic en input posiciona o selecciona; clic en scrollbar desplaza; clic en un elemento lo ejecuta; cualquier clic fuera la cierra
+        if let Some(palette) = &mut self.palette {
+            let rects = PaletteRects::compute_with_scroll(
+                win_w,
+                win_h,
+                palette.filtered.len(),
+                palette.scroll_offset,
+            );
+            if button == MouseButton::Left {
+                if state == ElementState::Pressed {
+                    // Clic en la barra de scroll de la paleta: arrastrar el pulgar o saltar al punto pulsado
+                    if let Some((track, thumb)) = rects.scrollbar {
+                        let right = rects.card.0 + rects.card.2;
+                        if crate::renderer::ScrollbarRects::hit(track, right, mx, my) {
+                            if my >= thumb.1 && my < thumb.1 + thumb.3 {
+                                self.palette_scrollbar_dragging = true;
+                                self.palette_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                            } else {
+                                self.palette_scroll_to_thumb(my.saturating_sub(thumb.3 / 2));
+                            }
+                            self.last_scroll_time = Instant::now();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                    }
+
+                    if PaletteRects::inside(mx, my, rects.input) {
+                        let text_start_x = rects.input.0 + 40;
+                        let mut input = std::mem::take(&mut palette.input);
+                        self.handle_text_input_click(&mut input, mx, text_start_x);
+                        if let Some(p) = &mut self.palette {
+                            p.input = input;
+                        }
+                        return;
+                    }
+                    if PaletteRects::inside(mx, my, rects.card) {
+                        if let Some(idx) = rects.item_at_with_offset(mx, my, palette.scroll_offset)
+                        {
+                            if let Some(item) = palette.filtered.get(idx) {
+                                let action = item.action.clone();
+                                self.execute_palette_action(action);
+                                return;
+                            }
+                        }
+                        return;
+                    }
+                    self.palette = None;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                } else if state == ElementState::Released {
+                    palette.input.mouse_up();
+                    if self.palette_scrollbar_dragging {
+                        self.palette_scrollbar_dragging = false;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    return;
+                }
+            }
+            return;
+        }
         if button == MouseButton::Right
             && state == ElementState::Pressed
             && self.open_context_menu(mx, my)
@@ -64,6 +126,10 @@ impl AxonApp {
             return;
         }
         if button == MouseButton::Left && state == ElementState::Released {
+            self.settings_page_state.theme_search_input.mouse_up();
+            if let Some(p) = &mut self.palette {
+                p.input.mouse_up();
+            }
             if let Some(drag_idx) = self.tab_drag.take() {
                 let torn_off = if self.is_horizontal_tabs() {
                     my >= TopTabBarRects::HEIGHT + 15 || my >= win_h || mx >= win_w
@@ -123,13 +189,18 @@ impl AxonApp {
 
         // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
         if button == MouseButton::Left && state == ElementState::Released {
+            self.settings_page_state.theme_search_input.mouse_up();
+            if let Some(p) = &mut self.palette {
+                p.input.mouse_up();
+            }
             self.viewer_drag_selecting = false;
             let was_dragging = self.scrollbar_dragging
                 || self.sidebar_scrollbar_dragging
                 || self.explorer_scrollbar_dragging
                 || self.viewer_scrollbar_dragging
                 || self.viewer_hscrollbar_dragging
-                || self.settings_scrollbar_dragging;
+                || self.settings_scrollbar_dragging
+                || self.palette_scrollbar_dragging;
             if was_dragging {
                 self.scrollbar_dragging = false;
                 self.scrollbar_drag_pane_id = None;
@@ -138,6 +209,7 @@ impl AxonApp {
                 self.viewer_scrollbar_dragging = false;
                 self.viewer_hscrollbar_dragging = false;
                 self.settings_scrollbar_dragging = false;
+                self.palette_scrollbar_dragging = false;
                 self.last_scroll_time = Instant::now();
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -247,8 +319,9 @@ impl AxonApp {
                     return;
                 }
 
-                // Clic en [🔍] Buscar: la paleta (WP5) aún no existe; no arrastra la ventana.
+                // Clic en [🔍] Buscar: abrir paleta de comandos
                 if TopTabBarRects::inside(mx, my, top_rects.search_btn) {
+                    self.open_palette();
                     return;
                 }
 
@@ -328,8 +401,9 @@ impl AxonApp {
                     return;
                 }
 
-                // Píldora de búsqueda: la paleta (WP5) aún no existe; el clic no arrastra la ventana.
+                // Píldora de búsqueda: abrir paleta de comandos
                 if TopTabBarRects::inside(mx, my, title_rects.search_box) {
+                    self.open_palette();
                     return;
                 }
 
@@ -568,9 +642,11 @@ impl AxonApp {
                         if searching {
                             self.settings_page_state.editing_setting =
                                 Some(crate::renderer::EditingSettingField::ThemeSearch);
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
+                            let text_start_x = rects.theme_search_box.0 + 30;
+                            let mut input =
+                                std::mem::take(&mut self.settings_page_state.theme_search_input);
+                            self.handle_text_input_click(&mut input, mx, text_start_x);
+                            self.settings_page_state.theme_search_input = input;
                             return;
                         } else if self.settings_page_state.editing_setting
                             == Some(crate::renderer::EditingSettingField::ThemeSearch)
@@ -746,7 +822,7 @@ impl AxonApp {
                             self.toggle_ligatures();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
-                            crate::logger::log("-> Clic en abrir archivo axon.toml");
+                            crate::logger::log("-> Clic en abrir archivo tearminal.toml");
                             self.open_config_file();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
@@ -759,7 +835,7 @@ impl AxonApp {
                     }
                     SettingsSection::About => {
                         if SettingsPageRects::inside(mx, my, rects.about_open_file_btn) {
-                            crate::logger::log("-> Clic en abrir archivo axon.toml (About)");
+                            crate::logger::log("-> Clic en abrir archivo tearminal.toml (About)");
                             self.open_config_file();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.about_reset_btn) {
@@ -900,18 +976,6 @@ impl AxonApp {
                         }
                     }
                 }
-                return;
-            }
-        }
-
-        // Clics sobre el menú flotante de consumo de IA en la barra de estado: no deben filtrarse al visor ni terminal
-        if self.hovered_ai_badge
-            && self.config.appearance.show_status_bar
-            && !self.tabs[self.active_tab_index].is_settings
-        {
-            let popup_h = TerminalRenderer::ai_usage_popup_height(&self.ai_usage.snapshot);
-            let popup_rect = StatusBarRects::popup_rect(win_w, win_h, popup_h);
-            if StatusBarRects::inside(mx, my, popup_rect) {
                 return;
             }
         }
@@ -1174,16 +1238,11 @@ impl AxonApp {
 
         // 2b. Cabecera de un panel dividido: foco y botones dividir · maximizar · cerrar
         if button == MouseButton::Left && state == ElementState::Pressed {
-            let offset = self.sidebar_offset();
-            let top_offset = self.top_offset();
-            let right_offset = self.file_explorer_offset();
-            let term_area_w = win_w.saturating_sub(offset + right_offset);
-            let term_area_h = win_h.saturating_sub(top_offset + self.status_bar_height());
             let tab = &self.tabs[self.active_tab_index];
             let hit = if tab.is_settings || tab.file_viewer.is_some() {
                 None
             } else {
-                tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h)
+                self.active_tab_pane_rects(win_w, win_h)
                     .iter()
                     .find_map(|rect| {
                         if !rect.has_header {
@@ -1214,24 +1273,15 @@ impl AxonApp {
                     Some(PaneHeaderButton::Close) => self.close_pane_by_id(pane_id),
                     None => {}
                 }
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
+                self.request_redraw();
                 return;
             }
         }
 
         // 3. Clics en paneles de terminal activa
         let bypass = self.modifiers.shift_key();
-        let offset = self.sidebar_offset();
-        let top_offset = self.top_offset();
-        let status_bar_h = self.status_bar_height();
-        let right_offset = self.file_explorer_offset();
-        let term_area_w = win_w.saturating_sub(offset + right_offset);
-        let term_area_h = win_h.saturating_sub(top_offset + status_bar_h);
+        let pane_rects = self.active_tab_pane_rects(win_w, win_h);
         let active_tab = &mut self.tabs[self.active_tab_index];
-        let pane_rects =
-            active_tab.compute_pane_rects(offset, top_offset, term_area_w, term_area_h);
 
         let clicked_pane_rect = pane_rects
             .iter()
@@ -1350,8 +1400,8 @@ impl AxonApp {
                         let exit_code = block.as_ref().and_then(|b| b.exit_code);
                         match action {
                             crate::renderer::BlockCardButton::Copy => {
-                                if let (Some(command), Some(cb)) = (command, &mut self.clipboard) {
-                                    let _ = cb.set_text(command);
+                                if let Some(command) = command {
+                                    self.set_clipboard_text(&command);
                                 }
                             }
                             crate::renderer::BlockCardButton::Repeat => {
@@ -1367,9 +1417,9 @@ impl AxonApp {
                             }
                             // Sin agente integrado, «Explicar» deja en el portapapeles la petición lista para pegar.
                             crate::renderer::BlockCardButton::Explain => {
-                                if let (Some(command), Some(cb)) = (command, &mut self.clipboard) {
+                                if let Some(command) = command {
                                     let code = exit_code.unwrap_or(1);
-                                    let _ = cb.set_text(format!(
+                                    self.set_clipboard_text(&format!(
                                         "El comando `{command}` terminó con código {code}. Explica el error y propón la solución."
                                     ));
                                 }
@@ -1500,27 +1550,21 @@ impl AxonApp {
                                         self.terminal_click_count = 2;
                                         self.drag_start = None;
                                         self.drag_anchor = pane.terminal.selection;
-                                        if self.config.terminal.copy_on_select {
-                                            if let Some(text) = pane.terminal.copy_selection_text()
-                                            {
-                                                if let Some(cb) = &mut self.clipboard {
-                                                    let _ = cb.set_text(text);
-                                                }
-                                            }
-                                        }
+                                        super::clipboard::copy_pane_selection(
+                                            &mut self.clipboard,
+                                            self.config.terminal.copy_on_select,
+                                            pane,
+                                        );
                                     } else if is_quick_click && self.terminal_click_count == 2 {
                                         pane.terminal.select_line_at(global_line);
                                         self.terminal_click_count = 3;
                                         self.drag_start = None;
                                         self.drag_anchor = pane.terminal.selection;
-                                        if self.config.terminal.copy_on_select {
-                                            if let Some(text) = pane.terminal.copy_selection_text()
-                                            {
-                                                if let Some(cb) = &mut self.clipboard {
-                                                    let _ = cb.set_text(text);
-                                                }
-                                            }
-                                        }
+                                        super::clipboard::copy_pane_selection(
+                                            &mut self.clipboard,
+                                            self.config.terminal.copy_on_select,
+                                            pane,
+                                        );
                                     } else {
                                         pane.terminal.selection = None;
                                         self.terminal_click_count = 1;
@@ -1531,9 +1575,7 @@ impl AxonApp {
                                     self.last_terminal_click_pos = Some((col, global_line));
                                     self.last_terminal_click_pane_id = Some(pane.id);
 
-                                    if let Some(w) = &self.window {
-                                        w.request_redraw();
-                                    }
+                                    self.request_redraw();
                                 }
                             }
                             ElementState::Released => {
@@ -1542,18 +1584,14 @@ impl AxonApp {
                                 self.drag_anchor = None;
                                 if pane.terminal.selection.is_some_and(|s| s.start == s.end) {
                                     pane.terminal.selection = None;
-                                } else if self.config.terminal.copy_on_select
-                                    && pane.terminal.selection.is_some()
-                                {
-                                    if let Some(text) = pane.terminal.copy_selection_text() {
-                                        if let Some(cb) = &mut self.clipboard {
-                                            let _ = cb.set_text(text);
-                                        }
-                                    }
+                                } else {
+                                    super::clipboard::copy_pane_selection(
+                                        &mut self.clipboard,
+                                        self.config.terminal.copy_on_select,
+                                        pane,
+                                    );
                                 }
-                                if let Some(w) = &self.window {
-                                    w.request_redraw();
-                                }
+                                self.request_redraw();
                             }
                         },
                         MouseButton::Middle if state == ElementState::Pressed => {

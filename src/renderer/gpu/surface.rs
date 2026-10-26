@@ -112,6 +112,12 @@ impl GpuSurface {
         self.renderer.device().kind
     }
 
+    /// Ajusta parámetros de contraste de fuentes y filtrado de imágenes antes de renderizar.
+    pub(crate) fn set_render_tuning(&mut self, font_contrast: f32, linear_images: bool) {
+        self.renderer.font_contrast = font_contrast;
+        self.renderer.linear_images = linear_images;
+    }
+
     /// Acota cada lado a `1..=max_dim` (una ventana minimizada llega como 0x0) y redimensiona los búferes.
     pub(crate) fn resize(&mut self, w: u32, h: u32) -> Result<()> {
         let size = (clamp_dim(w, self.max_dim), clamp_dim(h, self.max_dim));

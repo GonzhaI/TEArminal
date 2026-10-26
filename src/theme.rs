@@ -234,11 +234,13 @@ impl Theme {
         }
         let key = name_key(name);
         let key = match key.as_str() {
-            // Valores de versiones anteriores de `axon.toml`
+            // Valores de versiones anteriores de `tearminal.toml`
             "frappe" => name_key("Catppuccin Frappe"),
             "latte" => name_key("Catppuccin Latte"),
-            "dark" | "default" | "axonnight" | "axon" | "night" => name_key(Self::DEFAULT_DARK),
-            "axonday" | "day" => name_key(Self::DEFAULT_LIGHT),
+            "dark" | "default" | "tearminalnight" | "tearminal" | "night" => {
+                name_key(Self::DEFAULT_DARK)
+            }
+            "tearminalday" | "day" => name_key(Self::DEFAULT_LIGHT),
             "onedark" => name_key("Atom One Dark"),
             "solarizeddark" => name_key("iTerm2 Solarized Dark"),
             _ => key,
@@ -454,8 +456,11 @@ mod tests {
         assert!(Theme::from_name(Theme::DEFAULT_DARK).is_dark());
         assert!(Theme::from_name(Theme::DEFAULT_LIGHT).is_light());
         // Los temas propios retirados se resuelven a los de por defecto
-        assert_eq!(Theme::canonical_name("Axon Night"), Theme::DEFAULT_DARK);
-        assert_eq!(Theme::canonical_name("Axon Day"), Theme::DEFAULT_LIGHT);
+        assert_eq!(
+            Theme::canonical_name("TEArminal Night"),
+            Theme::DEFAULT_DARK
+        );
+        assert_eq!(Theme::canonical_name("TEArminal Day"), Theme::DEFAULT_LIGHT);
     }
 
     #[test]

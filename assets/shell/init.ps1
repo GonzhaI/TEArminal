@@ -1,7 +1,7 @@
-# Inicialización de PowerShell para Axon. Se embebe con include_str! en src/pty.rs y se ejecuta con
+# Inicialización de PowerShell para TEArminal. Se embebe con include_str! en src/pty.rs y se ejecuta con
 # `powershell -NoExit -Command <este script>`. Reglas de rendimiento (se ejecuta en CADA prompt / comando):
 #   - Nada de procesos externos en `prompt` (un `git rev-parse` cuesta ~40 ms; leer .git/HEAD, ~2 ms).
-#   - Nada de Get-Command para buscar programas (ver Find-AxonApp) y los resultados se memoizan.
+#   - Nada de Get-Command para buscar programas (ver Find-TearminalApp) y los resultados se memoizan.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 Import-Module PSReadLine -ErrorAction SilentlyContinue
@@ -19,15 +19,15 @@ Set-PSReadLineKeyHandler -Chord 'Alt+Enter' -Function AddLine -ErrorAction Silen
 
 # Busca un ejecutable en PATH respetando PATHEXT (claude.cmd de npm incluido). Get-Command tarda 250-500 ms
 # cuando el programa NO está instalado (recorre cada entrada de PATH); File.Exists, ~5 ms. Solo memoiza aciertos.
-$script:AxonApps = @{}
-$script:AxonExts = @($env:PATHEXT.Split(';') | Where-Object { $_ })
-function Find-AxonApp([string]$Name) {
-    if ($script:AxonApps.ContainsKey($Name)) { return $script:AxonApps[$Name] }
+$script:TearminalApps = @{}
+$script:TearminalExts = @($env:PATHEXT.Split(';') | Where-Object { $_ })
+function Find-TearminalApp([string]$Name) {
+    if ($script:TearminalApps.ContainsKey($Name)) { return $script:TearminalApps[$Name] }
     foreach ($dir in $env:PATH.Split(';')) {
         if (-not $dir) { continue }
-        foreach ($e in $script:AxonExts) {
+        foreach ($e in $script:TearminalExts) {
             $f = $dir.TrimEnd('\') + '\' + $Name + $e
-            if ([IO.File]::Exists($f)) { return ($script:AxonApps[$Name] = $f) }
+            if ([IO.File]::Exists($f)) { return ($script:TearminalApps[$Name] = $f) }
         }
     }
 }
@@ -60,8 +60,8 @@ function prompt {
 }
 
 # ls: eza > lsd > listado propio con iconos Nerd Font (la búsqueda se hace una sola vez por sesión)
-$script:AxonLister = $null
-$script:AxonIcons = @{
+$script:TearminalLister = $null
+$script:TearminalIcons = @{
     '.rs'   = @('31', 0xe7a8);   '.toml' = @('33', 0xe6b2);  '.yaml' = @('33', 0xe6b2)
     '.yml'  = @('33', 0xe6b2);  '.json' = @('33', 0xe60b);  '.md'   = @('34', 0xe73e)
     '.ps1'  = @('36', 0xe70f);  '.bat'  = @('36', 0xe70f);  '.cmd'  = @('36', 0xe70f)
@@ -72,22 +72,22 @@ $script:AxonIcons = @{
 }
 function ls {
     param([Parameter(Position = 0, ValueFromPipeline = $true)][string]$Path = '.', [switch]$a, [switch]$Force)
-    if ($null -eq $script:AxonLister) {
-        $eza = Find-AxonApp 'eza'
-        $script:AxonLister = @{ Eza = $eza; Lsd = $(if ($eza) { $null } else { Find-AxonApp 'lsd' }) }
+    if ($null -eq $script:TearminalLister) {
+        $eza = Find-TearminalApp 'eza'
+        $script:TearminalLister = @{ Eza = $eza; Lsd = $(if ($eza) { $null } else { Find-TearminalApp 'lsd' }) }
     }
     $show = $a -or $Force
-    if ($script:AxonLister.Eza) {
+    if ($script:TearminalLister.Eza) {
         $ezaArgs = @('--icons', '--group-directories-first')
         if ($show) { $ezaArgs += '-a' }
         if ($Path -and $Path -ne '.') { $ezaArgs += $Path }
-        & $script:AxonLister.Eza @ezaArgs; return
+        & $script:TearminalLister.Eza @ezaArgs; return
     }
-    if ($script:AxonLister.Lsd) {
+    if ($script:TearminalLister.Lsd) {
         $lsdArgs = @('--group-dirs', 'first')
         if ($show) { $lsdArgs += '-a' }
         if ($Path -and $Path -ne '.') { $lsdArgs += $Path }
-        & $script:AxonLister.Lsd @lsdArgs; return
+        & $script:TearminalLister.Lsd @lsdArgs; return
     }
     $esc = [char]27
     $items = if ($show) { Get-ChildItem -Path $Path -Force -ErrorAction SilentlyContinue } else { Get-ChildItem -Path $Path -ErrorAction SilentlyContinue }
@@ -103,7 +103,7 @@ function ls {
             $name = $esc + '[1;34m' + $padded + $esc + '[0m'
             $size = $esc + '[2m' + '<DIR>'.PadLeft(9) + $esc + '[0m'
         } else {
-            $known = $script:AxonIcons[$item.Extension]
+            $known = $script:TearminalIcons[$item.Extension]
             if ($known) { $color = $known[0]; $glyph = $known[1] }
             else { $glyph = 0xf15b; $color = if ($item.Name.StartsWith('.')) { '90' } else { '39' } }
             $icon = $esc + '[' + $color + 'm' + [char]$glyph + $esc + '[0m'
@@ -122,16 +122,16 @@ Remove-Item alias:dir -Force -ErrorAction Ignore
 Set-Alias -Name dir -Value ls -Option AllScope -ErrorAction SilentlyContinue
 
 # Herramientas modernas opcionales (una sola búsqueda por herramienta al arrancar)
-if (Find-AxonApp 'bat') { Remove-Item alias:cat -Force -ErrorAction Ignore; Set-Alias -Name cat -Value bat -Option AllScope -ErrorAction SilentlyContinue }
-if (Find-AxonApp 'rg') { Set-Alias -Name grep -Value rg -Option AllScope -ErrorAction SilentlyContinue }
-if (Find-AxonApp 'fd') { Set-Alias -Name find -Value fd -Option AllScope -ErrorAction SilentlyContinue }
-if (Find-AxonApp 'zoxide') { Invoke-Expression (& zoxide init powershell --cmd cd | Out-String) -ErrorAction SilentlyContinue }
+if (Find-TearminalApp 'bat') { Remove-Item alias:cat -Force -ErrorAction Ignore; Set-Alias -Name cat -Value bat -Option AllScope -ErrorAction SilentlyContinue }
+if (Find-TearminalApp 'rg') { Set-Alias -Name grep -Value rg -Option AllScope -ErrorAction SilentlyContinue }
+if (Find-TearminalApp 'fd') { Set-Alias -Name find -Value fd -Option AllScope -ErrorAction SilentlyContinue }
+if (Find-TearminalApp 'zoxide') { Invoke-Expression (& zoxide init powershell --cmd cd | Out-String) -ErrorAction SilentlyContinue }
 
 # Agentes de IA en CLI. Mode: Anchor = limpia y ancla el prompt a la última línea (entrada inferior);
 # Clear = solo limpia; None = solo título. Subcomandos y flags no interactivos (update, --help, -v, -p…)
 # pasan a None para conservar la pantalla; al salir no se llama a Clear-Host ni a ESC[r (lleva el cursor a 1;1).
-function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList) {
-    $cmd = Find-AxonApp $Name
+function Invoke-TearminalAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList) {
+    $cmd = Find-TearminalApp $Name
     if (-not $cmd) { Write-Error "El comando '$Name' no se encuentra en PATH."; return }
     if ($Mode -ne 'None' -and $ArgumentList -and $ArgumentList.Count -gt 0) {
         $first = [string]$ArgumentList[0]
@@ -164,21 +164,21 @@ function Invoke-AxonAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList)
         for ($i = 0; $i -lt $h; $i++) { [Console]::WriteLine('') }
         [Console]::Write($esc + '[' + $h + ';1H')
     }
-    # OSC 1337 AxonAgent: si la consola muere con el agente (opencode lo hace al salir), Axon reabre el shell
-    [Console]::Write($esc + ']1337;AxonAgent=start;name=' + $Name + $bel)
+    # OSC 1337 TearminalAgent: si la consola muere con el agente (opencode lo hace al salir), TEArminal reabre el shell
+    [Console]::Write($esc + ']1337;TearminalAgent=start;name=' + $Name + $bel)
     try { & $cmd @ArgumentList }
     finally {
-        [Console]::Write($esc + ']1337;AxonAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[J')
+        [Console]::Write($esc + ']1337;TearminalAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[J')
     }
 }
-function agy      { Invoke-AxonAgent 'agy' 'Anchor' $args }
-function claude   { Invoke-AxonAgent 'claude' 'Anchor' $args }
-function gemini   { Invoke-AxonAgent 'gemini' 'Anchor' $args }
-function opencode { Invoke-AxonAgent 'opencode' 'Clear' $args }
-function aider    { Invoke-AxonAgent 'aider' 'None' $args }
+function agy      { Invoke-TearminalAgent 'agy' 'Anchor' $args }
+function claude   { Invoke-TearminalAgent 'claude' 'Anchor' $args }
+function gemini   { Invoke-TearminalAgent 'gemini' 'Anchor' $args }
+function opencode { Invoke-TearminalAgent 'opencode' 'Clear' $args }
+function aider    { Invoke-TearminalAgent 'aider' 'None' $args }
 Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction SilentlyContinue
 
-# ssh: señaliza inicio/fin de sesión a Axon (OSC 1337) para clonar paneles y detectar el host remoto
+# ssh: señaliza inicio/fin de sesión a TEArminal (OSC 1337) para clonar paneles y detectar el host remoto
 function ssh {
     $rawArgs = $args
     $dest = ''
@@ -201,14 +201,14 @@ function ssh {
     }
     if (-not $dest) { $dest = 'remote' }
     # Integración (config terminal.ssh_integration): un bash remoto informa en cada prompt de la rama git,
-    # la carpeta (OSC 7) y su listado (OSC 1337), y atiende peticiones de Axon (leer/guardar archivo, listar
+    # la carpeta (OSC 7) y su listado (OSC 1337), y atiende peticiones de TEArminal (leer/guardar archivo, listar
     # carpeta) por la misma sesión, sin segunda conexión: funciona también con contraseña. Solo en sesiones
     # interactivas sin comando remoto. Texto plano, sin ofuscar (los antivirus desconfían de lo contrario).
-    $integrate = ($env:AXON_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($posCount -eq 1)
+    $integrate = ($env:TEARMINAL_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($posCount -eq 1)
     foreach ($a in $rawArgs) { if ($a -in @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'
-__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;AxonGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;AxonLs=%s\007' $(ls -1Ap 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__axon_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 10485760 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;AxonFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__axon_req';fi
+__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;TearminalLs=%s\007' $(ls -1Ap 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__tearminal_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 10485760 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;TearminalFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__tearminal_req';fi
 '@
         $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
         $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;exec ${SHELL:-/bin/sh} -l'
@@ -219,17 +219,17 @@ __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git r
     }
     $esc = [char]27; $bel = [char]7
     if ($dest -ne 'remote') {
-        [Console]::Write($esc + ']1337;AxonSSH=start;dest=' + $dest + ';token=' + $env:AXON_PANE_TOKEN + $bel)
+        [Console]::Write($esc + ']1337;TearminalSSH=start;dest=' + $dest + ';token=' + $env:TEARMINAL_PANE_TOKEN + $bel)
         [Console]::Write($esc + ']0;ssh: ' + $dest + $bel)
     }
     $prevTerm = $env:TERM; $prevColor = $env:COLORTERM
     $env:TERM = 'xterm-256color'; $env:COLORTERM = 'truecolor'
-    $sshCmd = Find-AxonApp 'ssh'
+    $sshCmd = Find-TearminalApp 'ssh'
     if ($sshCmd) {
         try { & $sshCmd @rawArgs }
         finally {
             if ($dest -ne 'remote') {
-                [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
+                [Console]::Write($esc + ']1337;TearminalSSH=end;token=' + $env:TEARMINAL_PANE_TOKEN + $bel)
                 [Console]::Write($esc + ']0;powershell' + $bel)
             }
             if ($prevTerm) { $env:TERM = $prevTerm } else { Remove-Item env:TERM -ErrorAction SilentlyContinue }
@@ -238,7 +238,7 @@ __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git r
     } else {
         Write-Error "El comando 'ssh' no se encuentra en PATH."
         if ($dest -ne 'remote') {
-            [Console]::Write($esc + ']1337;AxonSSH=end;token=' + $env:AXON_PANE_TOKEN + $bel)
+            [Console]::Write($esc + ']1337;TearminalSSH=end;token=' + $env:TEARMINAL_PANE_TOKEN + $bel)
         }
     }
 }

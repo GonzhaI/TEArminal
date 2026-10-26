@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
-PackageIdentifier: GonzhaI.Axon
+PackageIdentifier: GonzhaI.TEArminal
 PackageVersion: <VERSION>
 InstallerType: inno
 Scope: user
@@ -11,7 +11,7 @@ MinimumOSVersion: 10.0.17763.0
 UpgradeBehavior: install
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/GonzhaI/axon/releases/download/v<VERSION>/axon-setup-<VERSION>.exe
+    InstallerUrl: https://github.com/GonzhaI/TEArminal/releases/download/v<VERSION>/tearminal-setup-<VERSION>.exe
     InstallerSha256: <SHA256>
 ManifestType: installer
 ManifestVersion: 1.6.0

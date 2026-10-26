@@ -1,7 +1,7 @@
 //! Observador del sistema de archivos nativo de Windows (FindFirstChangeNotificationW)
 //! Notifica cambios en tiempo real en el árbol de archivos o metadatos de Git con 0% CPU en reposo.
 
-use super::AxonEvent;
+use super::TearminalEvent;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -16,7 +16,7 @@ pub(super) struct FsWatcher {
 }
 
 impl FsWatcher {
-    pub(super) fn new(path: &Path, proxy: EventLoopProxy<AxonEvent>) -> Option<Self> {
+    pub(super) fn new(path: &Path, proxy: EventLoopProxy<TearminalEvent>) -> Option<Self> {
         if !path.exists() {
             return None;
         }
@@ -28,7 +28,7 @@ impl FsWatcher {
 
         #[cfg(target_os = "windows")]
         let thread = std::thread::Builder::new()
-            .name("axon-fs-watcher".into())
+            .name("tearminal-fs-watcher".into())
             .spawn(move || {
                 run_watcher_windows(path_for_thread, stop_for_thread, proxy);
             })
@@ -59,7 +59,7 @@ impl Drop for FsWatcher {
 fn run_watcher_windows(
     dir: PathBuf,
     stop: Arc<super::CachePadded<AtomicBool>>,
-    proxy: EventLoopProxy<AxonEvent>,
+    proxy: EventLoopProxy<TearminalEvent>,
 ) {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
@@ -100,7 +100,7 @@ fn run_watcher_windows(
             }
 
             if !stop.load(Ordering::Relaxed) {
-                let _ = proxy.send_event(AxonEvent::FsChanged);
+                let _ = proxy.send_event(TearminalEvent::FsChanged);
             }
 
             // Como mucho un aviso cada ~2 s: una compilación (`target/`) escribe sin parar y cada aviso relee el
@@ -122,7 +122,7 @@ fn run_watcher_windows(
     }
 }
 
-impl super::AxonApp {
+impl super::TearminalApp {
     /// Sincroniza el observador de cambios en tiempo real según el repositorio o carpeta activa del explorador
     pub(crate) fn sync_fs_watcher(&mut self) {
         if !self.file_explorer.visible || self.file_explorer.remote_session.is_some() {

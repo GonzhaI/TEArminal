@@ -2,13 +2,10 @@
 
 use super::*;
 
-impl AxonApp {
+impl TearminalApp {
     /// Alto visible del contenido desplazable de Ajustes
     fn settings_viewport_h(&self) -> usize {
-        let win_h = self
-            .window
-            .as_ref()
-            .map_or(600, |w| w.inner_size().height as usize);
+        let win_h = self.window_height();
         win_h.saturating_sub(
             self.top_offset() + SettingsPageRects::CONTENT_TOP + self.status_bar_height(),
         )
@@ -18,10 +15,7 @@ impl AxonApp {
     pub(super) fn settings_scrollbar(
         &self,
     ) -> Option<(crate::renderer::Rect, crate::renderer::Rect)> {
-        let win_w = self
-            .window
-            .as_ref()
-            .map_or(800, |w| w.inner_size().width as usize);
+        let win_w = self.window_width();
         SettingsPageRects::scrollbar(
             self.settings_page_state.section,
             self.top_offset(),
@@ -36,15 +30,14 @@ impl AxonApp {
         let Some((track, thumb)) = self.settings_scrollbar() else {
             return;
         };
-        let travel = track.3.saturating_sub(thumb.3);
         let max = SettingsPageRects::max_scroll(
             self.settings_page_state.section,
             self.settings_viewport_h(),
         );
         if let Some(scroll) =
-            (thumb_top.saturating_sub(track.1).min(travel) * max).checked_div(travel)
+            crate::renderer::scroll_offset_for_thumb_y(track, thumb, thumb_top as f32, max)
         {
-            self.settings_page_state.scroll_y = scroll.min(max);
+            self.settings_page_state.scroll_y = scroll;
             self.last_scroll_time = Instant::now();
         }
     }
@@ -100,7 +93,7 @@ impl AxonApp {
     }
 
     pub(super) fn reset_font_size(&mut self) {
-        let target_size = AxonConfig::default().appearance.font_size;
+        let target_size = TearminalConfig::default().appearance.font_size;
         if (self.config.appearance.font_size - target_size).abs() > 0.01 {
             self.config.appearance.font_size = target_size;
             let _ = self.config.save();
@@ -116,7 +109,7 @@ impl AxonApp {
     }
 
     pub(super) fn reload_config(&mut self) {
-        self.config = AxonConfig::load_or_default();
+        self.config = TearminalConfig::load_or_default();
         self.apply_loaded_config();
     }
 
@@ -154,55 +147,61 @@ impl AxonApp {
         self.settings_page_state.theme_scroll = idx.saturating_sub(2);
     }
 
-    /// Teclado del buscador de temas: escribe, borra, Enter aplica el primer resultado y Esc limpia.
-    pub(super) fn edit_theme_search(&mut self, key: &Key, text: Option<&str>) {
-        let st = &mut self.settings_page_state;
-        match key {
+    /// Teclado del buscador de temas: escribe, borra palabras/caracteres, navega, selecciona y busca.
+    pub(super) fn edit_theme_search(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: Option<&str>,
+    ) {
+        match logical_key {
             Key::Named(NamedKey::Enter) => {
+                let st = &mut self.settings_page_state;
                 st.editing_setting = None;
                 if let Some(&name) = st.filtered_themes.first() {
                     self.pick_theme(name);
                 }
             }
             Key::Named(NamedKey::Escape) => {
+                let st = &mut self.settings_page_state;
                 st.editing_setting = None;
+                st.theme_search_input.clear();
                 st.theme_filter.clear();
                 st.filtered_themes = Theme::search("");
                 st.theme_scroll = 0;
                 self.reveal_current_theme();
-            }
-            Key::Named(NamedKey::Backspace) => {
-                st.theme_filter.pop();
-                st.filtered_themes = Theme::search(&st.theme_filter);
-                st.theme_scroll = 0;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
             _ => {
-                let mut changed = false;
-                for ch in text.unwrap_or("").chars().filter(|c| !c.is_control()) {
-                    if st.theme_filter.chars().count() < 32 {
-                        st.theme_filter.push(ch);
-                        changed = true;
-                    }
-                }
+                let mut input = std::mem::take(&mut self.settings_page_state.theme_search_input);
+                let (_consumed, changed) =
+                    self.handle_text_input_key(&mut input, logical_key, physical_key, text);
+                self.settings_page_state.theme_search_input = input;
                 if changed {
-                    st.filtered_themes = Theme::search(&st.theme_filter);
-                    st.theme_scroll = 0;
+                    self.sync_theme_search_filter();
                 }
             }
         }
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+    }
+
+    pub(super) fn sync_theme_search_filter(&mut self) {
+        let st = &mut self.settings_page_state;
+        st.theme_filter = st.theme_search_input.text().to_string();
+        st.filtered_themes = Theme::search(&st.theme_filter);
+        st.theme_scroll = 0;
     }
 
     /// Recalcula el tema activo (modo + tema de Windows) y lo aplica a ventana y paneles.
     pub(super) fn apply_active_theme(&mut self) {
         self.system_light = crate::theme::is_windows_system_light_mode();
-        self.theme = self.config.appearance.resolve_theme(self.system_light);
+        let new_theme = self.config.appearance.resolve_theme(self.system_light);
+        self.theme = new_theme.clone();
         for tab in &mut self.tabs {
             for pane in &mut tab.panes {
                 let was_dark = pane.terminal.theme.is_dark();
-                pane.terminal.theme = self.theme.clone();
+                pane.terminal.update_theme(new_theme.clone());
                 let now_dark = pane.terminal.theme.is_dark();
                 if pane.terminal.report_color_scheme_mode && was_dark != now_dark {
                     let report = pane.terminal.color_scheme_report_bytes();
@@ -322,10 +321,10 @@ impl AxonApp {
         }
     }
 
-    /// Los shells nuevos heredan `AXON_SSH_INTEGRATION`, que lee el wrapper `ssh` de `init.ps1`
+    /// Los shells nuevos heredan `TEARMINAL_SSH_INTEGRATION`, que lee el wrapper `ssh` de `init.ps1`
     pub(crate) fn apply_ssh_integration_env(&self) {
         let on = self.config.terminal.ssh_integration;
-        std::env::set_var("AXON_SSH_INTEGRATION", if on { "1" } else { "0" });
+        std::env::set_var("TEARMINAL_SSH_INTEGRATION", if on { "1" } else { "0" });
     }
 
     pub(crate) fn toggle_ssh_integration(&mut self) {
@@ -357,7 +356,7 @@ impl AxonApp {
     }
 
     pub(crate) fn open_config_file(&self) {
-        let path = AxonConfig::config_path();
+        let path = TearminalConfig::config_path();
         if !path.exists() {
             let _ = self.config.save();
         }
@@ -373,7 +372,7 @@ impl AxonApp {
 
     pub(crate) fn reset_to_defaults(&mut self) {
         crate::logger::log("-> Restableciendo configuración a valores por defecto");
-        self.config = AxonConfig::default();
+        self.config = TearminalConfig::default();
         let _ = self.config.save();
         self.apply_loaded_config();
     }
