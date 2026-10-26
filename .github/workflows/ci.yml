@@ -41,12 +41,12 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - name: axon.exe no debe depender del Visual C++ Redistributable
+      - name: tearminal.exe no debe depender del Visual C++ Redistributable
         shell: pwsh
         run: |
-          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('target/release/axon.exe'))
-          if ($text -match '(?i)vcruntime140|msvcp140') { throw 'axon.exe importa el runtime de Visual C++ (falta crt-static)' }
-          "OK: ejecutable autónomo ({0:N1} MB)" -f ((Get-Item target/release/axon.exe).Length / 1MB)
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes('target/release/tearminal.exe'))
+          if ($text -match '(?i)vcruntime140|msvcp140') { throw 'tearminal.exe importa el runtime de Visual C++ (falta crt-static)' }
+          "OK: ejecutable autónomo ({0:N1} MB)" -f ((Get-Item target/release/tearminal.exe).Length / 1MB)
 
   lint:
     name: Formato y lints
@@ -102,8 +102,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: axon-windows-x64
+          name: tearminal-windows-x64
           path: |
-            dist/axon-setup-*.exe
-            dist/axon-*-windows-x64.zip
+            dist/tearminal-setup-*.exe
+            dist/tearminal-*-windows-x64.zip
             dist/SHA256SUMS.txt

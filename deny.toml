@@ -1,4 +1,4 @@
-# Configuración de cargo-deny para Axon
+# Configuración de cargo-deny para TEArminal
 # Auditoría de licencias, vulnerabilidades (RustSec) y dependencias duplicadas.
 
 [graph]

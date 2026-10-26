@@ -1,4 +1,4 @@
-# Configuración de cargo-nextest para Axon
+# Configuración de cargo-nextest para TEArminal
 [profile.default]
 retries = 0
 fail-fast = false
