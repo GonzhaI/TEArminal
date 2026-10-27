@@ -73,7 +73,14 @@ impl TerminalRenderer {
             true,
         );
         if let Some((branch, chip_x, chip_w)) = &chip {
-            canvas.rounded_fill(*chip_x, top + 10, *chip_w, 22, 11, theme.surface_bg());
+            canvas.rounded_fill(
+                *chip_x,
+                top + 10,
+                *chip_w,
+                22,
+                tokens::RADIUS_CONTROL,
+                theme.surface_bg(),
+            );
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::GitBranch,
@@ -106,7 +113,14 @@ impl TerminalRenderer {
             );
         }
         if hovered_new_tab {
-            canvas.rounded_fill(plus.0, plus.1, plus.2, plus.3, 6, theme.surface_hover());
+            canvas.rounded_fill(
+                plus.0,
+                plus.1,
+                plus.2,
+                plus.3,
+                tokens::RADIUS_ROW,
+                theme.surface_hover(),
+            );
         }
         self.draw_lucide_icon(
             canvas,
@@ -137,10 +151,25 @@ impl TerminalRenderer {
             let row = (tab_x, tab_y, tab_w, tab_item_h);
 
             if tab.is_active {
-                canvas.rounded_fill(row.0, row.1, row.2, row.3, 10, theme.background);
-                canvas.rounded_stroke(row.0, row.1, row.2, row.3, 10, theme.chrome_line_strong());
+                let radius = tokens::RADIUS_ROW;
+                canvas.rounded_fill(row.0, row.1, row.2, row.3, radius, theme.background);
+                canvas.rounded_stroke(
+                    row.0,
+                    row.1,
+                    row.2,
+                    row.3,
+                    radius,
+                    theme.chrome_line_strong(),
+                );
             } else if is_hovered {
-                canvas.rounded_fill(row.0, row.1, row.2, row.3, 10, theme.surface_hover());
+                canvas.rounded_fill(
+                    row.0,
+                    row.1,
+                    row.2,
+                    row.3,
+                    tokens::RADIUS_ROW,
+                    theme.surface_hover(),
+                );
             }
 
             let item_cy = tab_y + tab_item_h / 2;
@@ -244,7 +273,14 @@ impl TerminalRenderer {
                 let close = SidebarRects::close_btn_rect(row);
                 let is_close_hovered = hovered_close == Some(idx);
                 if is_close_hovered {
-                    canvas.rounded_fill(close.0, close.1, close.2, close.3, 6, theme.surface_bg());
+                    canvas.rounded_fill(
+                        close.0,
+                        close.1,
+                        close.2,
+                        close.3,
+                        tokens::RADIUS_ROW,
+                        theme.surface_bg(),
+                    );
                 }
                 self.draw_lucide_icon(
                     canvas,
@@ -281,7 +317,14 @@ impl TerminalRenderer {
         // 4. Ajustes al fondo del riel (el pie «Ocultar panel» ya no existe; el panel se alterna con Ctrl B).
         let btn = SidebarRects::settings_btn_rect(usable_h);
         if hovered_toggle_btn {
-            canvas.rounded_fill(btn.0, btn.1, btn.2, btn.3, 6, theme.surface_hover());
+            canvas.rounded_fill(
+                btn.0,
+                btn.1,
+                btn.2,
+                btn.3,
+                tokens::RADIUS_ROW,
+                theme.surface_hover(),
+            );
         }
         self.draw_lucide_icon(
             canvas,
@@ -312,7 +355,11 @@ impl TerminalRenderer {
         } else {
             theme.surface_hover()
         };
-        canvas.rounded_fill(x + 8, y, w.saturating_sub(16), h, 6, fill);
+        let row_w = w.saturating_sub(16);
+        canvas.rounded_fill(x + 8, y, row_w, h, tokens::RADIUS_ROW, fill);
+        if selected && focused {
+            canvas.rounded_stroke(x + 8, y, row_w, h, tokens::RADIUS_ROW, theme.card_outline());
+        }
         if selected {
             let bar = if focused {
                 theme.accent_color()
@@ -349,8 +396,15 @@ impl TerminalRenderer {
         } else {
             theme.chrome_bg_elevated()
         };
-        canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 4, bg);
-        canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 4, theme.chrome_line());
+        canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, tokens::RADIUS_CONTROL, bg);
+        canvas.rounded_stroke(
+            btn_x,
+            btn_y,
+            btn_w,
+            btn_h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_line(),
+        );
         self.draw_lucide_icon(
             canvas,
             if on_right {

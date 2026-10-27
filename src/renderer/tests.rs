@@ -2612,6 +2612,68 @@ fn test_tab_chip_stays_inside_tab_rect() {
     }
 }
 
+/// Las filas de sesión comparten el radio de fila (6): la esquina queda redondeada, pero el píxel a (2, 2) de ella ya
+/// pertenece al relleno (con el radio 10 anterior quedaba fuera).
+#[test]
+fn test_sidebar_hovered_row_uses_row_radius() {
+    use crate::renderer::{SidebarHeader, SidebarRects, SidebarTabItem, StatusBarRects};
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let (w, h) = (crate::app::SIDEBAR_WIDTH, 600usize);
+    let status_h = StatusBarRects::BAR_H;
+    let tabs: Vec<SidebarTabItem> = (0..3)
+        .map(|i| SidebarTabItem {
+            index: i,
+            status: None,
+            title: format!("Sesión {i}"),
+            detail: None,
+            is_active: i == 0,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            is_file_viewer: false,
+            is_preview: false,
+        })
+        .collect();
+    let header = SidebarHeader {
+        title: "Sesiones".into(),
+        branch: None,
+        path: None,
+        on_right: false,
+        list_end: SidebarRects::list_end(h - status_h, 3, false),
+    };
+    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let buf = test_support::with_canvas(w, h, |c| {
+        c.clear(theme.background);
+        r.render_sidebar(
+            c,
+            w,
+            status_h,
+            &header,
+            &tabs,
+            0,
+            Some(1),
+            None,
+            false,
+            false,
+            false,
+            &theme,
+        );
+    });
+    let row = (
+        SidebarRects::PAD_X,
+        SidebarRects::row_y(1),
+        w - (SidebarRects::PAD_X + 8),
+        SidebarRects::TAB_ITEM_H,
+    );
+    let at = |x: usize, y: usize| buf[y * w + x];
+    let hover = theme.surface_hover().to_u32_xrgb();
+    assert_ne!(at(row.0, row.1), hover, "esquina redondeada");
+    assert_eq!(at(row.0 + 2, row.1 + 2), hover, "radio de fila (6)");
+    assert_eq!(at(row.0 + 2, row.1 + row.3 / 2), hover, "borde izquierdo");
+}
+
 #[test]
 fn test_draw_helpers_write_through_canvas() {
     const W: usize = 40;
