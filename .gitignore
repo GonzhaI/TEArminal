@@ -1,5 +1,4 @@
 # Compilación y artefactos de Rust
-/target/
 **/target/
 **/*.rs.bk
 *.pdb
@@ -38,6 +37,11 @@ session.toml
 *.rej
 *~
 
+# Planes y specs generados por agentes de IA (se quedan en local)
+/docs/superpowers/
+/.superpowers/
+/.claude/
+
 # Entornos de desarrollo y editores
 .vscode/
 *.code-workspace
@@ -47,7 +51,7 @@ session.toml
 .vs/
 *.suo
 *.user
-*.userosv
+*.userosscache
 *.sln.docstates
 *.swp
 *.swo
