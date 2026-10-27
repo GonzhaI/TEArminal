@@ -272,6 +272,209 @@ pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
     None
 }
 
+/// Intervalo máximo configurado en el sistema operativo para detectar un doble clic.
+#[cfg(target_os = "windows")]
+pub(crate) fn double_click_time() -> std::time::Duration {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
+    let ms = unsafe { GetDoubleClickTime() };
+    std::time::Duration::from_millis(ms as u64)
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn double_click_time() -> std::time::Duration {
+    std::time::Duration::from_millis(500)
+}
+
+/// Líneas que se deben desplazar por cada muesca de la rueda del ratón según la configuración del sistema.
+#[cfg(target_os = "windows")]
+pub(crate) fn wheel_scroll_lines() -> f32 {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETWHEELSCROLLLINES,
+    };
+    let mut lines: u32 = 3;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETWHEELSCROLLLINES,
+            0,
+            &mut lines as *mut u32 as *mut _,
+            0,
+        )
+    };
+    if ok != 0 {
+        if lines == u32::MAX {
+            3.0
+        } else {
+            (lines.clamp(1, 100)) as f32
+        }
+    } else {
+        3.0
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn wheel_scroll_lines() -> f32 {
+    3.0
+}
+
+const PROP_PREV_WNDPROC: &[u16] = &[
+    'T' as u16, 'E' as u16, 'A' as u16, 'R' as u16, 'M' as u16, 'I' as u16, 'N' as u16, 'A' as u16,
+    'L' as u16, '_' as u16, 'W' as u16, 'P' as u16, 0,
+];
+
+#[cfg(target_os = "windows")]
+pub(super) fn setup_native_window_frame(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetPropW, SetWindowLongPtrW, GWLP_WNDPROC, GWL_STYLE, WS_MAXIMIZEBOX,
+        WS_MINIMIZEBOX, WS_SYSMENU, WS_THICKFRAME,
+    };
+
+    unsafe {
+        // Asegurar que el sistema sabe que la ventana soporta maximizado y redimensionamiento
+        // (requisito nativo de Windows 11 para activar los Snap Layouts en el botón maximizar).
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_STYLE,
+            (style | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_THICKFRAME | WS_SYSMENU) as isize,
+        );
+
+        let prev = SetWindowLongPtrW(hwnd, GWLP_WNDPROC, wnd_proc_subclass as *const () as isize);
+        if prev != 0 {
+            SetPropW(hwnd, PROP_PREV_WNDPROC.as_ptr(), prev as _);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(super) fn setup_native_window_frame(_hwnd: *mut std::ffi::c_void) {}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn wnd_proc_subclass(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: windows_sys::Win32::Foundation::WPARAM,
+    lparam: windows_sys::Win32::Foundation::LPARAM,
+) -> windows_sys::Win32::Foundation::LRESULT {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    let prev = GetPropW(hwnd, PROP_PREV_WNDPROC.as_ptr()) as isize;
+    if prev == 0 {
+        return DefWindowProcW(hwnd, msg, wparam, lparam);
+    }
+    let prev_proc: WNDPROC = std::mem::transmute(prev);
+
+    match msg {
+        WM_NCHITTEST => {
+            let x = (lparam as i32) as i16 as i32;
+            let y = ((lparam as i32 >> 16) as i16) as i32;
+            let mut pt = POINT { x, y };
+            ScreenToClient(hwnd, &mut pt);
+
+            let mut rc = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetClientRect(hwnd, &mut rc);
+            let win_w = rc.right - rc.left;
+            let win_h = rc.bottom - rc.top;
+
+            if win_w <= 0 || win_h <= 0 {
+                return CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam);
+            }
+
+            let is_maximized = IsZoomed(hwnd) != 0;
+
+            // 1. Bordes de redimensionamiento nativos del SO (cuando no está maximizada)
+            if !is_maximized {
+                let border = 6;
+                let top_border = 4;
+                let at_left = pt.x < border;
+                let at_right = pt.x >= win_w - border;
+                let at_top = pt.y < top_border;
+                let at_bottom = pt.y >= win_h - border;
+
+                match (at_top, at_bottom, at_left, at_right) {
+                    (true, _, true, _) => return HTTOPLEFT as isize,
+                    (true, _, _, true) => return HTTOPRIGHT as isize,
+                    (_, true, true, _) => return HTBOTTOMLEFT as isize,
+                    (_, true, _, true) => return HTBOTTOMRIGHT as isize,
+                    (true, ..) => return HTTOP as isize,
+                    (_, true, ..) => return HTBOTTOM as isize,
+                    (_, _, true, _) => return HTLEFT as isize,
+                    (_, _, _, true) => return HTRIGHT as isize,
+                    _ => {}
+                }
+            }
+
+            // 2. Botón Maximizar / Restaurar -> HTMAXBUTTON activa Snap Layouts en Windows 11
+            let ctrl_w = 46;
+            let bar_h = 38;
+            if pt.y >= 0 && pt.y < bar_h {
+                let max_btn_left = win_w - ctrl_w * 2;
+                let max_btn_right = win_w - ctrl_w;
+                if pt.x >= max_btn_left && pt.x < max_btn_right {
+                    return HTMAXBUTTON as isize;
+                }
+            }
+
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        WM_NCLBUTTONDOWN => {
+            if wparam == HTMAXBUTTON as usize {
+                return 0;
+            }
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        WM_NCMOUSEMOVE => {
+            if wparam == HTMAXBUTTON as usize {
+                let x = (lparam as i32) as i16 as i32;
+                let y = ((lparam as i32 >> 16) as i16) as i32;
+                let mut pt = POINT { x, y };
+                ScreenToClient(hwnd, &mut pt);
+
+                use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+                    TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                };
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_NONCLIENT | TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut tme);
+
+                let client_lparam = ((pt.y as u32) << 16) | (pt.x as u32 & 0xFFFF);
+                PostMessageW(hwnd, WM_MOUSEMOVE, 0, client_lparam as isize);
+            }
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        WM_NCMOUSELEAVE => {
+            // El cursor salió del área de controles de ventana: apagar el hover
+            let client_lparam = (0x7FFF << 16) | 0x7FFF;
+            PostMessageW(hwnd, WM_MOUSEMOVE, 0, client_lparam as isize);
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        WM_NCLBUTTONUP => {
+            if wparam == HTMAXBUTTON as usize {
+                let is_max = IsZoomed(hwnd) != 0;
+                let cmd = if is_max { SW_RESTORE } else { SW_MAXIMIZE };
+                ShowWindow(hwnd, cmd);
+                return 0;
+            }
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        WM_NCDESTROY => {
+            RemovePropW(hwnd, PROP_PREV_WNDPROC.as_ptr());
+            CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam)
+        }
+        _ => CallWindowProcW(prev_proc, hwnd, msg, wparam, lparam),
+    }
+}
+
 /// Texto del diálogo cuando Direct3D 11 no arranca ni siquiera con WARP.
 #[cold]
 pub(crate) fn gpu_error_message(err: &dyn std::fmt::Display) -> String {

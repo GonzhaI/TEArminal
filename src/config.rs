@@ -36,18 +36,6 @@ pub(crate) struct AppearanceConfig {
     /// Lado de la ventana donde va el panel de navegación: "left" | "right".
     #[serde(default = "default_panel_side")]
     pub(crate) panel_side: String,
-    /// Realce de contraste gamma para texto sobre fondos oscuros (1.0 = estándar, 1.3-1.5 = nítido).
-    #[serde(default = "default_font_contrast")]
-    pub(crate) font_contrast: f32,
-    /// Filtrado de imágenes: "point" (más nítido para pixel art) o "linear" (suave para capturas y fotos).
-    #[serde(default = "default_image_filter")]
-    pub(crate) image_filter: String,
-    /// Ajuste de fuentes e iconos de UI a cuadrícula de píxel exacto (evita difuminado en DPI 125%/150%).
-    #[serde(default = "default_false")]
-    pub(crate) pixel_snap: bool,
-    /// Muestra el logo y nombre "TEArminal" en la esquina superior izquierda.
-    #[serde(default = "default_false")]
-    pub(crate) show_brand: bool,
     /// Muestra las dimensiones de la rejilla (columnas × filas) en la esquina inferior derecha.
     #[serde(default = "default_false")]
     pub(crate) show_dimensions: bool,
@@ -78,10 +66,9 @@ pub(crate) struct TerminalConfig {
     /// Ligaduras tipográficas de programación (->, !=, ==, =>...)
     #[serde(default = "default_true")]
     pub(crate) ligatures: bool,
-    /// Sin efecto: la GPU (Direct3D 11, con WARP de respaldo) es el único renderer. Se conserva solo
-    /// para que un `tearminal.toml` antiguo con `gpu = ...` siga cargando. Nada debe leer este campo.
-    #[serde(default = "default_true")]
-    pub(crate) gpu: bool,
+    /// Forma del cursor: "block", "beam" / "bar", "underline"
+    #[serde(default = "default_cursor_shape")]
+    pub(crate) cursor_shape: String,
     /// Comprobación automática de nuevas versiones al iniciar TEArminal
     #[serde(default = "default_true")]
     pub(crate) auto_check_updates: bool,
@@ -92,19 +79,15 @@ pub(crate) struct TerminalConfig {
 }
 
 fn default_font_size() -> f32 {
-    15.0
-}
-
-fn default_font_contrast() -> f32 {
-    1.0
-}
-
-fn default_image_filter() -> String {
-    "point".to_string()
+    16.0
 }
 
 fn default_ui_font_size() -> f32 {
-    15.0
+    16.0
+}
+
+fn default_cursor_shape() -> String {
+    "block".to_string()
 }
 
 fn default_true() -> bool {
@@ -178,8 +161,8 @@ impl Default for TearminalConfig {
             appearance: AppearanceConfig {
                 font_family: "JetBrains Mono Nerd Font".to_string(),
                 font_path: None,
-                font_size: 15.0,
-                ui_font_size: 15.0,
+                font_size: 16.0,
+                ui_font_size: 16.0,
                 window_opacity: 1.0,
                 theme: crate::theme::Theme::DEFAULT_DARK.to_string(),
                 theme_light: crate::theme::Theme::DEFAULT_LIGHT.to_string(),
@@ -189,10 +172,6 @@ impl Default for TearminalConfig {
                 show_status_bar: true,
                 show_file_explorer: false,
                 panel_side: default_panel_side(),
-                font_contrast: 1.0,
-                image_filter: "point".to_string(),
-                pixel_snap: false,
-                show_brand: false,
                 show_dimensions: false,
             },
             terminal: TerminalConfig {
@@ -207,7 +186,7 @@ impl Default for TearminalConfig {
                 ssh_integration: true,
                 osc52: true,
                 ligatures: true,
-                gpu: true,
+                cursor_shape: "block".to_string(),
                 auto_check_updates: true,
                 ai_limits: true,
             },
@@ -228,13 +207,87 @@ impl Default for TerminalConfig {
 }
 
 fn detect_preferred_shell() -> String {
-    // Solo usar pwsh.exe si existe como binario Win32 nativo completo en Program Files.
-    // Los alias de Windows Store (AppData\Local\Microsoft\WindowsApps\pwsh.exe) bloquean ConPTY en Windows 11.
-    let prog_pwsh = std::path::Path::new(r"C:\Program Files\PowerShell\7\pwsh.exe");
-    if prog_pwsh.exists() {
-        return prog_pwsh.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        // 1. Comprobar rutas estándar de instalación de PowerShell 7 en Program Files
+        let mut candidates = Vec::new();
+
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            let base = PathBuf::from(pf);
+            candidates.push(base.join("PowerShell").join("7").join("pwsh.exe"));
+            candidates.push(base.join("PowerShell").join("7-preview").join("pwsh.exe"));
+        }
+        if let Ok(pf64) = std::env::var("ProgramW6432") {
+            let base = PathBuf::from(pf64);
+            candidates.push(base.join("PowerShell").join("7").join("pwsh.exe"));
+        }
+        candidates.push(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"));
+
+        // 2. Comprobar instalación por usuario (WinGet/MSI sin privilegios admin o Scoop)
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("PowerShell")
+                    .join("7")
+                    .join("pwsh.exe"),
+            );
+        }
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            candidates.push(
+                PathBuf::from(user_profile)
+                    .join("scoop")
+                    .join("apps")
+                    .join("pwsh")
+                    .join("current")
+                    .join("pwsh.exe"),
+            );
+        }
+
+        for path in candidates {
+            if path.is_file() {
+                return path.to_string_lossy().to_string();
+            }
+        }
+
+        // 3. Buscar pwsh.exe en el PATH del sistema mediante SearchPathW,
+        // excluyendo expresamente los alias de Microsoft Store (WindowsApps) que bloquean ConPTY
+        if let Some(path) = search_path_native("pwsh.exe") {
+            let path_str = path.to_string_lossy();
+            if !path_str.to_ascii_lowercase().contains("windowsapps") && path.is_file() {
+                return path_str.to_string();
+            }
+        }
     }
+
     "powershell.exe".to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn search_path_native(file_name: &str) -> Option<PathBuf> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
+
+    let wide_file: Vec<u16> = OsStr::new(file_name).encode_wide().chain(Some(0)).collect();
+    let mut buf = [0u16; 512];
+    let len = unsafe {
+        SearchPathW(
+            std::ptr::null(),
+            wide_file.as_ptr(),
+            std::ptr::null(),
+            buf.len() as u32,
+            buf.as_mut_ptr(),
+            std::ptr::null_mut(),
+        )
+    };
+    if len > 0 && (len as usize) < buf.len() {
+        use std::os::windows::ffi::OsStringExt;
+        let os_str = std::ffi::OsString::from_wide(&buf[..len as usize]);
+        Some(PathBuf::from(os_str))
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -720,13 +773,12 @@ mod tests {
 
     #[test]
     fn test_config_gpu_key_is_accepted_and_ignored() {
-        // `terminal.gpu` solo existe para que un tearminal.toml antiguo siga cargando: ningún código lo lee.
+        // Un tearminal.toml antiguo con `gpu = ...` sigue cargando sin error aunque la clave se haya eliminado
         let text = toml::to_string_pretty(&TearminalConfig::default())
             .unwrap()
-            .replace("gpu = true", "gpu = false");
-        assert!(text.contains("gpu = false"));
-        let cfg = toml::from_str::<TearminalConfig>(&text).unwrap();
-        assert!(!cfg.terminal.gpu);
+            .replace("[terminal]\n", "[terminal]\ngpu = false\n");
+        let cfg = toml::from_str::<TearminalConfig>(&text);
+        assert!(cfg.is_ok());
     }
 
     #[test]
@@ -752,19 +804,18 @@ mod tests {
     }
 
     #[test]
-    fn test_render_tuning_config_roundtrip_and_defaults() {
+    fn test_defaults_and_legacy_tuning_ignored() {
         let default_cfg = TearminalConfig::default();
-        assert_eq!(default_cfg.appearance.font_contrast, 1.0);
-        assert_eq!(default_cfg.appearance.image_filter, "point");
-        assert!(!default_cfg.appearance.pixel_snap);
-        assert!(!default_cfg.appearance.show_brand);
+        assert_eq!(default_cfg.appearance.font_size, 16.0);
+        assert_eq!(default_cfg.appearance.ui_font_size, 16.0);
+        assert_eq!(default_cfg.terminal.cursor_shape, "block");
         assert!(!default_cfg.appearance.show_dimensions);
 
         let toml_str = r#"
 [appearance]
 font_family = "JetBrains Mono Nerd Font"
-font_size = 16.0
-ui_font_size = 15.0
+font_size = 18.0
+ui_font_size = 16.0
 window_opacity = 1.0
 theme = "Catppuccin Mocha"
 theme_light = "Catppuccin Latte"
@@ -777,24 +828,25 @@ panel_side = "left"
 font_contrast = 1.4
 image_filter = "linear"
 pixel_snap = true
+show_brand = true
 
 [terminal]
 default_shell = "powershell.exe"
 scrollback_lines = 10000
 cursor_blink = true
+cursor_shape = "beam"
 copy_on_select = false
 restore_session = true
+gpu = true
 "#;
         let cfg: TearminalConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(cfg.appearance.font_contrast, 1.4);
-        assert_eq!(cfg.appearance.image_filter, "linear");
-        assert!(cfg.appearance.pixel_snap);
+        assert_eq!(cfg.appearance.font_size, 18.0);
+        assert_eq!(cfg.terminal.cursor_shape, "beam");
 
         let mut bytes = Vec::new();
         cfg.write_to(&mut bytes).unwrap();
         let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
-        assert_eq!(reloaded.appearance.font_contrast, 1.4);
-        assert_eq!(reloaded.appearance.image_filter, "linear");
-        assert!(reloaded.appearance.pixel_snap);
+        assert_eq!(reloaded.appearance.font_size, 18.0);
+        assert_eq!(reloaded.terminal.cursor_shape, "beam");
     }
 }

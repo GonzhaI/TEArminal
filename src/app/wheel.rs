@@ -11,6 +11,7 @@ impl TearminalApp {
         let my = self.mouse_pos.y as usize;
 
         let (win_w, win_h) = self.window_size();
+        let scroll_multiplier = platform::wheel_scroll_lines();
         let (scroll_x_lines, scroll_y_lines) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (x, y),
             MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / 20.0, pos.y as f32 / 20.0),
@@ -55,7 +56,7 @@ impl TearminalApp {
                     my
                 };
                 if rects.theme_row_at(mx, page_y).is_some() {
-                    let rows = (-scroll_y_lines * 3.0).round() as isize;
+                    let rows = (-scroll_y_lines * scroll_multiplier).round() as isize;
                     self.scroll_theme_list(rows);
                     return;
                 }
@@ -94,7 +95,7 @@ impl TearminalApp {
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let lines = (scroll_y_lines * 3.0).round() as isize;
+                let lines = (scroll_y_lines * scroll_multiplier).round() as isize;
                 let list_h = panel_h.saturating_sub(
                     crate::explorer::FileExplorer::HEADER_HEIGHT
                         + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
@@ -109,8 +110,8 @@ impl TearminalApp {
         // Scroll en pestaña de visor de archivos (soporte vertical y horizontal)
         if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
             let (dx, dy) = (
-                (scroll_x_lines * 3.0).round() as isize,
-                (scroll_y_lines * 3.0).round() as isize,
+                (scroll_x_lines * scroll_multiplier).round() as isize,
+                (scroll_y_lines * scroll_multiplier).round() as isize,
             );
             let max_x = if viewer.wrap_active() {
                 0
@@ -212,9 +213,9 @@ impl TearminalApp {
                     }
                 }
             } else {
-                // 3 líneas por muesca; el resto fraccionario se acumula para que un touchpad
-                // (muchos eventos con y < 1) avance al ritmo de sus dedos y no 3 líneas por evento
-                self.wheel_remainder += scroll_y_lines * 3.0;
+                // Líneas por muesca según configuración del SO; el resto fraccionario se acumula para que un touchpad
+                // (muchos eventos con y < 1) avance al ritmo de sus dedos y no a saltos bruscos
+                self.wheel_remainder += scroll_y_lines * scroll_multiplier;
                 let lines = self.wheel_remainder.trunc();
                 self.wheel_remainder -= lines;
                 let lines = lines as isize;

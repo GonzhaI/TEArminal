@@ -166,8 +166,8 @@ fn test_settings_reset_to_defaults() {
     app.reset_to_defaults();
 
     // Validar que se restauraron los valores por defecto
-    assert_eq!(app.config.appearance.font_size, 15.0);
-    assert_eq!(app.config.appearance.ui_font_size, 15.0);
+    assert_eq!(app.config.appearance.font_size, 16.0);
+    assert_eq!(app.config.appearance.ui_font_size, 16.0);
     assert_eq!(app.config.appearance.window_opacity, 1.0);
     assert_eq!(
         app.config.appearance.theme,
@@ -1070,6 +1070,33 @@ fn test_file_viewer_grapheme_clustering() {
     );
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_file_viewer_indent_unit_and_guides() {
+    assert_eq!(indent_of("class Foo:"), Some(0));
+    assert_eq!(indent_of("    def bar():"), Some(4));
+    assert_eq!(indent_of("        x = 1"), Some(8));
+    assert_eq!(indent_of("\tx = 1"), Some(4));
+    assert_eq!(indent_of("\t\ty = 2"), Some(8));
+    assert_eq!(indent_of(""), None);
+    assert_eq!(indent_of("   "), None);
+
+    let (mut tab_4, path_4) = viewer_with(
+        "four_spaces.py",
+        "class Foo:\n    def bar(self):\n        if True:\n            return 42\n",
+    );
+    let v4 = tab_4.file_viewer.as_mut().expect("viewer");
+    assert_eq!(v4.indent_unit(), 4);
+    let _ = std::fs::remove_file(path_4);
+
+    let (mut tab_2, path_2) = viewer_with(
+        "two_spaces.json",
+        "{\n  \"name\": \"test\",\n  \"nested\": {\n    \"val\": 1\n  }\n}\n",
+    );
+    let v2 = tab_2.file_viewer.as_mut().expect("viewer");
+    assert_eq!(v2.indent_unit(), 2);
+    let _ = std::fs::remove_file(path_2);
 }
 
 #[test]

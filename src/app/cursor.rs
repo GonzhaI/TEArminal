@@ -897,6 +897,20 @@ impl TearminalApp {
                 .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height)
                 .copied();
 
+            let hovered_pid = hovered_pane_rect.map(|r| r.pane_id);
+            for p in &mut active_tab.panes {
+                if Some(p.id) != hovered_pid {
+                    if p.terminal.scrollbar_hovered {
+                        p.terminal.scrollbar_hovered = false;
+                        needs_redraw = true;
+                    }
+                    if p.terminal.scroll_to_bottom_hovered {
+                        p.terminal.scroll_to_bottom_hovered = false;
+                        needs_redraw = true;
+                    }
+                }
+            }
+
             if let Some(rect) = hovered_pane_rect {
                 if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
                     let is_over_scrollbar = if let Some(renderer) = &self.renderer {
@@ -1324,17 +1338,19 @@ impl TearminalApp {
             });
 
             // Las dimensiones y los medidores van a la derecha del badge: misma geometría que el dibujo.
-            let dims_text = format!("{} × {}", dims.0, dims.1);
+            let dims_w = if self.config.appearance.show_dimensions {
+                let dims_text = format!("{} × {}", dims.0, dims.1);
+                self.renderer.as_ref().map_or(dims_text.len() * 6, |r| {
+                    r.measure_mono_text(&dims_text, 10.0, false)
+                })
+            } else {
+                0
+            };
             let meters = TerminalRenderer::status_meters_for(&self.ai_usage.snapshot, ai_status);
-            let (dims_w, meters_w) =
-                self.renderer
-                    .as_ref()
-                    .map_or((dims_text.len() * 6, meters.len() * 150), |r| {
-                        (
-                            r.measure_mono_text(&dims_text, 10.0, false),
-                            r.status_meters_width(&meters),
-                        )
-                    });
+            let meters_w = self
+                .renderer
+                .as_ref()
+                .map_or(meters.len() * 150, |r| r.status_meters_width(&meters));
 
             let sb_rects = StatusBarRects::compute_with_status(
                 win_w, win_h, label_w, update_w, dims_w, meters_w,

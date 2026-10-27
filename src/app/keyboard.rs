@@ -58,16 +58,16 @@ impl TearminalApp {
             return;
         }
 
-        // Debounce de foco: suprimir Enter/Tab residuales generados al alternar ventanas con Alt+Tab / Task View
-        if self.last_focus_gained.elapsed().as_millis() < 150
-            && (logical_key == Key::Named(NamedKey::Enter)
-                || logical_key == Key::Named(NamedKey::Tab))
+        let (ctrl, shift, alt, altgr, win) = self.physical_modifiers();
+
+        // Debounce de foco: suprimir solo Tab residual si Alt sigue presionado al alternar ventanas con Alt+Tab
+        if self.last_focus_gained.elapsed().as_millis() < 30
+            && logical_key == Key::Named(NamedKey::Tab)
+            && (alt || self.modifiers.alt_key())
         {
-            crate::logger::log("-> Ignorado Enter/Tab sintético residual de foco");
+            crate::logger::log("-> Ignorado Tab residual con Alt de foco");
             return;
         }
-
-        let (ctrl, shift, alt, altgr, win) = self.physical_modifiers();
 
         // Si la tecla Windows/Super está presionada (o atajos de Windows como Win+Shift+Flechas):
         if win || self.modifiers.super_key() {
@@ -94,23 +94,6 @@ impl TearminalApp {
                     }
                 }
             }
-            return;
-        }
-
-        // Debounce de movimiento de ventana / cambio de monitor (Win+Shift+Flechas o arrastre)
-        if self.last_window_move.elapsed().as_millis() < 250
-            && matches!(
-                logical_key,
-                Key::Named(NamedKey::Enter)
-                    | Key::Named(NamedKey::ArrowUp)
-                    | Key::Named(NamedKey::ArrowDown)
-                    | Key::Named(NamedKey::ArrowLeft)
-                    | Key::Named(NamedKey::ArrowRight)
-            )
-        {
-            crate::logger::log(
-                "-> Ignorada tecla de navegación/enter residual tras mover de monitor",
-            );
             return;
         }
 

@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
+pub(crate) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
     let bg = if cell.inverse() {
         if cell.fg != Color::TRANSPARENT {
             cell.fg
@@ -22,18 +22,24 @@ pub(super) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
             theme.background
         }
     } else if cell.fg != Color::TRANSPARENT {
-        // Garantizar contraste mínimo legible contra el fondo de la celda
-        let cr = crate::theme::contrast_ratio(cell.fg, bg);
-        if cr < 1.8 {
-            if bg == theme.background {
-                theme.foreground
-            } else if crate::theme::contrast_ratio(theme.background, bg) >= 3.0 {
-                theme.background
-            } else {
-                theme.foreground
-            }
-        } else {
+        // Los caracteres de dibujo de bloques, gráficos y braille no deben alterarse por contraste:
+        // las aplicaciones (logos de agentes, imágenes CLI, sparklines) usan paletas y sombras intencionales.
+        if matches!(cell.c as u32, 0x2500..=0x259F | 0x2800..=0x28FF) {
             cell.fg
+        } else {
+            // Garantizar contraste mínimo legible contra el fondo de la celda
+            let cr = crate::theme::contrast_ratio(cell.fg, bg);
+            if cr < 1.8 {
+                if bg == theme.background {
+                    theme.foreground
+                } else if crate::theme::contrast_ratio(theme.background, bg) >= 3.0 {
+                    theme.background
+                } else {
+                    theme.foreground
+                }
+            } else {
+                cell.fg
+            }
         }
     } else {
         theme.foreground
@@ -73,6 +79,114 @@ impl TerminalRenderer {
             history.saturating_sub(terminal.scroll_offset),
         )?;
         Some((x, y, w, h))
+    }
+
+    /// Dibuja de forma procedural caracteres de bloque sólido (U+2580..=U+2590, U+2594..=U+259F)
+    /// garantizando ajuste pixel-perfect a la celda, sin costuras, rebabas ni desbordamiento vertical.
+    pub(crate) fn draw_block_element(
+        &self,
+        canvas: &mut Canvas,
+        clip: Clip,
+        c: char,
+        cell_x: usize,
+        cell_y: usize,
+        color: Color,
+    ) -> bool {
+        let cw = self.char_width;
+        let rh = self.row_height;
+        let w2 = cw / 2;
+        let rem_w = cw.saturating_sub(w2);
+        let h2 = rh / 2;
+        let rem_h = rh.saturating_sub(h2);
+
+        match c {
+            // Bloque completo
+            '█' => {
+                canvas.fill_rect(clip, cell_x, cell_y, cw, rh, color);
+                true
+            }
+            // Mitades
+            '▀' => {
+                canvas.fill_rect(clip, cell_x, cell_y, cw, h2, color);
+                true
+            }
+            '▄' => {
+                canvas.fill_rect(clip, cell_x, cell_y + h2, cw, rem_h, color);
+                true
+            }
+            '▌' => {
+                canvas.fill_rect(clip, cell_x, cell_y, w2, rh, color);
+                true
+            }
+            '▐' => {
+                canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, rh, color);
+                true
+            }
+            // Fracciones inferiores 1/8 .. 7/8 (U+2581..=U+2587)
+            '\u{2581}'..='\u{2587}' => {
+                let frac = (c as u32 - 0x2580) as usize;
+                let h = ((rh * frac) + 4) / 8;
+                canvas.fill_rect(clip, cell_x, cell_y + rh.saturating_sub(h), cw, h, color);
+                true
+            }
+            // Fracciones izquierdas 1/8 .. 7/8 (U+258F..=U+2589)
+            '▏' | '▎' | '▍' | '▋' | '▊' | '▉' => {
+                let frac = match c {
+                    '▏' => 1,
+                    '▎' => 2,
+                    '▍' => 3,
+                    '▋' => 5,
+                    '▊' => 6,
+                    '▉' => 7,
+                    _ => 0,
+                };
+                let w = ((cw * frac) + 4) / 8;
+                canvas.fill_rect(clip, cell_x, cell_y, w, rh, color);
+                true
+            }
+            // 1/8 superior
+            '▔' => {
+                let h = (rh + 4) / 8;
+                canvas.fill_rect(clip, cell_x, cell_y, cw, h, color);
+                true
+            }
+            // 1/8 derecho
+            '▕' => {
+                let w = (cw + 4) / 8;
+                canvas.fill_rect(clip, cell_x + cw.saturating_sub(w), cell_y, w, rh, color);
+                true
+            }
+            // Cuadrantes (U+2596..=U+259F)
+            '▖'..='▟' => {
+                let (tl, tr, bl, br) = match c {
+                    '▖' => (false, false, true, false),
+                    '▗' => (false, false, false, true),
+                    '▘' => (true, false, false, false),
+                    '▙' => (true, false, true, true),
+                    '▚' => (true, false, false, true),
+                    '▛' => (true, true, true, false),
+                    '▜' => (true, true, false, true),
+                    '▝' => (false, true, false, false),
+                    '▞' => (false, true, true, false),
+                    '▟' => (false, true, true, true),
+                    _ => (false, false, false, false),
+                };
+                if tl {
+                    canvas.fill_rect(clip, cell_x, cell_y, w2, h2, color);
+                }
+                if tr {
+                    canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, h2, color);
+                }
+                if bl {
+                    canvas.fill_rect(clip, cell_x, cell_y + h2, w2, rem_h, color);
+                }
+                if br {
+                    canvas.fill_rect(clip, cell_x + w2, cell_y + h2, rem_w, rem_h, color);
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Botón de la cabecera de panel: fondo solo al pasar el ratón, icono atenuado.
@@ -510,6 +624,11 @@ impl TerminalRenderer {
                     }
                 }
 
+                if self.draw_block_element(canvas, clip, cell.c, cell_x, cell_y, fg_color) {
+                    col_idx += 1;
+                    continue;
+                }
+
                 let glyph = self.get_glyph(cell.c, cell.bold());
                 let glyph_x = cell_x as i32 + glyph.x_offset;
                 let glyph_y = (cell_y + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
@@ -555,16 +674,40 @@ impl TerminalRenderer {
                 self.char_width
             };
 
-            if is_active_pane {
-                canvas.fill_rect(clip, cx, cy, c_width, self.row_height, theme.cursor);
+            match terminal.cursor_shape {
+                crate::terminal::CursorShape::Block => {
+                    if is_active_pane {
+                        canvas.fill_rect(clip, cx, cy, c_width, self.row_height, theme.cursor);
 
-                // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
-                if let Some(cell) = cell_under {
-                    if cell.c != ' ' && cell.width > 0 {
-                        if cell.is_grapheme() {
-                            if let Some(g) = terminal.grapheme_of(cell) {
-                                for ch in g.chars() {
-                                    let glyph = self.get_glyph(ch, cell.bold());
+                        // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
+                        if let Some(cell) = cell_under {
+                            if cell.c != ' ' && cell.width > 0 {
+                                if cell.is_grapheme() {
+                                    if let Some(g) = terminal.grapheme_of(cell) {
+                                        for ch in g.chars() {
+                                            let glyph = self.get_glyph(ch, cell.bold());
+                                            let glyph_x = cx as i32 + glyph.x_offset;
+                                            let glyph_y = (cy + baseline_y) as i32
+                                                - glyph.y_offset
+                                                - glyph.height as i32;
+                                            canvas.glyph(
+                                                clip,
+                                                glyph,
+                                                glyph_x,
+                                                glyph_y,
+                                                theme.background,
+                                            );
+                                        }
+                                    }
+                                } else if !self.draw_block_element(
+                                    canvas,
+                                    clip,
+                                    cell.c,
+                                    cx,
+                                    cy,
+                                    theme.background,
+                                ) {
+                                    let glyph = self.get_glyph(cell.c, cell.bold());
                                     let glyph_x = cx as i32 + glyph.x_offset;
                                     let glyph_y = (cy + baseline_y) as i32
                                         - glyph.y_offset
@@ -572,23 +715,36 @@ impl TerminalRenderer {
                                     canvas.glyph(clip, glyph, glyph_x, glyph_y, theme.background);
                                 }
                             }
-                        } else {
-                            let glyph = self.get_glyph(cell.c, cell.bold());
-                            let glyph_x = cx as i32 + glyph.x_offset;
-                            let glyph_y =
-                                (cy + baseline_y) as i32 - glyph.y_offset - glyph.height as i32;
-                            canvas.glyph(clip, glyph, glyph_x, glyph_y, theme.background);
                         }
+                    } else {
+                        // Cursor hueco para terminal inactiva en split
+                        let border_c = theme.ansi[8];
+                        let rh = self.row_height;
+                        canvas.fill_rect(clip, cx, cy, c_width, 1, border_c);
+                        canvas.fill_rect(clip, cx, cy + rh - 1, c_width, 1, border_c);
+                        canvas.fill_rect(clip, cx, cy, 1, rh, border_c);
+                        canvas.fill_rect(clip, cx + c_width - 1, cy, 1, rh, border_c);
                     }
                 }
-            } else {
-                // Cursor hueco para terminal inactiva en split
-                let border_c = theme.ansi[8];
-                let rh = self.row_height;
-                canvas.fill_rect(clip, cx, cy, c_width, 1, border_c);
-                canvas.fill_rect(clip, cx, cy + rh - 1, c_width, 1, border_c);
-                canvas.fill_rect(clip, cx, cy, 1, rh, border_c);
-                canvas.fill_rect(clip, cx + c_width - 1, cy, 1, rh, border_c);
+                crate::terminal::CursorShape::Beam => {
+                    let bar_w = 2.max(self.char_width / 6);
+                    let color = if is_active_pane {
+                        theme.cursor
+                    } else {
+                        theme.ansi[8]
+                    };
+                    canvas.fill_rect(clip, cx, cy, bar_w, self.row_height, color);
+                }
+                crate::terminal::CursorShape::Underline => {
+                    let uh = 2.max(self.row_height / 8);
+                    let uy = cy + self.row_height.saturating_sub(uh);
+                    let color = if is_active_pane {
+                        theme.cursor
+                    } else {
+                        theme.ansi[8]
+                    };
+                    canvas.fill_rect(clip, cx, uy, c_width, uh, color);
+                }
             }
         }
 

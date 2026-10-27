@@ -12,6 +12,36 @@ fn test_default_theme_palette() {
 }
 
 #[test]
+fn test_decscusr_cursor_shapes() {
+    let mut term = TerminalState::new(80, 24, 100, Theme::default());
+    assert_eq!(term.cursor_shape, CursorShape::Block);
+
+    // CSI 3 SP q -> Blinking Underline
+    term.process_bytes(b"\x1b[3 q");
+    assert_eq!(term.cursor_shape, CursorShape::Underline);
+
+    // CSI 4 SP q -> Steady Underline
+    term.process_bytes(b"\x1b[4 q");
+    assert_eq!(term.cursor_shape, CursorShape::Underline);
+
+    // CSI 5 SP q -> Blinking Bar
+    term.process_bytes(b"\x1b[5 q");
+    assert_eq!(term.cursor_shape, CursorShape::Beam);
+
+    // CSI 6 SP q -> Steady Bar
+    term.process_bytes(b"\x1b[6 q");
+    assert_eq!(term.cursor_shape, CursorShape::Beam);
+
+    // CSI 1 SP q -> Blinking Block
+    term.process_bytes(b"\x1b[1 q");
+    assert_eq!(term.cursor_shape, CursorShape::Block);
+
+    // CSI 2 SP q -> Steady Block
+    term.process_bytes(b"\x1b[2 q");
+    assert_eq!(term.cursor_shape, CursorShape::Block);
+}
+
+#[test]
 fn test_truecolor_parsing() {
     let theme = Theme::default();
     let mut term = TerminalState::new(80, 24, 1000, theme);

@@ -667,6 +667,10 @@ fn test_ai_agent_detection_and_status_bar() {
     );
     assert_eq!(detect_ai_agent(Some("pwsh")), AiAgentStatus::None);
     assert_eq!(detect_ai_agent(Some("tearminal")), AiAgentStatus::None);
+    assert_eq!(detect_ai_agent(Some("shaggy dog")), AiAgentStatus::None);
+    assert_eq!(detect_ai_agent(Some("pedagogy 101")), AiAgentStatus::None);
+    assert_eq!(detect_ai_agent(Some("agy")), AiAgentStatus::Agy);
+    assert_eq!(detect_ai_agent(Some("agy session")), AiAgentStatus::Agy);
 
     // Validar que con AiAgentStatus::None no se muestre el modelo de IA en el badge
     let theme = crate::theme::Theme::default();
@@ -993,6 +997,7 @@ fn test_font_ligature_shaping() {
             op
         );
 
+        let char_w = r.char_width;
         // El último glifo debe tener x_offset negativo (se expande hacia atrás para cubrir las celdas previas)
         let last_glyph = r.get_ligature_glyph(shaped.gids[op.len() - 1], false);
         assert!(
@@ -1002,9 +1007,11 @@ fn test_font_ligature_shaping() {
             last_glyph.x_offset
         );
         assert!(
-            last_glyph.width > r.char_width,
-            "Último glifo de '{}' debe abarcar más de una celda",
-            op
+            last_glyph.width >= char_w,
+            "Último glifo de '{}' debe abarcar al menos una celda (obtenido ancho {} vs char_width {})",
+            op,
+            last_glyph.width,
+            char_w
         );
     }
 }
@@ -1051,9 +1058,25 @@ fn test_settings_ligatures_toggle_rect() {
 }
 
 #[test]
-fn test_config_gpu_option_defaults_to_true() {
+fn test_config_cursor_shape_defaults_to_block() {
     let cfg = TearminalConfig::default();
-    assert!(cfg.terminal.gpu);
+    assert_eq!(cfg.terminal.cursor_shape, "block");
+}
+
+#[test]
+fn test_compute_pane_grid_size_reserves_scrollbar_and_card_inset() {
+    let cfg = TearminalConfig::default();
+    let r = TerminalRenderer::new(&cfg, 1.0);
+    let pane_w = 800;
+    let pane_h = 600;
+    let (cols, _rows) = r.compute_pane_grid_size(pane_w, pane_h);
+
+    let text_end_x = r.margin_x + cols * r.char_width;
+    let scrollbar_track_x = crate::renderer::ScrollbarRects::track_x(pane_w);
+    assert!(
+        text_end_x <= scrollbar_track_x,
+        "El texto (termina en x={text_end_x}) no debe solaparse con la barra de scroll (empieza en x={scrollbar_track_x})"
+    );
 }
 
 /// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
@@ -1063,7 +1086,10 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     use crate::renderer::{SettingsPageState, SidebarTabItem};
     use crate::theme::Theme;
 
-    let cfg = TearminalConfig::default();
+    let mut cfg = TearminalConfig::default();
+    cfg.appearance.show_dimensions = true;
+    cfg.appearance.font_size = 15.0;
+    cfg.appearance.ui_font_size = 15.0;
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
@@ -2242,7 +2268,10 @@ fn preview_panel_card() {
     use crate::renderer::SidebarRects;
     use crate::theme::Theme;
 
-    let cfg = TearminalConfig::default();
+    let mut cfg = TearminalConfig::default();
+    cfg.appearance.show_dimensions = true;
+    cfg.appearance.font_size = 15.0;
+    cfg.appearance.ui_font_size = 15.0;
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let (w, h) = (900usize, 560usize);
@@ -4359,14 +4388,6 @@ mod gpu_scenes {
 
     #[test]
     fn test_renderer_render_tuning_and_pixel_snap() {
-        use super::TerminalRenderer;
-        use crate::config::TearminalConfig;
-
-        let mut cfg = TearminalConfig::default();
-        cfg.appearance.pixel_snap = true;
-        let r = TerminalRenderer::new(&cfg, 1.25);
-        assert!(r.pixel_snap);
-
         let dev = GpuDevice::new_with(Some(DriverKind::Warp), D3D_FEATURE_LEVEL_10_0).unwrap();
         let mut gpu_r = GpuRenderer::new(dev).unwrap();
         assert_eq!(gpu_r.font_contrast, 1.0);

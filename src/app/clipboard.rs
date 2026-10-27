@@ -97,57 +97,80 @@ impl TearminalApp {
             return;
         };
 
-        // 1. Si hay texto en el portapapeles (código, comandos, texto plano), pegar directamente
-        if let Ok(text) = cb.get_text() {
-            if !text.is_empty() {
-                self.paste_text(&text);
-                return;
+        let has_image = cb.get_image().ok();
+        let clip_text = cb.get_text().ok();
+
+        // 1. Si hay una imagen en el portapapeles (captura Snipping Tool, Win+Shift+S, recorte web, etc.):
+        // Decidir si la imagen tiene prioridad sobre el texto secundario (URLs de imagen, rutas locales, OCR automático de Windows 11)
+        if let Some(img) = has_image {
+            let prefer_image = match &clip_text {
+                None => true,
+                Some(t) => {
+                    let trimmed = t.trim();
+                    trimmed.is_empty()
+                        || !trimmed.contains('\n')
+                        || trimmed.starts_with("http://")
+                        || trimmed.starts_with("https://")
+                        || trimmed.starts_with("file://")
+                        || trimmed.ends_with(".png")
+                        || trimmed.ends_with(".jpg")
+                        || trimmed.ends_with(".jpeg")
+                        || trimmed.ends_with(".webp")
+                        || trimmed.ends_with(".gif")
+                }
+            };
+
+            if prefer_image {
+                let active_pane = self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .and_then(|t| t.active_pane());
+                let ssh_session = active_pane.and_then(|p| p.terminal.ssh_session.clone());
+                let active_pane_id = active_pane.map(|p| p.id);
+                let is_ssh = ssh_session.as_ref().map(|s| s.is_active).unwrap_or(false);
+
+                // Solo Claude Code soporta pegado nativo de imágenes con Alt+V (\x1bv).
+                // Para otros agentes (gemini, agy, aider...) o la shell, se guarda el PNG y se pega su ruta.
+                let is_claude = active_pane
+                    .is_some_and(|p| p.terminal.active_ai_agent() == AiAgentStatus::Claude);
+
+                // Si Claude Code (local o remoto vía SSH) está activo, enviamos la secuencia
+                // nativa de pegado de imágenes (Alt + V: \x1bv).
+                if is_claude {
+                    if let Some(pane) = active_pane {
+                        pane.pty.write_input(b"\x1bv");
+                    }
+                    return;
+                }
+
+                // Si estamos en una sesión remota SSH, transferimos la imagen por ssh
+                // y pegamos la ruta remota /tmp/tearminal_img_... en lugar de una ruta local de Windows
+                if is_ssh {
+                    if let Some(session) = ssh_session {
+                        if let (Some(local_path), Some(pane_id)) =
+                            (self.save_clipboard_image(&img), active_pane_id)
+                        {
+                            // `ssh` en un hilo: al terminar se pega la ruta remota (o la local si falló)
+                            self.ssh_upload_image(pane_id, local_path, &session.destination);
+                            return;
+                        }
+                    }
+                }
+
+                // Si Claude Code no está corriendo y es una sesión local,
+                // guardamos la captura en el directorio temporal y pegamos la ruta formateada.
+                if let Some(path_str) = self.save_clipboard_image(&img) {
+                    let formatted = format!("\"{}\" ", path_str);
+                    self.paste_text(&formatted);
+                    return;
+                }
             }
         }
 
-        // 2. Si no hay texto, comprobar si hay una imagen (captura de pantalla, recorte, imagen web)
-        if let Ok(img) = cb.get_image() {
-            let active_pane = self
-                .tabs
-                .get(self.active_tab_index)
-                .and_then(|t| t.active_pane());
-            let ssh_session = active_pane.and_then(|p| p.terminal.ssh_session.clone());
-            let active_pane_id = active_pane.map(|p| p.id);
-            let is_ssh = ssh_session.as_ref().map(|s| s.is_active).unwrap_or(false);
-
-            // Solo Claude Code soporta pegado nativo de imágenes con Alt+V (\x1bv).
-            // Para otros agentes (gemini, agy, aider...) o la shell, se guarda el PNG y se pega su ruta.
-            let is_claude =
-                active_pane.is_some_and(|p| p.terminal.active_ai_agent() == AiAgentStatus::Claude);
-
-            // Si Claude Code (local o remoto vía SSH) está activo, enviamos la secuencia
-            // nativa de pegado de imágenes (Alt + V: \x1bv).
-            if is_claude {
-                if let Some(pane) = active_pane {
-                    pane.pty.write_input(b"\x1bv");
-                }
-                return;
-            }
-
-            // Si estamos en una sesión remota SSH, transferimos la imagen por ssh
-            // y pegamos la ruta remota /tmp/tearminal_img_... en lugar de una ruta local de Windows
-            if is_ssh {
-                if let Some(session) = ssh_session {
-                    if let (Some(local_path), Some(pane_id)) =
-                        (self.save_clipboard_image(&img), active_pane_id)
-                    {
-                        // `ssh` en un hilo: al terminar se pega la ruta remota (o la local si falló)
-                        self.ssh_upload_image(pane_id, local_path, &session.destination);
-                        return;
-                    }
-                }
-            }
-
-            // Si Claude Code no está corriendo y es una sesión local,
-            // guardamos la captura en el directorio temporal y pegamos la ruta formateada.
-            if let Some(path_str) = self.save_clipboard_image(&img) {
-                let formatted = format!("\"{}\" ", path_str);
-                self.paste_text(&formatted);
+        // 2. Si no es imagen o el texto es un bloque multi-línea, pegar el texto directamente
+        if let Some(text) = clip_text {
+            if !text.is_empty() {
+                self.paste_text(&text);
                 return;
             }
         }

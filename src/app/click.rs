@@ -194,6 +194,23 @@ impl TearminalApp {
                 p.input.mouse_up();
             }
             self.viewer_drag_selecting = false;
+            self.viewer_drag_start = None;
+            let was_mouse_down = std::mem::take(&mut self.mouse_down);
+            let had_drag = self.drag_start.take().is_some() | self.drag_anchor.take().is_some();
+            if had_drag || was_mouse_down {
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                if let Some(pane) = active_tab.find_pane_mut(active_tab.active_pane_id) {
+                    if pane.terminal.selection.is_some_and(|s| s.start == s.end) {
+                        pane.terminal.selection = None;
+                    } else if pane.terminal.selection.is_some() {
+                        super::clipboard::copy_pane_selection(
+                            &mut self.clipboard,
+                            self.config.terminal.copy_on_select,
+                            pane,
+                        );
+                    }
+                }
+            }
             let was_dragging = self.scrollbar_dragging
                 || self.sidebar_scrollbar_dragging
                 || self.explorer_scrollbar_dragging
@@ -353,7 +370,7 @@ impl TearminalApp {
 
                 // Arrastrar ventana o doble clic para maximizar
                 let now = Instant::now();
-                if now.duration_since(self.last_titlebar_click).as_millis() < 300 {
+                if now.duration_since(self.last_titlebar_click) <= platform::double_click_time() {
                     if let Some(w) = &self.window {
                         w.set_maximized(!w.is_maximized());
                     }
@@ -409,7 +426,7 @@ impl TearminalApp {
 
                 // Arrastrar ventana o doble clic para maximizar
                 let now = Instant::now();
-                if now.duration_since(self.last_titlebar_click).as_millis() < 300 {
+                if now.duration_since(self.last_titlebar_click) <= platform::double_click_time() {
                     if let Some(w) = &self.window {
                         w.set_maximized(!w.is_maximized());
                     }
@@ -960,10 +977,8 @@ impl TearminalApp {
                                     // Un clic = vista previa; doble clic sobre el mismo archivo = pestaña fija
                                     let now = Instant::now();
                                     let double = self.last_explorer_click_idx == Some(idx)
-                                        && now
-                                            .duration_since(self.last_explorer_click_time)
-                                            .as_millis()
-                                            < 400;
+                                        && now.duration_since(self.last_explorer_click_time)
+                                            <= platform::double_click_time();
                                     self.last_explorer_click_idx = Some(idx);
                                     self.last_explorer_click_time = now;
                                     self.open_file_in_viewer(&item.path, double);
@@ -1190,13 +1205,13 @@ impl TearminalApp {
                                     viewer.selection = Some((start, (target_line, target_col)));
                                 } else {
                                     let now = Instant::now();
-                                    let is_quick_click =
-                                        now.duration_since(self.last_viewer_click_time).as_millis()
-                                            < 400
-                                            && self.last_viewer_click_pos.is_some_and(|(l, c)| {
-                                                l == target_line
-                                                    && (c as isize - target_col as isize).abs() <= 1
-                                            });
+                                    let is_quick_click = now
+                                        .duration_since(self.last_viewer_click_time)
+                                        <= platform::double_click_time()
+                                        && self.last_viewer_click_pos.is_some_and(|(l, c)| {
+                                            l == target_line
+                                                && (c as isize - target_col as isize).abs() <= 1
+                                        });
 
                                     viewer.cursor_line = target_line;
                                     viewer.cursor_col = target_col;
@@ -1536,10 +1551,8 @@ impl TearminalApp {
                                     let now = Instant::now();
                                     let is_quick_click = self.last_terminal_click_pane_id
                                         == Some(pane.id)
-                                        && now
-                                            .duration_since(self.last_terminal_click_time)
-                                            .as_millis()
-                                            < 400
+                                        && now.duration_since(self.last_terminal_click_time)
+                                            <= platform::double_click_time()
                                         && self.last_terminal_click_pos.is_some_and(|(c, l)| {
                                             l == global_line
                                                 && (c as isize - col as isize).abs() <= 1

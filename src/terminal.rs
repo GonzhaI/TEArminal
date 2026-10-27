@@ -36,11 +36,30 @@ struct RemoteFileAsm {
     parts: Vec<Option<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CursorShape {
+    #[default]
+    Block,
+    Beam,
+    Underline,
+}
+
+impl CursorShape {
+    pub(crate) fn from_str_name(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "beam" | "bar" | "line" => CursorShape::Beam,
+            "underline" => CursorShape::Underline,
+            _ => CursorShape::Block,
+        }
+    }
+}
+
 pub(crate) struct TerminalState {
     pub cols: usize,
     pub rows: usize,
     pub cursor_x: usize,
     pub cursor_y: usize,
+    pub cursor_shape: CursorShape,
     pub grid: VecDeque<Vec<Cell>>,
     pub scrollback: VecDeque<Vec<Cell>>,
     pub max_scrollback: usize,
@@ -163,6 +182,7 @@ impl TerminalState {
             rows,
             cursor_x: 0,
             cursor_y: 0,
+            cursor_shape: CursorShape::Block,
             grid,
             scrollback: VecDeque::with_capacity(max_scrollback.min(4096)),
             max_scrollback,

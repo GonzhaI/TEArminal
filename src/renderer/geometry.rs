@@ -813,6 +813,8 @@ impl ScrollbarRects {
     const GAP: usize = 2;
     /// Pulgar mínimo, para que siga siendo agarrable con listas muy largas.
     const MIN_THUMB: usize = 18;
+    /// Espacio reservado a la derecha para el carril de la barra de scroll y el borde de la tarjeta.
+    pub(crate) const RESERVED_RIGHT: usize = Self::WIDTH + Self::GAP + SidebarRects::CARD_INSET;
 
     /// X del carril de un contenido que termina en `right`: junto al borde de la tarjeta
     /// (`SidebarRects::CARD_INSET`), que recorta ese margen.

@@ -390,6 +390,8 @@ impl TerminalRenderer {
         let sel_bg = Color::from_rgba(accent.r(), accent.g(), accent.b(), 70);
         let mark_color = theme.text_muted();
         let tab_adv = (char_w * 4) as i32;
+        let indent_unit = viewer.indent_unit();
+        let guide_color = theme.mix(theme.background, theme.foreground, 0.10);
 
         for (row_idx, row) in rows
             .iter()
@@ -502,6 +504,43 @@ impl TerminalRenderer {
                     // Marca sólida en el borde de las líneas añadidas y quitadas
                     if c != accent {
                         canvas.fill_rect(clip, sep_x + 1, row_y, 3, row_h, c);
+                    }
+                }
+            }
+
+            // Guías de alineación e indentación verticales
+            if !viewer.is_diff() && (!viewer.render_markdown || !is_markdown) && first_segment {
+                let line_str = viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+                let indent_col = if !line_str.trim().is_empty() {
+                    crate::app::indent_of(line_str).unwrap_or(0)
+                } else {
+                    viewer
+                        .lines
+                        .get(line_idx + 1..)
+                        .unwrap_or(&[])
+                        .iter()
+                        .take(100)
+                        .find_map(|l| crate::app::indent_of(l))
+                        .or_else(|| {
+                            viewer
+                                .lines
+                                .get(..line_idx)
+                                .unwrap_or(&[])
+                                .iter()
+                                .rev()
+                                .take(100)
+                                .find_map(|l| crate::app::indent_of(l))
+                        })
+                        .unwrap_or(0)
+                };
+                if indent_col > 0 {
+                    let mut col = 0;
+                    while col < indent_col {
+                        let gx = cur_x + (col * char_w) as i32;
+                        if gx >= text_clip.0 as i32 && (gx as usize) < text_clip.2 {
+                            canvas.fill_rect(text_clip, gx as usize, row_y, 1, row_h, guide_color);
+                        }
+                        col += indent_unit;
                     }
                 }
             }

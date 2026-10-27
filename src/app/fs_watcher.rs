@@ -1,4 +1,4 @@
-//! Observador del sistema de archivos nativo de Windows (FindFirstChangeNotificationW)
+//! Observador del sistema de archivos nativo de Windows (ReadDirectoryChangesW)
 //! Notifica cambios en tiempo real en el árbol de archivos o metadatos de Git con 0% CPU en reposo.
 
 use super::TearminalEvent;
@@ -62,63 +62,106 @@ fn run_watcher_windows(
     proxy: EventLoopProxy<TearminalEvent>,
 ) {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT};
-    use windows_sys::Win32::Storage::FileSystem::{
-        FindCloseChangeNotification, FindFirstChangeNotificationW, FindNextChangeNotification,
-        FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
-        FILE_NOTIFY_CHANGE_SIZE,
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
-    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, ReadDirectoryChangesW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OVERLAPPED,
+        FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_DIR_NAME, FILE_NOTIFY_CHANGE_FILE_NAME,
+        FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent, WaitForSingleObject};
+    use windows_sys::Win32::System::IO::{CancelIoEx, OVERLAPPED};
 
-    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
-    wide.push(0);
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    // SAFETY: abrir directorio con permisos de listado y semántica de backup (requerido para carpetas)
+    let h_dir = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_LIST_DIRECTORY,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+            0,
+        )
+    };
+
+    if h_dir == 0 || h_dir == INVALID_HANDLE_VALUE {
+        return;
+    }
+
+    let change_event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
+    if change_event == 0 {
+        unsafe { CloseHandle(h_dir) };
+        return;
+    }
 
     let filter = FILE_NOTIFY_CHANGE_FILE_NAME
         | FILE_NOTIFY_CHANGE_DIR_NAME
         | FILE_NOTIFY_CHANGE_LAST_WRITE
         | FILE_NOTIFY_CHANGE_SIZE;
 
-    // SAFETY: cadena wide válida y terminada en nulo
-    let handle = unsafe { FindFirstChangeNotificationW(wide.as_ptr(), 1, filter) };
-    if handle == 0 || handle == INVALID_HANDLE_VALUE {
-        return;
-    }
+    let mut buffer = [0u8; 4096];
 
     while !stop.load(Ordering::Relaxed) {
-        // Espera de hasta 500 ms por evento del kernel o chequeo de parada
-        let res = unsafe { WaitForSingleObject(handle, 500) };
-        if res == WAIT_OBJECT_0 {
-            // Debounce de 500 ms para unificar ráfagas de escritura rápida (git commit, guardado, compilación)
-            std::thread::sleep(Duration::from_millis(500));
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = change_event;
 
-            unsafe {
-                FindNextChangeNotification(handle);
-                // Drenar señales adicionales acumuladas durante la pausa
-                while WaitForSingleObject(handle, 0) == WAIT_OBJECT_0 {
-                    FindNextChangeNotification(handle);
-                }
-            }
+        unsafe { ResetEvent(change_event) };
 
-            if !stop.load(Ordering::Relaxed) {
-                let _ = proxy.send_event(TearminalEvent::FsChanged);
-            }
+        let ok = unsafe {
+            ReadDirectoryChangesW(
+                h_dir,
+                buffer.as_mut_ptr() as *mut _,
+                buffer.len() as u32,
+                1, // Observar todo el subárbol del proyecto o repo
+                filter,
+                std::ptr::null_mut(),
+                &mut overlapped,
+                None,
+            )
+        };
 
-            // Como mucho un aviso cada ~2 s: una compilación (`target/`) escribe sin parar y cada aviso relee el
-            // explorador y lanza `git status`. Lo que cambie durante la pausa queda pendiente en el manejador.
-            for _ in 0..6 {
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(250));
-            }
-        } else if res != WAIT_TIMEOUT {
-            // WAIT_FAILED (carpeta borrada, unidad retirada): sin esto la espera vuelve al instante y gira al 100 % de CPU
+        if ok == 0 {
             break;
+        }
+
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                unsafe { CancelIoEx(h_dir, &overlapped) };
+                break;
+            }
+
+            let res = unsafe { WaitForSingleObject(change_event, 500) };
+            if res == WAIT_OBJECT_0 {
+                // Debounce de 500 ms para unificar ráfagas de escritura rápida (git commit, compilación, etc.)
+                std::thread::sleep(Duration::from_millis(500));
+
+                if !stop.load(Ordering::Relaxed) {
+                    let _ = proxy.send_event(TearminalEvent::FsChanged);
+                }
+
+                // Límite de frecuencia: como mucho un aviso cada ~1.5s durante escrituras masivas
+                for _ in 0..6 {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                break;
+            } else if res != WAIT_TIMEOUT {
+                unsafe { CancelIoEx(h_dir, &overlapped) };
+                break;
+            }
         }
     }
 
     unsafe {
-        FindCloseChangeNotification(handle);
+        CloseHandle(change_event);
+        CloseHandle(h_dir);
     }
 }
 

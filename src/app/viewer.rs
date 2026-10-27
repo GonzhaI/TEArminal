@@ -75,7 +75,7 @@ fn heading_level(line: &str) -> Option<usize> {
     ((1..=6).contains(&n) && line[n..].starts_with(' ')).then_some(n)
 }
 
-fn indent_of(line: &str) -> Option<usize> {
+pub(crate) fn indent_of(line: &str) -> Option<usize> {
     (!line.trim().is_empty()).then(|| {
         line.chars()
             .take_while(|c| c.is_whitespace())
@@ -250,6 +250,31 @@ impl FileViewerState {
     /// El ajuste de línea no se aplica a la vista previa de Markdown (se dibuja línea a línea)
     pub(crate) fn wrap_active(&self) -> bool {
         self.word_wrap && !(self.render_markdown && self.is_markdown())
+    }
+
+    /// Detecta si el archivo utiliza sangría de 2 o 4 espacios (por defecto 4).
+    pub(crate) fn indent_unit(&self) -> usize {
+        let mut count_2 = 0;
+        let mut count_4 = 0;
+        for line in self.lines.iter().take(150) {
+            if let Some(ind) = indent_of(line) {
+                if ind > 0 {
+                    if ind % 4 != 0 && ind % 2 == 0 {
+                        count_2 += 1;
+                    } else if ind % 4 == 0 {
+                        count_4 += 1;
+                    }
+                    if count_4 >= 20 || count_2 >= 20 {
+                        break;
+                    }
+                }
+            }
+        }
+        if count_2 > count_4 {
+            2
+        } else {
+            4
+        }
     }
 
     /// Filas visuales (ajuste de línea + plegado), en caché mientras no cambien texto, pliegues, ancho ni modo.

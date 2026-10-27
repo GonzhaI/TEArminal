@@ -131,8 +131,8 @@ impl TerminalRenderer {
         })
     }
 
-    pub(super) fn fallback_font(&self) -> Option<&fontdue::Font> {
-        self.fallback_font
+    pub(super) fn fallback_symbols(&self) -> Option<&fontdue::Font> {
+        self.fallback_symbols
             .get_or_init(|| {
                 let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
                 let path = std::path::Path::new(&windir)
@@ -145,6 +145,79 @@ impl TerminalRenderer {
             .as_ref()
     }
 
+    pub(super) fn fallback_emoji(&self) -> Option<&fontdue::Font> {
+        self.fallback_emoji
+            .get_or_init(|| {
+                let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+                let path = std::path::Path::new(&windir)
+                    .join("Fonts")
+                    .join("seguiemj.ttf");
+                std::fs::read(path)
+                    .ok()
+                    .and_then(|bytes| fontdue::Font::from_bytes(bytes, font_settings()).ok())
+            })
+            .as_ref()
+    }
+
+    pub(super) fn fallback_cjk(&self) -> Option<&fontdue::Font> {
+        self.fallback_cjk
+            .get_or_init(|| {
+                let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
+                let fonts_dir = std::path::Path::new(&windir).join("Fonts");
+                // Carga bajo demanda de fuentes estándar CJK de Windows (chino, japonés, coreano)
+                for name in ["msyh.ttc", "YuGothM.ttc", "malgun.ttf", "msgothic.ttc"] {
+                    let path = fonts_dir.join(name);
+                    if let Ok(bytes) = std::fs::read(&path) {
+                        if let Ok(font) = fontdue::Font::from_bytes(bytes, font_settings()) {
+                            return Some(font);
+                        }
+                    }
+                }
+                None
+            })
+            .as_ref()
+    }
+
+    /// Busca perezosamente el glifo en las fuentes de fallback del sistema operativo
+    pub(super) fn fallback_font_for(&self, c: char) -> Option<&fontdue::Font> {
+        let code = c as u32;
+
+        // 1. CJK (chino, japonés, coreano)
+        let is_cjk = matches!(code, 0x2E80..=0x9FFF | 0xAC00..=0xD7AF | 0xFF00..=0xFFEF);
+        if is_cjk {
+            if let Some(f) = self.fallback_cjk().filter(|f| f.has_glyph(c)) {
+                return Some(f);
+            }
+        }
+
+        // 2. Emojis modernos SMP (Supplementary Multilingual Plane: 0x1F000..=0x1FAFF)
+        let is_smp_emoji = matches!(code, 0x1F000..=0x1FAFF);
+        if is_smp_emoji {
+            if let Some(f) = self.fallback_emoji().filter(|f| f.has_glyph(c)) {
+                return Some(f);
+            }
+        }
+
+        // 3. Símbolos estándar de Windows (Segoe UI Symbol): flechas, mates, dingbats y puntuación técnica
+        if let Some(f) = self.fallback_symbols().filter(|f| f.has_glyph(c)) {
+            return Some(f);
+        }
+
+        // 4. Búsqueda exhaustiva: si no estaba en símbolos, probar emojis y CJK
+        if !is_smp_emoji {
+            if let Some(f) = self.fallback_emoji().filter(|f| f.has_glyph(c)) {
+                return Some(f);
+            }
+        }
+        if !is_cjk {
+            if let Some(f) = self.fallback_cjk().filter(|f| f.has_glyph(c)) {
+                return Some(f);
+            }
+        }
+
+        None
+    }
+
     pub(super) fn rasterize_glyph(&self, c: char, bold: bool) -> CachedGlyph {
         // Orden: negrita (si aplica) -> regular -> iconos Nerd (PUA) -> fallback del sistema -> lo que haya
         let is_pua = matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..);
@@ -154,7 +227,7 @@ impl TerminalRenderer {
             &self.regular_font
         } else if is_pua && self.nerd_font(c).has_glyph(c) {
             self.nerd_font(c)
-        } else if let Some(fb) = self.fallback_font().filter(|f| f.has_glyph(c)) {
+        } else if let Some(fb) = self.fallback_font_for(c) {
             fb
         } else if bold {
             self.bold_font()

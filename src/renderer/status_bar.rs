@@ -59,7 +59,7 @@ impl TerminalRenderer {
         ai_status: AiAgentStatus,
         active_model: Option<&str>,
         meters: &[StatusMeter],
-        hovered_ai_badge: bool,
+        _hovered_ai_badge: bool,
         _explorer_visible: bool,
         theme: &Theme,
     ) {
@@ -87,25 +87,32 @@ impl TerminalRenderer {
         let update_w = update_text
             .as_ref()
             .map(|t| self.measure_mono_text(t, tokens::MICRO + 0.5, false));
-        let dims = format!("{cols} × {rows}");
-        let dims_w = self.measure_mono_text(&dims, tokens::MICRO, false);
+        let (dims_w, dims_str) = if self.show_dimensions {
+            let dims = format!("{cols} × {rows}");
+            let w = self.measure_mono_text(&dims, tokens::MICRO, false);
+            (w, Some(dims))
+        } else {
+            (0, None)
+        };
         let meters_w = self.status_meters_width(meters);
         let rects = StatusBarRects::compute_with_status(
             width, height, ai_text_w, update_w, dims_w, meters_w,
         );
 
-        // Dimensiones como dato, en el extremo derecho.
-        let dims_x = width.saturating_sub(StatusBarRects::RIGHT_PAD + dims_w);
-        self.draw_mono_text(
-            canvas,
-            &dims,
-            dims_x,
-            baseline,
-            width.saturating_sub(StatusBarRects::RIGHT_PAD),
-            theme.text_muted(),
-            tokens::MICRO,
-            false,
-        );
+        // Dimensiones como dato, en el extremo derecho (solo si está activo en la configuración).
+        if let Some(ref dims) = dims_str {
+            let dims_x = width.saturating_sub(StatusBarRects::RIGHT_PAD + dims_w);
+            self.draw_mono_text(
+                canvas,
+                dims,
+                dims_x,
+                baseline,
+                width.saturating_sub(StatusBarRects::RIGHT_PAD),
+                theme.text_muted(),
+                tokens::MICRO,
+                false,
+            );
+        }
 
         // Medidores de los límites reales del agente (solo Claude los tiene), a la izquierda de las
         // dimensiones: etiqueta, barra y porcentaje. La geometría decide si caben.
@@ -121,7 +128,7 @@ impl TerminalRenderer {
             );
         }
 
-        let (bx, by, bw, bh) = rects.ai_badge;
+        let (bx, _by, bw, _bh) = rects.ai_badge;
 
         // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
         let mut cur_x = 14;
@@ -220,18 +227,8 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Badge de agente: icono del agente + nombre legible y modelo. El color de marca es solo
-        // del icono; el texto es el del chrome (legible), como en el bosquejo.
-        if hovered_ai_badge {
-            canvas.rounded_fill(
-                bx,
-                by + 3,
-                bw,
-                bh.saturating_sub(6),
-                6,
-                theme.accent_soft(26),
-            );
-        }
+        // 5. Badge de agente: icono del agente + nombre legible y modelo.
+        // Es puramente informativo (sin interacción ni estilo de selección).
         self.draw_lucide_icon(canvas, badge_icon, bx + 8, center_y, 10.0, ai_fg);
         let label_fg = if ai_status == AiAgentStatus::None {
             ai_fg

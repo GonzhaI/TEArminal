@@ -56,8 +56,10 @@ pub(crate) struct TerminalRenderer {
     custom_font: bool,
     /// ~10 000 iconos Nerd (PUA): ~45 MB de contornos en RAM, cada bloque se parsea al primer icono
     nerd_fonts: [OnceCell<fontdue::Font>; 2],
-    /// Segoe UI Symbol del sistema: solo se parsea si aparece un glifo que ninguna otra fuente tiene
-    fallback_font: OnceCell<Option<fontdue::Font>>,
+    /// Fuentes de fallback del sistema Windows: solo se parsean perezosamente bajo demanda
+    fallback_symbols: OnceCell<Option<fontdue::Font>>,
+    fallback_emoji: OnceCell<Option<fontdue::Font>>,
+    fallback_cjk: OnceCell<Option<fontdue::Font>>,
     pub inter_font: fontdue::Font,
     pub inter_semibold_font: fontdue::Font,
     pub lucide_font: fontdue::Font,
@@ -80,9 +82,6 @@ pub(crate) struct TerminalRenderer {
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
     pub ligatures: bool,
-    pub pixel_snap: bool,
-    #[allow(dead_code)]
-    pub show_brand: bool,
     #[allow(dead_code)]
     pub show_dimensions: bool,
     regular_face: Option<rustybuzz::Face<'static>>,
@@ -116,7 +115,9 @@ impl TerminalRenderer {
             bold_font: OnceCell::new(),
             custom_font,
             nerd_fonts: [OnceCell::new(), OnceCell::new()],
-            fallback_font: OnceCell::new(),
+            fallback_symbols: OnceCell::new(),
+            fallback_emoji: OnceCell::new(),
+            fallback_cjk: OnceCell::new(),
             inter_font,
             inter_semibold_font,
             lucide_font,
@@ -137,8 +138,6 @@ impl TerminalRenderer {
             margin_y: 0,
             scrollbars_awake: false,
             ligatures: config.terminal.ligatures,
-            pixel_snap: config.appearance.pixel_snap,
-            show_brand: config.appearance.show_brand,
             show_dimensions: config.appearance.show_dimensions,
             regular_face,
             bold_face_rb: OnceCell::new(),
@@ -152,8 +151,6 @@ impl TerminalRenderer {
 
     pub(crate) fn update_scale(&mut self, config: &TearminalConfig, scale_factor: f64) {
         self.scale_factor = scale_factor;
-        self.pixel_snap = config.appearance.pixel_snap;
-        self.show_brand = config.appearance.show_brand;
         self.show_dimensions = config.appearance.show_dimensions;
         self.font_size = (config.appearance.font_size * scale_factor as f32)
             .round()
@@ -189,13 +186,18 @@ impl TerminalRenderer {
         self.ligature_cache.clear();
     }
 
-    /// Calcula las columnas y filas que caben en un panel según sus dimensiones en píxeles
+    /// Calcula las columnas y filas que caben en un panel según sus dimensiones en píxeles.
+    /// Reserva el margen izquierdo (`margin_x`), el margen simétrico a la derecha del texto,
+    /// y el espacio de la barra de scroll vertical y marco de tarjeta (`ScrollbarRects::RESERVED_RIGHT`),
+    /// evitando que el texto o tablas formateadas por CLIs/agentes se solapen con la barra de scroll
+    /// o queden cortados por el borde derecho.
     pub(crate) fn compute_pane_grid_size(
         &self,
         pane_width: usize,
         pane_height: usize,
     ) -> (usize, usize) {
-        let avail_w = pane_width.saturating_sub(self.margin_x * 2);
+        let h_margins = self.margin_x * 2 + ScrollbarRects::RESERVED_RIGHT;
+        let avail_w = pane_width.saturating_sub(h_margins);
         let avail_h = pane_height.saturating_sub(self.margin_y * 2);
         let cols = (avail_w / self.char_width).max(10);
         let rows = (avail_h / self.row_height).max(3);

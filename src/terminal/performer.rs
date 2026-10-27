@@ -203,7 +203,24 @@ impl<'a> Perform for Performer<'a> {
             return;
         }
 
-        // Con marcador privado o intermedio (`CSI > 4 ; 2 m` modifyOtherKeys, `CSI SP q` DECSCUSR...)
+        // DECSCUSR: Set Cursor Style (CSI <n> SP q)
+        // 0, 1: Blinking Block | 2: Steady Block | 3: Blinking Underline | 4: Steady Underline | 5: Blinking Bar | 6: Steady Bar
+        if intermediates == b" " && action == 'q' {
+            let n = params
+                .iter()
+                .next()
+                .and_then(|p| p.first())
+                .copied()
+                .unwrap_or(1);
+            self.state.cursor_shape = match n {
+                3 | 4 => crate::terminal::CursorShape::Underline,
+                5 | 6 => crate::terminal::CursorShape::Beam,
+                _ => crate::terminal::CursorShape::Block,
+            };
+            return;
+        }
+
+        // Con marcador privado o intermedio (`CSI > 4 ; 2 m` modifyOtherKeys...)
         // no es SGR, cursor ni borrado: ignorarlas evita, por ejemplo,
         // que `>4;2m` active subrayado y tenue en el texto siguiente.
         if !intermediates.is_empty() {

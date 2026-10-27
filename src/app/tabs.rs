@@ -138,7 +138,7 @@ impl TearminalApp {
     pub(super) fn click_tab(&mut self, idx: usize) {
         let now = Instant::now();
         let double = self.last_tab_click_idx == Some(idx)
-            && now.duration_since(self.last_tab_click_time).as_millis() < 400;
+            && now.duration_since(self.last_tab_click_time) <= platform::double_click_time();
         self.last_tab_click_idx = Some(idx);
         self.last_tab_click_time = now;
         if double {
@@ -258,6 +258,8 @@ impl TearminalApp {
             self.config.terminal.scrollback_lines,
             self.theme.clone(),
         );
+        terminal.cursor_shape =
+            crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);
 
         terminal.current_dir = cwd;
         let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
@@ -473,6 +475,8 @@ impl TearminalApp {
             self.config.terminal.scrollback_lines,
             self.theme.clone(),
         );
+        terminal.cursor_shape =
+            crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);
         terminal.current_dir = cwd_path;
         terminal.ssh_session = initial_ssh;
 

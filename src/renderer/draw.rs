@@ -48,11 +48,7 @@ impl TerminalRenderer {
         } else {
             &self.inter_font
         };
-        let effective_size = if self.pixel_snap {
-            (size_px * self.ui_scale_ratio()).round().max(6.0)
-        } else {
-            (size_px * self.ui_scale_ratio()).max(6.0)
-        };
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
@@ -99,11 +95,7 @@ impl TerminalRenderer {
         tracking: f32,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = if self.pixel_snap {
-            (size_px * self.ui_scale_ratio()).round().max(6.0)
-        } else {
-            (size_px * self.ui_scale_ratio()).max(6.0)
-        };
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
@@ -114,29 +106,13 @@ impl TerminalRenderer {
             }
 
             let key = (c, size_bits, semibold);
-            let inter_semibold = &self.inter_semibold_font;
-            let inter_regular = &self.inter_font;
-            let fallback_cell = &self.fallback_font;
-            let (glyph, advance) = self.ui_glyph_cache.entry(key).or_insert_with(|| {
-                let font = if semibold && inter_semibold.has_glyph(c) {
-                    inter_semibold
-                } else if inter_regular.has_glyph(c) {
-                    inter_regular
+            if !self.ui_glyph_cache.contains_key(&key) {
+                let font = if semibold && self.inter_semibold_font.has_glyph(c) {
+                    &self.inter_semibold_font
+                } else if self.inter_font.has_glyph(c) {
+                    &self.inter_font
                 } else {
-                    fallback_cell
-                        .get_or_init(|| {
-                            let windir = std::env::var("WINDIR")
-                                .unwrap_or_else(|_| "C:\\Windows".to_string());
-                            let path = std::path::Path::new(&windir)
-                                .join("Fonts")
-                                .join("seguisym.ttf");
-                            std::fs::read(path).ok().and_then(|bytes| {
-                                fontdue::Font::from_bytes(bytes, font_settings()).ok()
-                            })
-                        })
-                        .as_ref()
-                        .filter(|f| f.has_glyph(c))
-                        .unwrap_or(inter_regular)
+                    self.fallback_font_for(c).unwrap_or(&self.inter_font)
                 };
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
                 let glyph = Rc::new(CachedGlyph {
@@ -146,8 +122,10 @@ impl TerminalRenderer {
                     y_offset: metrics.ymin,
                     bitmap,
                 });
-                (glyph, metrics.advance_width)
-            });
+                self.ui_glyph_cache
+                    .insert(key, (glyph, metrics.advance_width));
+            }
+            let (glyph, advance) = self.ui_glyph_cache.get(&key).unwrap();
 
             let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
             let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
@@ -232,7 +210,7 @@ impl TerminalRenderer {
             self.bold_font()
         } else if self.regular_font.has_glyph(c) {
             &self.regular_font
-        } else if let Some(fb) = self.fallback_font().filter(|f| f.has_glyph(c)) {
+        } else if let Some(fb) = self.fallback_font_for(c) {
             fb
         } else if bold {
             self.bold_font()
@@ -243,11 +221,7 @@ impl TerminalRenderer {
 
     /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
     pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
-        let effective_size = if self.pixel_snap {
-            (size_px * self.ui_scale_ratio()).round().max(6.0)
-        } else {
-            (size_px * self.ui_scale_ratio()).max(6.0)
-        };
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.mono_advance_cache.borrow_mut();
         let width: f32 = text
@@ -277,11 +251,7 @@ impl TerminalRenderer {
         bold: bool,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = if self.pixel_snap {
-            (size_px * self.ui_scale_ratio()).round().max(6.0)
-        } else {
-            (size_px * self.ui_scale_ratio()).max(6.0)
-        };
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cur_x = start_x as f32;
         // `std::mem::take` evita el préstamo mutable de la caché mientras `mono_font_for` lee `self`.
@@ -368,11 +338,7 @@ impl TerminalRenderer {
         color: Color,
     ) {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = if self.pixel_snap {
-            (size_px * self.ui_scale_ratio()).round().max(6.0)
-        } else {
-            (size_px * self.ui_scale_ratio()).max(6.0)
-        };
+        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
         let c = icon.as_char();
         let size_bits = effective_size.to_bits();
         let lucide_ref = &self.lucide_font;

@@ -174,7 +174,6 @@ pub(crate) struct TearminalApp {
     hovered_win_max: bool,
     hovered_win_close: bool,
     last_titlebar_click: Instant,
-    last_system_theme_check: Instant,
     /// Último tema de Windows visto (true = claro), para detectar el cambio en modo "system"
     system_light: bool,
     /// Ventana minimizada/tapada: no se renderiza (el PTY se sigue procesando)
@@ -347,7 +346,8 @@ impl TearminalApp {
             .unwrap_or(input.len());
 
         let now = std::time::Instant::now();
-        let is_quick_click = now.duration_since(self.last_input_click_time).as_millis() < 400;
+        let is_quick_click =
+            now.duration_since(self.last_input_click_time) <= platform::double_click_time();
         let (_, shift, _, _, _) = self.physical_modifiers();
 
         if is_quick_click && self.last_input_click_count == 1 {
@@ -655,7 +655,6 @@ impl TearminalApp {
             hovered_win_max: false,
             hovered_win_close: false,
             last_titlebar_click: Instant::now(),
-            last_system_theme_check: Instant::now(),
             system_light,
             occluded: false,
             scroll_hide_armed: false,
@@ -940,6 +939,8 @@ impl SpawnCtx<'_> {
             self.config.terminal.scrollback_lines,
             self.theme.clone(),
         );
+        terminal.cursor_shape =
+            crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);
         terminal.current_dir = cwd.map(std::path::Path::to_path_buf);
         TerminalPane::new(id, pty, terminal, (cols, rows))
     }

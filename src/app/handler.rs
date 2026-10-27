@@ -137,6 +137,7 @@ impl TearminalApp {
                 .create_window(window_attributes)
                 .expect("Error al crear ventana nativa de Windows"),
         );
+        window.set_ime_allowed(true);
 
         // Configurar tema nativo inmersivo de Windows 11 (DWM Dark/Light Mode y Mica)
         update_windows_theme(&window, &self.theme);
@@ -150,6 +151,7 @@ impl TearminalApp {
             use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
             match window.window_handle().map(|h| h.as_raw()) {
                 Ok(RawWindowHandle::Win32(win32)) => {
+                    platform::setup_native_window_frame(win32.hwnd.get() as _);
                     windows::Win32::Foundation::HWND(win32.hwnd.get() as _)
                 }
                 _ => platform::fatal_gpu_error(&"no se pudo obtener el HWND de la ventana"),
@@ -248,6 +250,26 @@ impl TearminalApp {
 
             WindowEvent::RedrawRequested => self.on_redraw(),
 
+            WindowEvent::Ime(ime) => self.on_ime_event(ime),
+
+            WindowEvent::ThemeChanged(winit_theme) => {
+                let is_sys_light = matches!(winit_theme, winit::window::Theme::Light);
+                if self
+                    .config
+                    .appearance
+                    .theme_mode
+                    .eq_ignore_ascii_case("system")
+                    && is_sys_light != self.system_light
+                {
+                    crate::logger::log(&format!(
+                        "-> Cambio de tema del sistema Windows detectado vía ThemeChanged (light={}): actualizando interfaz",
+                        is_sys_light
+                    ));
+                    self.system_light = is_sys_light;
+                    self.apply_active_theme();
+                }
+            }
+
             WindowEvent::ModifiersChanged(mods) => {
                 self.modifiers = mods.state();
             }
@@ -303,6 +325,17 @@ impl TearminalApp {
                     self.drag_anchor = None;
                     self.divider_drag = None;
                     self.tab_drag = None;
+                    self.scrollbar_dragging = false;
+                    self.scrollbar_drag_pane_id = None;
+                    self.sidebar_scrollbar_dragging = false;
+                    self.explorer_scrollbar_dragging = false;
+                    self.viewer_scrollbar_dragging = false;
+                    self.viewer_hscrollbar_dragging = false;
+                    self.settings_scrollbar_dragging = false;
+                    self.palette_scrollbar_dragging = false;
+                    self.viewer_drag_selecting = false;
+                    self.viewer_drag_start = None;
+                    self.explorer_resizing = false;
                 } else {
                     self.modifiers = ModifiersState::empty();
                     self.last_focus_gained = Instant::now();
@@ -312,6 +345,22 @@ impl TearminalApp {
                         self.file_explorer.refresh();
                         self.pump_explorer_ssh();
                         self.sync_fs_watcher();
+                    }
+                    if self
+                        .config
+                        .appearance
+                        .theme_mode
+                        .eq_ignore_ascii_case("system")
+                    {
+                        let is_sys_light = crate::theme::is_windows_system_light_mode();
+                        if is_sys_light != self.system_light {
+                            crate::logger::log(&format!(
+                                "-> Cambio de tema del sistema detectado al recuperar foco (light={}): actualizando interfaz",
+                                is_sys_light
+                            ));
+                            self.system_light = is_sys_light;
+                            self.apply_active_theme();
+                        }
                     }
                 }
 
@@ -335,6 +384,116 @@ impl TearminalApp {
             }
 
             _ => {}
+        }
+    }
+
+    pub(super) fn on_ime_event(&mut self, ime: winit::event::Ime) {
+        match ime {
+            winit::event::Ime::Commit(text) => {
+                if text.is_empty() {
+                    return;
+                }
+                // 1. Si la paleta de comandos está abierta
+                if let Some(palette) = &mut self.palette {
+                    palette.input.insert_text(&text);
+                    palette.update_filter();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                // 2. Si el visor de archivos está activo
+                let auto_save = self.config.terminal.auto_save;
+                let visible = self.viewer_visible_lines();
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                if let Some(viewer) = active_tab.file_viewer.as_mut() {
+                    viewer.insert_text(&text);
+                    if auto_save && viewer.is_dirty {
+                        viewer.autosave_local();
+                    }
+                    viewer.ensure_cursor_visible(visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                // 3. Terminal activa
+                if let Some(active_pane) = active_tab.active_pane_mut() {
+                    Self::paste_into_pane(active_pane, &text);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            winit::event::Ime::Preedit(_text, _cursor) => {
+                self.update_ime_cursor_area();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            winit::event::Ime::Enabled | winit::event::Ime::Disabled => {}
+        }
+    }
+
+    pub(super) fn update_ime_cursor_area(&self) {
+        let (Some(window), Some(renderer)) = (&self.window, &self.renderer) else {
+            return;
+        };
+        let (win_w, win_h) = self.window_size();
+
+        // 1. Paleta de comandos
+        if let Some(palette) = &self.palette {
+            let rects = crate::renderer::PaletteRects::compute_with_scroll(
+                win_w,
+                win_h,
+                palette.filtered.len(),
+                palette.scroll_offset,
+            );
+            let pos = winit::dpi::PhysicalPosition::new(
+                rects.input.0 as i32 + 10,
+                (rects.input.1 + rects.input.3) as i32,
+            );
+            let size = winit::dpi::PhysicalSize::new(20, 24);
+            window.set_ime_cursor_area(pos, size);
+            return;
+        }
+
+        let active_tab = &self.tabs[self.active_tab_index];
+
+        // 2. Visor de archivos
+        if let Some(viewer) = active_tab.file_viewer.as_ref() {
+            let (offset, _right_offset, top_offset, _) = self.terminal_area_offsets();
+            let row = viewer.cursor_line.saturating_sub(viewer.scroll_offset);
+            let col = viewer.cursor_col.saturating_sub(viewer.scroll_offset_x);
+            let px = offset + renderer.margin_x + col * renderer.char_width;
+            let py = top_offset + renderer.margin_y + row * renderer.row_height;
+            let pos = winit::dpi::PhysicalPosition::new(px as i32, py as i32);
+            let size = winit::dpi::PhysicalSize::new(
+                renderer.char_width as u32,
+                renderer.row_height as u32,
+            );
+            window.set_ime_cursor_area(pos, size);
+            return;
+        }
+
+        // 3. Terminal activa
+        if let Some(active_pane) = active_tab.active_pane() {
+            let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
+            let rects = active_tab.compute_pane_rects(cx, cy, cw, ch);
+            if let Some(pane_rect) = rects.iter().find(|r| r.pane_id == active_pane.id) {
+                let px = pane_rect.x
+                    + renderer.margin_x
+                    + active_pane.terminal.cursor_x * renderer.char_width;
+                let py = pane_rect.y
+                    + renderer.margin_y
+                    + active_pane.terminal.cursor_y * renderer.row_height;
+                let pos = winit::dpi::PhysicalPosition::new(px as i32, py as i32);
+                let size = winit::dpi::PhysicalSize::new(
+                    renderer.char_width as u32,
+                    renderer.row_height as u32,
+                );
+                window.set_ime_cursor_area(pos, size);
+            }
         }
     }
 
@@ -539,27 +698,6 @@ impl TearminalApp {
                 self.file_explorer.refresh_git_status();
                 self.pump_explorer_ssh();
             }
-        }
-
-        // Tema del sistema (cada 2 s) si theme_mode es "system"
-        if self
-            .config
-            .appearance
-            .theme_mode
-            .eq_ignore_ascii_case("system")
-        {
-            if self.last_system_theme_check.elapsed().as_secs() >= 2 {
-                self.last_system_theme_check = Instant::now();
-                let is_sys_light = crate::theme::is_windows_system_light_mode();
-                if is_sys_light != self.system_light {
-                    crate::logger::log(&format!("-> Cambio de tema del sistema Windows detectado (light={}): actualizando interfaz", is_sys_light));
-                    self.apply_active_theme();
-                }
-            }
-            earliest(
-                &mut wake,
-                self.last_system_theme_check + std::time::Duration::from_secs(2),
-            );
         }
 
         // Modelo y consumo de IA de la barra de estado: se reescanean solos mientras hay un agente

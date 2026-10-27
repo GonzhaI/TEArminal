@@ -1,9 +1,77 @@
-# Compilación y empaquetado
-/target
-/dist
-/tools/*/target
+# Compilación y artefactos de Rust
+/target/
+**/target/
 **/*.rs.bk
+*.pdb
 
-# Local de cada desarrollador (la configuración de ejemplo está en examples/tearminal.toml)
+# Binarios y librerías generados localmente (los shaders .cso se versionan explícitamente)
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.exp
+*.ilk
+*.obj
+
+# Empaquetado y distribución
+/dist/
+/Output/
+/output/
+*.msi
+*.zip
+
+# Configuración local de usuario y logs
 /tearminal.toml
+*.local.toml
+session.toml
 *.log
+*.dmp
+*.dump
+*.crash
+
+# Archivos temporales y de respaldo
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
+
+# Entornos de desarrollo y editores
+.vscode/
+*.code-workspace
+.history/
+.idea/
+*.iml
+.vs/
+*.suo
+*.user
+*.userosv
+*.sln.docstates
+*.swp
+*.swo
+
+# Cobertura y testing
+.nextest/
+*.profraw
+*.profdata
+
+# Archivos del sistema operativo
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+.fuse_hidden*
+.directory

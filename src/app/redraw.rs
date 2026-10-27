@@ -184,13 +184,7 @@ impl TearminalApp {
         let Some(gpu) = &mut self.gpu_surface else {
             return;
         };
-        gpu.set_render_tuning(
-            self.config.appearance.font_contrast,
-            self.config
-                .appearance
-                .image_filter
-                .eq_ignore_ascii_case("linear"),
-        );
+        gpu.set_render_tuning(1.0, false);
         match gpu.present(self.canvas.scene()) {
             Ok(Presented::Ok) => {}
             Ok(Presented::Recovered) => {
@@ -208,6 +202,7 @@ impl TearminalApp {
                 }
             }
         }
+        self.update_ime_cursor_area();
     }
 }
 

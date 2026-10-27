@@ -3,34 +3,6 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Marca de TEArminal: el prompt `>_` en acento y el wordmark. Sin decoración fuera de la marca.
-    fn draw_brand(&mut self, canvas: &mut Canvas, bar_h: usize, theme: &Theme) {
-        if !self.show_brand {
-            return;
-        }
-        let cy = bar_h / 2;
-        self.draw_mono_text(
-            canvas,
-            ">_",
-            16,
-            cy + 4,
-            40,
-            theme.accent_color(),
-            tokens::BODY,
-            true,
-        );
-        self.draw_ui_text(
-            canvas,
-            "TEArminal",
-            42,
-            cy + 5,
-            TopTabBarRects::BRAND_W,
-            theme.foreground,
-            tokens::TITLE,
-            true,
-        );
-    }
-
     /// Píldora de búsqueda centrada del modo vertical: icono, invitación y atajo Ctrl K.
     fn draw_search_pill(&mut self, canvas: &mut Canvas, rect: Rect, theme: &Theme) {
         let (x, y, w, h) = rect;
@@ -186,10 +158,7 @@ impl TerminalRenderer {
         // 1. Franja superior
         Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
 
-        // 2. Marca
-        self.draw_brand(canvas, bar_h, theme);
-
-        // 3. Pestañas
+        // 2. Pestañas
         for (pos, tab) in tabs.iter().enumerate() {
             let idx = tab.index;
             let r = rects.tab_rect(pos);
@@ -467,7 +436,6 @@ impl TerminalRenderer {
         let bar_h = rects.bar_h;
 
         Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
-        self.draw_brand(canvas, bar_h, theme);
         self.draw_search_pill(canvas, rects.search_box, theme);
         self.draw_window_controls(
             canvas,

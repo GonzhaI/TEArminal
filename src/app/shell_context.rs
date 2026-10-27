@@ -82,13 +82,41 @@ pub(super) fn shorten_home<'a>(path: &'a std::path::Path) -> std::borrow::Cow<'a
     }
 }
 
+fn contains_word_ignore_ascii_case(haystack: &str, word: &str) -> bool {
+    let h_bytes = haystack.as_bytes();
+    let w_bytes = word.as_bytes();
+    let w_len = w_bytes.len();
+    if h_bytes.len() < w_len {
+        return false;
+    }
+    for i in 0..=(h_bytes.len() - w_len) {
+        if h_bytes[i..i + w_len].eq_ignore_ascii_case(w_bytes) {
+            let left_ok = if i == 0 {
+                true
+            } else {
+                !h_bytes[i - 1].is_ascii_alphanumeric()
+            };
+            let right_ok = if i + w_len == h_bytes.len() {
+                true
+            } else {
+                !h_bytes[i + w_len].is_ascii_alphanumeric()
+            };
+            if left_ok && right_ok {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn detect_ai_agent(title: Option<&str>) -> AiAgentStatus {
     use crate::renderer::contains_ignore_ascii_case;
     if let Some(t) = title {
         if contains_ignore_ascii_case(t, "claude") {
             return AiAgentStatus::Claude;
         }
-        if contains_ignore_ascii_case(t, "agy") || contains_ignore_ascii_case(t, "antigravity") {
+        if contains_word_ignore_ascii_case(t, "agy") || contains_ignore_ascii_case(t, "antigravity")
+        {
             return AiAgentStatus::Agy;
         }
         if contains_ignore_ascii_case(t, "gemini") {
