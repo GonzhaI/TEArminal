@@ -321,16 +321,19 @@ impl Theme {
         frame
     }
 
-    /// Contorno de 1 px de las tarjetas y de los chips: el hairline que separa regiones, reforzado solo
-    /// en los temas de poco contraste (texto casi igual al fondo) donde ese hairline no se vería.
+    /// Contorno de 1 px de las tarjetas, los chips y las cápsulas: el hairline que separa regiones
+    /// (`chrome_line`), reforzado solo cuando no se vería contra la tarjeta (`background`) o contra el
+    /// marco (`bar_bg`): en temas claros el hairline casi coincide con el marco, y en los de poco
+    /// contraste (texto casi igual al fondo) con ambos.
     pub(crate) fn card_outline(&self) -> Color {
-        let bg = self.background;
+        let (bg, frame) = (self.background, self.bar_bg());
+        let visible = |c: Color| max_channel_diff(c, bg) >= 8 && max_channel_diff(c, frame) >= 8;
         let mut line = self.chrome_line();
-        for t in [0.18, 0.25, 0.35, 0.5] {
-            if max_channel_diff(line, bg) >= 8 {
+        for t in [0.12, 0.18, 0.25, 0.35, 0.5] {
+            if visible(line) {
                 break;
             }
-            line = self.mix(bg, self.foreground, t);
+            line = self.mix(frame, self.foreground, t);
         }
         line
     }
@@ -473,6 +476,11 @@ mod tests {
             assert!(
                 max_channel_diff(t.card_outline(), t.background) >= 8,
                 "{name}: el contorno no se distingue de la tarjeta"
+            );
+            // Chips y cápsulas viven sobre el marco, no sobre la tarjeta.
+            assert!(
+                max_channel_diff(t.card_outline(), t.bar_bg()) >= 8,
+                "{name}: el contorno no se distingue del marco"
             );
         }
     }
