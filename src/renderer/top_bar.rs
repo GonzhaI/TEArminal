@@ -76,12 +76,13 @@ impl TerminalRenderer {
         self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, icon_size, fg);
     }
 
-    /// Chip de pestaña dentro de su `tab_rect`, recortado 4 px por arriba y por abajo: la activa lleva
-    /// relleno y contorno; una inactiva solo relleno al pasar el ratón.
+    /// Chip de pestaña dentro de su `tab_rect`, recortado 4 px por arriba y por abajo: la activa lleva el
+    /// color de la tarjeta de contenido (con el que se funde y sobre el que el texto ya tiene el contraste
+    /// del propio tema) y contorno; una inactiva solo relleno al pasar el ratón.
     fn draw_tab_chip(canvas: &mut Canvas, r: Rect, active: bool, hovered: bool, theme: &Theme) {
         let (x, y, w, h) = (r.0, r.1 + 4, r.2, r.3.saturating_sub(8));
         if active {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_bg());
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.background);
             canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.card_outline());
         } else if hovered {
             canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_hover());

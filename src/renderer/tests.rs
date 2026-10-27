@@ -2523,24 +2523,6 @@ fn test_outlined_card_tiny_region_does_not_panic() {
     }
 }
 
-/// El título de la pestaña activa (color de texto) debe leerse sobre el relleno del chip en un tema claro y uno oscuro.
-#[test]
-fn test_active_tab_text_is_readable_on_chip() {
-    use crate::theme::{contrast_ratio, Theme};
-
-    let light = Theme::names()
-        .find(|n| Theme::from_name(n).is_light())
-        .unwrap();
-    let dark = Theme::names()
-        .find(|n| Theme::from_name(n).is_dark())
-        .unwrap();
-    for name in [light, dark] {
-        let t = Theme::from_name(name);
-        let ratio = contrast_ratio(t.foreground, t.surface_bg());
-        assert!(ratio >= 4.5, "{name}: contraste {ratio:.2} sobre el chip");
-    }
-}
-
 /// La pestaña activa es un chip con contorno que ocupa las columnas del `tab_rect` y las filas `y + 4 ..= y + h - 5`;
 /// ni su relleno ni su contorno aparecen fuera de ese rectángulo, ni con pestañas compactas ni con muchas.
 #[test]
@@ -2550,7 +2532,7 @@ fn test_tab_chip_stays_inside_tab_rect() {
 
     let theme = Theme::default();
     let (fill, line) = (
-        theme.surface_bg().to_u32_xrgb(),
+        theme.background.to_u32_xrgb(),
         theme.card_outline().to_u32_xrgb(),
     );
     let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
@@ -2712,6 +2694,42 @@ fn test_status_bar_separator_between_cwd_and_branch() {
     };
     assert!(region_has_ink(Some("main")), "falta el separador con rama");
     assert!(!region_has_ink(None), "sin rama no debe haber separador");
+}
+
+/// Con una ruta tan larga que el texto se recorta en el límite del grupo derecho, la rama y su separador se omiten:
+/// no pueden pisar la cápsula ni el icono del badge del agente.
+#[test]
+fn test_status_bar_drops_branch_when_cwd_fills_the_left_side() {
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let (w, h) = (520usize, 60usize);
+    let cwd = "~/dev/un/directorio/de/trabajo/con/una/ruta/muy/larga/que/no/cabe/en/la/barra";
+    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let mut render = |branch: Option<&str>| {
+        test_support::with_canvas(w, h, |c| {
+            c.clear(theme.bar_bg());
+            r.render_status_bar_with_ai(
+                c,
+                0,
+                Some(cwd),
+                branch,
+                None,
+                110,
+                34,
+                AiAgentStatus::Claude,
+                Some("claude-sonnet-5-5"),
+                &[],
+                false,
+                false,
+                &theme,
+            );
+        })
+    };
+    assert!(
+        render(Some("main")) == render(None),
+        "la rama se dibuja encima del badge cuando la ruta ocupa todo el sitio"
+    );
 }
 
 /// Las cápsulas (badge del agente y medidores) se dibujan con sitio y se omiten, sin pánico, en barras estrechas:

@@ -10,6 +10,9 @@ const METER_PCT_GAP: usize = 8;
 const METER_GAP: usize = 17;
 /// Cuerpo del porcentaje: un paso por debajo de la etiqueta, como en el bosquejo.
 const METER_PCT_SIZE: f32 = 9.0;
+/// Sitio mínimo (px) que debe quedar tras un tramo de las migas para dibujar el separador `›` (18) y el
+/// icono del siguiente elemento (15); si no, el elemento se omite en vez de pisar el badge del agente.
+const CRUMB_ROOM: usize = 33;
 /// Etiquetas del grupo de estado (badge y medidores): los 12 px del bosquejo, a la escala por
 /// defecto de `ui_font_size`.
 const STATUS_LABEL_SIZE: f32 = 10.5;
@@ -159,6 +162,7 @@ impl TerminalRenderer {
 
         // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
         let mut cur_x = 14;
+        let mut room = true;
         let text_limit = rects
             .update_badge
             .map_or(bx, |(ux, _, _, _)| ux)
@@ -186,11 +190,16 @@ impl TerminalRenderer {
             );
             cur_x = adv + 14;
             if cwd.is_some() || git_branch.is_some() {
-                cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+                // Separador + icono del siguiente elemento: si no caben antes del grupo derecho, se omiten.
+                if adv + CRUMB_ROOM <= text_limit {
+                    cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+                } else {
+                    room = false;
+                }
             }
         }
 
-        if let Some(dir) = cwd {
+        if let (Some(dir), true) = (cwd, room) {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::Folder,
@@ -212,11 +221,15 @@ impl TerminalRenderer {
             );
             cur_x = adv + 14;
             if git_branch.is_some() {
-                cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+                if adv + CRUMB_ROOM <= text_limit {
+                    cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+                } else {
+                    room = false;
+                }
             }
         }
 
-        if let Some(branch) = git_branch {
+        if let (Some(branch), true) = (git_branch, room) {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::GitBranch,
