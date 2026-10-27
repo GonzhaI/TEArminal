@@ -167,6 +167,13 @@ fn luminance(c: Color) -> f32 {
     0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
 }
 
+/// Mayor diferencia por canal entre dos colores (0-255).
+fn max_channel_diff(a: Color, b: Color) -> u8 {
+    a.r.abs_diff(b.r)
+        .max(a.g.abs_diff(b.g))
+        .max(a.b.abs_diff(b.b))
+}
+
 /// Contraste WCAG entre dos colores opacos (1..21).
 pub(crate) fn contrast_ratio(a: Color, b: Color) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
@@ -291,11 +298,41 @@ impl Theme {
         self.mix(self.background, self.foreground, 0.045)
     }
 
-    /// Fondo de las barras de ventana y de estado: en temas oscuros un paso hacia la sombra, para que
-    /// el chrome se separe del lienzo; en claros apenas se distingue de él.
+    /// Marco de la ventana (barras, estado y margen de las tarjetas): un paso hacia la sombra, para que
+    /// el chrome se separe de la tarjeta de contenido. Un fondo casi negro no puede oscurecerse más:
+    /// ahí el marco se aclara un poco hacia el texto.
     pub(crate) fn bar_bg(&self) -> Color {
-        let depth = if self.is_dark() { 0.26 } else { 0.05 };
-        self.mix(self.background, Color::from_rgb(0, 0, 0), depth)
+        let black = Color::from_rgb(0, 0, 0);
+        if self.is_light() {
+            return self.mix(self.background, black, 0.07);
+        }
+        let bg = self.background;
+        if bg.r.max(bg.g).max(bg.b) >= 24 {
+            return self.mix(bg, black, 0.26);
+        }
+        // Fondo casi negro: se aclara hacia el texto lo justo para que el marco se note.
+        let mut frame = bg;
+        for t in [0.05, 0.1, 0.18, 0.3] {
+            frame = self.mix(bg, self.foreground, t);
+            if max_channel_diff(frame, bg) >= 4 {
+                break;
+            }
+        }
+        frame
+    }
+
+    /// Contorno de 1 px de las tarjetas y de los chips: el hairline que separa regiones, reforzado solo
+    /// en los temas de poco contraste (texto casi igual al fondo) donde ese hairline no se vería.
+    pub(crate) fn card_outline(&self) -> Color {
+        let bg = self.background;
+        let mut line = self.chrome_line();
+        for t in [0.18, 0.25, 0.35, 0.5] {
+            if max_channel_diff(line, bg) >= 8 {
+                break;
+            }
+            line = self.mix(bg, self.foreground, t);
+        }
+        line
     }
 
     /// Superficie elevada: filas activas, tarjetas, menús.
@@ -423,6 +460,27 @@ mod tests {
         assert!(lines >= 800, "themes.txt incompleto: {lines} temas");
         assert_eq!(Theme::names().count(), lines);
         assert!(THEMES.lines().all(|l| parse_line(l).is_some()));
+    }
+
+    #[test]
+    fn test_frame_and_outline_stay_visible_in_every_theme() {
+        for name in Theme::names() {
+            let t = Theme::from_name(name);
+            assert!(
+                max_channel_diff(t.bar_bg(), t.background) >= 4,
+                "{name}: el marco no se distingue de la tarjeta"
+            );
+            assert!(
+                max_channel_diff(t.card_outline(), t.background) >= 8,
+                "{name}: el contorno no se distingue de la tarjeta"
+            );
+        }
+    }
+
+    #[test]
+    fn test_card_outline_is_chrome_line() {
+        let t = Theme::default();
+        assert_eq!(t.card_outline(), t.chrome_line());
     }
 
     #[test]

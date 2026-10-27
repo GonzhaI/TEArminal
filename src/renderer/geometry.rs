@@ -663,7 +663,7 @@ impl SidebarRects {
     pub(crate) const TOP: usize = 38;
     /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`Canvas::card`).
     pub(crate) const CARD_INSET: usize = 6;
-    pub(crate) const CARD_RADIUS: usize = 10;
+    pub(crate) const CARD_RADIUS: usize = super::tokens::RADIUS_CARD;
     /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire
     /// dentro de la tarjeta y alinea los bordes de todas las secciones.
     pub(crate) const PAD_R: usize = 20;
