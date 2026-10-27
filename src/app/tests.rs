@@ -2247,7 +2247,11 @@ fn test_panel_side_reserves_space_and_hosts_the_explorer() {
     app.sync_explorer_dock(1200, 800);
     let (x, _, w, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
     assert_eq!(x, 1200 - SIDEBAR_WIDTH + SidebarRects::RAIL_W);
-    assert_eq!(w, SIDEBAR_WIDTH - SidebarRects::RAIL_W);
+    // Termina en el borde interior de la tarjeta del panel.
+    assert_eq!(
+        w,
+        SIDEBAR_WIDTH - SidebarRects::RAIL_W - SidebarRects::CARD_INSET
+    );
     assert_eq!(app.file_explorer_offset(), SIDEBAR_WIDTH);
 
     // Sin panel (oculto) vuelve a acoplarse al borde derecho
@@ -2261,8 +2265,12 @@ fn test_panel_side_reserves_space_and_hosts_the_explorer() {
     app.config.appearance.tab_layout = "horizontal".to_string();
     app.sync_explorer_dock(1200, 800);
     let (x, y, _, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
-    assert_eq!(x, 1200 - SIDEBAR_WIDTH);
-    assert_eq!(app.panel_local_x(x + 5, 40, 1200), Some(5));
+    // El explorador ocupa el interior de la tarjeta del panel (sin su margen de CARD_INSET).
+    assert_eq!(x, 1200 - SIDEBAR_WIDTH + SidebarRects::CARD_INSET);
+    assert_eq!(
+        app.panel_local_x(x + 5, 40, 1200),
+        Some(5 + SidebarRects::CARD_INSET)
+    );
     assert_eq!(app.panel_local_x(x + 5, y + 5, 1200), None);
 }
 
@@ -2498,4 +2506,42 @@ fn test_cache_alignment_and_enum_size_regressions() {
     assert!(!flag.load(std::sync::atomic::Ordering::SeqCst));
     flag.store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// El panel lateral es una tarjeta con cualquier disposición de pestañas (vertical u horizontal), a cualquier
+/// lado, y la tarjeta del contenido se estira bajo su margen para dejar un solo margen entre las dos.
+#[test]
+fn test_card_regions_panel_is_a_card_in_every_layout() {
+    use super::redraw::card_regions;
+    use crate::renderer::SidebarRects;
+
+    let (w, h, status, top) = (1440usize, 900usize, 28usize, 38usize);
+    let inset = SidebarRects::CARD_INSET;
+    let usable = h - status;
+
+    // Panel a la izquierda (offset = SIDEBAR_WIDTH).
+    let r = card_regions(w, h, status, SIDEBAR_WIDTH, 0, top, true, false);
+    assert_eq!(r.panel, Some((0, top, SIDEBAR_WIDTH, usable - top)));
+    assert_eq!(
+        r.content,
+        (
+            SIDEBAR_WIDTH - inset,
+            top,
+            w - (SIDEBAR_WIDTH - inset),
+            usable - top
+        )
+    );
+
+    // Panel a la derecha (right_offset = SIDEBAR_WIDTH).
+    let r = card_regions(w, h, status, 0, SIDEBAR_WIDTH, top, true, true);
+    assert_eq!(
+        r.panel,
+        Some((w - SIDEBAR_WIDTH, top, SIDEBAR_WIDTH, usable - top))
+    );
+    assert_eq!(r.content, (0, top, w - SIDEBAR_WIDTH + inset, usable - top));
+
+    // Sin panel: solo la tarjeta del contenido, sin estirar.
+    let r = card_regions(w, h, status, 0, 0, top, false, false);
+    assert_eq!(r.panel, None);
+    assert_eq!(r.content, (0, top, w, usable - top));
 }

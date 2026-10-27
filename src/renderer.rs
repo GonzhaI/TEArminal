@@ -172,8 +172,10 @@ impl TerminalRenderer {
             .horizontal_line_metrics(self.font_size)
             .map(|m| m.ascent.ceil() as usize)
             .unwrap_or(self.font_size.ceil() as usize);
-        self.margin_x = (14.0 * scale_factor as f32).round() as usize;
-        self.margin_y = (10.0 * scale_factor as f32).round() as usize;
+        // La tarjeta de contenido recorta `CARD_INSET` px del borde del panel: los márgenes cuentan ese recorte
+        // y dejan 14 px laterales y 8 verticales de aire visible hasta su borde interior.
+        self.margin_x = (20.0 * scale_factor as f32).round() as usize;
+        self.margin_y = (14.0 * scale_factor as f32).round() as usize;
         self.glyph_cache.clear();
         for slot in self.ascii_cache.iter_mut() {
             *slot = None;

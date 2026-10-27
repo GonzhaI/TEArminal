@@ -1079,6 +1079,115 @@ fn test_compute_pane_grid_size_reserves_scrollbar_and_card_inset() {
     );
 }
 
+/// El contenido del panel (filas de sesión y explorador, alojado o no) queda a ≥ 8 px del borde interior de la
+/// tarjeta del panel: la tarjeta recorta `CARD_INSET` px de cada lado del panel.
+#[test]
+fn test_panel_content_keeps_clear_of_the_panel_card() {
+    use crate::renderer::{FilesPanelRects, SidebarRects};
+
+    let inset = SidebarRects::CARD_INSET;
+    let (interior_l, interior_r) = (inset, SidebarRects::WIDTH - inset);
+    let clear = 8;
+
+    let row = SidebarRects::tab_rect(0, 0);
+    assert!(
+        row.0 + row.2 + clear <= interior_r,
+        "fila de sesión: fin={}",
+        row.0 + row.2
+    );
+
+    let docked = SidebarRects::explorer_rect_after(900, 200);
+    assert!(
+        docked.0 + docked.2 <= interior_r,
+        "explorador bajo las sesiones: fin={}",
+        docked.0 + docked.2
+    );
+
+    let top_tabs = FilesPanelRects::explorer_rect(900);
+    assert!(
+        top_tabs.0 >= interior_l,
+        "explorador del panel: x={}",
+        top_tabs.0
+    );
+    assert!(
+        top_tabs.0 + top_tabs.2 <= interior_r,
+        "explorador del panel: fin={}",
+        top_tabs.0 + top_tabs.2
+    );
+}
+
+/// El aviso de versión disponible deja 10 px de aire hasta la cápsula del badge del agente (que sobresale 6 px de su
+/// rectángulo).
+#[test]
+fn test_update_badge_keeps_clear_of_the_agent_capsule() {
+    use crate::renderer::StatusBarRects;
+
+    let r = StatusBarRects::compute_with_status(1440, 900, 120, Some(90), 0, 0);
+    let ub = r.update_badge.expect("aviso de versión");
+    assert!(
+        ub.0 + ub.2 + 10 <= r.ai_badge.0 - 6,
+        "aviso termina en {}, cápsula empieza en {}",
+        ub.0 + ub.2,
+        r.ai_badge.0 - 6
+    );
+}
+
+/// La primera pestaña arranca alineada con el borde izquierdo de las tarjetas (`CARD_INSET`), no pegada a la ventana.
+#[test]
+fn test_first_tab_aligns_with_the_card_edge() {
+    use crate::renderer::{SidebarRects, TopTabBarRects};
+
+    for n in [1usize, 3, 12] {
+        let rects = TopTabBarRects::compute(1440, n);
+        assert_eq!(rects.tab_rect(0).0, SidebarRects::CARD_INSET, "n={n}");
+    }
+}
+
+/// La tarjeta de contenido recorta `CARD_INSET` px del borde del panel: el texto y las tarjetas de bloque deben
+/// quedar a distancia visible de su borde interior (texto ≥ 12 px a los lados y ≥ 8 arriba y abajo; tarjetas de
+/// bloque ≥ 6 px a los lados), no pegadas a su contorno.
+#[test]
+fn test_pane_content_keeps_clear_of_the_content_card() {
+    use crate::renderer::SidebarRects;
+    use crate::theme::Theme;
+
+    let inset = SidebarRects::CARD_INSET;
+    let r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    assert!(
+        r.margin_x >= inset + 12,
+        "margen lateral del texto: {}",
+        r.margin_x
+    );
+    assert!(
+        r.margin_y >= inset + 8,
+        "margen vertical del texto: {}",
+        r.margin_y
+    );
+
+    let mut term = crate::terminal::TerminalState::new(110, 34, 2000, Theme::default());
+    term.process_bytes(
+        b"\x1b]133;A\x07PS C:\\>\x1b]133;B\x07cargo test\x1b]133;C\x07\r\nok\r\n\x1b]133;D;0\x07\x1b]133;A\x07PS C:\\> ",
+    );
+    let (x, y, w, h) = (0usize, 38usize, 1100usize, 800usize);
+    let cards = r.block_cards(x, y, w, h, &term);
+    assert!(
+        !cards.is_empty(),
+        "el escenario debe producir tarjetas de bloque"
+    );
+    for c in cards {
+        let (cx, _, cw, _) = c.card;
+        assert!(
+            cx >= x + inset + 6,
+            "tarjeta pegada al borde izquierdo: x={cx}"
+        );
+        assert!(
+            cx + cw + inset + 6 <= x + w,
+            "tarjeta pegada al borde derecho: fin={}",
+            cx + cw
+        );
+    }
+}
+
 /// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
 /// `build_scenes` las dibuja en la GPU (WARP); los tests de escenas de `gpu_scenes` leen `canvas.scene()`.
 pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Canvas)> {
@@ -1217,10 +1326,19 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         true,
         false,
     );
-    // Tarjeta del contenido, como la dibuja `redraw.rs` (vertical: el panel queda a la izquierda).
+    // Tarjetas del panel y del contenido, como las dibuja `redraw.rs` (vertical, panel a la izquierda: el
+    // contenido se estira bajo el margen de la tarjeta vecina).
+    let inset = crate::renderer::SidebarRects::CARD_INSET;
     canvas.outlined_card(
-        (SIDEBAR_WIDTH, top_h, pane_w, pane_h),
-        crate::renderer::SidebarRects::CARD_INSET,
+        (0, top_h, SIDEBAR_WIDTH, pane_h),
+        inset,
+        crate::renderer::SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+        theme.card_outline(),
+    );
+    canvas.outlined_card(
+        (SIDEBAR_WIDTH - inset, top_h, pane_w + inset, pane_h),
+        inset,
         crate::renderer::SidebarRects::CARD_RADIUS,
         theme.bar_bg(),
         theme.card_outline(),

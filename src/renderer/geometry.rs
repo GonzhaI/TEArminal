@@ -55,8 +55,8 @@ pub(crate) struct TopTabBarRects {
 
 impl TopTabBarRects {
     pub(crate) const HEIGHT: usize = 38;
-    /// Las pestañas empiezan en el extremo izquierdo al eliminarse la marca.
-    pub(crate) const BRAND_W: usize = 0;
+    /// Las pestañas empiezan alineadas con el borde izquierdo de las tarjetas (no hay marca).
+    pub(crate) const BRAND_W: usize = SidebarRects::CARD_INSET;
     pub(crate) const TAB_GAP: usize = 3;
     pub(crate) const CLOSE_W: usize = 24;
     pub(crate) const PLUS_W: usize = 28;
@@ -667,6 +667,8 @@ impl SidebarRects {
     /// Margen derecho del contenido del panel (contadores, estados, insignias de git): deja aire
     /// dentro de la tarjeta y alinea los bordes de todas las secciones.
     pub(crate) const PAD_R: usize = 20;
+    /// Margen derecho de las filas de sesión: el recorte de la tarjeta del panel más 8 px de aire.
+    pub(crate) const ROW_PAD_R: usize = Self::CARD_INSET + 8;
     /// Título, rama y carpeta.
     pub(crate) const HEADER_H: usize = 66;
     /// Y de la primera fila.
@@ -712,7 +714,8 @@ impl SidebarRects {
         (
             Self::RAIL_W,
             top,
-            Self::WIDTH - Self::RAIL_W,
+            // Termina en el borde interior de la tarjeta del panel, no bajo su margen.
+            Self::WIDTH - Self::RAIL_W - Self::CARD_INSET,
             bottom.saturating_sub(top),
         )
     }
@@ -756,7 +759,7 @@ impl SidebarRects {
         (
             Self::PAD_X,
             Self::row_y(idx.saturating_sub(scroll_offset)),
-            Self::WIDTH - Self::PAD_X - 8,
+            Self::WIDTH - Self::PAD_X - Self::ROW_PAD_R,
             Self::TAB_ITEM_H,
         )
     }
@@ -856,11 +859,17 @@ impl ScrollbarRects {
 pub(crate) struct FilesPanelRects;
 
 impl FilesPanelRects {
-    /// Rectángulo del explorador alojado: desde el margen de la tarjeta hasta el fondo.
+    /// Rectángulo del explorador alojado: el interior de la tarjeta del panel (sin su margen), hasta el fondo.
     pub(crate) fn explorer_rect(usable_h: usize) -> Rect {
-        let top = SidebarRects::TOP + SidebarRects::CARD_INSET;
+        let inset = SidebarRects::CARD_INSET;
+        let top = SidebarRects::TOP + inset;
         let bottom = SidebarRects::content_bottom(usable_h);
-        (0, top, SidebarRects::WIDTH, bottom.saturating_sub(top))
+        (
+            inset,
+            top,
+            SidebarRects::WIDTH - 2 * inset,
+            bottom.saturating_sub(top),
+        )
     }
 }
 
@@ -940,7 +949,8 @@ impl StatusBarRects {
 
         let update_badge = update_w.map(|uw| {
             let ub_w = uw + 26;
-            let ub_x = badge_x.saturating_sub(ub_w + 10);
+            // 16 px hasta el badge: la cápsula del agente sobresale 6 px de su rectángulo y quedan 10 de aire.
+            let ub_x = badge_x.saturating_sub(ub_w + 16);
             (ub_x, bar_y, ub_w, Self::BAR_H)
         });
 

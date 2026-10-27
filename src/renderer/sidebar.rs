@@ -139,7 +139,7 @@ impl TerminalRenderer {
         let tab_item_h = SidebarRects::TAB_ITEM_H;
         let list_max_y = header.list_end;
         let tab_x = SidebarRects::PAD_X;
-        let tab_w = sidebar_width.saturating_sub(tab_x + 8);
+        let tab_w = sidebar_width.saturating_sub(tab_x + SidebarRects::ROW_PAD_R);
 
         for (vis_idx, tab) in tabs.iter().skip(scroll_offset).enumerate() {
             let tab_y = SidebarRects::row_y(vis_idx);

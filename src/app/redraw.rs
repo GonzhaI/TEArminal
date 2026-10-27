@@ -397,52 +397,27 @@ fn draw_full_scene(
         }
     }
 
-    // Marco del panel de pestañas superiores: tarjeta con esquinas redondeadas sobre el tono de las
-    // barras. Va después del explorador alojado, que pinta hasta el borde del panel.
-    let usable = height.saturating_sub(p.status_bar_h);
-    if p.is_horizontal && p.sidebar_visible {
-        let x0 = if p.panel_right {
-            width.saturating_sub(SIDEBAR_WIDTH)
-        } else {
-            0
-        };
-        let top = SidebarRects::TOP;
+    // Tarjetas del panel y del contenido: esquinas redondeadas y contorno sobre el tono de las barras. Van
+    // después del explorador alojado, que pinta hasta el borde del panel.
+    let cards = card_regions(
+        width,
+        height,
+        p.status_bar_h,
+        p.offset,
+        p.right_offset,
+        p.top_offset,
+        p.sidebar_visible,
+        p.panel_right,
+    );
+    for region in cards.panel.into_iter().chain(Some(cards.content)) {
         canvas.outlined_card(
-            (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top)),
+            region,
             SidebarRects::CARD_INSET,
             SidebarRects::CARD_RADIUS,
             theme.bar_bg(),
             theme.card_outline(),
         );
     }
-
-    // Tarjeta del contenido (terminales, visor, Ajustes): misma esquina y margen que la del panel. Con el
-    // panel a la vista en horizontal la región se estira bajo el margen de la tarjeta vecina, de modo que
-    // entre las dos queda un solo margen y no dos.
-    let inset = SidebarRects::CARD_INSET;
-    let stretch = if p.is_horizontal && p.sidebar_visible {
-        inset
-    } else {
-        0
-    };
-    let left = if p.offset > 0 {
-        p.offset - stretch.min(p.offset)
-    } else {
-        0
-    };
-    let right = width.saturating_sub(p.right_offset) + if p.right_offset > 0 { stretch } else { 0 };
-    canvas.outlined_card(
-        (
-            left,
-            p.top_offset,
-            right.min(width).saturating_sub(left),
-            usable.saturating_sub(p.top_offset),
-        ),
-        inset,
-        SidebarRects::CARD_RADIUS,
-        theme.bar_bg(),
-        theme.card_outline(),
-    );
 
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
@@ -531,6 +506,60 @@ fn draw_full_scene(
 
 /// Dibuja el panel lateral. A la izquierda lo hace sobre el fotograma; a la derecha, en un búfer propio
 /// del ancho del panel que se copia a su sitio (la geometría del panel es local a él).
+type Region = (usize, usize, usize, usize);
+
+/// Regiones `(x, y, ancho, alto)` de las tarjetas, en coordenadas de ventana.
+pub(super) struct CardRegions {
+    /// Panel lateral (con cualquier disposición de pestañas y a cualquier lado), si está a la vista.
+    pub(super) panel: Option<Region>,
+    /// Contenido (terminales, visor, Ajustes). Con el panel a la vista se estira bajo el margen de la tarjeta
+    /// vecina, de modo que entre las dos queda un solo margen y no dos.
+    pub(super) content: Region,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn card_regions(
+    width: usize,
+    height: usize,
+    status_bar_h: usize,
+    offset: usize,
+    right_offset: usize,
+    top_offset: usize,
+    panel_visible: bool,
+    panel_right: bool,
+) -> CardRegions {
+    let usable = height.saturating_sub(status_bar_h);
+    let top = SidebarRects::TOP;
+    let panel = panel_visible.then(|| {
+        let x0 = if panel_right {
+            width.saturating_sub(SIDEBAR_WIDTH)
+        } else {
+            0
+        };
+        (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top))
+    });
+    let stretch = if panel_visible {
+        SidebarRects::CARD_INSET
+    } else {
+        0
+    };
+    let left = if offset > 0 {
+        offset - stretch.min(offset)
+    } else {
+        0
+    };
+    let right = width.saturating_sub(right_offset) + if right_offset > 0 { stretch } else { 0 };
+    CardRegions {
+        panel,
+        content: (
+            left,
+            top_offset,
+            right.min(width).saturating_sub(left),
+            usable.saturating_sub(top_offset),
+        ),
+    }
+}
+
 fn draw_panel(
     canvas: &mut Canvas,
     renderer: &mut TerminalRenderer,

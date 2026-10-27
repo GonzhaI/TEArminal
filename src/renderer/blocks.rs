@@ -157,7 +157,8 @@ impl TerminalRenderer {
             let bottom_y = base_y + (last_visible.saturating_sub(view_start) + 1) * self.row_height;
 
             let card_x = base_x.saturating_sub(CARD_INSET_X);
-            let card_right = max_x.saturating_sub(8);
+            // Simétrica a `card_x`: el texto empieza en `margin_x` y la tarjeta sobresale `CARD_INSET_X` a cada lado.
+            let card_right = max_x.saturating_sub(self.margin_x.saturating_sub(CARD_INSET_X));
             if card_right <= card_x + 80 {
                 continue;
             }
