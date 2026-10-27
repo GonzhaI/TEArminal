@@ -536,9 +536,30 @@ impl TerminalRenderer {
         let (x, y, w, h) = StatusBarRects::popup_rect(width, height, popup_h);
 
         // Sombra corta, superficie elevada y hairline
-        canvas.rounded_fill(x + 1, y + 3, w, h, 6, Color::from_rgba(0, 0, 0, 80));
-        canvas.rounded_fill(x, y, w, h, 6, theme.chrome_bg_elevated());
-        canvas.rounded_stroke(x, y, w, h, 6, theme.chrome_line_strong());
+        canvas.rounded_fill(
+            x + 1,
+            y + 3,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            Color::from_rgba(0, 0, 0, 80),
+        );
+        canvas.rounded_fill(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_bg_elevated(),
+        );
+        canvas.rounded_stroke(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_line_strong(),
+        );
 
         let pad_x = x + 16;
         let max_x = x + w - 16;

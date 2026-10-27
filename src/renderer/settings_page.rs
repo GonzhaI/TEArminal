@@ -20,7 +20,7 @@ impl TerminalRenderer {
         } else {
             theme.mix(theme.background, theme.foreground, 0.05)
         };
-        canvas.rounded_fill(bx, by, bw, bh, 4, bg);
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_ROW, bg);
         let border = if active_accent {
             theme.accent_color()
         } else if hovered {
@@ -28,7 +28,7 @@ impl TerminalRenderer {
         } else {
             theme.chrome_line()
         };
-        canvas.rounded_stroke(bx, by, bw, bh, 4, border);
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_ROW, border);
 
         let fg = if active_accent {
             theme.accent_color()
@@ -72,7 +72,7 @@ impl TerminalRenderer {
         } else {
             theme.mix(theme.background, theme.foreground, 0.05)
         };
-        canvas.rounded_fill(bx, by, bw, bh, 4, bg);
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_ROW, bg);
         let border = if active_accent {
             theme.accent_color()
         } else if hovered {
@@ -80,7 +80,7 @@ impl TerminalRenderer {
         } else {
             theme.chrome_line()
         };
-        canvas.rounded_stroke(bx, by, bw, bh, 4, border);
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_ROW, border);
 
         let fg = if active_accent {
             theme.accent_color()
@@ -127,7 +127,7 @@ impl TerminalRenderer {
         } else {
             theme.mix(theme.background, theme.foreground, 0.05)
         };
-        canvas.rounded_fill(span_start, box_y, span_w, box_h, 4, bg);
+        canvas.rounded_fill(span_start, box_y, span_w, box_h, tokens::RADIUS_ROW, bg);
 
         let border_c = if is_editing {
             theme.accent_color()
@@ -136,7 +136,14 @@ impl TerminalRenderer {
         } else {
             theme.chrome_line()
         };
-        canvas.rounded_stroke(span_start, box_y, span_w, box_h, 4, border_c);
+        canvas.rounded_stroke(
+            span_start,
+            box_y,
+            span_w,
+            box_h,
+            tokens::RADIUS_ROW,
+            border_c,
+        );
 
         let disp_text = if is_editing {
             format!("{}|", text)
@@ -218,8 +225,8 @@ impl TerminalRenderer {
         title: &str,
         theme: &Theme,
     ) {
-        canvas.rounded_fill(x, y, w, h, 6, theme.surface_bg());
-        canvas.rounded_stroke(x, y, w, h, 6, theme.chrome_line());
+        canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_bg());
+        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.chrome_line());
 
         // Cabecera editorial de la tarjeta: 40 px, micro-etiqueta con tracking.
         Self::draw_rect(canvas, x, y + 40, w, 1, theme.chrome_line());
@@ -275,7 +282,7 @@ impl TerminalRenderer {
         } else {
             theme.mix(theme.background, theme.foreground, 0.05)
         };
-        canvas.rounded_fill(bx, by, size, size, 4, bg);
+        canvas.rounded_fill(bx, by, size, size, tokens::RADIUS_ROW, bg);
         let border = if on {
             theme.accent_color()
         } else if hovered {
@@ -283,7 +290,7 @@ impl TerminalRenderer {
         } else {
             theme.chrome_line()
         };
-        canvas.rounded_stroke(bx, by, size, size, 4, border);
+        canvas.rounded_stroke(bx, by, size, size, tokens::RADIUS_ROW, border);
         if on {
             self.draw_lucide_icon(
                 canvas,
@@ -361,7 +368,14 @@ impl TerminalRenderer {
 
         let r_btn = rects.reset_defaults_btn;
         if state.hovered_reset_defaults {
-            canvas.rounded_fill(r_btn.0, r_btn.1, r_btn.2, r_btn.3, 4, theme.surface_hover());
+            canvas.rounded_fill(
+                r_btn.0,
+                r_btn.1,
+                r_btn.2,
+                r_btn.3,
+                tokens::RADIUS_ROW,
+                theme.surface_hover(),
+            );
         }
         let r_fg = if state.hovered_reset_defaults {
             theme.foreground
@@ -593,7 +607,7 @@ impl TerminalRenderer {
             sb.1,
             sb.2,
             sb.3,
-            4,
+            tokens::RADIUS_ROW,
             theme.mix(theme.background, theme.foreground, 0.05),
         );
         canvas.rounded_stroke(
@@ -601,7 +615,7 @@ impl TerminalRenderer {
             sb.1,
             sb.2,
             sb.3,
-            4,
+            tokens::RADIUS_ROW,
             if searching {
                 theme.accent_color()
             } else {
@@ -682,7 +696,7 @@ impl TerminalRenderer {
                     r.1,
                     r.2,
                     r.3 - 2,
-                    4,
+                    tokens::RADIUS_ROW,
                     if is_current {
                         theme.accent_soft(26)
                     } else {
@@ -985,7 +999,7 @@ impl TerminalRenderer {
             preview.1,
             preview.2,
             preview.3,
-            4,
+            tokens::RADIUS_ROW,
             theme.mix(theme.background, theme.foreground, 0.04),
         );
         self.draw_mono_text(

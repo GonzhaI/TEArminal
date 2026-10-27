@@ -142,8 +142,8 @@ impl TerminalRenderer {
             if selected {
                 let sel_bg = theme.mix(theme.surface_hover(), theme.accent_color(), 0.28);
                 let sel_stroke = theme.mix(theme.surface_hover(), theme.accent_color(), 0.65);
-                canvas.rounded_fill(rx, ry, rw, rh, 6, sel_bg);
-                canvas.rounded_stroke(rx, ry, rw, rh, 6, sel_stroke);
+                canvas.rounded_fill(rx, ry, rw, rh, tokens::RADIUS_ROW, sel_bg);
+                canvas.rounded_stroke(rx, ry, rw, rh, tokens::RADIUS_ROW, sel_stroke);
             }
 
             let item_cy = ry + rh / 2;

@@ -31,9 +31,30 @@ impl TerminalRenderer {
         let (width, height) = canvas.size();
         let (x, y, w, h) = menu.bounds();
         // Sombra corta, superficie elevada y hairline: un menú, no una isla.
-        canvas.rounded_fill(x + 1, y + 3, w, h, 6, Color::from_rgba(0, 0, 0, 80));
-        canvas.rounded_fill(x, y, w, h, 6, theme.chrome_bg_elevated());
-        canvas.rounded_stroke(x, y, w, h, 6, theme.chrome_line_strong());
+        canvas.rounded_fill(
+            x + 1,
+            y + 3,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            Color::from_rgba(0, 0, 0, 80),
+        );
+        canvas.rounded_fill(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_bg_elevated(),
+        );
+        canvas.rounded_stroke(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_line_strong(),
+        );
 
         let accent = theme.accent_color();
         for (i, item) in menu.items.iter().enumerate() {

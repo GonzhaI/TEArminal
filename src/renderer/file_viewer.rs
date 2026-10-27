@@ -295,10 +295,17 @@ impl TerminalRenderer {
                 card_y,
                 card_w,
                 card_h,
-                6,
+                tokens::RADIUS_CONTROL,
                 theme.chrome_bg_elevated(),
             );
-            canvas.rounded_stroke(card_x, card_y, card_w, card_h, 6, theme.chrome_line());
+            canvas.rounded_stroke(
+                card_x,
+                card_y,
+                card_w,
+                card_h,
+                tokens::RADIUS_CONTROL,
+                theme.card_outline(),
+            );
 
             self.draw_lucide_icon(
                 canvas,

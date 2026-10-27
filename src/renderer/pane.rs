@@ -803,7 +803,14 @@ impl TerminalRenderer {
             if btn_x + btn_w <= width && btn_y + btn_h <= height {
                 // Sombra sutil para despegar el botón flotante del texto de fondo
                 let shadow_color = Color::from_rgba(0, 0, 0, 110);
-                canvas.rounded_fill(btn_x, btn_y + 2, btn_w, btn_h, 6, shadow_color);
+                canvas.rounded_fill(
+                    btn_x,
+                    btn_y + 2,
+                    btn_w,
+                    btn_h,
+                    tokens::RADIUS_CONTROL,
+                    shadow_color,
+                );
 
                 let bg_color = if terminal.scroll_to_bottom_hovered {
                     theme.surface_hover()
@@ -821,8 +828,15 @@ impl TerminalRenderer {
                     theme.foreground
                 };
 
-                canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, 6, bg_color);
-                canvas.rounded_stroke(btn_x, btn_y, btn_w, btn_h, 6, border_color);
+                canvas.rounded_fill(btn_x, btn_y, btn_w, btn_h, tokens::RADIUS_CONTROL, bg_color);
+                canvas.rounded_stroke(
+                    btn_x,
+                    btn_y,
+                    btn_w,
+                    btn_h,
+                    tokens::RADIUS_CONTROL,
+                    border_color,
+                );
                 self.draw_lucide_icon(
                     canvas,
                     crate::ui::LucideIcon::ChevronDown,

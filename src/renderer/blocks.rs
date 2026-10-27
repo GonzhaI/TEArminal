@@ -12,7 +12,6 @@ use crate::ui::LucideIcon;
 const CARD_INSET_X: usize = 8;
 const CARD_INSET_TOP: usize = 3;
 const CARD_INSET_BOTTOM: usize = 1;
-const CARD_RADIUS: usize = 8;
 const BUTTON_W: usize = 26;
 const BUTTON_H: usize = 22;
 const BUTTON_GAP: usize = 4;
@@ -251,13 +250,13 @@ impl TerminalRenderer {
             } else {
                 theme.surface_bg()
             };
-            canvas.rounded_fill(x, y, w, h, CARD_RADIUS, bg);
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, bg);
             let border = if card.failed {
                 theme.mix(theme.background, theme.ansi[1], 0.55)
             } else {
                 theme.chrome_line()
             };
-            canvas.rounded_stroke(x, y, w, h, CARD_RADIUS, border);
+            canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, border);
         }
     }
 

@@ -1139,7 +1139,7 @@ impl PaletteRects {
     pub(crate) const INPUT_H: usize = 46;
     pub(crate) const ITEM_H: usize = 40;
     pub(crate) const MAX_VISIBLE: usize = 8;
-    pub(crate) const CARD_RADIUS: usize = 8;
+    pub(crate) const CARD_RADIUS: usize = super::tokens::RADIUS_CONTROL;
 
     #[allow(dead_code)]
     #[allow(dead_code)]

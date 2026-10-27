@@ -2762,6 +2762,60 @@ fn test_status_bar_capsules_dropped_when_narrow() {
     }
 }
 
+/// Ninguna superficie del chrome usa un radio literal de tarjeta/control/fila (6, 8, 9, 10, 11): van por
+/// `tokens::RADIUS_*`. Los radios de micro-elementos (puntos de estado, spinner, pulgares, keycaps) quedan fuera.
+#[test]
+fn test_no_loose_radius_literals_in_chrome() {
+    const FORBIDDEN: [&str; 5] = ["6", "8", "9", "10", "11"];
+    let sources = [
+        ("blocks.rs", include_str!("blocks.rs")),
+        ("context_menu.rs", include_str!("context_menu.rs")),
+        ("palette.rs", include_str!("palette.rs")),
+        ("status_bar.rs", include_str!("status_bar.rs")),
+        ("settings_page.rs", include_str!("settings_page.rs")),
+        ("file_viewer.rs", include_str!("file_viewer.rs")),
+        ("pane.rs", include_str!("pane.rs")),
+        ("draw.rs", include_str!("draw.rs")),
+        ("top_bar.rs", include_str!("top_bar.rs")),
+        ("sidebar.rs", include_str!("sidebar.rs")),
+        ("explorer_panel.rs", include_str!("explorer_panel.rs")),
+        ("md_preview.rs", include_str!("md_preview.rs")),
+    ];
+    let mut found = Vec::new();
+    for (file, src) in sources {
+        for call in ["rounded_fill(", "rounded_stroke("] {
+            for (at, _) in src.match_indices(call) {
+                let args = &src[at + call.len()..];
+                // Argumentos de primer nivel hasta el paréntesis que cierra la llamada.
+                let (mut depth, mut cur, mut parts) = (0i32, String::new(), Vec::new());
+                for ch in args.chars() {
+                    match ch {
+                        '(' | '[' | '{' => depth += 1,
+                        ')' | ']' | '}' if depth == 0 => break,
+                        ')' | ']' | '}' => depth -= 1,
+                        ',' if depth == 0 => {
+                            parts.push(std::mem::take(&mut cur));
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    cur.push(ch);
+                }
+                if let Some(radius) = parts.get(4).map(|p| p.trim()) {
+                    // Los controles de Ajustes (casillas, campos, botones) usan el radio de fila, no el 4 suelto.
+                    let loose = FORBIDDEN.contains(&radius)
+                        || (file == "settings_page.rs" && radius == "4");
+                    if loose {
+                        let line = src[..at].lines().count();
+                        found.push(format!("{file}:{line} radio {radius}"));
+                    }
+                }
+            }
+        }
+    }
+    assert!(found.is_empty(), "radios sueltos:\n{}", found.join("\n"));
+}
+
 #[test]
 fn test_draw_helpers_write_through_canvas() {
     const W: usize = 40;
