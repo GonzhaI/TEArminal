@@ -407,11 +407,12 @@ fn draw_full_scene(
             0
         };
         let top = SidebarRects::TOP;
-        canvas.card(
+        canvas.outlined_card(
             (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top)),
             SidebarRects::CARD_INSET,
             SidebarRects::CARD_RADIUS,
             theme.bar_bg(),
+            theme.card_outline(),
         );
     }
 
@@ -430,7 +431,7 @@ fn draw_full_scene(
         0
     };
     let right = width.saturating_sub(p.right_offset) + if p.right_offset > 0 { stretch } else { 0 };
-    canvas.card(
+    canvas.outlined_card(
         (
             left,
             p.top_offset,
@@ -440,6 +441,7 @@ fn draw_full_scene(
         inset,
         SidebarRects::CARD_RADIUS,
         theme.bar_bg(),
+        theme.card_outline(),
     );
 
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {

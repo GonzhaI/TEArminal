@@ -253,4 +253,23 @@ impl Canvas {
             outer,
         });
     }
+
+    /// `card` más un contorno de 1 px (el trazo de `rounded_stroke`) sobre el borde interior de la tarjeta (la región
+    /// menos `inset`). Si el interior no da para las esquinas redondeadas, solo se dibuja la tarjeta.
+    pub(crate) fn outlined_card(
+        &mut self,
+        region: (usize, usize, usize, usize),
+        inset: usize,
+        radius: usize,
+        outer: Color,
+        outline: Color,
+    ) {
+        self.card(region, inset, radius, outer);
+        let (x, y, w, h) = region;
+        let iw = w.saturating_sub(2 * inset);
+        let ih = h.saturating_sub(2 * inset);
+        if iw >= 2 * radius && ih >= 2 * radius {
+            self.rounded_stroke(x + inset, y + inset, iw, ih, radius, outline);
+        }
+    }
 }

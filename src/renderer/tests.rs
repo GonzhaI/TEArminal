@@ -1217,6 +1217,14 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         true,
         false,
     );
+    // Tarjeta del contenido, como la dibuja `redraw.rs` (vertical: el panel queda a la izquierda).
+    canvas.outlined_card(
+        (SIDEBAR_WIDTH, top_h, pane_w, pane_h),
+        crate::renderer::SidebarRects::CARD_INSET,
+        crate::renderer::SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+        theme.card_outline(),
+    );
     r.render_status_bar_with_ai(
         &mut canvas,
         SIDEBAR_WIDTH,
@@ -1287,6 +1295,23 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         false,
     );
     r.render_file_explorer(&mut canvas, top_tabs.bar_h, status_h, &h_explorer, &theme);
+    // Tarjetas del panel y del contenido, como las dibuja `redraw.rs` (horizontal, panel a la derecha:
+    // el contenido se estira bajo el margen de la tarjeta vecina).
+    let inset = crate::renderer::SidebarRects::CARD_INSET;
+    canvas.outlined_card(
+        (x0, sb_top, SIDEBAR_WIDTH, usable_h - sb_top),
+        inset,
+        crate::renderer::SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+        theme.card_outline(),
+    );
+    canvas.outlined_card(
+        (0, top_tabs.bar_h, x0 + inset, usable_h - top_tabs.bar_h),
+        inset,
+        crate::renderer::SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+        theme.card_outline(),
+    );
     r.render_status_bar_with_ai(
         &mut canvas,
         0,
@@ -2457,6 +2482,45 @@ fn test_card_keeps_the_inside_and_rounds_the_corners_on_the_gpu() {
         "el borde recto de la tarjeta queda dentro"
     );
     assert_eq!(at(16, 6), inner, "fin de la esquina: borde superior recto");
+}
+
+/// `outlined_card` = `card` + contorno de 1 px sobre el borde interior de la tarjeta, exacto en lo opaco.
+#[test]
+fn test_outlined_card_draws_exact_outline() {
+    let (w, h) = (60usize, 50usize);
+    let inner = Color::from_rgb(200, 100, 50);
+    let outer = Color::from_rgb(10, 20, 30);
+    let outline = Color::from_rgb(90, 160, 250);
+    let buf = test_support::with_canvas(w, h, |c| {
+        c.clear(inner);
+        c.outlined_card((0, 0, w, h), 6, 10, outer, outline);
+    });
+    let at = |x: usize, y: usize| buf[y * w + x];
+    assert_eq!(at(6, 25), outline.to_u32_xrgb(), "contorno izquierdo");
+    assert_eq!(at(w - 7, 25), outline.to_u32_xrgb(), "contorno derecho");
+    assert_eq!(at(30, 6), outline.to_u32_xrgb(), "contorno superior");
+    assert_eq!(at(30, h - 7), outline.to_u32_xrgb(), "contorno inferior");
+    assert_eq!(at(7, 25), inner.to_u32_xrgb(), "justo dentro del contorno");
+    assert_eq!(at(0, 25), outer.to_u32_xrgb(), "margen");
+    assert_eq!(at(6, 6), outer.to_u32_xrgb(), "esquina redondeada");
+}
+
+#[test]
+fn test_outlined_card_tiny_region_does_not_panic() {
+    let (w, h) = (20usize, 20usize);
+    for region in [(0, 0, 3, 3), (0, 0, 12, 12), (0, 0, 0, 0), (5, 5, 40, 40)] {
+        let buf = test_support::with_canvas(w, h, |c| {
+            c.clear(Color::from_rgb(1, 2, 3));
+            c.outlined_card(
+                region,
+                6,
+                10,
+                Color::from_rgb(10, 20, 30),
+                Color::from_rgb(90, 160, 250),
+            );
+        });
+        assert_eq!(buf.len(), w * h, "{region:?}");
+    }
 }
 
 #[test]

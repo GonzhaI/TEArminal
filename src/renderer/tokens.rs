@@ -14,8 +14,6 @@ pub(crate) const SECTION: f32 = 13.0;
 pub(crate) const DISPLAY: f32 = 20.0;
 /// Tracking de micro-etiquetas (px por hueco).
 pub(crate) const TRACKING: f32 = 1.2;
-/// Grosor del contorno de tarjetas, chips y cápsulas (px).
-pub(crate) const OUTLINE: usize = 1;
 /// Radio de las tarjetas que enmarcan el contenido y el panel.
 pub(crate) const RADIUS_CARD: usize = 10;
 /// Radio de chips, botones de acción, cápsulas y superficies flotantes (menús, paleta, popups).
