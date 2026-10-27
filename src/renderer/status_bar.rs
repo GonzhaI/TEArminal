@@ -130,6 +130,33 @@ impl TerminalRenderer {
 
         let (bx, _by, bw, _bh) = rects.ai_badge;
 
+        // Cápsulas con contorno alrededor del badge del agente y de los medidores. Se omiten si la barra
+        // no deja sitio a la ruta y la rama (el mismo umbral con el que la geometría suelta los medidores).
+        let cap_y = bar_y + 4;
+        let cap_h = bar_h.saturating_sub(8);
+        let outline = theme.card_outline();
+        if bx >= StatusBarRects::MIN_CONTENT_W {
+            canvas.rounded_stroke(
+                bx - 6,
+                cap_y,
+                bw + 12,
+                cap_h,
+                tokens::RADIUS_CONTROL,
+                outline,
+            );
+            if rects.meters.2 > 0 {
+                let (mx, _, mw, _) = rects.meters;
+                canvas.rounded_stroke(
+                    mx - 8,
+                    cap_y,
+                    mw + 16,
+                    cap_h,
+                    tokens::RADIUS_CONTROL,
+                    outline,
+                );
+            }
+        }
+
         // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
         let mut cur_x = 14;
         let text_limit = rects
@@ -158,6 +185,9 @@ impl TerminalRenderer {
                 true,
             );
             cur_x = adv + 14;
+            if cwd.is_some() || git_branch.is_some() {
+                cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+            }
         }
 
         if let Some(dir) = cwd {
@@ -181,6 +211,9 @@ impl TerminalRenderer {
                 false,
             );
             cur_x = adv + 14;
+            if git_branch.is_some() {
+                cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
+            }
         }
 
         if let Some(branch) = git_branch {
@@ -245,6 +278,26 @@ impl TerminalRenderer {
             STATUS_LABEL_SIZE,
             true,
         );
+    }
+
+    /// Separador `›` de las migas (SSH · carpeta · rama): `adv` es donde terminó el texto anterior.
+    /// Devuelve la X donde empieza el siguiente elemento.
+    fn draw_crumb_separator(
+        &mut self,
+        canvas: &mut Canvas,
+        adv: usize,
+        center_y: usize,
+        theme: &Theme,
+    ) -> usize {
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::ChevronRight,
+            adv + 9,
+            center_y,
+            9.0,
+            theme.text_muted(),
+        );
+        adv + 18
     }
 
     /// Dibuja los medidores terminando en `right_limit` y devuelve el borde izquierdo que ocupan.

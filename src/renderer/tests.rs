@@ -2674,6 +2674,94 @@ fn test_sidebar_hovered_row_uses_row_radius() {
     assert_eq!(at(row.0 + 2, row.1 + row.3 / 2), hover, "borde izquierdo");
 }
 
+/// Entre la carpeta y la rama hay un separador `›`; sin rama no hay nada a la derecha de la carpeta.
+#[test]
+fn test_status_bar_separator_between_cwd_and_branch() {
+    use crate::renderer::StatusBarRects;
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let (w, h) = (900usize, 60usize);
+    let bar_y = h - StatusBarRects::BAR_H;
+    let cwd = "~/dev/tearminal";
+    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    // La carpeta empieza en x = 14 + 15 (icono) y su texto avanza `measure_mono_text`; el icono de la rama
+    // empieza 14 px después del texto, así que [adv + 3, adv + 13) solo puede contener el separador.
+    let adv = 29 + r.measure_mono_text(cwd, tokens::DETAIL, false);
+    let mut region_has_ink = |branch: Option<&str>| {
+        let buf = test_support::with_canvas(w, h, |c| {
+            c.clear(theme.bar_bg());
+            r.render_status_bar_with_ai(
+                c,
+                0,
+                Some(cwd),
+                branch,
+                None,
+                110,
+                34,
+                AiAgentStatus::None,
+                None,
+                &[],
+                false,
+                false,
+                &theme,
+            );
+        });
+        let bg = theme.bar_bg().to_u32_xrgb();
+        (bar_y + 4..h - 4).any(|y| (adv + 3..adv + 13).any(|x| buf[y * w + x] != bg))
+    };
+    assert!(region_has_ink(Some("main")), "falta el separador con rama");
+    assert!(!region_has_ink(None), "sin rama no debe haber separador");
+}
+
+/// Las cápsulas (badge del agente y medidores) se dibujan con sitio y se omiten, sin pánico, en barras estrechas:
+/// a 200 px no cabe ninguna, a 400 solo el badge (los medidores se sueltan primero) y a 1440 las dos.
+#[test]
+fn test_status_bar_capsules_dropped_when_narrow() {
+    use crate::renderer::{StatusBarRects, StatusMeter};
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let line = theme.card_outline().to_u32_xrgb();
+    let h = 60usize;
+    let top_row = h - StatusBarRects::BAR_H + 4;
+    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let meters = [
+        StatusMeter {
+            label: "5 h".into(),
+            percent: 42.0,
+        },
+        StatusMeter {
+            label: "Semana".into(),
+            percent: 18.0,
+        },
+    ];
+    for (w, capsules) in [(200usize, 0usize), (400, 1), (1440, 2)] {
+        let buf = test_support::with_canvas(w, h, |c| {
+            c.clear(theme.bar_bg());
+            r.render_status_bar_with_ai(
+                c,
+                0,
+                Some("~/dev/tearminal"),
+                Some("main"),
+                None,
+                110,
+                34,
+                AiAgentStatus::Claude,
+                Some("claude-sonnet-5-5"),
+                &meters,
+                false,
+                false,
+                &theme,
+            );
+        });
+        // Una cápsula = un tramo continuo de contorno en su fila superior.
+        let on = |x: usize| buf[top_row * w + x] == line;
+        let runs = (0..w).filter(|&x| on(x) && (x == 0 || !on(x - 1))).count();
+        assert_eq!(runs, capsules, "w={w}: cápsulas dibujadas");
+    }
+}
+
 #[test]
 fn test_draw_helpers_write_through_canvas() {
     const W: usize = 40;
