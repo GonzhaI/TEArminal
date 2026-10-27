@@ -2523,6 +2523,95 @@ fn test_outlined_card_tiny_region_does_not_panic() {
     }
 }
 
+/// El título de la pestaña activa (color de texto) debe leerse sobre el relleno del chip en un tema claro y uno oscuro.
+#[test]
+fn test_active_tab_text_is_readable_on_chip() {
+    use crate::theme::{contrast_ratio, Theme};
+
+    let light = Theme::names()
+        .find(|n| Theme::from_name(n).is_light())
+        .unwrap();
+    let dark = Theme::names()
+        .find(|n| Theme::from_name(n).is_dark())
+        .unwrap();
+    for name in [light, dark] {
+        let t = Theme::from_name(name);
+        let ratio = contrast_ratio(t.foreground, t.surface_bg());
+        assert!(ratio >= 4.5, "{name}: contraste {ratio:.2} sobre el chip");
+    }
+}
+
+/// La pestaña activa es un chip con contorno que ocupa las columnas del `tab_rect` y las filas `y + 4 ..= y + h - 5`;
+/// ni su relleno ni su contorno aparecen fuera de ese rectángulo, ni con pestañas compactas ni con muchas.
+#[test]
+fn test_tab_chip_stays_inside_tab_rect() {
+    use crate::renderer::{SidebarTabItem, TopTabBarRects};
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let (fill, line) = (
+        theme.surface_bg().to_u32_xrgb(),
+        theme.card_outline().to_u32_xrgb(),
+    );
+    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    for (w, n) in [
+        (480usize, 1usize),
+        (480, 8),
+        (1440, 8),
+        (1440, 30),
+        (480, 30),
+    ] {
+        let tabs: Vec<SidebarTabItem> = (0..n)
+            .map(|i| SidebarTabItem {
+                index: i,
+                status: None,
+                title: format!("Pestaña {i}"),
+                detail: None,
+                is_active: i == 0,
+                has_unread: false,
+                pane_count: 1,
+                is_settings: false,
+                is_file_viewer: false,
+                is_preview: false,
+            })
+            .collect();
+        let rects = TopTabBarRects::compute(w, n);
+        let h = TopTabBarRects::HEIGHT;
+        let buf = test_support::with_canvas(w, h, |c| {
+            r.render_top_tab_bar(
+                c, &tabs, None, None, false, false, false, false, false, false, false, false,
+                &theme,
+            )
+        });
+        let t = rects.tab_rect(0);
+        let chip = (t.0, t.1 + 4, t.2, t.3 - 8);
+        let at = |x: usize, y: usize| buf[y * w + x];
+        let mid_x = chip.0 + chip.2 / 2;
+        let mid_y = chip.1 + chip.3 / 2;
+        let ctx = format!("w={w} n={n}");
+        assert_eq!(at(mid_x, chip.1), line, "{ctx}: contorno superior");
+        assert_eq!(
+            at(mid_x, chip.1 + chip.3 - 1),
+            line,
+            "{ctx}: contorno inferior"
+        );
+        assert_eq!(at(chip.0, mid_y), line, "{ctx}: contorno izquierdo");
+        assert_eq!(at(chip.0 + 2, mid_y), fill, "{ctx}: relleno");
+        for y in 0..h {
+            for x in 0..rects.plus_btn.0.min(w) {
+                let inside =
+                    x >= chip.0 && x < chip.0 + chip.2 && y >= chip.1 && y < chip.1 + chip.3;
+                if !inside {
+                    assert!(
+                        at(x, y) != fill && at(x, y) != line,
+                        "{ctx}: chip fuera de su rectángulo en ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn test_draw_helpers_write_through_canvas() {
     const W: usize = 40;

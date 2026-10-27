@@ -14,10 +14,10 @@ impl TerminalRenderer {
             y,
             w,
             h,
-            9,
+            tokens::RADIUS_CONTROL,
             theme.mix(theme.bar_bg(), theme.background, 0.4),
         );
-        canvas.rounded_stroke(x, y, w, h, 9, theme.chrome_bg());
+        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.chrome_bg());
         self.draw_lucide_icon(
             canvas,
             crate::ui::LucideIcon::Search,
@@ -64,7 +64,7 @@ impl TerminalRenderer {
             } else {
                 theme.surface_hover()
             };
-            canvas.rounded_fill(x, y, w, h, 8, bg);
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, bg);
         }
         let fg = if active {
             theme.accent_color()
@@ -76,20 +76,16 @@ impl TerminalRenderer {
         self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, icon_size, fg);
     }
 
-    /// Pestaña activa: superficie del lienzo con esquinas superiores redondeadas.
-    fn draw_active_tab_surface(canvas: &mut Canvas, r: Rect, theme: &Theme) {
-        let y = 5;
-        let h = r.3.saturating_sub(y);
-        canvas.rounded_fill(r.0, y, r.2, h, 6, theme.background);
-        // Base cuadrada: la pestaña se funde con el lienzo en el borde inferior.
-        Self::draw_rect(
-            canvas,
-            r.0,
-            y + 6,
-            r.2,
-            h.saturating_sub(6),
-            theme.background,
-        );
+    /// Chip de pestaña dentro de su `tab_rect`, recortado 4 px por arriba y por abajo: la activa lleva
+    /// relleno y contorno; una inactiva solo relleno al pasar el ratón.
+    fn draw_tab_chip(canvas: &mut Canvas, r: Rect, active: bool, hovered: bool, theme: &Theme) {
+        let (x, y, w, h) = (r.0, r.1 + 4, r.2, r.3.saturating_sub(8));
+        if active {
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_bg());
+            canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.card_outline());
+        } else if hovered {
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_hover());
+        }
     }
 
     /// Spinner de ocho segmentos con estela: la pestaña que ejecuta un comando.
@@ -167,11 +163,7 @@ impl TerminalRenderer {
             }
             let is_hovered = hovered_tab == Some(idx);
 
-            if tab.is_active {
-                Self::draw_active_tab_surface(canvas, r, theme);
-            } else if is_hovered {
-                canvas.rounded_fill(r.0, 5, r.2, r.3.saturating_sub(5), 6, theme.surface_hover());
-            }
+            Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
 
             let compact = rects.tab_w < 110;
             let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 18 };
@@ -263,7 +255,7 @@ impl TerminalRenderer {
                         close_r.1,
                         close_r.2,
                         close_r.3,
-                        4,
+                        tokens::RADIUS_ROW,
                         theme.surface_hover(),
                     );
                 }
@@ -293,7 +285,11 @@ impl TerminalRenderer {
             theme,
         );
 
-        // 5. Acciones de la derecha: buscar · panel · ajustes
+        // 5. Acciones de la derecha: buscar · panel · ajustes, separadas de las pestañas por una línea fina.
+        let sep_x = rects.search_btn.0.saturating_sub(8);
+        if sep_x >= rects.plus_btn.0 + rects.plus_btn.2 + 8 {
+            Self::draw_rect(canvas, sep_x, (bar_h - 16) / 2, 1, 16, theme.chrome_line());
+        }
         self.draw_chrome_action(
             canvas,
             rects.search_btn,
