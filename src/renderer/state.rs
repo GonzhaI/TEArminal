@@ -142,12 +142,15 @@ pub(crate) enum EditingSettingField {
     LineSpacing,
     WindowOpacity,
     ThemeSearch,
+    GeneralSearch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SettingsPageState {
     pub section: SettingsSection,
     pub hovered_section: Option<SettingsSection>,
+    pub hovered_search_box: bool,
+    pub search_input: crate::ui::TextInput,
     pub hovered_theme: Option<usize>,
     pub hovered_theme_mode: Option<usize>,
     pub hovered_tab_layout: Option<usize>,
@@ -222,6 +225,7 @@ impl SettingsPageState {
             || self.hovered_ligatures
             || self.hovered_open_file
             || self.hovered_reset_defaults
+            || self.hovered_search_box
             || self.hovered_scrollbar
             || self.hovered_theme_slot.is_some();
         if changed {
@@ -253,6 +257,7 @@ impl SettingsPageState {
             self.hovered_ligatures = false;
             self.hovered_open_file = false;
             self.hovered_reset_defaults = false;
+            self.hovered_search_box = false;
             self.hovered_scrollbar = false;
             self.hovered_theme_slot = None;
         }
@@ -265,6 +270,8 @@ impl Default for SettingsPageState {
         Self {
             section: SettingsSection::Appearance,
             hovered_section: None,
+            hovered_search_box: false,
+            search_input: crate::ui::TextInput::default(),
             hovered_theme: None,
             hovered_theme_mode: None,
             hovered_tab_layout: None,

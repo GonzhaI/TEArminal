@@ -51,7 +51,7 @@ impl TerminalRenderer {
 
         // 2. Cabecera: título, rama y carpeta de la sesión a la vista. El botón «+» abre una sesión nueva.
         let col_x = rail_w + 14;
-        let plus = SidebarRects::plus_btn();
+        let plus = SidebarRects::plus_btn_with_width(sidebar_width);
         // La rama va como píldora alineada a la derecha, junto al «+».
         let chip = header.branch.as_ref().map(|branch| {
             let text_w = self.measure_mono_text(branch, tokens::MICRO + 0.5, false);

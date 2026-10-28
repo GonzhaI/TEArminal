@@ -114,6 +114,26 @@ impl TerminalRenderer {
             }
         }
 
+        // 2b. Micro-herramientas de la cabecera estilo DataGrip (+, colapsar todo, refrescar)
+        let tool_btns = [
+            (tabs.new_btn, crate::ui::LucideIcon::Plus, explorer.hovered_new_btn),
+            (tabs.collapse_btn, crate::ui::LucideIcon::Minus, explorer.hovered_collapse_btn),
+            (tabs.refresh_btn, crate::ui::LucideIcon::RefreshCw, explorer.hovered_refresh_btn),
+        ];
+        for (btn_rect, icon, hovered) in tool_btns {
+            if let Some(r) = btn_rect {
+                if hovered {
+                    canvas.rounded_fill(r.0, r.1, r.2, r.3, tokens::RADIUS_ROW, theme.surface_hover());
+                }
+                let fg = if hovered {
+                    theme.foreground
+                } else {
+                    theme.text_muted()
+                };
+                self.draw_lucide_icon(canvas, icon, r.0 + r.2 / 2, r.1 + r.3 / 2, 11.0, fg);
+            }
+        }
+
         // 3. Lista de elementos (archivos y carpetas), justo bajo la cabecera.
         let list_y = panel_y
             + header_h
@@ -178,6 +198,16 @@ impl TerminalRenderer {
             let item_center_y = item_y + (item_h / 2);
             let item_base = item_center_y + 4;
             let content_x = panel_x + 16 + indent;
+
+            // Guías visuales de sangría estilo DataGrip / JetBrains para niveles anidados
+            if item.depth > 0 {
+                let guide_color = theme.mix(theme.background, theme.foreground, 0.08);
+                let clip = (panel_x, panel_y, panel_w, panel_h);
+                for d in 0..item.depth {
+                    let guide_x = panel_x + 16 + d * 12 + 4;
+                    canvas.fill_rect(clip, guide_x, item_y, 1, item_h, guide_color);
+                }
+            }
 
             // Insignia de Git si el archivo/carpeta tiene estado
             let badge_w = if item.git_status.is_some() { 16 } else { 0 };

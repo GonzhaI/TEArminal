@@ -55,10 +55,15 @@ impl TearminalApp {
                 .is_some_and(|t| t.is_settings)
     }
 
+    /// Ancho actual del panel lateral / explorador de archivos.
+    pub(crate) fn panel_width(&self) -> usize {
+        self.file_explorer.width
+    }
+
     /// X de la ventana donde empieza el panel.
     pub(super) fn panel_x(&self, win_w: usize) -> usize {
         if self.panel_on_right() {
-            win_w.saturating_sub(SIDEBAR_WIDTH)
+            win_w.saturating_sub(self.panel_width())
         } else {
             0
         }
@@ -78,13 +83,14 @@ impl TearminalApp {
             return None;
         }
         let x0 = self.panel_x(win_w);
-        (mx >= x0 && mx < x0 + SIDEBAR_WIDTH).then(|| mx - x0)
+        let pw = self.panel_width();
+        (mx >= x0 && mx < x0 + pw).then(|| mx - x0)
     }
 
     /// Ancho que el panel quita a la derecha cuando va a ese lado (Ajustes lo respeta al centrar su contenido).
     pub(super) fn panel_right_inset(&self) -> usize {
         if self.panel_shown() && self.panel_on_right() {
-            SIDEBAR_WIDTH
+            self.panel_width()
         } else {
             0
         }
@@ -187,14 +193,74 @@ impl TearminalApp {
     pub(super) fn sync_explorer_dock(&mut self, win_w: usize, win_h: usize) {
         self.file_explorer.dock = if self.panel_shown() && self.file_explorer.visible {
             let usable_h = win_h.saturating_sub(self.status_bar_height());
+            let pw = self.panel_width();
             let (x, y, w, h) = if self.is_horizontal_tabs() {
-                FilesPanelRects::explorer_rect(usable_h)
+                FilesPanelRects::explorer_rect_with_width(pw, usable_h)
             } else {
-                SidebarRects::explorer_rect_after(usable_h, self.panel_list_end(usable_h))
+                SidebarRects::explorer_rect_after_with_width(pw, usable_h, self.panel_list_end(usable_h))
             };
             Some((self.panel_x(win_w) + x, y, w, h))
         } else {
             None
         };
+    }
+
+    /// ¿Está el ratón `(mx, my)` sobre el borde que separa el panel / explorador de archivos y la terminal?
+    pub(crate) fn on_panel_resize_edge(
+        &self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
+        if self.tabs.get(self.active_tab_index).is_some_and(|t| t.is_settings) {
+            return false;
+        }
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
+        let usable_h = win_h.saturating_sub(status_bar_h);
+        if my < top_offset || my >= usable_h {
+            return false;
+        }
+
+        if self.panel_shown() {
+            let pw = self.panel_width();
+            let edge_x = if self.panel_on_right() {
+                win_w.saturating_sub(pw)
+            } else {
+                pw
+            };
+            mx + 6 >= edge_x && mx <= edge_x + 5
+        } else if self.file_explorer.visible {
+            self.file_explorer.on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
+        } else {
+            false
+        }
+    }
+
+    /// Redimensiona el ancho del panel / explorador de archivos al arrastrar su borde con el ratón.
+    pub(crate) fn resize_panel_from_mouse(&mut self, mx: usize, win_w: usize) {
+        let on_right = if self.panel_shown() {
+            self.panel_on_right()
+        } else {
+            true
+        };
+        let new_w = if on_right {
+            win_w.saturating_sub(mx)
+        } else {
+            mx
+        };
+        self.file_explorer.width = crate::explorer::FileExplorer::clamp_width(new_w, win_w);
+        if let Some(ref mut cfg_pw) = self.config.appearance.panel_width {
+            *cfg_pw = self.file_explorer.width;
+        }
+        if self.panel_shown() {
+            let win_h = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size().height as usize)
+                .unwrap_or(800);
+            self.sync_explorer_dock(win_w, win_h);
+        }
     }
 }

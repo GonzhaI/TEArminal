@@ -39,6 +39,14 @@ pub(crate) struct AppearanceConfig {
     /// Muestra las dimensiones de la rejilla (columnas × filas) en la esquina inferior derecha.
     #[serde(default = "default_false")]
     pub(crate) show_dimensions: bool,
+    /// Ancho del panel lateral / explorador de archivos (en píxeles)
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "file_explorer_width",
+        alias = "explorer_width"
+    )]
+    pub(crate) panel_width: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -173,6 +181,7 @@ impl Default for TearminalConfig {
                 show_file_explorer: false,
                 panel_side: default_panel_side(),
                 show_dimensions: false,
+                panel_width: None,
             },
             terminal: TerminalConfig {
                 default_shell: shell,

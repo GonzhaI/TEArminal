@@ -521,6 +521,8 @@ impl TearminalApp {
             app.file_explorer.width = s
                 .file_explorer_width
                 .max(crate::explorer::FILE_EXPLORER_MIN_WIDTH);
+        } else if let Some(w) = app.config.appearance.panel_width {
+            app.file_explorer.width = w.max(crate::explorer::FILE_EXPLORER_MIN_WIDTH);
         }
         app
     }
@@ -570,8 +572,13 @@ impl TearminalApp {
             explorer_visible
         };
         let next_tab_id = TabId(tabs.len());
-        let file_explorer =
+        let mut file_explorer =
             crate::explorer::FileExplorer::new(std::env::current_dir().ok(), explorer_visible);
+        if let Some(w) = config.appearance.panel_width {
+            file_explorer.width = w.max(crate::explorer::FILE_EXPLORER_MIN_WIDTH);
+        } else {
+            file_explorer.width = SIDEBAR_WIDTH;
+        }
         let clipboard = arboard::Clipboard::new().ok();
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
         Self {
@@ -789,9 +796,9 @@ impl TearminalApp {
         };
         let (left, right) = if self.sidebar_visible {
             if self.panel_on_right() {
-                (0, SIDEBAR_WIDTH)
+                (0, self.panel_width())
             } else {
-                (SIDEBAR_WIDTH, 0)
+                (self.panel_width(), 0)
             }
         } else if self.file_explorer.visible {
             (0, self.file_explorer.width)
@@ -804,7 +811,7 @@ impl TearminalApp {
     /// Espacio que el panel lateral quita al contenido por la izquierda.
     pub(crate) fn sidebar_offset(&self) -> usize {
         if self.panel_shown() && !self.panel_on_right() {
-            SIDEBAR_WIDTH
+            self.panel_width()
         } else {
             0
         }
@@ -839,7 +846,7 @@ impl TearminalApp {
         }
         if self.panel_shown() {
             return if self.panel_on_right() {
-                SIDEBAR_WIDTH
+                self.panel_width()
             } else {
                 0
             };

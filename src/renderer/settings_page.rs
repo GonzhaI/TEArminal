@@ -405,6 +405,71 @@ impl TerminalRenderer {
             false,
         );
 
+        // Barra de búsqueda rápida de ajustes estilo JetBrains / DataGrip
+        let sb = rects.search_box;
+        let is_searching = state.editing_setting == Some(EditingSettingField::GeneralSearch);
+        let sb_bg = if is_searching || state.hovered_search_box {
+            theme.surface_hover()
+        } else {
+            theme.mix(theme.background, theme.foreground, 0.05)
+        };
+        canvas.rounded_fill(sb.0, sb.1, sb.2, sb.3, tokens::RADIUS_ROW, sb_bg);
+        let sb_border = if is_searching {
+            theme.accent_color()
+        } else if state.hovered_search_box {
+            theme.chrome_line_strong()
+        } else {
+            theme.chrome_line()
+        };
+        canvas.rounded_stroke(sb.0, sb.1, sb.2, sb.3, tokens::RADIUS_ROW, sb_border);
+
+        let icon_c = if is_searching {
+            theme.accent_color()
+        } else {
+            theme.text_muted()
+        };
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Search,
+            sb.0 + 14,
+            sb.1 + sb.3 / 2,
+            11.5,
+            icon_c,
+        );
+
+        let sb_text_x = sb.0 + 28;
+        let sb_text_y = sb.1 + sb.3 / 2 + 4;
+        let query = &state.search_input.text;
+        if query.is_empty() {
+            self.draw_ui_text(
+                canvas,
+                "Buscar ajustes...",
+                sb_text_x,
+                sb_text_y,
+                sb.0 + sb.2.saturating_sub(8),
+                theme.text_muted(),
+                tokens::DETAIL,
+                false,
+            );
+        } else {
+            let cursor_str = if is_searching && cursor_visible {
+                "|"
+            } else {
+                ""
+            };
+            let disp = format!("{query}{cursor_str}");
+            self.draw_ui_text(
+                canvas,
+                &disp,
+                sb_text_x,
+                sb_text_y,
+                sb.0 + sb.2.saturating_sub(8),
+                theme.foreground,
+                tokens::BODY,
+                false,
+            );
+        }
+
         Self::draw_rect(
             canvas,
             content_x,

@@ -31,6 +31,7 @@ struct SceneParams<'a> {
     tab_items: &'a [SidebarTabItem],
     header: &'a SidebarHeader,
     panel_right: bool,
+    panel_width: usize,
 }
 
 impl TearminalApp {
@@ -65,6 +66,7 @@ impl TearminalApp {
         let hovered_toggle_btn = self.hovered_toggle_btn;
         let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
         let panel_right = self.panel_on_right();
+        let panel_width = self.panel_width();
 
         // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
         for t in &mut self.tabs {
@@ -162,6 +164,7 @@ impl TearminalApp {
             tab_items: &tab_items,
             header: &header,
             panel_right,
+            panel_width,
         };
 
         self.canvas.begin(size.width, size.height);
@@ -270,7 +273,7 @@ fn draw_full_scene(
             canvas,
             p.offset,
             if p.panel_right && p.sidebar_visible {
-                SIDEBAR_WIDTH
+                p.panel_width
             } else {
                 0
             },
@@ -530,13 +533,15 @@ pub(super) fn card_regions(
 ) -> CardRegions {
     let usable = height.saturating_sub(status_bar_h);
     let top = SidebarRects::TOP;
+    let panel_w = if panel_right { right_offset } else { offset };
+    let panel_w = if panel_w > 0 { panel_w } else { SIDEBAR_WIDTH };
     let panel = panel_visible.then(|| {
         let x0 = if panel_right {
-            width.saturating_sub(SIDEBAR_WIDTH)
+            width.saturating_sub(panel_w)
         } else {
             0
         };
-        (x0, top, SIDEBAR_WIDTH, usable.saturating_sub(top))
+        (x0, top, panel_w, usable.saturating_sub(top))
     });
     let stretch = if panel_visible {
         SidebarRects::CARD_INSET
@@ -568,12 +573,13 @@ fn draw_panel(
     width: usize,
     height: usize,
 ) {
+    let panel_w = p.panel_width;
     macro_rules! render {
         ($canvas:expr) => {
             if p.is_horizontal {
                 renderer.render_files_panel(
                     $canvas,
-                    SIDEBAR_WIDTH,
+                    panel_w,
                     p.status_bar_h,
                     p.header.on_right,
                     theme,
@@ -581,7 +587,7 @@ fn draw_panel(
             } else {
                 renderer.render_sidebar(
                     $canvas,
-                    SIDEBAR_WIDTH,
+                    panel_w,
                     p.status_bar_h,
                     p.header,
                     p.tab_items,
@@ -600,22 +606,22 @@ fn draw_panel(
         render!(canvas);
         return;
     }
-    let x0 = width.saturating_sub(SIDEBAR_WIDTH);
+    let x0 = width.saturating_sub(panel_w);
     let usable = height.saturating_sub(p.status_bar_h);
     let top = SidebarRects::TOP;
     canvas.fill_rect(
         (0, 0, width, height),
         x0,
         top,
-        SIDEBAR_WIDTH,
+        panel_w,
         usable.saturating_sub(top),
         theme.background,
     );
     canvas.with_offset(
         x0 as i32,
         0,
-        (SIDEBAR_WIDTH, height),
-        (x0, top, x0 + SIDEBAR_WIDTH, usable),
+        (panel_w, height),
+        (x0, top, x0 + panel_w, usable),
         |c| render!(c),
     );
 }

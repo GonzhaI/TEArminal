@@ -257,6 +257,7 @@ pub(crate) struct SettingsPageRects {
     pub ligatures_btn: (usize, usize, usize, usize),
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
+    pub search_box: (usize, usize, usize, usize),
     pub term_reset_btn: (usize, usize, usize, usize),
     /// Acciones editoriales de «Acerca de» (no comparten rectángulo con Terminal)
     pub about_open_file_btn: (usize, usize, usize, usize),
@@ -328,7 +329,15 @@ impl SettingsPageRects {
             side_padding
         };
         let content_x = page_x + margin_x;
-        let reset_defaults_btn = (content_x + card_w.saturating_sub(180), page_y + 26, 180, 30);
+        let search_w = 200.min(card_w / 3);
+        let reset_w = 150;
+        let reset_defaults_btn = (content_x + card_w.saturating_sub(reset_w), page_y + 26, reset_w, 30);
+        let search_box = (
+            reset_defaults_btn.0.saturating_sub(search_w + 12),
+            page_y + 26,
+            search_w,
+            30,
+        );
 
         let nav_y = page_y + 92;
         let nav_h = 34;
@@ -488,6 +497,7 @@ impl SettingsPageRects {
             ligatures_btn,
             open_file_btn,
             reset_defaults_btn,
+            search_box,
             term_reset_btn,
             about_open_file_btn,
             about_reset_btn,
@@ -680,10 +690,17 @@ impl SidebarRects {
     pub(crate) const CLOSE_SIZE: usize = 24;
     pub(crate) const PLUS_SIZE: usize = 28;
 
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn plus_btn() -> Rect {
+        Self::plus_btn_with_width(Self::WIDTH)
+    }
+
+    /// Rectángulo del botón «+» para un ancho de panel dado.
+    #[inline]
+    pub(crate) fn plus_btn_with_width(panel_w: usize) -> Rect {
         (
-            Self::WIDTH - Self::PLUS_SIZE - 10,
+            panel_w.saturating_sub(Self::PLUS_SIZE + 10),
             Self::TOP + 8,
             Self::PLUS_SIZE,
             Self::PLUS_SIZE,
@@ -708,14 +725,24 @@ impl SidebarRects {
     }
 
     /// Rectángulo del explorador alojado bajo la lista de sesiones.
+    #[allow(dead_code)]
     pub(crate) fn explorer_rect_after(usable_h: usize, list_end: usize) -> Rect {
+        Self::explorer_rect_after_with_width(Self::WIDTH, usable_h, list_end)
+    }
+
+    /// Rectángulo del explorador alojado bajo la lista de sesiones para un ancho de panel dado.
+    pub(crate) fn explorer_rect_after_with_width(
+        panel_w: usize,
+        usable_h: usize,
+        list_end: usize,
+    ) -> Rect {
         let top = list_end + 8;
         let bottom = Self::content_bottom(usable_h);
         (
             Self::RAIL_W,
             top,
             // Termina en el borde interior de la tarjeta del panel, no bajo su margen.
-            Self::WIDTH - Self::RAIL_W - Self::CARD_INSET,
+            panel_w.saturating_sub(Self::RAIL_W + Self::CARD_INSET),
             bottom.saturating_sub(top),
         )
     }
@@ -754,12 +781,19 @@ impl SidebarRects {
     }
 
     /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn tab_rect(idx: usize, scroll_offset: usize) -> Rect {
+        Self::tab_rect_with_width(idx, scroll_offset, Self::WIDTH)
+    }
+
+    /// Rectángulo de la fila `idx` de la lista para un ancho de panel dado.
+    #[inline]
+    pub(crate) fn tab_rect_with_width(idx: usize, scroll_offset: usize, panel_w: usize) -> Rect {
         (
             Self::PAD_X,
             Self::row_y(idx.saturating_sub(scroll_offset)),
-            Self::WIDTH - Self::PAD_X - Self::ROW_PAD_R,
+            panel_w.saturating_sub(Self::PAD_X + Self::ROW_PAD_R),
             Self::TAB_ITEM_H,
         )
     }
@@ -860,14 +894,20 @@ pub(crate) struct FilesPanelRects;
 
 impl FilesPanelRects {
     /// Rectángulo del explorador alojado: el interior de la tarjeta del panel (sin su margen), hasta el fondo.
+    #[allow(dead_code)]
     pub(crate) fn explorer_rect(usable_h: usize) -> Rect {
+        Self::explorer_rect_with_width(SidebarRects::WIDTH, usable_h)
+    }
+
+    /// Rectángulo del explorador alojado para un ancho de panel dado.
+    pub(crate) fn explorer_rect_with_width(panel_w: usize, usable_h: usize) -> Rect {
         let inset = SidebarRects::CARD_INSET;
         let top = SidebarRects::TOP + inset;
         let bottom = SidebarRects::content_bottom(usable_h);
         (
             inset,
             top,
-            SidebarRects::WIDTH - 2 * inset,
+            panel_w.saturating_sub(2 * inset),
             bottom.saturating_sub(top),
         )
     }
@@ -1100,23 +1140,53 @@ impl SettingsPageRects {
     }
 }
 
-/// Pestañas «Archivos» · «Cambios» que encabezan el explorador: dos mitades iguales con el margen
-/// de la tarjeta del panel. La comparten dibujo, clic y hover.
+/// Pestañas «Archivos» · «Cambios» y micro-herramientas que encabezan el explorador estilo DataGrip.
+/// La comparten dibujo, clic y hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct ExplorerTabsRects {
     pub(crate) files: Rect,
     pub(crate) changes: Rect,
+    pub(crate) new_btn: Option<Rect>,
+    pub(crate) collapse_btn: Option<Rect>,
+    pub(crate) refresh_btn: Option<Rect>,
 }
 
 impl ExplorerTabsRects {
     #[allow(dead_code)]
     pub(crate) fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
-        let inner = panel_w.saturating_sub(16);
+        let btn_size = 20;
+        let btn_y = panel_y + (header_h.saturating_sub(btn_size)) / 2;
+        // Si hay espacio suficiente (ancho >= 220), colocamos la barra de herramientas a la derecha
+        let (toolbar_w, new_btn, collapse_btn, refresh_btn) = if panel_w >= 220 {
+            let right_pad = 8;
+            let gap = 3;
+            let ref_x = panel_x + panel_w.saturating_sub(right_pad + btn_size);
+            let col_x = ref_x.saturating_sub(btn_size + gap);
+            let new_x = col_x.saturating_sub(btn_size + gap);
+            (
+                btn_size * 3 + gap * 2 + right_pad,
+                Some((new_x, btn_y, btn_size, btn_size)),
+                Some((col_x, btn_y, btn_size, btn_size)),
+                Some((ref_x, btn_y, btn_size, btn_size)),
+            )
+        } else {
+            (0, None, None, None)
+        };
+
+        let inner = panel_w.saturating_sub(16 + toolbar_w);
         let half = inner / 2;
         Self {
             files: (panel_x + 8, panel_y, half, header_h),
-            changes: (panel_x + 8 + half, panel_y, inner - half, header_h),
+            changes: (panel_x + 8 + half, panel_y, inner.saturating_sub(half), header_h),
+            new_btn,
+            collapse_btn,
+            refresh_btn,
         }
+    }
+
+    #[inline]
+    pub(crate) fn inside_opt(mx: usize, my: usize, r: Option<Rect>) -> bool {
+        r.is_some_and(|r| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3)
     }
 
     /// `Some(true)` sobre «Cambios», `Some(false)` sobre «Archivos».

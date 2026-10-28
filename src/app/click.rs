@@ -486,8 +486,10 @@ impl TearminalApp {
                         return;
                     }
 
+                    let pw = self.panel_width();
+
                     // Clic en botón "+"
-                    let plus = crate::renderer::SidebarRects::plus_btn();
+                    let plus = crate::renderer::SidebarRects::plus_btn_with_width(pw);
                     if TopTabBarRects::inside(mx, my, plus) {
                         crate::logger::log("-> Clic en [+] sidebar: nueva terminal");
                         self.create_new_tab();
@@ -496,12 +498,12 @@ impl TearminalApp {
 
                     // Clic en la barra de desplazamiento de la barra lateral vertical
                     if let Some((track, thumb)) = TerminalRenderer::sidebar_scrollbar_geometry(
-                        SIDEBAR_WIDTH,
+                        pw,
                         list_end,
                         self.tabs.len(),
                         self.sidebar_scroll_offset,
                     ) {
-                        if crate::renderer::ScrollbarRects::hit(track, SIDEBAR_WIDTH, mx, my) {
+                        if crate::renderer::ScrollbarRects::hit(track, pw, mx, my) {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
                                 self.sidebar_scrollbar_dragging = true;
                                 self.sidebar_scrollbar_drag_offset_y = (my - thumb.1) as f32;
@@ -529,9 +531,10 @@ impl TearminalApp {
 
                     // Clic en pestañas o botón cerrar "x" (misma retícula que el dibujo y el hover)
                     if let Some(tab_idx) = self.panel_tab_at(my, usable_h) {
-                        let row = crate::renderer::SidebarRects::tab_rect(
+                        let row = crate::renderer::SidebarRects::tab_rect_with_width(
                             tab_idx,
                             self.sidebar_scroll_offset,
+                            pw,
                         );
                         if crate::renderer::SidebarRects::inside(mx, my, row) {
                             if button == MouseButton::Middle {
@@ -605,6 +608,18 @@ impl TearminalApp {
                 if SettingsPageRects::inside(mx, my, rects.reset_defaults_btn) {
                     crate::logger::log("-> Clic en restablecer valores por defecto (Header)");
                     self.reset_to_defaults();
+                    return;
+                }
+
+                // Buscador rápido de ajustes estilo JetBrains
+                if SettingsPageRects::inside(mx, my, rects.search_box) {
+                    self.settings_page_state.editing_setting =
+                        Some(crate::renderer::EditingSettingField::GeneralSearch);
+                    self.cursor_on = true;
+                    self.cursor_timer = Instant::now();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
                     return;
                 }
 
@@ -869,15 +884,13 @@ impl TearminalApp {
             return;
         }
 
-        // Clics dentro del panel del explorador lateral de archivos (a la derecha)
-        if self.file_explorer.visible && !is_settings_active {
+        // Clics dentro del panel del explorador lateral de archivos / barra lateral
+        if (self.file_explorer.visible || self.panel_shown()) && !is_settings_active {
             let top_offset = self.top_offset();
             let status_bar_h = self.status_bar_height();
             if state == ElementState::Pressed
                 && button == MouseButton::Left
-                && self
-                    .file_explorer
-                    .on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
+                && self.on_panel_resize_edge(mx, my, win_w, win_h)
             {
                 self.explorer_resizing = true;
                 return;
@@ -900,6 +913,62 @@ impl TearminalApp {
                             self.file_explorer.toggle_changes_only();
                         }
                         self.last_explorer_click_idx = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+
+                    // Micro-herramientas de la cabecera del explorador (+, colapsar todo, refrescar)
+                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.refresh_btn) {
+                        self.file_explorer.is_focused = true;
+                        self.file_explorer.refresh();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.collapse_btn) {
+                        self.file_explorer.is_focused = true;
+                        self.file_explorer.collapse_all();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.new_btn) {
+                        self.file_explorer.is_focused = true;
+                        let base_dir = self
+                            .file_explorer
+                            .selected_index
+                            .and_then(|idx| self.file_explorer.items.get(idx))
+                            .map(|it| {
+                                if it.is_dir {
+                                    it.path.clone()
+                                } else {
+                                    it.path
+                                        .parent()
+                                        .unwrap_or(&self.file_explorer.root_dir)
+                                        .to_path_buf()
+                                }
+                            })
+                            .unwrap_or_else(|| self.file_explorer.root_dir.clone());
+                        let mut counter = 0;
+                        let target = loop {
+                            let name = if counter == 0 {
+                                "nuevo.txt".to_string()
+                            } else {
+                                format!("nuevo_{counter}.txt")
+                            };
+                            let p = base_dir.join(name);
+                            if !p.exists() {
+                                break p;
+                            }
+                            counter += 1;
+                        };
+                        let _ = std::fs::write(&target, "");
+                        self.file_explorer.refresh();
+                        self.open_file_in_viewer(&target, true);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }

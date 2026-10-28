@@ -210,6 +210,9 @@ pub(crate) struct FileExplorer {
     pub changes_only: bool,
     /// Pestaña bajo el ratón: `Some(true)` «Cambios», `Some(false)` «Archivos».
     pub hovered_tab: Option<bool>,
+    pub hovered_refresh_btn: bool,
+    pub hovered_collapse_btn: bool,
+    pub hovered_new_btn: bool,
     /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
     pub is_pinned: bool,
     pub hovered_pin_btn: bool,
@@ -294,6 +297,7 @@ impl FileExplorer {
     }
 
     /// Ancho que deja el borde izquierdo del panel bajo el ratón en `mx`
+    #[allow(dead_code)]
     pub(crate) fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
         self.width = Self::clamp_width(win_w.saturating_sub(mx), win_w);
     }
@@ -353,6 +357,9 @@ impl FileExplorer {
             git_root: None,
             changes_only: false,
             hovered_tab: None,
+            hovered_refresh_btn: false,
+            hovered_collapse_btn: false,
+            hovered_new_btn: false,
             is_pinned: false,
             hovered_pin_btn: false,
             remote_session: None,

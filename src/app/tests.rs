@@ -2545,3 +2545,73 @@ fn test_card_regions_panel_is_a_card_in_every_layout() {
     assert_eq!(r.panel, None);
     assert_eq!(r.content, (0, top, w, usable - top));
 }
+
+#[test]
+fn test_panel_resize_edge_detection_and_mouse_drag_on_both_sides() {
+    use crate::explorer::FILE_EXPLORER_MIN_WIDTH;
+
+    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
+    app.sidebar_visible = true;
+    let (win_w, win_h) = (1200, 800);
+
+    // 1. Panel a la izquierda (por defecto)
+    app.config.appearance.panel_side = "left".to_string();
+    let initial_w = app.panel_width();
+    assert_eq!(initial_w, SIDEBAR_WIDTH);
+
+    // Detección del borde de redimensionado en x = panel_width (±5 px)
+    assert!(app.on_panel_resize_edge(initial_w, 200, win_w, win_h));
+    assert!(app.on_panel_resize_edge(initial_w - 3, 200, win_w, win_h));
+    assert!(app.on_panel_resize_edge(initial_w + 3, 200, win_w, win_h));
+    assert!(!app.on_panel_resize_edge(initial_w + 30, 200, win_w, win_h));
+    assert!(!app.on_panel_resize_edge(initial_w - 30, 200, win_w, win_h));
+
+    // Arrastrar el borde hacia la derecha ensancha el panel
+    app.resize_panel_from_mouse(400, win_w);
+    assert_eq!(app.panel_width(), 400);
+    assert_eq!(app.sidebar_offset(), 400);
+
+    // Geometría dinámica del panel para dibujo y clics
+    let plus_btn = crate::renderer::SidebarRects::plus_btn_with_width(400);
+    assert_eq!(plus_btn.0, 400 - crate::renderer::SidebarRects::PLUS_SIZE - 10);
+    let tab_rect = crate::renderer::SidebarRects::tab_rect_with_width(0, 0, 400);
+    assert_eq!(
+        tab_rect.2,
+        400 - crate::renderer::SidebarRects::PAD_X - crate::renderer::SidebarRects::ROW_PAD_R
+    );
+
+    // Límites de acotado
+    app.resize_panel_from_mouse(50, win_w);
+    assert_eq!(app.panel_width(), FILE_EXPLORER_MIN_WIDTH);
+
+    app.resize_panel_from_mouse(1000, win_w);
+    assert_eq!(app.panel_width(), win_w / 2);
+
+    // 2. Panel a la derecha
+    app.config.appearance.panel_side = "right".to_string();
+    app.file_explorer.width = 300;
+    let edge_x = win_w - 300;
+
+    assert!(app.on_panel_resize_edge(edge_x, 200, win_w, win_h));
+    assert!(app.on_panel_resize_edge(edge_x - 3, 200, win_w, win_h));
+    assert!(app.on_panel_resize_edge(edge_x + 3, 200, win_w, win_h));
+    assert!(!app.on_panel_resize_edge(edge_x - 30, 200, win_w, win_h));
+
+    // Arrastrar a la izquierda ensancha el panel derecho (win_w - mx)
+    app.resize_panel_from_mouse(win_w - 450, win_w);
+    assert_eq!(app.panel_width(), 450);
+    assert_eq!(app.file_explorer_offset(), 450);
+}
+
+#[test]
+fn test_panel_width_config_and_session() {
+    let mut cfg = TearminalConfig::default();
+    cfg.appearance.panel_width = Some(360);
+
+    let toml_str = toml::to_string(&cfg).unwrap();
+    let loaded: TearminalConfig = toml::from_str(&toml_str).unwrap();
+    assert_eq!(loaded.appearance.panel_width, Some(360));
+
+    let app = TearminalApp::new(loaded, None);
+    assert_eq!(app.panel_width(), 360);
+}

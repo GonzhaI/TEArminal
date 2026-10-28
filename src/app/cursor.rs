@@ -71,8 +71,9 @@ impl TearminalApp {
             let usable_h = win_h.saturating_sub(status_bar_h);
             let list_len = self.tabs.len();
             let list_end = self.panel_list_end(usable_h);
+            let pw = self.panel_width();
             if let Some((track, thumb)) = TerminalRenderer::sidebar_scrollbar_geometry(
-                SIDEBAR_WIDTH,
+                pw,
                 list_end,
                 list_len,
                 self.sidebar_scroll_offset,
@@ -227,9 +228,9 @@ impl TearminalApp {
             return;
         }
 
-        // Arrastre del borde izquierdo del explorador: el PTY se redimensiona al soltar o al detenerse
+        // Arrastre del borde del explorador / panel: el PTY se redimensiona al soltar o al detenerse
         if self.explorer_resizing {
-            self.file_explorer.set_width_from_edge(mx, win_w);
+            self.resize_panel_from_mouse(mx, win_w);
             self.schedule_pty_resize();
             if let Some(w) = &self.window {
                 w.set_cursor(winit::window::CursorIcon::ColResize);
@@ -486,15 +487,16 @@ impl TearminalApp {
             }
 
             if self.sidebar_visible {
+                let pw = self.panel_width();
                 let is_over_sidebar_sb = if let Some((track, _)) =
                     TerminalRenderer::sidebar_scrollbar_geometry(
-                        SIDEBAR_WIDTH,
+                        pw,
                         list_end,
                         self.tabs.len(),
                         self.sidebar_scroll_offset,
                     ) {
                     local.is_some_and(|lx| {
-                        crate::renderer::ScrollbarRects::hit(track, SIDEBAR_WIDTH, lx, my)
+                        crate::renderer::ScrollbarRects::hit(track, pw, lx, my)
                     })
                 } else {
                     false
@@ -512,11 +514,12 @@ impl TearminalApp {
             if let (true, Some(lx)) = (self.sidebar_visible, local) {
                 // Dentro del panel todas las coordenadas son locales a él
                 let mx = lx;
+                let pw = self.panel_width();
                 // Hover en botón "+"
                 let is_new_tab = crate::renderer::SidebarRects::inside(
                     mx,
                     my,
-                    crate::renderer::SidebarRects::plus_btn(),
+                    crate::renderer::SidebarRects::plus_btn_with_width(pw),
                 );
                 if is_new_tab {
                     is_pointer = true;
@@ -531,9 +534,10 @@ impl TearminalApp {
                 let mut new_hovered_close = None;
 
                 if let Some(tab_idx) = self.panel_tab_at(my, usable_h) {
-                    let row = crate::renderer::SidebarRects::tab_rect(
+                    let row = crate::renderer::SidebarRects::tab_rect_with_width(
                         tab_idx,
                         self.sidebar_scroll_offset,
+                        pw,
                     );
                     if crate::renderer::SidebarRects::inside(mx, my, row) {
                         new_hovered_tab = Some(tab_idx);
@@ -638,6 +642,10 @@ impl TearminalApp {
             let mut h_lig = false;
             let mut h_of = false;
             let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
+            let h_search = SettingsPageRects::inside(mx, my, rects.search_box);
+            if h_search {
+                is_text = true;
+            }
 
             match self.settings_page_state.section {
                 SettingsSection::Appearance => {
@@ -775,6 +783,7 @@ impl TearminalApp {
                 || st.hovered_ligatures != h_lig
                 || st.hovered_open_file != h_of
                 || st.hovered_reset_defaults != h_reset
+                || st.hovered_search_box != h_search
             {
                 st.hovered_section = h_sec;
                 st.hovered_theme = h_theme;
@@ -805,6 +814,7 @@ impl TearminalApp {
                 st.hovered_ligatures = h_lig;
                 st.hovered_open_file = h_of;
                 st.hovered_reset_defaults = h_reset;
+                st.hovered_search_box = h_search;
                 needs_redraw = true;
             }
         } else if is_settings_active && self.settings_page_state.clear_hover() {
@@ -830,18 +840,29 @@ impl TearminalApp {
                 } else {
                     false
                 };
-                let hovered_tab = crate::renderer::ExplorerTabsRects::compute(
+                let tabs_rects = crate::renderer::ExplorerTabsRects::compute(
                     panel_x,
                     panel_y,
                     panel_w,
                     crate::explorer::FileExplorer::HEADER_HEIGHT,
-                )
-                .tab_at(mx, my);
-                if self.file_explorer.hovered_tab != hovered_tab {
+                );
+                let hovered_tab = tabs_rects.tab_at(mx, my);
+                let h_refresh = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.refresh_btn);
+                let h_collapse = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.collapse_btn);
+                let h_new = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.new_btn);
+
+                if self.file_explorer.hovered_tab != hovered_tab
+                    || self.file_explorer.hovered_refresh_btn != h_refresh
+                    || self.file_explorer.hovered_collapse_btn != h_collapse
+                    || self.file_explorer.hovered_new_btn != h_new
+                {
                     self.file_explorer.hovered_tab = hovered_tab;
+                    self.file_explorer.hovered_refresh_btn = h_refresh;
+                    self.file_explorer.hovered_collapse_btn = h_collapse;
+                    self.file_explorer.hovered_new_btn = h_new;
                     needs_redraw = true;
                 }
-                is_pointer |= is_over_scrollbar || hovered_tab.is_some();
+                is_pointer |= is_over_scrollbar || hovered_tab.is_some() || h_refresh || h_collapse || h_new;
 
                 let item_hover = if is_over_scrollbar {
                     None
@@ -863,10 +884,16 @@ impl TearminalApp {
             } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
                 || self.file_explorer.hovered_tab.is_some()
+                || self.file_explorer.hovered_refresh_btn
+                || self.file_explorer.hovered_collapse_btn
+                || self.file_explorer.hovered_new_btn
             {
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
                 self.file_explorer.hovered_tab = None;
+                self.file_explorer.hovered_refresh_btn = false;
+                self.file_explorer.hovered_collapse_btn = false;
+                self.file_explorer.hovered_new_btn = false;
                 needs_redraw = true;
             }
         }
@@ -1438,14 +1465,7 @@ impl TearminalApp {
 
         let divider_cursor = self.divider_at(mx, my).map(|d| d.cursor_icon());
         let explorer_edge_cursor = (!is_settings_active
-            && self.file_explorer.on_resize_edge(
-                mx,
-                my,
-                win_w,
-                win_h,
-                top_offset,
-                self.status_bar_height(),
-            ))
+            && self.on_panel_resize_edge(mx, my, win_w, win_h))
         .then_some(winit::window::CursorIcon::ColResize);
         let cursor_icon = if let Some(resize_cur) = border_resize_cursor
             .or(explorer_edge_cursor)

@@ -193,6 +193,92 @@ impl TearminalApp {
         st.theme_scroll = 0;
     }
 
+    /// Teclado del buscador general de ajustes estilo JetBrains / DataGrip.
+    pub(super) fn edit_general_settings_search(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: Option<&str>,
+    ) {
+        match logical_key {
+            Key::Named(NamedKey::Enter) => {
+                self.settings_page_state.editing_setting = None;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.settings_page_state.editing_setting = None;
+                self.settings_page_state.search_input.clear();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            _ => {
+                let mut input = std::mem::take(&mut self.settings_page_state.search_input);
+                let (_consumed, changed) =
+                    self.handle_text_input_key(&mut input, logical_key, physical_key, text);
+                self.settings_page_state.search_input = input;
+                if changed {
+                    let q = self.settings_page_state.search_input.text().to_lowercase();
+                    if !q.is_empty() {
+                        if q.contains("tema")
+                            || q.contains("color")
+                            || q.contains("oscuro")
+                            || q.contains("claro")
+                            || q.contains("sistema")
+                            || q.contains("pestaña")
+                            || q.contains("panel")
+                            || q.contains("opacid")
+                            || q.contains("fuente")
+                            || q.contains("espaci")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Appearance;
+                        } else if q.contains("term")
+                            || q.contains("shell")
+                            || q.contains("cursor")
+                            || q.contains("copi")
+                            || q.contains("barra")
+                            || q.contains("explor")
+                            || q.contains("sesi")
+                            || q.contains("guard")
+                            || q.contains("ajust")
+                            || q.contains("ssh")
+                            || q.contains("ligat")
+                            || q.contains("archiv")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Terminal;
+                        } else if q.contains("ataj")
+                            || q.contains("ctrl")
+                            || q.contains("alt")
+                            || q.contains("shift")
+                            || q.contains("tecl")
+                            || q.contains("divid")
+                            || q.contains("zoom")
+                            || q.contains("palet")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Shortcuts;
+                        } else if q.contains("acerc")
+                            || q.contains("version")
+                            || q.contains("versión")
+                            || q.contains("updat")
+                            || q.contains("actualiz")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::About;
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+        }
+    }
+
     /// Recalcula el tema activo (modo + tema de Windows) y lo aplica a ventana y paneles.
     pub(super) fn apply_active_theme(&mut self) {
         self.system_light = crate::theme::is_windows_system_light_mode();

@@ -170,6 +170,10 @@ impl TearminalApp {
                 self.edit_theme_search(&logical_key, physical_key, text.as_deref());
                 return;
             }
+            if self.settings_page_state.editing_setting == Some(EditingSettingField::GeneralSearch) {
+                self.edit_general_settings_search(&logical_key, physical_key, text.as_deref());
+                return;
+            }
             // Edición inline de campo numérico
             if let Some(editing_field) = self.settings_page_state.editing_setting {
                 match &logical_key {
@@ -202,7 +206,7 @@ impl TearminalApp {
                                     let _ = self.config.save();
                                 }
                             }
-                            EditingSettingField::ThemeSearch => {}
+                            EditingSettingField::ThemeSearch | EditingSettingField::GeneralSearch => {}
                             EditingSettingField::WindowOpacity => {
                                 if let Ok(mut val) = input.parse::<f32>() {
                                     if val > 1.0 {
