@@ -197,7 +197,11 @@ impl TearminalApp {
             let (x, y, w, h) = if self.is_horizontal_tabs() {
                 FilesPanelRects::explorer_rect_with_width(pw, usable_h)
             } else {
-                SidebarRects::explorer_rect_after_with_width(pw, usable_h, self.panel_list_end(usable_h))
+                SidebarRects::explorer_rect_after_with_width(
+                    pw,
+                    usable_h,
+                    self.panel_list_end(usable_h),
+                )
             };
             Some((self.panel_x(win_w) + x, y, w, h))
         } else {
@@ -213,7 +217,11 @@ impl TearminalApp {
         win_w: usize,
         win_h: usize,
     ) -> bool {
-        if self.tabs.get(self.active_tab_index).is_some_and(|t| t.is_settings) {
+        if self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(|t| t.is_settings)
+        {
             return false;
         }
         let top_offset = self.top_offset();
@@ -232,7 +240,8 @@ impl TearminalApp {
             };
             mx + 6 >= edge_x && mx <= edge_x + 5
         } else if self.file_explorer.visible {
-            self.file_explorer.on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
+            self.file_explorer
+                .on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
         } else {
             false
         }

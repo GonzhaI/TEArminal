@@ -2573,7 +2573,10 @@ fn test_panel_resize_edge_detection_and_mouse_drag_on_both_sides() {
 
     // Geometría dinámica del panel para dibujo y clics
     let plus_btn = crate::renderer::SidebarRects::plus_btn_with_width(400);
-    assert_eq!(plus_btn.0, 400 - crate::renderer::SidebarRects::PLUS_SIZE - 10);
+    assert_eq!(
+        plus_btn.0,
+        400 - crate::renderer::SidebarRects::PLUS_SIZE - 10
+    );
     let tab_rect = crate::renderer::SidebarRects::tab_rect_with_width(0, 0, 400);
     assert_eq!(
         tab_rect.2,

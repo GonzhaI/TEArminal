@@ -495,9 +495,7 @@ impl TearminalApp {
                         self.tabs.len(),
                         self.sidebar_scroll_offset,
                     ) {
-                    local.is_some_and(|lx| {
-                        crate::renderer::ScrollbarRects::hit(track, pw, lx, my)
-                    })
+                    local.is_some_and(|lx| crate::renderer::ScrollbarRects::hit(track, pw, lx, my))
                 } else {
                     false
                 };
@@ -847,9 +845,12 @@ impl TearminalApp {
                     crate::explorer::FileExplorer::HEADER_HEIGHT,
                 );
                 let hovered_tab = tabs_rects.tab_at(mx, my);
-                let h_refresh = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.refresh_btn);
-                let h_collapse = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.collapse_btn);
-                let h_new = crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.new_btn);
+                let h_refresh =
+                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.refresh_btn);
+                let h_collapse =
+                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.collapse_btn);
+                let h_new =
+                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.new_btn);
 
                 if self.file_explorer.hovered_tab != hovered_tab
                     || self.file_explorer.hovered_refresh_btn != h_refresh
@@ -862,7 +863,8 @@ impl TearminalApp {
                     self.file_explorer.hovered_new_btn = h_new;
                     needs_redraw = true;
                 }
-                is_pointer |= is_over_scrollbar || hovered_tab.is_some() || h_refresh || h_collapse || h_new;
+                is_pointer |=
+                    is_over_scrollbar || hovered_tab.is_some() || h_refresh || h_collapse || h_new;
 
                 let item_hover = if is_over_scrollbar {
                     None

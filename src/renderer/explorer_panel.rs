@@ -116,14 +116,33 @@ impl TerminalRenderer {
 
         // 2b. Micro-herramientas de la cabecera estilo DataGrip (+, colapsar todo, refrescar)
         let tool_btns = [
-            (tabs.new_btn, crate::ui::LucideIcon::Plus, explorer.hovered_new_btn),
-            (tabs.collapse_btn, crate::ui::LucideIcon::Minus, explorer.hovered_collapse_btn),
-            (tabs.refresh_btn, crate::ui::LucideIcon::RefreshCw, explorer.hovered_refresh_btn),
+            (
+                tabs.new_btn,
+                crate::ui::LucideIcon::Plus,
+                explorer.hovered_new_btn,
+            ),
+            (
+                tabs.collapse_btn,
+                crate::ui::LucideIcon::Minus,
+                explorer.hovered_collapse_btn,
+            ),
+            (
+                tabs.refresh_btn,
+                crate::ui::LucideIcon::RefreshCw,
+                explorer.hovered_refresh_btn,
+            ),
         ];
         for (btn_rect, icon, hovered) in tool_btns {
             if let Some(r) = btn_rect {
                 if hovered {
-                    canvas.rounded_fill(r.0, r.1, r.2, r.3, tokens::RADIUS_ROW, theme.surface_hover());
+                    canvas.rounded_fill(
+                        r.0,
+                        r.1,
+                        r.2,
+                        r.3,
+                        tokens::RADIUS_ROW,
+                        theme.surface_hover(),
+                    );
                 }
                 let fg = if hovered {
                     theme.foreground

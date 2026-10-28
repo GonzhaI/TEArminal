@@ -331,7 +331,12 @@ impl SettingsPageRects {
         let content_x = page_x + margin_x;
         let search_w = 200.min(card_w / 3);
         let reset_w = 150;
-        let reset_defaults_btn = (content_x + card_w.saturating_sub(reset_w), page_y + 26, reset_w, 30);
+        let reset_defaults_btn = (
+            content_x + card_w.saturating_sub(reset_w),
+            page_y + 26,
+            reset_w,
+            30,
+        );
         let search_box = (
             reset_defaults_btn.0.saturating_sub(search_w + 12),
             page_y + 26,
@@ -1177,7 +1182,12 @@ impl ExplorerTabsRects {
         let half = inner / 2;
         Self {
             files: (panel_x + 8, panel_y, half, header_h),
-            changes: (panel_x + 8 + half, panel_y, inner.saturating_sub(half), header_h),
+            changes: (
+                panel_x + 8 + half,
+                panel_y,
+                inner.saturating_sub(half),
+                header_h,
+            ),
             new_btn,
             collapse_btn,
             refresh_btn,
