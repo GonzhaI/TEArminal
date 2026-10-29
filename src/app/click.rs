@@ -1174,7 +1174,8 @@ impl TearminalApp {
                             }
 
                             // Clic dentro del contenido de texto para posicionar el cursor y seleccionar
-                            let content_y = top_offset + 38;
+                            let content_y =
+                                top_offset + crate::renderer::FileViewerLayout::HEADER_H;
                             if my >= content_y && !viewer.is_binary && !viewer.lines.is_empty() {
                                 let clicked_row =
                                     viewer.scroll_offset + (my - content_y) / row_h.max(16);

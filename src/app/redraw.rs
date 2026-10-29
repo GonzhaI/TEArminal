@@ -435,7 +435,7 @@ fn draw_full_scene(
     if config.appearance.show_status_bar && !active_tab.is_settings {
         let (cwd, git_branch, ssh_host, cols, rows, ai_status) =
             if let Some(ref viewer) = active_tab.file_viewer {
-                let path_str = shell_context::shorten_home(&viewer.path).into_owned();
+                let path_str = shell_context::display_path(&viewer.path).into_owned();
                 let branch = viewer.remote_branch.clone();
                 let ssh = viewer.remote_destination.clone();
                 let lines_count = viewer.lines.len();
@@ -452,7 +452,7 @@ fn draw_full_scene(
                     .terminal
                     .current_dir
                     .as_deref()
-                    .map(|d| shell_context::shorten_home(d).into_owned());
+                    .map(|d| shell_context::display_path(d).into_owned());
                 let g_branch = pane.get_git_branch();
                 let s_host = pane
                     .terminal

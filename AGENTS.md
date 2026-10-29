@@ -35,6 +35,7 @@ tools/             # subset-fonts (recorta fuentes), make-icon.ps1, fetch-themes
 2. **VT/ECMA-48 estricto** (xterm).
 3. **Teclado sin suposiciones:** valida el estado físico de los modificadores.
 4. **Pensado para agentes de CLI** (Claude Code, Aider…): imágenes pegadas, OSC 133.
+5. **Ejecución silenciosa de tests y procesos:** ningún proceso auxiliar (`git`, `powershell`, `bash`, `taskkill`) ni test debe mostrar ventanas de consola parpadeantes ni robar foco al usuario; siempre aplicar `hide_console` (`CREATE_NO_WINDOW`). Los agentes deben ejecutar los tests en segundo plano para no interrumpir el trabajo activo.
 
 ## Trampas de la plataforma (leer antes de tocar teclado o VT)
 

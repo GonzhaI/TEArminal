@@ -31,11 +31,12 @@ impl TerminalRenderer {
         let keycap_x = x + w - 8 - keycap_w;
         let keycap_y = y + (h.saturating_sub(tokens::KEYCAP_H)) / 2;
         self.draw_keycap(canvas, keycap_x, keycap_y, keycap, theme);
+        let baseline = self.centered_baseline(y + h / 2);
         self.draw_ui_text(
             canvas,
             "Buscar sesiones, archivos y comandos",
             x + 30,
-            y + h / 2 + 4,
+            baseline,
             keycap_x.saturating_sub(8),
             theme.text_secondary(),
             tokens::BODY,
@@ -89,43 +90,6 @@ impl TerminalRenderer {
         }
     }
 
-    /// Spinner de ocho segmentos con estela: la pestaña que ejecuta un comando.
-    fn draw_tab_spinner(&mut self, canvas: &mut Canvas, cx: usize, cy: usize, color: Color) {
-        const SEGMENTS: usize = 8;
-        const ALPHA: [u8; SEGMENTS] = [255, 205, 158, 116, 82, 56, 36, 22];
-        let phase = Self::spinner_phase();
-        let radius = 5.0f32;
-        for i in 0..SEGMENTS {
-            let angle =
-                (i as f32 / SEGMENTS as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-            let px = cx as f32 + angle.cos() * radius;
-            let py = cy as f32 + angle.sin() * radius;
-            let step = (i + SEGMENTS - phase % SEGMENTS) % SEGMENTS;
-            let dot = Color::from_rgba(color.r, color.g, color.b, ALPHA[step]);
-            canvas.rounded_fill(
-                (px - 1.0).round().max(0.0) as usize,
-                (py - 1.0).round().max(0.0) as usize,
-                2,
-                2,
-                1,
-                dot,
-            );
-        }
-    }
-
-    /// Fase del spinner en pasos de 110 ms.
-    fn spinner_phase() -> usize {
-        #[cfg(test)]
-        if let Some(phase) = super::test_support::spinner_phase_override() {
-            return phase;
-        }
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis());
-        ((ms / 110) % 8) as usize
-    }
-
     /// Renderiza la barra horizontal de pestañas: franja plana, pestañas y regla de acento.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_top_tab_bar(
@@ -166,88 +130,56 @@ impl TerminalRenderer {
 
             Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
 
-            let has_spinner = tab.status == Some(SessionStatus::Running);
-            let maybe_icon = tab_icon(tab);
-            let has_leading = has_spinner || maybe_icon.is_some();
-
-            let compact = rects.tab_w < 110;
-            let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 18 };
-            if tab.has_unread && !tab.is_active {
-                canvas.rounded_fill(r.0 + 7, r.1 + (r.3 / 2) - 2, 4, 4, 2, theme.ansi[6]);
-                icon_x += 5;
-            }
-
-            // La pestaña que ejecuta un comando muestra el spinner en lugar del icono de tipo: es el
-            // único indicador animado del chrome y sale de OSC 133 (`SessionStatus`), nunca inventado.
-            if has_spinner {
-                let color = if tab.is_active {
-                    theme.foreground
-                } else {
-                    theme.text_secondary()
-                };
-                self.draw_tab_spinner(canvas, icon_x, r.1 + (r.3 / 2), color);
-            } else if let Some(icon) = maybe_icon {
-                let icon_color = tab_icon_color(tab, tab.is_active, is_hovered, theme);
-                self.draw_lucide_icon(canvas, icon, icon_x, r.1 + (r.3 / 2), 14.0, icon_color);
-            }
-
             let show_close = rects.tab_w >= 76 && (tab.is_active || is_hovered);
 
-            if !compact || !has_leading {
-                let text_color = if tab.is_active {
-                    theme.foreground
-                } else if is_hovered {
-                    theme.text_secondary()
-                } else {
-                    theme.text_muted()
-                };
-                let title_x = if has_leading {
-                    r.0 + 34
-                } else if tab.has_unread && !tab.is_active {
-                    r.0 + 18
-                } else {
-                    r.0 + 14
-                };
-                let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
-                // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
-                // barra muestra solo el destino («staging-01»), como en el bosquejo.
-                let title = match tab.title.strip_prefix("ssh: ") {
-                    Some(target) => target.rsplit('@').next().unwrap_or(target),
-                    None => tab.title.as_str(),
-                };
-                let title_end = self.draw_ui_text(
+            let text_color = if tab.is_active {
+                theme.foreground
+            } else if is_hovered {
+                theme.text_secondary()
+            } else {
+                theme.text_muted()
+            };
+            let title_x = r.0 + 14;
+            let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
+            // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
+            // barra muestra solo el destino («staging-01»), como en el bosquejo.
+            let title = match tab.title.strip_prefix("ssh: ") {
+                Some(target) => target.rsplit('@').next().unwrap_or(target),
+                None => tab.title.as_str(),
+            };
+            let tab_base = self.centered_baseline(r.1 + (r.3 / 2));
+            let title_end = self.draw_ui_text(
+                canvas,
+                title,
+                title_x,
+                tab_base,
+                title_max,
+                text_color,
+                tokens::TITLE,
+                tab.is_active,
+            );
+            if tab.is_preview {
+                Self::draw_rect(
                     canvas,
-                    title,
                     title_x,
-                    r.1 + (r.3 / 2) + 4,
-                    title_max,
+                    tab_base + 3,
+                    title_end.saturating_sub(title_x),
+                    1,
                     text_color,
-                    tokens::TITLE,
-                    tab.is_active,
                 );
-                if tab.is_preview {
-                    Self::draw_rect(
-                        canvas,
-                        title_x,
-                        r.1 + (r.3 / 2) + 7,
-                        title_end.saturating_sub(title_x),
-                        1,
-                        text_color,
-                    );
-                }
-                if tab.pane_count > 1 {
-                    let badge = format!("×{}", tab.pane_count);
-                    self.draw_mono_text(
-                        canvas,
-                        &badge,
-                        title_end + 7,
-                        r.1 + (r.3 / 2) + 4,
-                        title_max,
-                        theme.text_muted(),
-                        tokens::MICRO,
-                        false,
-                    );
-                }
+            }
+            if tab.pane_count > 1 {
+                let badge = format!("×{}", tab.pane_count);
+                self.draw_mono_text(
+                    canvas,
+                    &badge,
+                    title_end + 7,
+                    tab_base,
+                    title_max,
+                    theme.text_muted(),
+                    tokens::MICRO,
+                    false,
+                );
             }
 
             if show_close {
@@ -448,29 +380,5 @@ impl TerminalRenderer {
             is_maximized,
             theme,
         );
-    }
-}
-
-/// Color del icono de la pestaña según su tipo: terminal, agente o servidor. Es información, así que
-/// el color sigue al tipo y no al estado de la pestaña.
-fn tab_icon_color(tab: &SidebarTabItem, active: bool, hovered: bool, theme: &Theme) -> Color {
-    if tab.is_settings || tab.is_file_viewer {
-        return if active {
-            theme.foreground
-        } else if hovered {
-            theme.text_secondary()
-        } else {
-            theme.text_muted()
-        };
-    }
-    // La pestaña activa no colorea sus iconos: el título ya manda y el tipo es información secundaria.
-    if active {
-        return theme.foreground;
-    }
-    match tab_icon(tab) {
-        Some(crate::ui::LucideIcon::Sparkles) => theme.ansi[5],
-        Some(crate::ui::LucideIcon::Server) => theme.ansi[6],
-        Some(crate::ui::LucideIcon::Terminal) => theme.ansi[4],
-        _ => theme.text_muted(),
     }
 }

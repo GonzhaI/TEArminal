@@ -309,7 +309,7 @@ impl SettingsPageRects {
         ScrollbarRects::vertical(
             win_w,
             page_y + Self::CONTENT_TOP,
-            viewport_h,
+            viewport_h.saturating_sub(SidebarRects::CARD_INSET + 4),
             Self::content_height(section),
             viewport_h,
             scroll,
@@ -329,8 +329,8 @@ impl SettingsPageRects {
             side_padding
         };
         let content_x = page_x + margin_x;
-        let search_w = 200.min(card_w / 3);
-        let reset_w = 150;
+        let search_w = 216.min(card_w / 3);
+        let reset_w = 148;
         let reset_defaults_btn = (
             content_x + card_w.saturating_sub(reset_w),
             page_y + 26,
@@ -369,7 +369,7 @@ impl SettingsPageRects {
 
         // Tarjeta 2: Modo y Disposición de Pestañas
         let card2_y = card_y + Self::THEME_CARD_H + 14;
-        let label_col_w = (card_w as f32 * 0.34).clamp(170.0, 240.0) as usize;
+        let label_col_w = (card_w as f32 * 0.36).clamp(195.0, 250.0) as usize;
         let ctrl_x = content_x + 20 + label_col_w;
         let ctrl_w = card_w.saturating_sub(label_col_w + 40);
 
@@ -528,27 +528,30 @@ impl FileViewerHeaderRects {
         is_markdown: bool,
         has_diff: bool,
     ) -> Self {
-        let mut right_x = (x + w).saturating_sub(16);
+        let mut right_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 12);
+        let btn_y = y
+            + SidebarRects::CARD_INSET
+            + (FileViewerLayout::HEADER_H.saturating_sub(SidebarRects::CARD_INSET + 24)) / 2;
 
         // 1. Botón Vista previa / Código si es .md (icono + texto)
         let md_btn = if is_markdown {
-            let md_w = 112;
+            let md_w = 136;
             let md_x = right_x.saturating_sub(md_w);
             right_x = md_x.saturating_sub(8);
-            Some((md_x, y + 7, md_w, 24))
+            Some((md_x, btn_y, md_w, 24))
         } else {
             None
         };
 
         // 2. Botón Lectura / Edición (icono + texto; el atajo Ctrl+E va en la ayuda del menú)
-        let mode_w = 96;
+        let mode_w = 104;
         let mode_x = right_x.saturating_sub(mode_w);
-        let mode_btn = (mode_x, y + 7, mode_w, 24);
+        let mode_btn = (mode_x, btn_y, mode_w, 24);
 
         // 3. Botón Cambios (diff antes vs ahora), a la izquierda del de modo
         let diff_btn = has_diff.then(|| {
-            let diff_w = 88;
-            (mode_x.saturating_sub(8 + diff_w), y + 7, diff_w, 24)
+            let diff_w = 108;
+            (mode_x.saturating_sub(8 + diff_w), btn_y, diff_w, 24)
         });
 
         Self {
@@ -580,7 +583,7 @@ pub(crate) struct FileViewerLayout {
 }
 
 impl FileViewerLayout {
-    pub(crate) const HEADER_H: usize = 38;
+    pub(crate) const HEADER_H: usize = 42;
 
     #[allow(dead_code)]
     pub(crate) fn compute(
@@ -596,10 +599,10 @@ impl FileViewerLayout {
         let char_w = char_width.max(7);
         let content_h = h.saturating_sub(Self::HEADER_H);
         let digits = total_lines.to_string().len().max(3);
-        let gutter_w = digits * char_w + 24;
+        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 24;
         let sep_x = x + gutter_w;
         let text_x = sep_x + 14;
-        let text_max_x = (x + w).saturating_sub(18);
+        let text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
         Self {
             content_y: y + Self::HEADER_H,
             content_h,
@@ -638,15 +641,16 @@ impl FileViewerLayout {
 
     /// Pista y pulgar de la barra horizontal; `None` si todo el ancho cabe. `max_scroll` = `FileViewerState::max_scroll_x`.
     pub(crate) fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
-        if max_scroll == 0 || self.content_h < 24 {
+        if max_scroll == 0 || self.content_h < 32 {
             return None;
         }
-        let track_x = self.sep_x + 6;
+        let track_x = self.sep_x + 8;
         let track_w = self.text_max_x.saturating_sub(track_x);
-        let track_h = 6;
-        let track_y = self.content_y + self.content_h - track_h - 3;
+        let track_h = ScrollbarRects::WIDTH;
+        let track_y = (self.content_y + self.content_h)
+            .saturating_sub(track_h + 4 + SidebarRects::CARD_INSET);
         let total = max_scroll + self.visible_cols;
-        let thumb_w = (track_w * self.visible_cols / total).clamp(18.min(track_w), track_w);
+        let thumb_w = (track_w * self.visible_cols / total).clamp(24.min(track_w), track_w);
         let travel = track_w - thumb_w;
         let thumb_x = track_x + travel * scroll_x.min(max_scroll) / max_scroll;
         Some((
@@ -1057,10 +1061,11 @@ impl PaneHeaderRects {
     pub(crate) const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
     pub(crate) const BTN: usize = 26;
     pub(crate) const BTN_GAP: usize = 10;
-    pub(crate) const PAD_RIGHT: usize = 16;
+    pub(crate) const PAD_RIGHT: usize = 18;
     /// Centro del icono y comienzo del título, relativos al borde izquierdo del panel
+    #[allow(dead_code)]
     pub(crate) const ICON_X: usize = 24;
-    pub(crate) const TEXT_X: usize = 41;
+    pub(crate) const TEXT_X: usize = 20;
 
     #[allow(dead_code)]
     pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {

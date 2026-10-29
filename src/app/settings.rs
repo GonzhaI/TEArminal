@@ -65,7 +65,6 @@ impl TearminalApp {
         let rounded = (new_size * 10.0).round() / 10.0;
         if (rounded - self.config.appearance.font_size).abs() > 0.01 {
             self.config.appearance.font_size = rounded;
-            self.config.appearance.ui_font_size = rounded;
             let _ = self.config.save();
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();
@@ -79,14 +78,28 @@ impl TearminalApp {
     }
 
     pub(super) fn adjust_ui_font_size(&mut self, delta: f32) {
-        self.adjust_font_size(delta);
+        let new_size = (self.config.appearance.ui_font_size + delta).clamp(10.0, 24.0);
+        let rounded = (new_size * 10.0).round() / 10.0;
+        if (rounded - self.config.appearance.ui_font_size).abs() > 0.01 {
+            self.config.appearance.ui_font_size = rounded;
+            let _ = self.config.save();
+            if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+                let scale_factor = window.scale_factor();
+                renderer.update_scale(&self.config, scale_factor);
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
     }
 
     pub(super) fn reset_font_size(&mut self) {
-        let target_size = TearminalConfig::default().appearance.font_size;
-        if (self.config.appearance.font_size - target_size).abs() > 0.01 {
-            self.config.appearance.font_size = target_size;
-            self.config.appearance.ui_font_size = target_size;
+        let def = TearminalConfig::default().appearance;
+        if (self.config.appearance.font_size - def.font_size).abs() > 0.01
+            || (self.config.appearance.ui_font_size - def.ui_font_size).abs() > 0.01
+        {
+            self.config.appearance.font_size = def.font_size;
+            self.config.appearance.ui_font_size = def.ui_font_size;
             let _ = self.config.save();
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();

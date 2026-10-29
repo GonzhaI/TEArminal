@@ -73,10 +73,7 @@ pub(crate) struct TerminalRenderer {
     ascii_cache: Box<[Option<Rc<CachedGlyph>>; 512]>,
     ui_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
     ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
-    /// Valores de máquina (rutas, ramas, atajos): JetBrains Mono con su propia caché.
-    mono_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>,
-    mono_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>,
-    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>, // (c, size_bits) -> glyph
+    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>,    // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
@@ -131,8 +128,6 @@ impl TerminalRenderer {
             ascii_cache: Box::new(std::array::from_fn(|_| None)),
             ui_glyph_cache: FastMap::default(),
             ui_advance_cache: RefCell::default(),
-            mono_glyph_cache: FastMap::default(),
-            mono_advance_cache: RefCell::default(),
             icon_glyph_cache: FastMap::default(),
             margin_x: 0,
             margin_y: 0,
@@ -155,7 +150,9 @@ impl TerminalRenderer {
         self.font_size = (config.appearance.font_size * scale_factor as f32)
             .round()
             .max(10.0);
-        self.ui_font_size = self.font_size;
+        self.ui_font_size = (config.appearance.ui_font_size * scale_factor as f32)
+            .round()
+            .max(10.0);
         let metrics = self.regular_font.metrics('M', self.font_size);
         self.char_width = (metrics.advance_width.round() as usize).max(7);
         let line_height_raw = self
@@ -180,8 +177,6 @@ impl TerminalRenderer {
         }
         self.ui_glyph_cache.clear();
         self.ui_advance_cache.borrow_mut().clear();
-        self.mono_glyph_cache.clear();
-        self.mono_advance_cache.borrow_mut().clear();
         self.icon_glyph_cache.clear();
         self.ligature_cache.clear();
     }

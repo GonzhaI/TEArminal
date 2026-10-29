@@ -566,7 +566,9 @@ mod tests {
     /// el archivo
     #[test]
     fn test_write_file_cmd_is_all_or_nothing() {
-        if !Command::new("sh")
+        let mut check = Command::new("sh");
+        crate::app::platform::hide_console(&mut check);
+        if !check
             .arg("-c")
             .arg("true")
             .output()
@@ -581,6 +583,7 @@ mod tests {
         std::fs::write(&path, "original").unwrap();
         let run_with = |data: &[u8], len: usize| {
             let mut cmd = Command::new("sh");
+            crate::app::platform::hide_console(&mut cmd);
             cmd.arg("-c").arg(write_file_cmd(&path, len));
             run_command(cmd, Some(data), 4096).unwrap()
         };
@@ -596,7 +599,9 @@ mod tests {
     /// `quote` produce `'\''` (barra literal): lo que el shell remoto recibe es exactamente la ruta original
     #[test]
     fn test_quote_round_trips_through_sh() {
-        let Ok(sh) = Command::new("sh").arg("-c").arg("true").output() else {
+        let mut check = Command::new("sh");
+        crate::app::platform::hide_console(&mut check);
+        let Ok(sh) = check.arg("-c").arg("true").output() else {
             return; // sin `sh` en esta máquina (p. ej. sin Git para Windows)
         };
         assert!(sh.status.success());
@@ -609,7 +614,9 @@ mod tests {
             "'",
             "\"q\"",
         ] {
-            let out = Command::new("sh")
+            let mut cmd = Command::new("sh");
+            crate::app::platform::hide_console(&mut cmd);
+            let out = cmd
                 .arg("-c")
                 .arg(format!("printf %s {}", quote(raw)))
                 .output()

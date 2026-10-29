@@ -55,13 +55,14 @@ impl TerminalRenderer {
             _ => crate::ui::LucideIcon::File,
         };
 
-        let header_center_y = y + (header_h / 2);
-        let header_base = header_center_y + 4;
+        let header_center_y =
+            y + SidebarRects::CARD_INSET + (header_h.saturating_sub(SidebarRects::CARD_INSET)) / 2;
+        let header_base = self.centered_baseline(header_center_y);
 
         self.draw_lucide_icon(
             canvas,
             file_icon,
-            x + 18,
+            x + SidebarRects::CARD_INSET + 16,
             header_center_y,
             13.0,
             theme.text_muted(),
@@ -204,7 +205,7 @@ impl TerminalRenderer {
             chip_bg,
         ));
 
-        let name_start_x = x + 38;
+        let name_start_x = x + SidebarRects::CARD_INSET + 34;
         let name_end_x =
             name_start_x + self.measure_ui_text(&viewer.file_name, tokens::SECTION, true);
         let mut right_x = header_rects.mode_btn.0;
@@ -215,6 +216,7 @@ impl TerminalRenderer {
             right_x = right_x.min(r.0);
         }
         right_x = right_x.saturating_sub(10);
+        let sep_y = header_center_y.saturating_sub(6);
         for (text, chip_fg, _bg) in &chips {
             let chip_w = self.measure_mono_text(text, tokens::MICRO, false);
             let chip_x = right_x.saturating_sub(chip_w);
@@ -232,7 +234,7 @@ impl TerminalRenderer {
                 false,
             );
             right_x = chip_x.saturating_sub(9);
-            Self::draw_rect(canvas, right_x, y + 13, 1, 12, theme.chrome_line());
+            Self::draw_rect(canvas, right_x, sep_y, 1, 12, theme.chrome_line());
             right_x = right_x.saturating_sub(9);
         }
 
@@ -245,7 +247,7 @@ impl TerminalRenderer {
         if let Some(folder) = folder_label.as_deref() {
             let folder_x = name_end_x + 14;
             if folder_x + 24 < right_x {
-                Self::draw_rect(canvas, name_end_x + 7, y + 13, 1, 12, theme.chrome_line());
+                Self::draw_rect(canvas, name_end_x + 7, sep_y, 1, 12, theme.chrome_line());
                 self.draw_mono_text(
                     canvas,
                     folder,
@@ -540,8 +542,8 @@ impl TerminalRenderer {
                         })
                         .unwrap_or(0)
                 };
-                if indent_col > 0 {
-                    let mut col = 0;
+                if indent_col > indent_unit {
+                    let mut col = indent_unit;
                     while col < indent_col {
                         let gx = cur_x + (col * char_w) as i32;
                         if gx >= text_clip.0 as i32 && (gx as usize) < text_clip.2 {
@@ -741,16 +743,20 @@ impl TerminalRenderer {
         label: &str,
         fg: Color,
         bg: Color,
-        baseline: usize,
+        _baseline: usize,
     ) {
         canvas.rounded_fill(rect.0, rect.1, rect.2, rect.3, 4, bg);
-        self.draw_lucide_icon(canvas, icon, rect.0 + 13, rect.1 + rect.3 / 2, 11.5, fg);
+        let cy = rect.1 + rect.3 / 2;
+        let text_w = self.measure_ui_text(label, tokens::DETAIL, true);
+        let content_w = 22 + text_w;
+        let start_x = rect.0 + rect.2.saturating_sub(content_w) / 2;
+        self.draw_lucide_icon(canvas, icon, start_x + 7, cy, 11.5, fg);
         self.draw_ui_text(
             canvas,
             label,
-            rect.0 + 24,
-            baseline - 1,
-            rect.0 + rect.2,
+            start_x + 21,
+            self.centered_baseline(cy),
+            rect.0 + rect.2 - 4,
             fg,
             tokens::DETAIL,
             true,
@@ -775,8 +781,8 @@ impl TerminalRenderer {
 
         ScrollbarRects::vertical(
             x + w,
-            content_y + 4,
-            content_h.saturating_sub(8),
+            content_y + 6,
+            content_h.saturating_sub(6 + SidebarRects::CARD_INSET + 4),
             total_lines,
             visible_lines,
             viewer.scroll_offset,

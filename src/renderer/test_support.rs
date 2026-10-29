@@ -17,6 +17,7 @@ pub(super) fn set_spinner_phase(phase: Option<usize>) {
     SPINNER_PHASE.with(|c| c.set(phase));
 }
 
+#[allow(dead_code)]
 pub(super) fn spinner_phase_override() -> Option<usize> {
     SPINNER_PHASE.with(|c| c.get())
 }

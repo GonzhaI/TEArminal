@@ -1200,8 +1200,6 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
     let mut cfg = TearminalConfig::default();
     cfg.appearance.show_dimensions = true;
-    cfg.appearance.font_size = 15.0;
-    cfg.appearance.ui_font_size = 15.0;
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
@@ -2416,8 +2414,6 @@ fn preview_panel_card() {
 
     let mut cfg = TearminalConfig::default();
     cfg.appearance.show_dimensions = true;
-    cfg.appearance.font_size = 15.0;
-    cfg.appearance.ui_font_size = 15.0;
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let (w, h) = (900usize, 560usize);
@@ -2788,9 +2784,9 @@ fn test_status_bar_separator_between_cwd_and_branch() {
     let bar_y = h - StatusBarRects::BAR_H;
     let cwd = "~/dev/tearminal";
     let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
-    // La carpeta empieza en x = 14 + 15 (icono) y su texto avanza `measure_mono_text`; el icono de la rama
-    // empieza 14 px después del texto, así que [adv + 3, adv + 13) solo puede contener el separador.
-    let adv = 29 + r.measure_mono_text(cwd, tokens::DETAIL, false);
+    // La carpeta empieza en x = 14 + 21 (icono) y su texto avanza `measure_mono_text`; el icono de la rama
+    // empieza 22 px después del texto, así que [adv + 4, adv + 18) solo puede contener el separador.
+    let adv = 35 + r.measure_mono_text(cwd, tokens::DETAIL, false);
     let mut region_has_ink = |branch: Option<&str>| {
         let buf = test_support::with_canvas(w, h, |c| {
             c.clear(theme.bar_bg());
@@ -2811,7 +2807,7 @@ fn test_status_bar_separator_between_cwd_and_branch() {
             );
         });
         let bg = theme.bar_bg().to_u32_xrgb();
-        (bar_y + 4..h - 4).any(|y| (adv + 3..adv + 13).any(|x| buf[y * w + x] != bg))
+        (bar_y + 4..h - 4).any(|y| (adv + 4..adv + 18).any(|x| buf[y * w + x] != bg))
     };
     assert!(region_has_ink(Some("main")), "falta el separador con rama");
     assert!(!region_has_ink(None), "sin rama no debe haber separador");

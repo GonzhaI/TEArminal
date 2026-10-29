@@ -24,6 +24,7 @@ pub(crate) struct AppearanceConfig {
     pub(crate) theme: String,
     #[serde(default)]
     pub(crate) theme_light: String,
+    #[serde(default = "default_line_spacing")]
     pub(crate) line_spacing: f32,
     #[serde(default = "default_tab_layout")]
     pub(crate) tab_layout: String,
@@ -91,7 +92,11 @@ fn default_font_size() -> f32 {
 }
 
 fn default_ui_font_size() -> f32 {
-    16.0
+    14.0
+}
+
+fn default_line_spacing() -> f32 {
+    1.0
 }
 
 fn default_cursor_shape() -> String {
@@ -146,8 +151,16 @@ impl AppearanceConfig {
         })
     }
 
-    /// Configuraciones anteriores guardaban un único `theme` (en modo claro, uno claro).
+    /// Configuraciones anteriores guardaban un único `theme` (en modo claro, uno claro)
+    /// o valores anteriores de tipografía unificada (16/16 o 13/13).
     fn migrate(&mut self) {
+        if ((self.font_size - 16.0).abs() < 0.01 && (self.ui_font_size - 16.0).abs() < 0.01)
+            || ((self.font_size - 13.0).abs() < 0.01 && (self.ui_font_size - 13.0).abs() < 0.01)
+        {
+            self.font_size = 16.0;
+            self.ui_font_size = 14.0;
+            self.line_spacing = 1.0;
+        }
         if !self.theme_light.is_empty() {
             return;
         }
@@ -170,7 +183,7 @@ impl Default for TearminalConfig {
                 font_family: "JetBrains Mono Nerd Font".to_string(),
                 font_path: None,
                 font_size: 16.0,
-                ui_font_size: 16.0,
+                ui_font_size: 14.0,
                 window_opacity: 1.0,
                 theme: crate::theme::Theme::DEFAULT_DARK.to_string(),
                 theme_light: crate::theme::Theme::DEFAULT_LIGHT.to_string(),
@@ -816,7 +829,8 @@ mod tests {
     fn test_defaults_and_legacy_tuning_ignored() {
         let default_cfg = TearminalConfig::default();
         assert_eq!(default_cfg.appearance.font_size, 16.0);
-        assert_eq!(default_cfg.appearance.ui_font_size, 16.0);
+        assert_eq!(default_cfg.appearance.ui_font_size, 14.0);
+        assert_eq!(default_cfg.appearance.line_spacing, 1.0);
         assert_eq!(default_cfg.terminal.cursor_shape, "block");
         assert!(!default_cfg.appearance.show_dimensions);
 

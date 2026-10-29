@@ -781,7 +781,9 @@ mod tests {
                 "function ssh {{ $args | ForEach-Object {{ \"[$_]\" }} }}; {}",
                 ssh_command_line("user@host", Some("/home/a b"))
             );
-            let out = std::process::Command::new(&shell)
+            let mut cmd = std::process::Command::new(&shell);
+            crate::app::platform::hide_console(&mut cmd);
+            let out = cmd
                 .args(["-NoProfile", "-Command", &script])
                 .output()
                 .unwrap();
@@ -839,22 +841,54 @@ mod tests {
         }
     }
 
-    /// PIDs hijos directos de `parent` (consulta CIM; solo para tests)
+    /// PIDs hijos directos de `parent` (instantáneo y sin invocar procesos ni abrir ventanas)
     fn child_pids(parent: u32) -> Vec<u32> {
-        let out = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "(Get-CimInstance Win32_Process -Filter 'ParentProcessId={parent}').ProcessId"
-                ),
-            ])
-            .output()
-            .expect("powershell");
-        String::from_utf8_lossy(&out.stdout)
-            .lines()
-            .filter_map(|l| l.trim().parse().ok())
-            .collect()
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32,
+            TH32CS_SNAPPROCESS,
+        };
+        let mut children = Vec::new();
+        // SAFETY: llamada Win32 estándar; el handle se cierra siempre
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return children;
+            }
+            let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+            if Process32First(snapshot, &mut entry) != 0 {
+                loop {
+                    if entry.th32ParentProcessID == parent {
+                        children.push(entry.th32ProcessID);
+                    }
+                    if Process32Next(snapshot, &mut entry) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(snapshot);
+        }
+        children
+    }
+
+    /// Mata un proceso en tests sin abrir ventanas de consola (`TerminateProcess` directo + taskkill oculto)
+    fn kill_process(pid: u32) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, TerminateProcess, PROCESS_TERMINATE,
+        };
+        // SAFETY: llamada Win32 directa para matar el proceso de inmediato sin consola
+        unsafe {
+            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if h != 0 {
+                let _ = TerminateProcess(h, 1);
+                CloseHandle(h);
+            }
+        }
+        let mut cmd = std::process::Command::new("taskkill");
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd.args(["/PID", &pid.to_string(), "/T", "/F"]).output();
     }
 
     /// Cerrar un panel (soltar el `PtyManager`) o morir TEArminal no debe dejar PowerShell ni sus hijos vivos.
@@ -893,10 +927,7 @@ mod tests {
             }
         }
         for p in &alive {
-            // no dejar basura aunque el test falle
-            let _ = std::process::Command::new("taskkill")
-                .args(["/PID", &p.to_string(), "/T", "/F"])
-                .output();
+            kill_process(*p);
         }
         assert!(
             alive.is_empty(),
@@ -928,9 +959,7 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
             for p in &alive {
-                let _ = std::process::Command::new("taskkill")
-                    .args(["/PID", &p.to_string(), "/T", "/F"])
-                    .output();
+                kill_process(*p);
             }
             assert!(
                 alive.is_empty(),

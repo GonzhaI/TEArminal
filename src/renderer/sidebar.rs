@@ -55,18 +55,20 @@ impl TerminalRenderer {
         // La rama va como píldora alineada a la derecha, junto al «+».
         let chip = header.branch.as_ref().map(|branch| {
             let text_w = self.measure_mono_text(branch, tokens::MICRO + 0.5, false);
-            let chip_w = text_w + 28;
+            let chip_w = text_w + 30;
             let x = plus.0.saturating_sub(8).saturating_sub(chip_w);
             (branch.clone(), x, chip_w)
         });
         let title_max = chip
             .as_ref()
             .map_or(plus.0.saturating_sub(8), |(_, x, _)| x.saturating_sub(8));
+        let header_cy = top + 22;
+        let header_base = self.centered_baseline(header_cy);
         let _ = self.draw_ui_text(
             canvas,
             &header.title,
             col_x,
-            top + 26,
+            header_base,
             title_max,
             theme.foreground,
             tokens::SECTION + 1.5,
@@ -75,7 +77,7 @@ impl TerminalRenderer {
         if let Some((branch, chip_x, chip_w)) = &chip {
             canvas.rounded_fill(
                 *chip_x,
-                top + 10,
+                top + 11,
                 *chip_w,
                 22,
                 tokens::RADIUS_CONTROL,
@@ -84,16 +86,16 @@ impl TerminalRenderer {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::GitBranch,
-                chip_x + 11,
-                top + 21,
+                chip_x + 12,
+                header_cy,
                 11.0,
                 theme.accent_color(),
             );
             self.draw_mono_text(
                 canvas,
                 branch,
-                chip_x + 22,
-                top + 25,
+                chip_x + 23,
+                header_base,
                 chip_x + chip_w - 4,
                 theme.text_secondary(),
                 tokens::MICRO + 0.5,
@@ -174,30 +176,18 @@ impl TerminalRenderer {
 
             let item_cy = tab_y + tab_item_h / 2;
             let show_close = tabs.len() > 1 && is_hovered;
-            let status_color = match tab.status {
-                Some(SessionStatus::Running) => theme.accent_color(),
-                Some(SessionStatus::Done) => theme.ansi[2],
-                Some(SessionStatus::Failed) => theme.ansi[1],
-                _ => theme.text_muted(),
-            };
 
             let maybe_icon = tab_icon(tab);
-            let has_leading = tab.status.is_some() || maybe_icon.is_some();
+            let has_leading = maybe_icon.is_some();
+            let has_detail = tab.detail.is_some();
 
-            // Indicador: anillo en curso, punto lleno terminado/falló/en espera; icono en Ajustes y visores.
-            if let Some(status) = tab.status {
-                match status {
-                    SessionStatus::Running => {
-                        canvas.rounded_stroke(tab_x + 13, tab_y + 12, 10, 10, 5, status_color)
-                    }
-                    _ => canvas.rounded_fill(tab_x + 14, tab_y + 13, 8, 8, 4, status_color),
-                }
-            } else if let Some(icon) = maybe_icon {
+            if let Some(icon) = maybe_icon {
+                let icon_cy = if has_detail { tab_y + 16 } else { item_cy };
                 self.draw_lucide_icon(
                     canvas,
                     icon,
                     tab_x + 18,
-                    tab_y + 17,
+                    icon_cy,
                     14.0,
                     if tab.is_active {
                         theme.accent_color()
@@ -207,27 +197,13 @@ impl TerminalRenderer {
                 );
             }
 
-            // Estado a la derecha; al pasar el ratón lo sustituye el botón de cerrar.
+            // Al pasar el ratón se reserva espacio para el botón de cerrar.
             let right_edge = tab_x + tab_w - 12;
-            let mut title_max = right_edge;
-            if show_close {
-                title_max = right_edge.saturating_sub(26);
-            } else if let Some(status) = tab.status {
-                let label = status.label();
-                let w = self.measure_ui_text(label, tokens::DETAIL, false);
-                let x = right_edge.saturating_sub(w);
-                self.draw_ui_text(
-                    canvas,
-                    label,
-                    x,
-                    tab_y + 22,
-                    right_edge,
-                    status_color,
-                    tokens::DETAIL,
-                    false,
-                );
-                title_max = x.saturating_sub(10);
-            }
+            let title_max = if show_close {
+                right_edge.saturating_sub(26)
+            } else {
+                right_edge
+            };
 
             let title_x = tab_x + if has_leading { 32 } else { 16 };
             let title_color = if tab.is_active || tab.has_unread {
@@ -237,8 +213,11 @@ impl TerminalRenderer {
             } else {
                 theme.text_muted()
             };
-            let has_detail = tab.detail.is_some();
-            let title_base = if has_detail { tab_y + 22 } else { item_cy + 4 };
+            let title_base = if has_detail {
+                self.centered_baseline(tab_y + 16)
+            } else {
+                self.centered_baseline(item_cy)
+            };
             let title_end = self.draw_ui_text(
                 canvas,
                 &tab.title,
@@ -264,7 +243,7 @@ impl TerminalRenderer {
                     canvas,
                     detail,
                     title_x,
-                    tab_y + 39,
+                    self.centered_baseline(tab_y + 34),
                     tab_x + tab_w - 10,
                     theme.text_muted(),
                     tokens::BODY,

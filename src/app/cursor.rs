@@ -1133,7 +1133,7 @@ impl TearminalApp {
             let right_offset = self.file_explorer_offset();
             let viewer_w = win_w.saturating_sub(offset + right_offset);
             let viewer_h = win_h.saturating_sub(top_offset + status_bar_h);
-            let content_y = top_offset + 38;
+            let content_y = top_offset + crate::renderer::FileViewerLayout::HEADER_H;
             let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
             let char_w = self.renderer.as_ref().map(|r| r.char_width).unwrap_or(8);
 
@@ -1259,7 +1259,8 @@ impl TearminalApp {
                     if let Some(start) = self.viewer_drag_start {
                         viewer.selection = Some((start, (target_line, target_col)));
                     }
-                    let content_h = viewer_h.saturating_sub(38);
+                    let content_h =
+                        viewer_h.saturating_sub(crate::renderer::FileViewerLayout::HEADER_H);
                     let visible_lines = (content_h / row_h.max(16)).max(1);
                     viewer.ensure_cursor_visible(visible_lines);
                     needs_redraw = true;

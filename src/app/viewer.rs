@@ -1119,7 +1119,7 @@ impl FileViewerState {
     /// El texto (el real, aunque se esté viendo el diff) difiere de `HEAD`
     pub(crate) fn has_git_changes(&self) -> bool {
         let Some(base) = &self.git_base else {
-            return true;
+            return false;
         };
         if let Some(st) = &self.diff_stash {
             return base != &st.lines;

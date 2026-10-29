@@ -445,10 +445,9 @@ mod tests {
     /// con el que calcula TEArminal; si el contenido llega alterado, el valor difiere
     #[test]
     fn test_hook_put_reports_checksum_of_what_it_wrote() {
-        let Ok(out) = std::process::Command::new("bash")
-            .args(["-c", "command -v cksum od tr"])
-            .output()
-        else {
+        let mut check = std::process::Command::new("bash");
+        crate::app::platform::hide_console(&mut check);
+        let Ok(out) = check.args(["-c", "command -v cksum od tr"]).output() else {
             return; // sin bash en esta máquina
         };
         if !out.status.success() {
@@ -465,7 +464,9 @@ mod tests {
                 pct_encode(file.as_bytes())
             );
             use std::io::Write;
-            let mut child = std::process::Command::new("bash")
+            let mut cmd = std::process::Command::new("bash");
+            crate::app::platform::hide_console(&mut cmd);
+            let mut child = cmd
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())

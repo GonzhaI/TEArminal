@@ -82,6 +82,16 @@ pub(super) fn shorten_home<'a>(path: &'a std::path::Path) -> std::borrow::Cow<'a
     }
 }
 
+/// Ruta completa para mostrar en la barra de estado (con `\` en rutas locales de Windows y `/` en SSH).
+pub(super) fn display_path(path: &std::path::Path) -> std::borrow::Cow<'_, str> {
+    let s = path.to_string_lossy();
+    if s.as_bytes().get(1) == Some(&b':') && s.contains('/') {
+        std::borrow::Cow::Owned(s.replace('/', "\\"))
+    } else {
+        s
+    }
+}
+
 fn contains_word_ignore_ascii_case(haystack: &str, word: &str) -> bool {
     let h_bytes = haystack.as_bytes();
     let w_bytes = word.as_bytes();

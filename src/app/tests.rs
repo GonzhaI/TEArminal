@@ -167,7 +167,8 @@ fn test_settings_reset_to_defaults() {
 
     // Validar que se restauraron los valores por defecto
     assert_eq!(app.config.appearance.font_size, 16.0);
-    assert_eq!(app.config.appearance.ui_font_size, 16.0);
+    assert_eq!(app.config.appearance.ui_font_size, 14.0);
+    assert_eq!(app.config.appearance.line_spacing, 1.0);
     assert_eq!(app.config.appearance.window_opacity, 1.0);
     assert_eq!(
         app.config.appearance.theme,
@@ -588,6 +589,36 @@ fn test_file_viewer_git_diff_status() {
     );
 
     let _ = std::fs::remove_file(temp_file);
+}
+
+#[test]
+fn test_file_viewer_untracked_file_has_no_diff_marks() {
+    let repo_dir = std::env::temp_dir().join(format!(
+        "tearminal_test_untracked_repo_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&repo_dir);
+    std::fs::create_dir_all(&repo_dir).unwrap();
+
+    let mut cmd = std::process::Command::new("git");
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.current_dir(&repo_dir).args(["init"]).output();
+
+    let untracked_file = repo_dir.join("untracked.txt");
+    std::fs::write(&untracked_file, "line1\nline2\nline3\n").unwrap();
+
+    assert_eq!(crate::explorer::git_head_lines(&untracked_file), None);
+
+    let mut tab = TerminalTab::new_file_viewer(TabId(105), untracked_file.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.git_base = crate::explorer::git_head_lines(&untracked_file);
+
+    assert_eq!(viewer.get_line_git_diff_status(0), None);
+    assert_eq!(viewer.get_line_git_diff_status(1), None);
+    assert_eq!(viewer.get_line_git_diff_status(2), None);
+    assert!(!viewer.has_git_changes());
+
+    let _ = std::fs::remove_dir_all(repo_dir);
 }
 
 #[test]
@@ -1326,8 +1357,9 @@ fn test_explorer_changes_view_lists_only_git_changes() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("sub")).unwrap();
     let git = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        let mut cmd = std::process::Command::new("git");
+        crate::app::platform::hide_console(&mut cmd);
+        cmd.args(["-c", "user.name=t", "-c", "user.email=t@t"])
             .args(args)
             .current_dir(&dir)
             .output()
@@ -1366,7 +1398,14 @@ b
     let mut explorer = crate::explorer::FileExplorer::new(Some(dir.clone()), true);
     explorer.toggle_changes_only();
     let names: Vec<_> = explorer.items.iter().map(|i| i.name.clone()).collect();
-    assert_eq!(names, vec!["nuevo.txt", "mod.txt  sub"]);
+    assert_eq!(names, vec!["nuevo.txt", "mod.txt"]);
+
+    // Si dos archivos comparten nombre, se muestra la ruta relativa para distinguirlos
+    std::fs::create_dir_all(dir.join("otra")).unwrap();
+    std::fs::write(dir.join("otra").join("mod.txt"), "c\n").unwrap();
+    explorer.refresh();
+    let names: Vec<_> = explorer.items.iter().map(|i| i.name.clone()).collect();
+    assert_eq!(names, vec!["nuevo.txt", "mod.txt  otra", "mod.txt  sub"]);
 
     // el visor compara contra HEAD aunque el archivo ya esté guardado en disco
     let tab = TerminalTab::new_file_viewer(TabId(103), dir.join("sub").join("mod.txt"));
@@ -1805,7 +1844,7 @@ fn test_reset_font_size_default() {
     );
     assert_eq!(
         app.config.appearance.ui_font_size,
-        TearminalConfig::default().appearance.font_size
+        TearminalConfig::default().appearance.ui_font_size
     );
 }
 
@@ -1873,17 +1912,20 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
     let _ = std::fs::create_dir_all(&temp_dir);
 
     // Inicializar repo git con un commit inicial
-    let _ = std::process::Command::new("git")
-        .args(["init"])
-        .current_dir(&temp_dir)
-        .output();
+    let mut cmd = std::process::Command::new("git");
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["init"]).current_dir(&temp_dir).output();
     let file_path = temp_dir.join("file.txt");
     std::fs::write(&file_path, "v1").unwrap();
-    let _ = std::process::Command::new("git")
+    let mut cmd = std::process::Command::new("git");
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd
         .args(["add", "file.txt"])
         .current_dir(&temp_dir)
         .output();
-    let _ = std::process::Command::new("git")
+    let mut cmd = std::process::Command::new("git");
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd
         // Sin identidad (runner de CI) el commit falla y el archivo queda como «Added».
         .args([
             "-c",

@@ -1,6 +1,6 @@
 [package]
 name = "tearminal"
-version = "0.19.0"
+version = "0.20.0"
 edition = "2021"
 license = "MIT"
 description = "TEArminal: Terminal nativa veloz para Windows optimizada para agentes CLI"
@@ -31,6 +31,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_UI_Shell",
     "Win32_System_Registry",
     "Win32_System_Threading",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",

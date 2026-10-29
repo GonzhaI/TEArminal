@@ -19,7 +19,7 @@ impl TerminalRenderer {
             .max()
             .unwrap_or(0);
         // relleno + icono (36) + contenido + margen derecho
-        (ContextMenu::PAD * 2 + 36 + content + 14).max(200)
+        (ContextMenu::PAD * 2 + 36 + content + 18).max(210)
     }
 
     pub(crate) fn render_context_menu(
@@ -89,6 +89,7 @@ impl TerminalRenderer {
                 (true, false) => (theme.foreground, theme.text_secondary()),
             };
             let cy = r.1 + r.3 / 2;
+            let baseline = self.centered_baseline(cy);
             if let Some(icon) = item.icon {
                 self.draw_lucide_icon(canvas, icon, r.0 + 18, cy, 12.0, icon_fg);
             }
@@ -96,7 +97,7 @@ impl TerminalRenderer {
                 canvas,
                 &item.label,
                 r.0 + 36,
-                cy + 4,
+                baseline,
                 r.0 + r.2 - 8,
                 label_fg,
                 11.5,
@@ -108,7 +109,7 @@ impl TerminalRenderer {
                     canvas,
                     item.shortcut,
                     (r.0 + r.2).saturating_sub(sw + 10),
-                    cy + 4,
+                    baseline,
                     r.0 + r.2,
                     theme.text_muted(),
                     10.0,

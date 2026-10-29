@@ -15,6 +15,7 @@ pub(crate) enum SessionStatus {
 }
 
 impl SessionStatus {
+    #[allow(dead_code)]
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Idle => "En espera",
@@ -74,37 +75,8 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
-pub(crate) fn tab_icon(tab: &SidebarTabItem) -> Option<crate::ui::LucideIcon> {
-    if tab.is_settings {
-        Some(crate::ui::LucideIcon::Settings)
-    } else if tab.is_file_viewer {
-        let ext = std::path::Path::new(&tab.title)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if [
-            "rs", "py", "js", "ts", "go", "c", "cpp", "h", "cs", "html", "css",
-        ]
-        .iter()
-        .any(|e| ext.eq_ignore_ascii_case(e))
-        {
-            Some(crate::ui::LucideIcon::FileCode)
-        } else if ["toml", "json", "yaml", "yml"]
-            .iter()
-            .any(|e| ext.eq_ignore_ascii_case(e))
-        {
-            Some(crate::ui::LucideIcon::FileJson)
-        } else if ["md", "txt", "log"]
-            .iter()
-            .any(|e| ext.eq_ignore_ascii_case(e))
-        {
-            Some(crate::ui::LucideIcon::FileText)
-        } else {
-            Some(crate::ui::LucideIcon::File)
-        }
-    } else {
-        None
-    }
+pub(crate) fn tab_icon(_tab: &SidebarTabItem) -> Option<crate::ui::LucideIcon> {
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

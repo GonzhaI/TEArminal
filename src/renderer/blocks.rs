@@ -15,8 +15,8 @@ const CARD_INSET_BOTTOM: usize = 1;
 const BUTTON_W: usize = 26;
 const BUTTON_H: usize = 22;
 const BUTTON_GAP: usize = 4;
-const EXPLAIN_W: usize = 96;
-const IGNORE_W: usize = 74;
+const EXPLAIN_W: usize = 104;
+const IGNORE_W: usize = 76;
 
 /// Rectángulos de una tarjeta de bloque ya situada en el panel (geometría única para dibujo y clics).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -287,7 +287,7 @@ impl TerminalRenderer {
                     .saturating_sub(terminal.visible_line_start())
                     * self.row_height;
             let cy = header_y + self.row_height / 2;
-            let baseline = cy + (tokens::TITLE * self.ui_scale_ratio() * 0.36) as usize;
+            let baseline = self.centered_baseline(cy);
 
             // Estado: ✓ completado, ✗ con error, punto de acento mientras corre.
             let status = match block.exit_code {
@@ -332,6 +332,8 @@ impl TerminalRenderer {
             }
             // Tarjeta de error: [✧ Explicar] [Ignorar] en la misma fila.
             if let (Some(explain), Some(ignore)) = (card.explain_btn, card.ignore_btn) {
+                let btn_cy = explain.1 + explain.3 / 2;
+                let btn_base = self.centered_baseline(btn_cy);
                 canvas.rounded_fill(
                     explain.0,
                     explain.1,
@@ -340,20 +342,23 @@ impl TerminalRenderer {
                     5,
                     theme.accent_soft(56),
                 );
+                let exp_w = self.measure_ui_text("Explicar", tokens::BODY, true);
+                let exp_content_w = 20 + exp_w;
+                let exp_start = explain.0 + explain.2.saturating_sub(exp_content_w) / 2;
                 self.draw_lucide_icon(
                     canvas,
                     LucideIcon::Sparkles,
-                    explain.0 + 14,
-                    explain.1 + explain.3 / 2,
+                    exp_start + 6,
+                    btn_cy,
                     11.0,
                     theme.accent_color(),
                 );
                 self.draw_ui_text(
                     canvas,
                     "Explicar",
-                    explain.0 + 26,
-                    baseline,
-                    explain.0 + explain.2 - 6,
+                    exp_start + 20,
+                    btn_base,
+                    explain.0 + explain.2 - 4,
                     theme.accent_color(),
                     tokens::BODY,
                     true,
@@ -366,12 +371,14 @@ impl TerminalRenderer {
                     5,
                     theme.chrome_bg_elevated(),
                 );
+                let ign_w = self.measure_ui_text("Ignorar", tokens::BODY, false);
+                let ign_x = ignore.0 + ignore.2.saturating_sub(ign_w) / 2;
                 self.draw_ui_text(
                     canvas,
                     "Ignorar",
-                    ignore.0 + 12,
-                    baseline,
-                    ignore.0 + ignore.2 - 6,
+                    ign_x,
+                    btn_base,
+                    ignore.0 + ignore.2 - 4,
                     theme.text_secondary(),
                     tokens::BODY,
                     false,

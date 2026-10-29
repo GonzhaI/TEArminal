@@ -39,7 +39,7 @@ impl TerminalRenderer {
         };
         let text_w = self.measure_ui_text(text, tokens::BODY, active_accent);
         let tx = bx + (bw.saturating_sub(text_w) / 2);
-        let baseline = by + (bh / 2) + 4;
+        let baseline = self.centered_baseline(by + bh / 2);
         self.draw_ui_text(
             canvas,
             text,
@@ -90,15 +90,15 @@ impl TerminalRenderer {
             theme.text_secondary()
         };
         let text_w = self.measure_ui_text(text, tokens::BODY, active_accent);
-        let content_w = 14 + 6 + text_w;
+        let content_w = 22 + text_w;
         let start = bx + (bw.saturating_sub(content_w) / 2);
         let cy = by + bh / 2;
         self.draw_lucide_icon(canvas, icon, start + 7, cy, 13.0, fg);
         self.draw_ui_text(
             canvas,
             text,
-            start + 20,
-            cy + 4,
+            start + 22,
+            self.centered_baseline(cy),
             bx + bw,
             fg,
             tokens::BODY,
@@ -153,7 +153,7 @@ impl TerminalRenderer {
 
         let text_w = self.measure_mono_text(&disp_text, tokens::BODY, true);
         let tx = span_start + (span_w.saturating_sub(text_w) / 2);
-        let baseline = box_y + (box_h / 2) + 4;
+        let baseline = self.centered_baseline(box_y + box_h / 2);
         let fg = if is_editing {
             theme.foreground
         } else {
@@ -184,7 +184,7 @@ impl TerminalRenderer {
             canvas,
             label,
             x,
-            y + 18,
+            self.centered_baseline(y + 15),
             max_x,
             theme.foreground,
             tokens::BODY,
@@ -234,7 +234,7 @@ impl TerminalRenderer {
             canvas,
             title,
             x + 20,
-            y + 26,
+            self.centered_baseline(y + 20),
             x + w,
             theme.text_muted(),
             tokens::MICRO,
@@ -257,11 +257,12 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let cy = rect.1 + rect.3 / 2;
+        let baseline = self.centered_baseline(cy);
         self.draw_ui_text(
             canvas,
             label,
             label_x,
-            cy + 4,
+            baseline,
             label_max,
             if hovered {
                 theme.foreground
@@ -305,7 +306,7 @@ impl TerminalRenderer {
             canvas,
             if on { "Activado" } else { "Desactivado" },
             bx + size + 8,
-            cy + 4,
+            baseline,
             rect.0 + rect.2,
             if on {
                 theme.text_secondary()
@@ -385,11 +386,12 @@ impl TerminalRenderer {
         let r_cy = r_btn.1 + (r_btn.3 / 2);
         let r_label = "Restablecer";
         let r_label_w = self.measure_ui_text(r_label, tokens::BODY, false);
-        let r_text_x = r_btn.0 + r_btn.2.saturating_sub(r_label_w + 8);
+        let r_content_w = 22 + r_label_w;
+        let r_start_x = r_btn.0 + r_btn.2.saturating_sub(r_content_w) / 2;
         self.draw_lucide_icon(
             canvas,
             crate::ui::LucideIcon::RefreshCw,
-            r_text_x.saturating_sub(13),
+            r_start_x + 7,
             r_cy,
             11.0,
             r_fg,
@@ -397,8 +399,8 @@ impl TerminalRenderer {
         self.draw_ui_text(
             canvas,
             r_label,
-            r_text_x,
-            r_cy + 4,
+            r_start_x + 22,
+            self.centered_baseline(r_cy),
             r_btn.0 + r_btn.2,
             r_fg,
             tokens::BODY,
@@ -438,7 +440,7 @@ impl TerminalRenderer {
         );
 
         let sb_text_x = sb.0 + 28;
-        let sb_text_y = sb.1 + sb.3 / 2 + 4;
+        let sb_text_y = self.centered_baseline(sb.1 + sb.3 / 2);
         let query = &state.search_input.text;
         if query.is_empty() {
             self.draw_ui_text(
@@ -530,7 +532,7 @@ impl TerminalRenderer {
                 canvas,
                 title,
                 r.0 + 28,
-                cy + 4,
+                self.centered_baseline(cy),
                 r.0 + r.2,
                 fg,
                 tokens::BODY,
@@ -701,7 +703,7 @@ impl TerminalRenderer {
         );
         let count = format!("{}/{}", matches.len(), Theme::names().count());
         let count_w = self.measure_mono_text(&count, tokens::MICRO, false);
-        let text_y = sb.1 + sb.3 / 2 + 4;
+        let text_y = self.centered_baseline(sb.1 + sb.3 / 2);
         self.draw_mono_text(
             canvas,
             &count,
@@ -802,7 +804,7 @@ impl TerminalRenderer {
                 canvas,
                 name,
                 r.0 + 12,
-                r.1 + r.3 / 2 + 4,
+                self.centered_baseline(r.1 + r.3 / 2),
                 chips_x - 8,
                 fg,
                 tokens::BODY,
@@ -853,11 +855,12 @@ impl TerminalRenderer {
             theme,
         );
 
+        let label_max_x = rects.theme_mode_system_btn.0.saturating_sub(12);
         self.draw_label(
             canvas,
             content_x + 20,
             rects.theme_mode_system_btn.1,
-            content_x + 200,
+            label_max_x,
             "Modo de color",
             theme,
         );
@@ -893,7 +896,7 @@ impl TerminalRenderer {
             canvas,
             content_x + 20,
             rects.tab_layout_vertical_btn.1,
-            content_x + 200,
+            label_max_x,
             "Disposición de pestañas",
             theme,
         );
@@ -925,7 +928,7 @@ impl TerminalRenderer {
             canvas,
             content_x + 20,
             rects.panel_side_left_btn.1,
-            content_x + 200,
+            label_max_x,
             "Lado del panel",
             theme,
         );
@@ -953,7 +956,7 @@ impl TerminalRenderer {
             canvas,
             content_x + 20,
             rects.opacity_minus_btn.1,
-            content_x + 200,
+            label_max_x,
             "Opacidad de ventana",
             theme,
         );
@@ -1055,18 +1058,18 @@ impl TerminalRenderer {
         self.draw_mono_text(
             canvas,
             "Aa",
-            preview.0 + 16,
-            preview.1 + 42,
+            preview.0 + 18,
+            self.centered_baseline(preview.1 + preview.3 / 2),
             preview.0 + 54,
             theme.accent_color(),
             self.font_size,
-            false,
+            true,
         );
         self.draw_mono_text(
             canvas,
             "fn main() -> Result<(), Error>",
             preview.0 + 56,
-            preview.1 + 28,
+            self.centered_baseline(preview.1 + 22),
             preview.0 + preview.2 - 12,
             theme.foreground,
             self.font_size,
@@ -1084,7 +1087,7 @@ impl TerminalRenderer {
                 config.appearance.font_size
             ),
             preview.0 + 56,
-            preview.1 + 50,
+            self.centered_baseline(preview.1 + 44),
             preview.0 + preview.2 - 12,
             theme.text_muted(),
             self.font_size,
@@ -1317,17 +1320,19 @@ impl TerminalRenderer {
             let key_max = x + col_w;
             for (ki, key) in chord.split(" + ").enumerate() {
                 if ki > 0 {
+                    let plus_w = self.measure_mono_text("+", tokens::MICRO, false);
+                    let plus_base = self.centered_baseline(y + tokens::KEYCAP_H / 2);
                     self.draw_mono_text(
                         canvas,
                         "+",
-                        kx + 3,
-                        y + 15,
+                        kx + 4,
+                        plus_base,
                         key_max,
                         theme.text_muted(),
                         tokens::MICRO,
                         false,
                     );
-                    kx += 12;
+                    kx += plus_w + 8;
                 }
                 if kx >= key_max {
                     break;

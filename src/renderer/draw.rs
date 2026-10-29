@@ -19,18 +19,43 @@ impl TerminalRenderer {
         canvas.fill_rect((0, 0, buf_width, buf_height), x, y, w, h, color);
     }
 
-    /// Ratio de escalado para la tipografía e iconografía de la UI basado en font_size
+    /// Ratio de escalado para la tipografía e iconografía de la UI basado en ui_font_size
     #[inline]
     pub(crate) fn ui_scale_ratio(&self) -> f32 {
-        let base = 16.0 * self.scale_factor as f32;
+        let base = 14.0 * self.scale_factor as f32;
         if base > 0.0 {
-            (self.font_size / base).clamp(0.5, 3.0)
+            (self.ui_font_size / base).clamp(0.5, 3.0)
         } else {
             1.0
         }
     }
 
-    /// Mide el ancho en píxeles de un texto renderizado con Inter
+    /// Calcula la línea base (`baseline_y`) para centrar verticalmente texto alrededor de `center_y`.
+    #[inline]
+    pub(crate) fn centered_baseline(&self, center_y: usize) -> usize {
+        let cap_h = self
+            .inter_font
+            .metrics('M', self.ui_font_size.max(6.0))
+            .height;
+        center_y + cap_h.div_ceil(2)
+    }
+
+    /// Fuente proporcional de UI (Inter Medium / SemiBold) con fallback del sistema si falta el glifo.
+    fn ui_font_for(&self, c: char, semibold: bool) -> &fontdue::Font {
+        if semibold && self.inter_semibold_font.has_glyph(c) {
+            &self.inter_semibold_font
+        } else if self.inter_font.has_glyph(c) {
+            &self.inter_font
+        } else if let Some(fb) = self.fallback_font_for(c) {
+            fb
+        } else if semibold {
+            &self.inter_semibold_font
+        } else {
+            &self.inter_font
+        }
+    }
+
+    /// Mide el ancho en píxeles de un texto de UI (Inter Medium/SemiBold)
     pub(crate) fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
         self.measure_ui_text_tracked(text, size_px, semibold, 0.0)
     }
@@ -43,27 +68,24 @@ impl TerminalRenderer {
         semibold: bool,
         tracking: f32,
     ) -> usize {
-        let font = if semibold {
-            &self.inter_semibold_font
-        } else {
-            &self.inter_font
-        };
-        let effective_size = self.font_size.max(6.0);
+        let effective_size = self.ui_font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
             .chars()
             .map(|c| {
-                *cache
-                    .entry((c, size_bits, semibold))
-                    .or_insert_with(|| font.metrics(c, effective_size).advance_width)
+                *cache.entry((c, size_bits, semibold)).or_insert_with(|| {
+                    self.ui_font_for(c, semibold)
+                        .metrics(c, effective_size)
+                        .advance_width
+                })
             })
             .sum();
         let gaps = text.chars().count().saturating_sub(1) as f32;
         (width + gaps * tracking * self.ui_scale_ratio()).round() as usize
     }
 
-    /// Dibuja texto proporcional moderno utilizando la tipografía Inter
+    /// Dibuja texto de UI utilizando la tipografía Inter (Medium como peso base y SemiBold en énfasis)
     pub(crate) fn draw_ui_text(
         &mut self,
         canvas: &mut Canvas,
@@ -95,10 +117,11 @@ impl TerminalRenderer {
         tracking: f32,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = self.font_size.max(6.0);
+        let effective_size = self.ui_font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
+        let mut cache = std::mem::take(&mut self.ui_glyph_cache);
 
         for c in text.chars() {
             if cur_x as usize >= max_x {
@@ -106,26 +129,20 @@ impl TerminalRenderer {
             }
 
             let key = (c, size_bits, semibold);
-            if !self.ui_glyph_cache.contains_key(&key) {
-                let font = if semibold && self.inter_semibold_font.has_glyph(c) {
-                    &self.inter_semibold_font
-                } else if self.inter_font.has_glyph(c) {
-                    &self.inter_font
-                } else {
-                    self.fallback_font_for(c).unwrap_or(&self.inter_font)
-                };
+            let font = self.ui_font_for(c, semibold);
+            let (glyph, advance) = cache.entry(key).or_insert_with(|| {
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
-                let glyph = Rc::new(CachedGlyph {
-                    width: metrics.width,
-                    height: metrics.height,
-                    x_offset: metrics.xmin,
-                    y_offset: metrics.ymin,
-                    bitmap,
-                });
-                self.ui_glyph_cache
-                    .insert(key, (glyph, metrics.advance_width));
-            }
-            let (glyph, advance) = self.ui_glyph_cache.get(&key).unwrap();
+                (
+                    Rc::new(CachedGlyph {
+                        width: metrics.width,
+                        height: metrics.height,
+                        x_offset: metrics.xmin,
+                        y_offset: metrics.ymin,
+                        bitmap,
+                    }),
+                    metrics.advance_width,
+                )
+            });
 
             let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
             let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
@@ -139,6 +156,7 @@ impl TerminalRenderer {
             cur_x += *advance + tracking_px;
         }
 
+        self.ui_glyph_cache = cache;
         cur_x.round() as usize
     }
 
@@ -212,42 +230,12 @@ impl TerminalRenderer {
         }
     }
 
-    /// Fuente monoespaciada para un carácter: JetBrains Mono (regular/negrita) y, si falta el glifo,
-    /// el fallback del sistema. Nunca Inter: los valores de máquina se miden en mono.
-    fn mono_font_for(&self, c: char, bold: bool) -> &fontdue::Font {
-        if bold && self.bold_font().has_glyph(c) {
-            self.bold_font()
-        } else if self.regular_font.has_glyph(c) {
-            &self.regular_font
-        } else if let Some(fb) = self.fallback_font_for(c) {
-            fb
-        } else if bold {
-            self.bold_font()
-        } else {
-            &self.regular_font
-        }
+    /// Mide un valor del chrome con la fuente de interfaz Inter.
+    pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
+        self.measure_ui_text(text, size_px, bold)
     }
 
-    /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
-    pub(crate) fn measure_mono_text(&self, text: &str, _size_px: f32, bold: bool) -> usize {
-        let effective_size = self.font_size.max(6.0);
-        let size_bits = effective_size.to_bits();
-        let mut cache = self.mono_advance_cache.borrow_mut();
-        let width: f32 = text
-            .chars()
-            .map(|c| {
-                *cache.entry((c, size_bits, bold)).or_insert_with(|| {
-                    self.mono_font_for(c, bold)
-                        .metrics(c, effective_size)
-                        .advance_width
-                })
-            })
-            .sum();
-        width.round() as usize
-    }
-
-    /// Dibuja un valor de máquina (ruta, rama, dimensión, atajo o versión) en JetBrains Mono.
-    /// Es la segunda voz tipográfica del chrome: Inter habla, Mono mide.
+    /// Dibuja un valor del chrome (ruta, rama, dimensión, atajo o versión) con la fuente de interfaz Inter.
     pub(crate) fn draw_mono_text(
         &mut self,
         canvas: &mut Canvas,
@@ -256,49 +244,12 @@ impl TerminalRenderer {
         baseline_y: usize,
         max_x: usize,
         color: Color,
-        _size_px: f32,
+        size_px: f32,
         bold: bool,
     ) -> usize {
-        let (buf_width, buf_height) = canvas.size();
-        let effective_size = self.font_size.max(6.0);
-        let size_bits = effective_size.to_bits();
-        let mut cur_x = start_x as f32;
-        // `std::mem::take` evita el préstamo mutable de la caché mientras `mono_font_for` lee `self`.
-        let mut cache = std::mem::take(&mut self.mono_glyph_cache);
-
-        for c in text.chars() {
-            if cur_x as usize >= max_x {
-                break;
-            }
-            let font = self.mono_font_for(c, bold);
-            let (glyph, advance) = cache.entry((c, size_bits, bold)).or_insert_with(|| {
-                let (metrics, bitmap) = font.rasterize(c, effective_size);
-                (
-                    Rc::new(CachedGlyph {
-                        width: metrics.width,
-                        height: metrics.height,
-                        x_offset: metrics.xmin,
-                        y_offset: metrics.ymin,
-                        bitmap,
-                    }),
-                    metrics.advance_width,
-                )
-            });
-
-            let glyph_x = (cur_x.round() as i32) + glyph.x_offset;
-            let glyph_y = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
-            canvas.glyph(
-                (0, 0, max_x.min(buf_width), buf_height),
-                glyph,
-                glyph_x,
-                glyph_y,
-                color,
-            );
-            cur_x += *advance;
-        }
-
-        self.mono_glyph_cache = cache;
-        cur_x.round() as usize
+        self.draw_ui_text(
+            canvas, text, start_x, baseline_y, max_x, color, size_px, bold,
+        )
     }
 
     /// Tecla individual del chrome: caja de 18 px, borde hairline y glifo mono centrado.
@@ -323,11 +274,13 @@ impl TerminalRenderer {
             theme.mix(theme.background, theme.foreground, 0.07),
         );
         canvas.rounded_stroke(x, y, w, h, 3, theme.chrome_line());
+        let baseline = self.centered_baseline(y + h / 2);
+        let tx = x + w.saturating_sub(text_w) / 2;
         self.draw_mono_text(
             canvas,
             label,
-            x + 6,
-            y + h / 2 + 3,
+            tx,
+            baseline,
             x + w,
             theme.text_secondary(),
             tokens::MICRO,
@@ -343,11 +296,15 @@ impl TerminalRenderer {
         icon: crate::ui::LucideIcon,
         center_x: usize,
         center_y: usize,
-        _size_px: f32,
+        size_px: f32,
         color: Color,
     ) {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = self.font_size.max(6.0);
+        let effective_size = if size_px <= 9.5 {
+            (10.5 * self.ui_scale_ratio()).round().max(6.0)
+        } else {
+            (self.ui_font_size * 1.15).round().max(6.0)
+        };
         let c = icon.as_char();
         let size_bits = effective_size.to_bits();
         let lucide_ref = &self.lucide_font;

@@ -10,9 +10,9 @@ const METER_PCT_GAP: usize = 8;
 const METER_GAP: usize = 17;
 /// Cuerpo del porcentaje: un paso por debajo de la etiqueta, como en el bosquejo.
 const METER_PCT_SIZE: f32 = 9.0;
-/// Sitio mínimo (px) que debe quedar tras un tramo de las migas para dibujar el separador `›` (18) y el
-/// icono del siguiente elemento (15); si no, el elemento se omite en vez de pisar el badge del agente.
-const CRUMB_ROOM: usize = 33;
+/// Sitio mínimo (px) que debe quedar tras un tramo de las migas para dibujar el separador `›` (22) y el
+/// icono del siguiente elemento (21); si no, el elemento se omite en vez de pisar el badge del agente.
+const CRUMB_ROOM: usize = 43;
 /// Etiquetas del grupo de estado (badge y medidores): los 12 px del bosquejo, a la escala por
 /// defecto de `ui_font_size`.
 const STATUS_LABEL_SIZE: f32 = 10.5;
@@ -74,7 +74,7 @@ impl TerminalRenderer {
         let bar_h = StatusBarRects::BAR_H;
         let bar_y = height - bar_h;
         let center_y = bar_y + (bar_h / 2);
-        let baseline = center_y + 4;
+        let baseline = self.centered_baseline(center_y);
 
         // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
         Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
@@ -162,12 +162,12 @@ impl TerminalRenderer {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::Server,
-                cur_x + 5,
+                cur_x + 7,
                 center_y,
                 11.0,
                 theme.text_secondary(),
             );
-            cur_x += 15;
+            cur_x += 21;
             let adv = self.draw_mono_text(
                 canvas,
                 ssh,
@@ -193,12 +193,12 @@ impl TerminalRenderer {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::Folder,
-                cur_x + 5,
+                cur_x + 7,
                 center_y,
                 11.0,
                 theme.text_muted(),
             );
-            cur_x += 15;
+            cur_x += 21;
             let adv = self.draw_mono_text(
                 canvas,
                 dir,
@@ -223,12 +223,12 @@ impl TerminalRenderer {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::GitBranch,
-                cur_x + 5,
+                cur_x + 7,
                 center_y,
                 10.5,
                 theme.accent_color(),
             );
-            cur_x += 15;
+            cur_x += 21;
             self.draw_mono_text(
                 canvas,
                 branch,
@@ -246,7 +246,7 @@ impl TerminalRenderer {
             self.draw_lucide_icon(
                 canvas,
                 crate::ui::LucideIcon::ArrowUp,
-                ub_x + 6,
+                ub_x + 7,
                 center_y,
                 10.5,
                 theme.accent_color(),
@@ -254,7 +254,7 @@ impl TerminalRenderer {
             self.draw_mono_text(
                 canvas,
                 &utext,
-                ub_x + 15,
+                ub_x + 18,
                 baseline,
                 ub_x + ub_w,
                 theme.accent_color(),
@@ -295,12 +295,12 @@ impl TerminalRenderer {
         self.draw_lucide_icon(
             canvas,
             crate::ui::LucideIcon::ChevronRight,
-            adv + 9,
+            adv + 11,
             center_y,
-            9.0,
+            12.0,
             theme.text_muted(),
         );
-        adv + 18
+        adv + 22
     }
 
     /// Dibuja los medidores terminando en `right_limit` y devuelve el borde izquierdo que ocupan.

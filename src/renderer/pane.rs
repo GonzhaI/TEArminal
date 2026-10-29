@@ -219,9 +219,9 @@ impl TerminalRenderer {
         canvas: &mut Canvas,
         slot: (usize, usize, usize),
         title: &str,
-        subtitle: Option<&str>,
-        icon: crate::ui::LucideIcon,
-        icon_color: Color,
+        _subtitle: Option<&str>,
+        _icon: crate::ui::LucideIcon,
+        _icon_color: Color,
         focused: bool,
         zoomed: bool,
         hovered: Option<PaneHeaderButton>,
@@ -261,14 +261,6 @@ impl TerminalRenderer {
         }
 
         let cy = y + PaneHeaderRects::HEIGHT / 2;
-        self.draw_lucide_icon(
-            canvas,
-            icon,
-            x + PaneHeaderRects::ICON_X,
-            cy,
-            15.0,
-            icon_color,
-        );
 
         // El texto no invade los botones que se dibujan en este panel
         let buttons_left = if focused {
@@ -277,8 +269,8 @@ impl TerminalRenderer {
             rects.close_btn.0
         };
         let text_max = buttons_left.saturating_sub(12);
-        let baseline = cy + 4;
-        let title_end = self.draw_ui_text(
+        let baseline = self.centered_baseline(cy);
+        self.draw_ui_text(
             canvas,
             title,
             x + PaneHeaderRects::TEXT_X,
@@ -288,21 +280,6 @@ impl TerminalRenderer {
             tokens::TITLE,
             true,
         );
-        if let Some(subtitle) = subtitle.filter(|s| !s.is_empty()) {
-            let sx = title_end + 10;
-            if sx < text_max {
-                self.draw_ui_text(
-                    canvas,
-                    subtitle,
-                    sx,
-                    baseline,
-                    text_max,
-                    theme.text_muted(),
-                    tokens::BODY,
-                    false,
-                );
-            }
-        }
 
         if focused {
             self.draw_pane_header_button(

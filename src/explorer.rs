@@ -36,7 +36,7 @@ fn git_command(repo: &Path) -> std::process::Command {
 }
 
 /// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
-/// `Some(vacío)` si el archivo es nuevo en un repo (todo es añadido); `None` fuera de un repo.
+/// `None` si el archivo no está versionado en el repo (untracked) o fuera de un repo.
 pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
     let repo = git_repo_root(path.parent()?)?;
     let rel = path
@@ -49,7 +49,7 @@ pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
         .output()
         .ok()?;
     if !out.status.success() {
-        return Some(Vec::new());
+        return None;
     }
     Some(
         String::from_utf8_lossy(&out.stdout)
@@ -813,38 +813,45 @@ impl FileExplorer {
         self.refresh();
     }
 
-    /// Archivos con cambios (sin los borrados, que ya no se pueden abrir), ordenados por ruta relativa
+    /// Archivos con cambios (sin los borrados, que ya no se pueden abrir), ordenados por ruta relativa;
+    /// la carpeta solo se muestra cuando el nombre de archivo se repite.
     fn change_items(&self) -> Vec<ExplorerItem> {
         let mut items: Vec<ExplorerItem> = self
             .git_statuses
             .iter()
             .filter(|(path, status)| **status != GitFileStatus::Deleted && path.is_file())
-            .map(|(path, status)| {
-                let file = path
+            .map(|(path, status)| ExplorerItem {
+                path: path.clone(),
+                name: path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let dir = self
-                    .git_root
-                    .as_deref()
-                    .and_then(|root| path.parent()?.strip_prefix(root).ok())
-                    .map(|d| d.to_string_lossy().replace('\\', "/"))
-                    .unwrap_or_default();
-                ExplorerItem {
-                    path: path.clone(),
-                    name: if dir.is_empty() {
-                        file
-                    } else {
-                        format!("{file}  {dir}")
-                    },
-                    is_dir: false,
-                    depth: 0,
-                    is_expanded: false,
-                    git_status: Some(*status),
-                }
+                    .unwrap_or_default(),
+                is_dir: false,
+                depth: 0,
+                is_expanded: false,
+                git_status: Some(*status),
             })
             .collect();
         items.sort_by(|a, b| a.path.cmp(&b.path));
+        let mut counts: FxHashMap<String, usize> = FxHashMap::default();
+        for item in &items {
+            *counts.entry(item.name.clone()).or_insert(0) += 1;
+        }
+        if let Some(root) = self.git_root.as_deref() {
+            for item in &mut items {
+                if counts.get(&item.name).copied().unwrap_or(0) > 1 {
+                    if let Some(dir) = item
+                        .path
+                        .parent()
+                        .and_then(|p| p.strip_prefix(root).ok())
+                        .map(|d| d.to_string_lossy().replace('\\', "/"))
+                        .filter(|d| !d.is_empty())
+                    {
+                        item.name = format!("{}  {dir}", item.name);
+                    }
+                }
+            }
+        }
         items
     }
 

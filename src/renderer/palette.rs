@@ -74,11 +74,12 @@ impl TerminalRenderer {
         // Texto o placeholder con barra de escritura (cursor indicador)
         let text_x = ix + 40;
         let text_max_x = esc_x.saturating_sub(8);
+        let input_baseline = self.centered_baseline(icon_cy);
         self.render_text_input_content(
             canvas,
             &state.input,
             text_x,
-            icon_cy + 4,
+            input_baseline,
             text_max_x,
             iy + 6,
             ih.saturating_sub(12),
@@ -147,6 +148,7 @@ impl TerminalRenderer {
             }
 
             let item_cy = ry + rh / 2;
+            let item_baseline = self.centered_baseline(item_cy);
             let icon_col = if selected {
                 accent
             } else {
@@ -154,8 +156,8 @@ impl TerminalRenderer {
             };
             self.draw_lucide_icon(canvas, item.icon, rx + 14, item_cy, 14.0, icon_col);
 
-            // Categoría badge con ancho fijo (62 px) y texto centrado para alinear todos los elementos
-            const BADGE_W: usize = 62;
+            // Categoría badge con ancho fijo (68 px) y texto centrado para alinear todos los elementos
+            const BADGE_W: usize = 68;
             let cat_label = item.category.label();
             let (cat_bg, cat_fg) = match item.category {
                 PaletteCategory::Session => (
@@ -171,24 +173,24 @@ impl TerminalRenderer {
                     theme.ansi[2],
                 ),
             };
-            let badge_x = rx + 32;
-            let badge_y = item_cy.saturating_sub(9);
-            canvas.rounded_fill(badge_x, badge_y, BADGE_W, 18, 4, cat_bg);
-            let cat_w = self.measure_ui_text(cat_label, 9.5, false);
+            let badge_x = rx + 30;
+            let badge_y = item_cy.saturating_sub(10);
+            canvas.rounded_fill(badge_x, badge_y, BADGE_W, 20, 4, cat_bg);
+            let cat_w = self.measure_ui_text(cat_label, 9.5, true);
             let cat_text_x = badge_x + (BADGE_W.saturating_sub(cat_w)) / 2;
             self.draw_ui_text(
                 canvas,
                 cat_label,
                 cat_text_x,
-                item_cy + 4,
+                item_baseline,
                 badge_x + BADGE_W,
                 cat_fg,
                 9.5,
                 true,
             );
 
-            // Columna de título fija: TODOS los títulos arrancan exactamente en la misma posición (rx + 104)
-            let title_x = rx + 104;
+            // Columna de título fija: TODOS los títulos arrancan exactamente en la misma posición (rx + 108)
+            let title_x = rx + 108;
             let title_fg = if selected {
                 theme.foreground
             } else {
@@ -211,22 +213,22 @@ impl TerminalRenderer {
                     canvas,
                     &item.title,
                     title_x,
-                    item_cy + 4,
+                    item_baseline,
                     title_max_x,
                     title_fg,
                     tokens::BODY,
                     selected,
                 );
             } else if !item.subtitle.is_empty() {
-                // Elementos con ruta/rama/subtítulo: columna fija bien alineada (rx + 245)
+                // Elementos con ruta/rama/subtítulo: columna fija bien alineada (rx + 255)
                 // y corte suave con puntos suspensivos ("...") si alguno de los dos excede su ancho
-                let sub_x = rx + 245;
+                let sub_x = rx + 255;
                 let title_max_x = sub_x.saturating_sub(12);
                 self.draw_ui_text_truncated(
                     canvas,
                     &item.title,
                     title_x,
-                    item_cy + 4,
+                    item_baseline,
                     title_max_x,
                     title_fg,
                     tokens::BODY,
@@ -242,7 +244,7 @@ impl TerminalRenderer {
                     canvas,
                     &item.subtitle,
                     sub_x,
-                    item_cy + 4,
+                    item_baseline,
                     right_limit,
                     sub_fg,
                     tokens::MICRO,
@@ -254,7 +256,7 @@ impl TerminalRenderer {
                     canvas,
                     &item.title,
                     title_x,
-                    item_cy + 4,
+                    item_baseline,
                     right_limit,
                     title_fg,
                     tokens::BODY,

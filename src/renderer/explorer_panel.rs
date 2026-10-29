@@ -79,7 +79,7 @@ impl TerminalRenderer {
                 .as_ref()
                 .map_or(0, |c| 6 + self.measure_mono_text(c, tokens::MICRO, false));
             let x = rect.0 + rect.2.saturating_sub(label_w + count_w) / 2;
-            let baseline = rect.1 + (rect.3 - 1) / 2 + 4;
+            let baseline = self.centered_baseline(rect.1 + (rect.3 - 1) / 2);
             self.draw_ui_text(
                 canvas,
                 label,
@@ -176,15 +176,15 @@ impl TerminalRenderer {
 
             let indent = item.depth * 12;
             let item_center_y = item_y + (item_h / 2);
-            let item_base = item_center_y + 4;
-            let content_x = panel_x + 16 + indent;
+            let item_base = self.centered_baseline(item_center_y);
+            let content_x = panel_x + 18 + indent;
 
             // Guías visuales de sangría estilo DataGrip / JetBrains para niveles anidados
             if item.depth > 0 {
-                let guide_color = theme.mix(theme.background, theme.foreground, 0.08);
-                let clip = (panel_x, panel_y, panel_w, panel_h);
+                let guide_color = theme.mix(theme.chrome_bg(), theme.foreground, 0.22);
+                let clip = (panel_x, panel_y, panel_x + panel_w, panel_y + panel_h);
                 for d in 0..item.depth {
-                    let guide_x = panel_x + 16 + d * 12 + 4;
+                    let guide_x = panel_x + 18 + d * 12 + 5;
                     canvas.fill_rect(clip, guide_x, item_y, 1, item_h, guide_color);
                 }
             }
@@ -203,7 +203,7 @@ impl TerminalRenderer {
                 self.draw_lucide_icon(
                     canvas,
                     chevron_icon,
-                    content_x + 4,
+                    content_x + 5,
                     item_center_y,
                     10.5,
                     theme.text_muted(),
@@ -217,9 +217,9 @@ impl TerminalRenderer {
                 self.draw_lucide_icon(
                     canvas,
                     folder_icon,
-                    content_x + 18,
+                    content_x + 22,
                     item_center_y,
-                    11.5,
+                    12.0,
                     if is_selected {
                         theme.accent_color()
                     } else {
@@ -241,7 +241,7 @@ impl TerminalRenderer {
                 self.draw_ui_text(
                     canvas,
                     &label,
-                    content_x + 28,
+                    content_x + 36,
                     item_base,
                     max_name_x,
                     dir_color,
@@ -267,7 +267,7 @@ impl TerminalRenderer {
                     file_icon,
                     content_x + 10,
                     item_center_y,
-                    11.5,
+                    12.0,
                     file_fg,
                 );
 
@@ -283,7 +283,7 @@ impl TerminalRenderer {
                 self.draw_ui_text(
                     canvas,
                     &item.name,
-                    content_x + 22,
+                    content_x + 26,
                     item_base,
                     max_name_x,
                     text_color,
