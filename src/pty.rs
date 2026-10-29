@@ -39,14 +39,17 @@ const INIT_SCRIPT: &str = include_str!("../assets/shell/init.ps1");
 /// Ejecutar el script desde un archivo en disco con `-File` en lugar de inyectar 15 KB en `-Command` evita
 /// que los antivirus (como Kaspersky) disparen falsos positivos heurísticos (`HEUR:Trojan.Multi.Powecod`).
 pub(crate) fn ensure_init_script_on_disk() -> Option<std::path::PathBuf> {
-    let dir = crate::config::cache_dir_or_fallback().join("shell");
+    ensure_init_script_on_disk_in(&crate::config::cache_dir_or_fallback().join("shell"))
+}
+
+pub(crate) fn ensure_init_script_on_disk_in(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let path = dir.join("init.ps1");
     if let Ok(existing) = std::fs::read(&path) {
         if existing == INIT_SCRIPT.as_bytes() {
             return Some(path);
         }
     }
-    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::create_dir_all(dir).ok()?;
     std::fs::write(&path, INIT_SCRIPT.as_bytes()).ok()?;
     Some(path)
 }
@@ -619,11 +622,19 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{shell}: no se pudo iniciar: {e}"));
 
             // 1. Arranque: el prompt completo termina con OSC 133;B
-            let (ok, boot) = read_until(&pty, "]133;B", 40_000);
+            let (ok, mut boot) = read_until(&pty, "]133;B", 40_000);
             assert!(
                 ok,
                 "{shell}: el prompt de TEArminal no apareció. Salida: {boot:?}"
             );
+            // ConPTY en Windows más antiguos puede enviar las secuencias OSC primero y tardar
+            // unos milisegundos más en volcar el buffer de texto de la consola con la rama git.
+            if !boot.contains("tearminal-test-branch") {
+                let (ok_branch, extra) = read_until(&pty, "tearminal-test-branch", 10_000);
+                if ok_branch {
+                    boot.push_str(&extra);
+                }
+            }
             assert!(
                 boot.contains("]7;file://localhost/"),
                 "{shell}: falta OSC 7 (cwd): {boot:?}"
@@ -930,23 +941,21 @@ mod tests {
 
     #[test]
     fn test_ensure_init_script_on_disk() {
-        let path = ensure_init_script_on_disk().expect("debe crear init.ps1 en disco");
+        let tmp =
+            std::env::temp_dir().join(format!("tearminal_test_init_script_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let path = ensure_init_script_on_disk_in(&tmp).expect("debe crear init.ps1 en disco");
         assert!(path.is_file());
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content, INIT_SCRIPT);
 
-        // Si el archivo en disco fue modificado o corrompido, ensure_init_script_on_disk lo repara
-        // En Windows, otro test paralelo (ej. test_init_script_in_every_installed_powershell) puede tenerlo abierto brevemente
-        for attempt in 0..10 {
-            match std::fs::write(&path, "script obsoleto") {
-                Ok(_) => break,
-                Err(_) if attempt < 9 => std::thread::sleep(std::time::Duration::from_millis(50)),
-                Err(e) => panic!("error al escribir: {e}"),
-            }
-        }
-        let path2 = ensure_init_script_on_disk().expect("debe actualizar init.ps1");
+        // Si el archivo en disco fue modificado o corrompido, ensure_init_script_on_disk_in lo repara
+        // Se usa un directorio temporal aislado para no competir con otros tests paralelos
+        std::fs::write(&path, "script obsoleto").unwrap();
+        let path2 = ensure_init_script_on_disk_in(&tmp).expect("debe actualizar init.ps1");
         assert_eq!(path2, path);
         let repaired = std::fs::read_to_string(&path2).unwrap();
         assert_eq!(repaired, INIT_SCRIPT);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }
