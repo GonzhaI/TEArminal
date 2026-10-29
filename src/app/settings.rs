@@ -62,8 +62,10 @@ impl TearminalApp {
 
     pub(super) fn adjust_font_size(&mut self, delta: f32) {
         let new_size = (self.config.appearance.font_size + delta).clamp(8.0, 32.0);
-        if (new_size - self.config.appearance.font_size).abs() > 0.01 {
-            self.config.appearance.font_size = new_size;
+        let rounded = (new_size * 10.0).round() / 10.0;
+        if (rounded - self.config.appearance.font_size).abs() > 0.01 {
+            self.config.appearance.font_size = rounded;
+            self.config.appearance.ui_font_size = rounded;
             let _ = self.config.save();
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();
@@ -77,25 +79,14 @@ impl TearminalApp {
     }
 
     pub(super) fn adjust_ui_font_size(&mut self, delta: f32) {
-        let new_size = (self.config.appearance.ui_font_size + delta).clamp(8.0, 32.0);
-        let rounded = (new_size * 10.0).round() / 10.0;
-        if (rounded - self.config.appearance.ui_font_size).abs() > 0.01 {
-            self.config.appearance.ui_font_size = rounded;
-            if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
-                let scale_factor = window.scale_factor();
-                renderer.update_scale(&self.config, scale_factor);
-            }
-            let _ = self.config.save();
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
-        }
+        self.adjust_font_size(delta);
     }
 
     pub(super) fn reset_font_size(&mut self) {
         let target_size = TearminalConfig::default().appearance.font_size;
         if (self.config.appearance.font_size - target_size).abs() > 0.01 {
             self.config.appearance.font_size = target_size;
+            self.config.appearance.ui_font_size = target_size;
             let _ = self.config.save();
             if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
                 let scale_factor = window.scale_factor();

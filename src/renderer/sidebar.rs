@@ -181,6 +181,9 @@ impl TerminalRenderer {
                 _ => theme.text_muted(),
             };
 
+            let maybe_icon = tab_icon(tab);
+            let has_leading = tab.status.is_some() || maybe_icon.is_some();
+
             // Indicador: anillo en curso, punto lleno terminado/falló/en espera; icono en Ajustes y visores.
             if let Some(status) = tab.status {
                 match status {
@@ -189,10 +192,10 @@ impl TerminalRenderer {
                     }
                     _ => canvas.rounded_fill(tab_x + 14, tab_y + 13, 8, 8, 4, status_color),
                 }
-            } else {
+            } else if let Some(icon) = maybe_icon {
                 self.draw_lucide_icon(
                     canvas,
-                    tab_icon(tab),
+                    icon,
                     tab_x + 18,
                     tab_y + 17,
                     14.0,
@@ -226,7 +229,7 @@ impl TerminalRenderer {
                 title_max = x.saturating_sub(10);
             }
 
-            let title_x = tab_x + 32;
+            let title_x = tab_x + if has_leading { 32 } else { 16 };
             let title_color = if tab.is_active || tab.has_unread {
                 theme.foreground
             } else if is_hovered {

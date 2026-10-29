@@ -19,12 +19,12 @@ impl TerminalRenderer {
         canvas.fill_rect((0, 0, buf_width, buf_height), x, y, w, h, color);
     }
 
-    /// Ratio de escalado para la tipografía e iconografía de la UI basado en ui_font_size
+    /// Ratio de escalado para la tipografía e iconografía de la UI basado en font_size
     #[inline]
     pub(crate) fn ui_scale_ratio(&self) -> f32 {
-        let base = 13.0 * self.scale_factor as f32;
+        let base = 16.0 * self.scale_factor as f32;
         if base > 0.0 {
-            (self.ui_font_size / base).clamp(0.6, 2.5)
+            (self.font_size / base).clamp(0.5, 3.0)
         } else {
             1.0
         }
@@ -39,7 +39,7 @@ impl TerminalRenderer {
     pub(crate) fn measure_ui_text_tracked(
         &self,
         text: &str,
-        size_px: f32,
+        _size_px: f32,
         semibold: bool,
         tracking: f32,
     ) -> usize {
@@ -48,7 +48,7 @@ impl TerminalRenderer {
         } else {
             &self.inter_font
         };
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = self.font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
@@ -90,12 +90,12 @@ impl TerminalRenderer {
         baseline_y: usize,
         max_x: usize,
         color: Color,
-        size_px: f32,
+        _size_px: f32,
         semibold: bool,
         tracking: f32,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = self.font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
@@ -173,7 +173,16 @@ impl TerminalRenderer {
             cur_w += cw;
             char_count += c.len_utf8();
         }
-        format!("{}{}", &text[..char_count], ellipsis)
+        let mut result = format!("{}{}", &text[..char_count], ellipsis);
+        while char_count > 0 && self.measure_ui_text(&result, font_size, semibold) > max_w {
+            if let Some(c) = text[..char_count].chars().last() {
+                char_count -= c.len_utf8();
+                result = format!("{}{}", &text[..char_count], ellipsis);
+            } else {
+                break;
+            }
+        }
+        result
     }
 
     /// Dibuja texto de UI recortado con puntos suspensivos ("...") hacia la derecha si excede `max_x`.
@@ -220,8 +229,8 @@ impl TerminalRenderer {
     }
 
     /// Mide un valor de máquina con JetBrains Mono a `size_px` (escala de UI aplicada).
-    pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+    pub(crate) fn measure_mono_text(&self, text: &str, _size_px: f32, bold: bool) -> usize {
+        let effective_size = self.font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cache = self.mono_advance_cache.borrow_mut();
         let width: f32 = text
@@ -247,11 +256,11 @@ impl TerminalRenderer {
         baseline_y: usize,
         max_x: usize,
         color: Color,
-        size_px: f32,
+        _size_px: f32,
         bold: bool,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = self.font_size.max(6.0);
         let size_bits = effective_size.to_bits();
         let mut cur_x = start_x as f32;
         // `std::mem::take` evita el préstamo mutable de la caché mientras `mono_font_for` lee `self`.
@@ -334,11 +343,11 @@ impl TerminalRenderer {
         icon: crate::ui::LucideIcon,
         center_x: usize,
         center_y: usize,
-        size_px: f32,
+        _size_px: f32,
         color: Color,
     ) {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = (size_px * self.ui_scale_ratio()).max(6.0);
+        let effective_size = self.font_size.max(6.0);
         let c = icon.as_char();
         let size_bits = effective_size.to_bits();
         let lucide_ref = &self.lucide_font;

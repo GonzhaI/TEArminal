@@ -1796,14 +1796,17 @@ fn test_reset_font_size_default() {
     let config = TearminalConfig::load_or_default();
     let mut app = TearminalApp::new(config, None);
     app.config.appearance.font_size = 22.0;
-    app.config.appearance.ui_font_size = 18.0;
+    app.config.appearance.ui_font_size = 22.0;
 
     app.reset_font_size();
     assert_eq!(
         app.config.appearance.font_size,
         TearminalConfig::default().appearance.font_size
     );
-    assert_eq!(app.config.appearance.ui_font_size, 18.0);
+    assert_eq!(
+        app.config.appearance.ui_font_size,
+        TearminalConfig::default().appearance.font_size
+    );
 }
 
 #[test]
@@ -2604,6 +2607,64 @@ fn test_panel_resize_edge_detection_and_mouse_drag_on_both_sides() {
     app.resize_panel_from_mouse(win_w - 450, win_w);
     assert_eq!(app.panel_width(), 450);
     assert_eq!(app.file_explorer_offset(), 450);
+
+    // 3. Inicio del redimensionado mediante clic (on_mouse_input) en ambos lados del borde
+    // Usamos el tamaño reportado por window_size() de la app (800x600 sin ventana física)
+    let (win_w, win_h) = app.window_size();
+
+    // En modo pestañas superiores (horizontal):
+    app.config.appearance.tab_layout = "top".to_string();
+    app.file_explorer.width = 300;
+    app.sync_explorer_dock(win_w, win_h);
+    let edge_x = win_w - 300;
+
+    // Clic en el lado exterior (terminal, edge_x - 3)
+    app.explorer_resizing = false;
+    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x - 3) as f64, 200.0);
+    app.on_mouse_input(
+        winit::event::ElementState::Pressed,
+        winit::event::MouseButton::Left,
+    );
+    assert!(
+        app.explorer_resizing,
+        "clic en lado terminal del borde debe iniciar resize"
+    );
+
+    // Soltar cancela explorer_resizing
+    app.on_mouse_input(
+        winit::event::ElementState::Released,
+        winit::event::MouseButton::Left,
+    );
+    assert!(!app.explorer_resizing);
+
+    // Clic en el lado interior (margen del panel, edge_x + 3)
+    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x + 3) as f64, 200.0);
+    app.on_mouse_input(
+        winit::event::ElementState::Pressed,
+        winit::event::MouseButton::Left,
+    );
+    assert!(
+        app.explorer_resizing,
+        "clic en lado panel del borde debe iniciar resize"
+    );
+
+    app.on_mouse_input(
+        winit::event::ElementState::Released,
+        winit::event::MouseButton::Left,
+    );
+    assert!(!app.explorer_resizing);
+
+    // En modo pestañas verticales:
+    app.config.appearance.tab_layout = "left".to_string();
+    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x + 3) as f64, 200.0);
+    app.on_mouse_input(
+        winit::event::ElementState::Pressed,
+        winit::event::MouseButton::Left,
+    );
+    assert!(
+        app.explorer_resizing,
+        "clic en lado panel en pestañas verticales debe iniciar resize"
+    );
 }
 
 #[test]

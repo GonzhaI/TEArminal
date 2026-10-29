@@ -1005,22 +1005,12 @@ impl TerminalRenderer {
             (
                 rects.font_minus_btn,
                 rects.font_plus_btn,
-                "Fuente del terminal",
+                "Tamaño de fuente",
                 state.editing_setting == Some(EditingSettingField::FontSize),
                 state.hovered_font_minus,
                 state.hovered_font_plus,
                 state.hovered_font_box,
                 format!("{:.1} pt", config.appearance.font_size),
-            ),
-            (
-                rects.ui_font_minus_btn,
-                rects.ui_font_plus_btn,
-                "Fuente de la interfaz",
-                state.editing_setting == Some(EditingSettingField::UiFontSize),
-                state.hovered_ui_font_minus,
-                state.hovered_ui_font_plus,
-                state.hovered_ui_font_box,
-                format!("{:.1} pt", config.appearance.ui_font_size),
             ),
             (
                 rects.spacing_minus_btn,
@@ -1052,13 +1042,8 @@ impl TerminalRenderer {
             self.draw_button(canvas, plus, "+", h_plus, false, theme);
         }
 
-        // Muestra: valores de máquina en mono, no una promesa de fuente concreta.
-        let preview = (
-            content_x + 20,
-            card3_y + SettingsPageRects::TYPOGRAPHY_CARD_H - 62,
-            card_w.saturating_sub(40),
-            46,
-        );
+        // Muestra: valores de máquina en mono con el tamaño de fuente configurado.
+        let preview = (content_x + 20, card3_y + 140, card_w.saturating_sub(40), 66);
         canvas.rounded_fill(
             preview.0,
             preview.1,
@@ -1070,21 +1055,21 @@ impl TerminalRenderer {
         self.draw_mono_text(
             canvas,
             "Aa",
-            preview.0 + 14,
-            preview.1 + 28,
+            preview.0 + 16,
+            preview.1 + 42,
             preview.0 + 54,
             theme.accent_color(),
-            18.0,
+            self.font_size,
             false,
         );
         self.draw_mono_text(
             canvas,
             "fn main() -> Result<(), Error>",
-            preview.0 + 52,
-            preview.1 + 22,
+            preview.0 + 56,
+            preview.1 + 28,
             preview.0 + preview.2 - 12,
             theme.foreground,
-            tokens::BODY,
+            self.font_size,
             false,
         );
         self.draw_mono_text(
@@ -1098,11 +1083,11 @@ impl TerminalRenderer {
                 },
                 config.appearance.font_size
             ),
-            preview.0 + 52,
-            preview.1 + 37,
+            preview.0 + 56,
+            preview.1 + 50,
             preview.0 + preview.2 - 12,
             theme.text_muted(),
-            tokens::MICRO,
+            self.font_size,
             false,
         );
     }

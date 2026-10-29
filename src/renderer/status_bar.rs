@@ -133,31 +133,21 @@ impl TerminalRenderer {
 
         let (bx, _by, bw, _bh) = rects.ai_badge;
 
-        // Cápsulas con contorno alrededor del badge del agente y de los medidores. Se omiten si la barra
-        // no deja sitio a la ruta y la rama (el mismo umbral con el que la geometría suelta los medidores).
+        // Cápsula con contorno alrededor de los medidores. Se omite si la barra no deja
+        // sitio a la ruta y la rama. El indicador de agente / estado va limpio como texto e icono.
         let cap_y = bar_y + 4;
         let cap_h = bar_h.saturating_sub(8);
         let outline = theme.card_outline();
-        if bx >= StatusBarRects::MIN_CONTENT_W {
+        if bx >= StatusBarRects::MIN_CONTENT_W && rects.meters.2 > 0 {
+            let (mx, _, mw, _) = rects.meters;
             canvas.rounded_stroke(
-                bx - 6,
+                mx - 8,
                 cap_y,
-                bw + 12,
+                mw + 16,
                 cap_h,
                 tokens::RADIUS_CONTROL,
                 outline,
             );
-            if rects.meters.2 > 0 {
-                let (mx, _, mw, _) = rects.meters;
-                canvas.rounded_stroke(
-                    mx - 8,
-                    cap_y,
-                    mw + 16,
-                    cap_h,
-                    tokens::RADIUS_CONTROL,
-                    outline,
-                );
-            }
         }
 
         // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.

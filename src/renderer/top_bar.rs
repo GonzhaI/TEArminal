@@ -166,6 +166,10 @@ impl TerminalRenderer {
 
             Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
 
+            let has_spinner = tab.status == Some(SessionStatus::Running);
+            let maybe_icon = tab_icon(tab);
+            let has_leading = has_spinner || maybe_icon.is_some();
+
             let compact = rects.tab_w < 110;
             let mut icon_x = if compact { r.0 + (r.2 / 2) } else { r.0 + 18 };
             if tab.has_unread && !tab.is_active {
@@ -175,28 +179,21 @@ impl TerminalRenderer {
 
             // La pestaña que ejecuta un comando muestra el spinner en lugar del icono de tipo: es el
             // único indicador animado del chrome y sale de OSC 133 (`SessionStatus`), nunca inventado.
-            if tab.status == Some(SessionStatus::Running) {
+            if has_spinner {
                 let color = if tab.is_active {
                     theme.foreground
                 } else {
                     theme.text_secondary()
                 };
                 self.draw_tab_spinner(canvas, icon_x, r.1 + (r.3 / 2), color);
-            } else {
+            } else if let Some(icon) = maybe_icon {
                 let icon_color = tab_icon_color(tab, tab.is_active, is_hovered, theme);
-                self.draw_lucide_icon(
-                    canvas,
-                    tab_icon(tab),
-                    icon_x,
-                    r.1 + (r.3 / 2),
-                    14.0,
-                    icon_color,
-                );
+                self.draw_lucide_icon(canvas, icon, icon_x, r.1 + (r.3 / 2), 14.0, icon_color);
             }
 
             let show_close = rects.tab_w >= 76 && (tab.is_active || is_hovered);
 
-            if !compact {
+            if !compact || !has_leading {
                 let text_color = if tab.is_active {
                     theme.foreground
                 } else if is_hovered {
@@ -204,7 +201,13 @@ impl TerminalRenderer {
                 } else {
                     theme.text_muted()
                 };
-                let title_x = r.0 + 34;
+                let title_x = if has_leading {
+                    r.0 + 34
+                } else if tab.has_unread && !tab.is_active {
+                    r.0 + 18
+                } else {
+                    r.0 + 14
+                };
                 let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
                 // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
                 // barra muestra solo el destino («staging-01»), como en el bosquejo.
@@ -465,9 +468,9 @@ fn tab_icon_color(tab: &SidebarTabItem, active: bool, hovered: bool, theme: &The
         return theme.foreground;
     }
     match tab_icon(tab) {
-        crate::ui::LucideIcon::Sparkles => theme.ansi[5],
-        crate::ui::LucideIcon::Server => theme.ansi[6],
-        crate::ui::LucideIcon::Terminal => theme.ansi[4],
+        Some(crate::ui::LucideIcon::Sparkles) => theme.ansi[5],
+        Some(crate::ui::LucideIcon::Server) => theme.ansi[6],
+        Some(crate::ui::LucideIcon::Terminal) => theme.ansi[4],
         _ => theme.text_muted(),
     }
 }

@@ -845,26 +845,12 @@ impl TearminalApp {
                     crate::explorer::FileExplorer::HEADER_HEIGHT,
                 );
                 let hovered_tab = tabs_rects.tab_at(mx, my);
-                let h_refresh =
-                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.refresh_btn);
-                let h_collapse =
-                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.collapse_btn);
-                let h_new =
-                    crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs_rects.new_btn);
 
-                if self.file_explorer.hovered_tab != hovered_tab
-                    || self.file_explorer.hovered_refresh_btn != h_refresh
-                    || self.file_explorer.hovered_collapse_btn != h_collapse
-                    || self.file_explorer.hovered_new_btn != h_new
-                {
+                if self.file_explorer.hovered_tab != hovered_tab {
                     self.file_explorer.hovered_tab = hovered_tab;
-                    self.file_explorer.hovered_refresh_btn = h_refresh;
-                    self.file_explorer.hovered_collapse_btn = h_collapse;
-                    self.file_explorer.hovered_new_btn = h_new;
                     needs_redraw = true;
                 }
-                is_pointer |=
-                    is_over_scrollbar || hovered_tab.is_some() || h_refresh || h_collapse || h_new;
+                is_pointer |= is_over_scrollbar || hovered_tab.is_some();
 
                 let item_hover = if is_over_scrollbar {
                     None
@@ -886,16 +872,10 @@ impl TearminalApp {
             } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
                 || self.file_explorer.hovered_tab.is_some()
-                || self.file_explorer.hovered_refresh_btn
-                || self.file_explorer.hovered_collapse_btn
-                || self.file_explorer.hovered_new_btn
             {
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
                 self.file_explorer.hovered_tab = None;
-                self.file_explorer.hovered_refresh_btn = false;
-                self.file_explorer.hovered_collapse_btn = false;
-                self.file_explorer.hovered_new_btn = false;
                 needs_redraw = true;
             }
         }

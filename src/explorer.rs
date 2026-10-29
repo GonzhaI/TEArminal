@@ -210,9 +210,6 @@ pub(crate) struct FileExplorer {
     pub changes_only: bool,
     /// Pestaña bajo el ratón: `Some(true)` «Cambios», `Some(false)` «Archivos».
     pub hovered_tab: Option<bool>,
-    pub hovered_refresh_btn: bool,
-    pub hovered_collapse_btn: bool,
-    pub hovered_new_btn: bool,
     /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
     pub is_pinned: bool,
     pub hovered_pin_btn: bool,
@@ -317,7 +314,7 @@ impl FileExplorer {
         self.visible
             && self.dock.is_none()
             && mx + 6 >= panel_x
-            && mx < panel_x + 3
+            && mx <= panel_x + 5
             && my >= panel_y
             && my < panel_y + panel_h
     }
@@ -357,9 +354,6 @@ impl FileExplorer {
             git_root: None,
             changes_only: false,
             hovered_tab: None,
-            hovered_refresh_btn: false,
-            hovered_collapse_btn: false,
-            hovered_new_btn: false,
             is_pinned: false,
             hovered_pin_btn: false,
             remote_session: None,

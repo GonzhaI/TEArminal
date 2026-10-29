@@ -64,6 +64,7 @@ pub(crate) struct SidebarTabItem {
 }
 
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     let h = haystack.as_bytes();
     let n = needle.as_bytes();
@@ -73,9 +74,9 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
 }
 
-pub(crate) fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
+pub(crate) fn tab_icon(tab: &SidebarTabItem) -> Option<crate::ui::LucideIcon> {
     if tab.is_settings {
-        crate::ui::LucideIcon::Settings
+        Some(crate::ui::LucideIcon::Settings)
     } else if tab.is_file_viewer {
         let ext = std::path::Path::new(&tab.title)
             .extension()
@@ -87,29 +88,22 @@ pub(crate) fn tab_icon(tab: &SidebarTabItem) -> crate::ui::LucideIcon {
         .iter()
         .any(|e| ext.eq_ignore_ascii_case(e))
         {
-            crate::ui::LucideIcon::FileCode
+            Some(crate::ui::LucideIcon::FileCode)
         } else if ["toml", "json", "yaml", "yml"]
             .iter()
             .any(|e| ext.eq_ignore_ascii_case(e))
         {
-            crate::ui::LucideIcon::FileJson
+            Some(crate::ui::LucideIcon::FileJson)
         } else if ["md", "txt", "log"]
             .iter()
             .any(|e| ext.eq_ignore_ascii_case(e))
         {
-            crate::ui::LucideIcon::FileText
+            Some(crate::ui::LucideIcon::FileText)
         } else {
-            crate::ui::LucideIcon::File
+            Some(crate::ui::LucideIcon::File)
         }
-    } else if contains_ignore_ascii_case(&tab.title, "claude")
-        || contains_ignore_ascii_case(&tab.title, "agent")
-        || contains_ignore_ascii_case(&tab.title, "ai")
-    {
-        crate::ui::LucideIcon::Sparkles
-    } else if contains_ignore_ascii_case(&tab.title, "ssh") {
-        crate::ui::LucideIcon::Server
     } else {
-        crate::ui::LucideIcon::Terminal
+        None
     }
 }
 

@@ -863,21 +863,24 @@ fn test_render_frame_latency_and_fps_benchmark() {
 #[test]
 fn test_ui_font_size_scaling() {
     let mut config = TearminalConfig::load_or_default();
+    config.appearance.font_size = 13.0;
     config.appearance.ui_font_size = 13.0;
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
 
     let text = "Configuración y Ajustes de TEArminal";
-    let w_13 = renderer.measure_ui_text(text, 11.5, false);
+    let w_13 = renderer.measure_ui_text(text, 16.0, false);
 
     // Ajustar a 16.0 pt
+    config.appearance.font_size = 16.0;
     config.appearance.ui_font_size = 16.0;
     renderer.update_scale(&config, 1.0);
-    let w_16 = renderer.measure_ui_text(text, 11.5, false);
+    let w_16 = renderer.measure_ui_text(text, 16.0, false);
 
     // Ajustar a 10.0 pt
+    config.appearance.font_size = 10.0;
     config.appearance.ui_font_size = 10.0;
     renderer.update_scale(&config, 1.0);
-    let w_10 = renderer.measure_ui_text(text, 11.5, false);
+    let w_10 = renderer.measure_ui_text(text, 16.0, false);
 
     assert!(
         w_16 > w_13,
@@ -2850,8 +2853,8 @@ fn test_status_bar_drops_branch_when_cwd_fills_the_left_side() {
     );
 }
 
-/// Las cápsulas (badge del agente y medidores) se dibujan con sitio y se omiten, sin pánico, en barras estrechas:
-/// a 200 px no cabe ninguna, a 400 solo el badge (los medidores se sueltan primero) y a 1440 las dos.
+/// La cápsula de medidores se dibuja con sitio y se omite en barras estrechas:
+/// a 200 px y a 400 px no cabe, y a 1440 px se dibuja. El indicador de agente va limpio sin contorno.
 #[test]
 fn test_status_bar_capsules_dropped_when_narrow() {
     use crate::renderer::{StatusBarRects, StatusMeter};
@@ -2872,7 +2875,7 @@ fn test_status_bar_capsules_dropped_when_narrow() {
             percent: 18.0,
         },
     ];
-    for (w, capsules) in [(200usize, 0usize), (400, 1), (1440, 2)] {
+    for (w, capsules) in [(200usize, 0usize), (400, 0), (1440, 1)] {
         let buf = test_support::with_canvas(w, h, |c| {
             c.clear(theme.bar_bg());
             r.render_status_bar_with_ai(

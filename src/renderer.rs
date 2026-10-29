@@ -155,9 +155,7 @@ impl TerminalRenderer {
         self.font_size = (config.appearance.font_size * scale_factor as f32)
             .round()
             .max(10.0);
-        self.ui_font_size = (config.appearance.ui_font_size * scale_factor as f32)
-            .round()
-            .max(9.0);
+        self.ui_font_size = self.font_size;
         let metrics = self.regular_font.metrics('M', self.font_size);
         self.char_width = (metrics.advance_width.round() as usize).max(7);
         let line_height_raw = self

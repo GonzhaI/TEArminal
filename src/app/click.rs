@@ -440,6 +440,15 @@ impl TearminalApp {
             return;
         }
 
+        // Redimensionamiento del panel lateral / explorador de archivos (prioridad sobre el margen del panel y el sidebar)
+        if state == ElementState::Pressed
+            && button == MouseButton::Left
+            && self.on_panel_resize_edge(mx, my, win_w, win_h)
+        {
+            self.explorer_resizing = true;
+            return;
+        }
+
         // Modalidad horizontal: lo que el panel tiene fuera del explorador (su margen) no hace nada;
         // el explorador alojado dentro atiende su propio ratón
         if self.is_horizontal_tabs() && self.panel_local_x(mx, my, win_w).is_some() {
@@ -888,13 +897,6 @@ impl TearminalApp {
         if (self.file_explorer.visible || self.panel_shown()) && !is_settings_active {
             let top_offset = self.top_offset();
             let status_bar_h = self.status_bar_height();
-            if state == ElementState::Pressed
-                && button == MouseButton::Left
-                && self.on_panel_resize_edge(mx, my, win_w, win_h)
-            {
-                self.explorer_resizing = true;
-                return;
-            }
             let (panel_x, panel_y, panel_w, panel_h) =
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
@@ -913,62 +915,6 @@ impl TearminalApp {
                             self.file_explorer.toggle_changes_only();
                         }
                         self.last_explorer_click_idx = None;
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
-                    }
-
-                    // Micro-herramientas de la cabecera del explorador (+, colapsar todo, refrescar)
-                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.refresh_btn) {
-                        self.file_explorer.is_focused = true;
-                        self.file_explorer.refresh();
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
-                    }
-                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.collapse_btn) {
-                        self.file_explorer.is_focused = true;
-                        self.file_explorer.collapse_all();
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                        return;
-                    }
-                    if crate::renderer::ExplorerTabsRects::inside_opt(mx, my, tabs.new_btn) {
-                        self.file_explorer.is_focused = true;
-                        let base_dir = self
-                            .file_explorer
-                            .selected_index
-                            .and_then(|idx| self.file_explorer.items.get(idx))
-                            .map(|it| {
-                                if it.is_dir {
-                                    it.path.clone()
-                                } else {
-                                    it.path
-                                        .parent()
-                                        .unwrap_or(&self.file_explorer.root_dir)
-                                        .to_path_buf()
-                                }
-                            })
-                            .unwrap_or_else(|| self.file_explorer.root_dir.clone());
-                        let mut counter = 0;
-                        let target = loop {
-                            let name = if counter == 0 {
-                                "nuevo.txt".to_string()
-                            } else {
-                                format!("nuevo_{counter}.txt")
-                            };
-                            let p = base_dir.join(name);
-                            if !p.exists() {
-                                break p;
-                            }
-                            counter += 1;
-                        };
-                        let _ = std::fs::write(&target, "");
-                        self.file_explorer.refresh();
-                        self.open_file_in_viewer(&target, true);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }

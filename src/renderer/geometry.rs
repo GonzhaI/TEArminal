@@ -388,18 +388,18 @@ impl SettingsPageRects {
         let panel_side_left_btn = (ctrl_x, card2_y + 148, btn2_w, 30);
         let panel_side_right_btn = (ctrl_x + btn2_w + 8, card2_y + 148, btn2_w, 30);
 
-        // Tarjeta 3: Tipografía y ventana (Terminal Font, UI Font, Spacing, Opacity)
+        // Tarjeta 3: Tipografía y ventana (Font Size, Spacing)
         let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
         let step_btn_w = 30;
         let step_span = 150;
         let font_minus_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
         let font_plus_btn = (ctrl_x + step_span, card3_y + 50, step_btn_w, 30);
 
-        let ui_font_minus_btn = (ctrl_x, card3_y + 86, step_btn_w, 30);
-        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 86, step_btn_w, 30);
+        let ui_font_minus_btn = (0, 0, 0, 0);
+        let ui_font_plus_btn = (0, 0, 0, 0);
 
-        let spacing_minus_btn = (ctrl_x, card3_y + 122, step_btn_w, 30);
-        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 122, step_btn_w, 30);
+        let spacing_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
+        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
 
         // La opacidad pertenece a «Interfaz», no a tipografía.
         let opacity_minus_btn = (ctrl_x, card2_y + 198, step_btn_w, 30);
@@ -413,14 +413,7 @@ impl SettingsPageRects {
                 .saturating_sub(font_minus_btn.0 + font_minus_btn.2 + 8),
             font_minus_btn.3,
         );
-        let ui_font_value_box = (
-            ui_font_minus_btn.0 + ui_font_minus_btn.2 + 4,
-            ui_font_minus_btn.1,
-            ui_font_plus_btn
-                .0
-                .saturating_sub(ui_font_minus_btn.0 + ui_font_minus_btn.2 + 8),
-            ui_font_minus_btn.3,
-        );
+        let ui_font_value_box = (0, 0, 0, 0);
         let spacing_value_box = (
             spacing_minus_btn.0 + spacing_minus_btn.2 + 4,
             spacing_minus_btn.1,
@@ -938,7 +931,7 @@ impl StatusBarRects {
     pub(crate) const METER_TRACK_W: usize = 82;
     pub(crate) const METER_TRACK_H: usize = 6;
     /// Ancho mínimo que debe quedar para la ruta y la rama: por debajo, los medidores no se dibujan.
-    pub(crate) const MIN_CONTENT_W: usize = 240;
+    pub(crate) const MIN_CONTENT_W: usize = 200;
 
     /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
     /// incluyendo el indicador opcional de nueva versión disponible
@@ -1145,40 +1138,18 @@ impl SettingsPageRects {
     }
 }
 
-/// Pestañas «Archivos» · «Cambios» y micro-herramientas que encabezan el explorador estilo DataGrip.
+/// Pestañas «Archivos» · «Cambios» que encabezan el explorador estilo DataGrip.
 /// La comparten dibujo, clic y hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct ExplorerTabsRects {
     pub(crate) files: Rect,
     pub(crate) changes: Rect,
-    pub(crate) new_btn: Option<Rect>,
-    pub(crate) collapse_btn: Option<Rect>,
-    pub(crate) refresh_btn: Option<Rect>,
 }
 
 impl ExplorerTabsRects {
     #[allow(dead_code)]
     pub(crate) fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
-        let btn_size = 20;
-        let btn_y = panel_y + (header_h.saturating_sub(btn_size)) / 2;
-        // Si hay espacio suficiente (ancho >= 220), colocamos la barra de herramientas a la derecha
-        let (toolbar_w, new_btn, collapse_btn, refresh_btn) = if panel_w >= 220 {
-            let right_pad = 8;
-            let gap = 3;
-            let ref_x = panel_x + panel_w.saturating_sub(right_pad + btn_size);
-            let col_x = ref_x.saturating_sub(btn_size + gap);
-            let new_x = col_x.saturating_sub(btn_size + gap);
-            (
-                btn_size * 3 + gap * 2 + right_pad,
-                Some((new_x, btn_y, btn_size, btn_size)),
-                Some((col_x, btn_y, btn_size, btn_size)),
-                Some((ref_x, btn_y, btn_size, btn_size)),
-            )
-        } else {
-            (0, None, None, None)
-        };
-
-        let inner = panel_w.saturating_sub(16 + toolbar_w);
+        let inner = panel_w.saturating_sub(16);
         let half = inner / 2;
         Self {
             files: (panel_x + 8, panel_y, half, header_h),
@@ -1188,15 +1159,7 @@ impl ExplorerTabsRects {
                 inner.saturating_sub(half),
                 header_h,
             ),
-            new_btn,
-            collapse_btn,
-            refresh_btn,
         }
-    }
-
-    #[inline]
-    pub(crate) fn inside_opt(mx: usize, my: usize, r: Option<Rect>) -> bool {
-        r.is_some_and(|r| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3)
     }
 
     /// `Some(true)` sobre «Cambios», `Some(false)` sobre «Archivos».

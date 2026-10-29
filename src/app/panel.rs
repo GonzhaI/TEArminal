@@ -264,11 +264,7 @@ impl TearminalApp {
             *cfg_pw = self.file_explorer.width;
         }
         if self.panel_shown() {
-            let win_h = self
-                .window
-                .as_ref()
-                .map(|w| w.inner_size().height as usize)
-                .unwrap_or(800);
+            let win_h = self.window_size().1;
             self.sync_explorer_dock(win_w, win_h);
         }
     }
