@@ -422,23 +422,41 @@ impl TextInput {
         }
 
         let is_backspace = matches!(logical_key, Key::Named(NamedKey::Backspace))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Backspace))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::Backspace)
+            )
             || matches!(logical_key, Key::Character(s) if s == "\x17" || s == "\x08" || s == "\x7f");
 
         let is_delete = matches!(logical_key, Key::Named(NamedKey::Delete))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Delete));
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::Delete)
+            );
 
         let is_left = matches!(logical_key, Key::Named(NamedKey::ArrowLeft))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::ArrowLeft));
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::ArrowLeft)
+            );
 
         let is_right = matches!(logical_key, Key::Named(NamedKey::ArrowRight))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::ArrowRight));
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::ArrowRight)
+            );
 
         let is_home = matches!(logical_key, Key::Named(NamedKey::Home))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Home));
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::Home)
+            );
 
         let is_end = matches!(logical_key, Key::Named(NamedKey::End))
-            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::End));
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::End)
+            );
 
         if is_left {
             self.move_left(shift, ctrl);

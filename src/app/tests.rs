@@ -1957,7 +1957,10 @@ fn test_viewer_search_reveals_folded_blocks() {
 
     // Al saltar a la coincidencia activa, debe desplegarse automáticamente
     v.jump_to_active_match(10);
-    assert!(!v.folded.contains(&0), "el bloque plegado debe haberse desplegado");
+    assert!(
+        !v.folded.contains(&0),
+        "el bloque plegado debe haberse desplegado"
+    );
     assert_eq!(v.cursor_line, 1);
     assert!(v.row_of(1, 0).is_some(), "la línea 1 ahora es visible");
 

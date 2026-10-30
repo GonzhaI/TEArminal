@@ -606,7 +606,10 @@ impl TearminalApp {
         }
         let clipboard = arboard::Clipboard::new().ok();
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
-        let tab_history = tabs.get(active_tab_index).map(|t| vec![t.id]).unwrap_or_default();
+        let tab_history = tabs
+            .get(active_tab_index)
+            .map(|t| vec![t.id])
+            .unwrap_or_default();
         let mut app = Self {
             config,
             theme,

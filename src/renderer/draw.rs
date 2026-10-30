@@ -423,14 +423,7 @@ impl TerminalRenderer {
 
         if text.is_empty() && is_active {
             if cursor_visible {
-                canvas.rounded_fill(
-                    text_start_x,
-                    cur_y,
-                    2,
-                    cur_h,
-                    1,
-                    cursor_color,
-                );
+                canvas.rounded_fill(text_start_x, cur_y, 2, cur_h, 1, cursor_color);
             }
             self.draw_ui_text(
                 canvas,
@@ -450,7 +443,10 @@ impl TerminalRenderer {
         let (sel_bg, sel_fg) = if theme.selection != theme.background {
             (theme.selection, theme.selection_fg)
         } else {
-            (theme.mix(theme.background, theme.accent_color(), 0.55), theme.foreground)
+            (
+                theme.mix(theme.background, theme.accent_color(), 0.55),
+                theme.foreground,
+            )
         };
 
         if let Some((start, end)) = selection {
@@ -461,14 +457,7 @@ impl TerminalRenderer {
             if sel_w > 0 {
                 let sel_h = 18.min(box_h.saturating_sub(2)).max(14);
                 let sel_y = box_y + (box_h.saturating_sub(sel_h)) / 2;
-                canvas.rounded_fill(
-                    sel_x,
-                    sel_y,
-                    sel_w,
-                    sel_h,
-                    3,
-                    sel_bg,
-                );
+                canvas.rounded_fill(sel_x, sel_y, sel_w, sel_h, 3, sel_bg);
             }
 
             // Dibujar los tramos de texto: antes, seleccionado (en sel_fg) y después
@@ -528,14 +517,7 @@ impl TerminalRenderer {
         if is_active && cursor_visible {
             let cur_offset = self.measure_ui_text(&text[..input.cursor], tokens::BODY, true);
             let cur_x = (text_start_x + cur_offset).min(text_max_x);
-            canvas.rounded_fill(
-                cur_x,
-                cur_y,
-                2,
-                cur_h,
-                1,
-                cursor_color,
-            );
+            canvas.rounded_fill(cur_x, cur_y, 2, cur_h, 1, cursor_color);
         }
     }
 }

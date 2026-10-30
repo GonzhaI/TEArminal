@@ -746,7 +746,11 @@ impl FileViewerSearchRects {
         let bar = (bar_x, bar_y, bar_w, bar_h);
 
         let input_x = bar_x + 28;
-        let input_w = if bar_w >= 296 { 110 } else { bar_w.saturating_sub(186) };
+        let input_w = if bar_w >= 296 {
+            110
+        } else {
+            bar_w.saturating_sub(186)
+        };
         let input = (input_x, bar_y + 4, input_w, 24);
         let text_start_x = input_x + 4;
 

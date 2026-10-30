@@ -561,7 +561,8 @@ impl TerminalRenderer {
                 if line_idx >= l1 && line_idx <= l2 {
                     let full_line = viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
                     let mut acc = if !first_segment && viewer.render_markdown && is_markdown {
-                        cur_x + crate::renderer::md_preview::md_continuation_indent(full_line, char_w)
+                        cur_x
+                            + crate::renderer::md_preview::md_continuation_indent(full_line, char_w)
                     } else {
                         cur_x
                     };
@@ -621,7 +622,9 @@ impl TerminalRenderer {
                 let start_match = viewer
                     .search_matches
                     .partition_point(|&(l, _, _)| l < line_idx);
-                for (offset_idx, &(ml, mc1, mc2)) in viewer.search_matches[start_match..].iter().enumerate() {
+                for (offset_idx, &(ml, mc1, mc2)) in
+                    viewer.search_matches[start_match..].iter().enumerate()
+                {
                     if ml > line_idx {
                         break;
                     }
@@ -946,12 +949,26 @@ impl TerminalRenderer {
 
         // Separador vertical sutil entre navegación y cierre
         let sep_x = nx + nw + 3;
-        canvas.fill_rect(clip, sep_x, by + 6, 1, bh.saturating_sub(12), theme.chrome_line());
+        canvas.fill_rect(
+            clip,
+            sep_x,
+            by + 6,
+            1,
+            bh.saturating_sub(12),
+            theme.chrome_line(),
+        );
 
         // Botón cerrar (X)
         let (close_x, close_y, close_w, close_h) = s_rects.close_btn;
         if viewer.hovered_search_close {
-            canvas.rounded_fill(close_x, close_y, close_w, close_h, tokens::RADIUS_ROW, theme.surface_hover());
+            canvas.rounded_fill(
+                close_x,
+                close_y,
+                close_w,
+                close_h,
+                tokens::RADIUS_ROW,
+                theme.surface_hover(),
+            );
         }
         self.draw_lucide_icon(
             canvas,

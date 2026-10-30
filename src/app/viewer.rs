@@ -331,7 +331,13 @@ impl FileViewerState {
     pub(crate) fn rows(&self) -> Rc<[RowRef]> {
         let wrap = self.wrap_active();
         let is_md_preview = self.render_markdown && self.is_markdown();
-        let key = (self.edit_gen, self.fold_gen, self.visible_cols, wrap, is_md_preview);
+        let key = (
+            self.edit_gen,
+            self.fold_gen,
+            self.visible_cols,
+            wrap,
+            is_md_preview,
+        );
         let prev_max_cols = {
             let borrow = self.rows_cache.borrow();
             if let Some(c) = &*borrow {

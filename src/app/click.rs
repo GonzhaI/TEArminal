@@ -1260,18 +1260,44 @@ impl TearminalApp {
                             // Interacción con la barra flotante de búsqueda (`Ctrl + F`)
                             if viewer.search_open {
                                 let s_rects = crate::renderer::FileViewerSearchRects::compute(&lay);
-                                if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.bar) {
+                                if crate::renderer::FileViewerSearchRects::inside(
+                                    mx,
+                                    my,
+                                    s_rects.bar,
+                                ) {
                                     let visible_lines = (lay.content_h / lay.row_h.max(16)).max(1);
-                                    if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.close_btn) {
+                                    if crate::renderer::FileViewerSearchRects::inside(
+                                        mx,
+                                        my,
+                                        s_rects.close_btn,
+                                    ) {
                                         viewer.close_search();
-                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.prev_btn) {
+                                    } else if crate::renderer::FileViewerSearchRects::inside(
+                                        mx,
+                                        my,
+                                        s_rects.prev_btn,
+                                    ) {
                                         viewer.search_prev(visible_lines);
-                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.next_btn) {
+                                    } else if crate::renderer::FileViewerSearchRects::inside(
+                                        mx,
+                                        my,
+                                        s_rects.next_btn,
+                                    ) {
                                         viewer.search_next(visible_lines);
-                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.input) {
+                                    } else if crate::renderer::FileViewerSearchRects::inside(
+                                        mx,
+                                        my,
+                                        s_rects.input,
+                                    ) {
                                         let mut input = std::mem::take(&mut viewer.search_input);
-                                        self.handle_text_input_click(&mut input, mx, s_rects.text_start_x);
-                                        if let Some(ref mut v) = self.tabs[self.active_tab_index].file_viewer {
+                                        self.handle_text_input_click(
+                                            &mut input,
+                                            mx,
+                                            s_rects.text_start_x,
+                                        );
+                                        if let Some(ref mut v) =
+                                            self.tabs[self.active_tab_index].file_viewer
+                                        {
                                             v.search_input = input;
                                         }
                                     }

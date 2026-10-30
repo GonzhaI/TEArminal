@@ -1307,10 +1307,14 @@ impl TearminalApp {
 
                 let is_over_search_bar = if viewer.search_open {
                     let s_rects = crate::renderer::FileViewerSearchRects::compute(&lay);
-                    let hov_prev = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.prev_btn);
-                    let hov_next = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.next_btn);
-                    let hov_close = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.close_btn);
-                    let is_over_input = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.input);
+                    let hov_prev =
+                        crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.prev_btn);
+                    let hov_next =
+                        crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.next_btn);
+                    let hov_close =
+                        crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.close_btn);
+                    let is_over_input =
+                        crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.input);
 
                     if viewer.hovered_search_prev != hov_prev {
                         viewer.hovered_search_prev = hov_prev;

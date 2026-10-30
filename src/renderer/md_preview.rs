@@ -173,16 +173,21 @@ pub(crate) fn md_continuation_indent(full_line: &str, char_w: usize) -> i32 {
 
     for prefix in ["- ", "* ", "+ "] {
         if let Some(rest) = full_trimmed.strip_prefix(prefix) {
-            let offset = if rest.starts_with("[x] ") || rest.starts_with("[X] ") || rest.starts_with("[ ] ") {
-                prefix.len() + 4
-            } else {
-                2
-            };
+            let offset =
+                if rest.starts_with("[x] ") || rest.starts_with("[X] ") || rest.starts_with("[ ] ")
+                {
+                    prefix.len() + 4
+                } else {
+                    2
+                };
             return base + offset as i32 * cw;
         }
     }
 
-    let digits = full_trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    let digits = full_trimmed
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .count();
     if digits > 0 && full_trimmed[digits..].starts_with(". ") {
         let offset = digits + 2;
         return base + offset as i32 * cw;
@@ -195,7 +200,7 @@ pub(crate) fn md_continuation_indent(full_line: &str, char_w: usize) -> i32 {
             q_count += 1;
             r = stripped.trim_start();
         }
-        return base + q_count as i32 * 12;
+        return base + q_count * 12;
     }
 
     base
@@ -254,7 +259,7 @@ pub(crate) fn fit_table_column_widths(widths: &[usize], available_cols: usize) -
         return widths.to_vec();
     }
 
-    let min_widths: Vec<usize> = widths.iter().map(|&w| w.min(4).max(1)).collect();
+    let min_widths: Vec<usize> = widths.iter().map(|&w| w.clamp(1, 4)).collect();
     let min_total: usize = min_widths.iter().sum();
     if min_total >= net_available {
         return min_widths;
@@ -454,7 +459,9 @@ impl TerminalRenderer {
             } else {
                 trimmed
             };
-            self.draw_md_inline(canvas, clip, title, base_x, baseline_y, ctx, theme, color, true, init_state);
+            self.draw_md_inline(
+                canvas, clip, title, base_x, baseline_y, ctx, theme, color, true, init_state,
+            );
             if level <= 2 && is_last_segment && base_x < max_x_i32 {
                 let ux = base_x.max(clip.0 as i32) as usize;
                 let uw = (max_x_i32 - base_x).max(0) as usize;
@@ -488,8 +495,12 @@ impl TerminalRenderer {
                     match tag.to_ascii_uppercase().as_str() {
                         "NOTE" => Some((LucideIcon::Info, theme.ansi[4], "Nota", after_tag)),
                         "TIP" => Some((LucideIcon::Sparkles, theme.ansi[2], "Consejo", after_tag)),
-                        "IMPORTANT" => Some((LucideIcon::Sparkles, theme.ansi[5], "Importante", after_tag)),
-                        "WARNING" => Some((LucideIcon::Info, theme.ansi[3], "Advertencia", after_tag)),
+                        "IMPORTANT" => {
+                            Some((LucideIcon::Sparkles, theme.ansi[5], "Importante", after_tag))
+                        }
+                        "WARNING" => {
+                            Some((LucideIcon::Info, theme.ansi[3], "Advertencia", after_tag))
+                        }
                         "CAUTION" => Some((LucideIcon::X, theme.ansi[1], "Precaución", after_tag)),
                         _ => None,
                     }
@@ -501,9 +512,17 @@ impl TerminalRenderer {
             };
 
             let (bar_color, bg_tint) = if let Some((_, c, _, _)) = alert_info {
-                (c, Some(Color::from_u32_xrgb(theme.background.blend_over(c, 24))))
+                (
+                    c,
+                    Some(Color::from_u32_xrgb(theme.background.blend_over(c, 24))),
+                )
             } else {
-                (theme.ansi[4], Some(Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[4], 14))))
+                (
+                    theme.ansi[4],
+                    Some(Color::from_u32_xrgb(
+                        theme.background.blend_over(theme.ansi[4], 14),
+                    )),
+                )
             };
 
             let mut qx = base_x;
@@ -533,19 +552,18 @@ impl TerminalRenderer {
                 if first_segment {
                     let icon_cx = qx + cw;
                     if icon_cx > clip.0 as i32 + 6 && icon_cx < clip.2 as i32 {
-                        self.draw_lucide_icon(canvas, icon, icon_cx as usize, row_y + row_h / 2, 12.0, color);
+                        self.draw_lucide_icon(
+                            canvas,
+                            icon,
+                            icon_cx as usize,
+                            row_y + row_h / 2,
+                            12.0,
+                            color,
+                        );
                     }
                     let title_x = icon_cx + cw + 4;
                     let nx = self.draw_md_inline(
-                        canvas,
-                        clip,
-                        title,
-                        title_x,
-                        baseline_y,
-                        ctx,
-                        theme,
-                        color,
-                        true,
+                        canvas, clip, title, title_x, baseline_y, ctx, theme, color, true,
                         init_state,
                     );
                     if !after_tag.is_empty() {
@@ -597,7 +615,8 @@ impl TerminalRenderer {
                 _ => (None, false),
             };
 
-            let available_cols = max_x_i32.saturating_sub(base_x).max(0) as usize / cw.max(1) as usize;
+            let available_cols =
+                max_x_i32.saturating_sub(base_x).max(0) as usize / cw.max(1) as usize;
             let fitted_widths = raw_widths.map(|w| fit_table_column_widths(w, available_cols));
             let widths = fitted_widths.as_deref().or(raw_widths);
 
@@ -640,10 +659,17 @@ impl TerminalRenderer {
             let mut x = base_x;
             for (c, cell) in table_cells(trimmed).enumerate() {
                 self.draw_md_bar(canvas, clip, x, row_y, row_h, theme);
-                let col_w = widths.and_then(|w| w.get(c).copied()).unwrap_or_else(|| cell.chars().count());
+                let col_w = widths
+                    .and_then(|w| w.get(c).copied())
+                    .unwrap_or_else(|| cell.chars().count());
                 let cell_col_w = (col_w as i32 + 1) * cw;
                 let cell_max_x = (x + cell_col_w).min(max_x_i32);
-                let cell_clip = (x.max(clip.0 as i32) as usize, clip.1, cell_max_x as usize, clip.3);
+                let cell_clip = (
+                    x.max(clip.0 as i32) as usize,
+                    clip.1,
+                    cell_max_x as usize,
+                    clip.3,
+                );
 
                 x += cw;
                 let cell_char_count = cell.chars().count();
@@ -685,13 +711,19 @@ impl TerminalRenderer {
         }
         if let Some(prefix) = ul_prefix {
             let after_prefix = &full_trimmed[prefix.len()..];
-            let (icon, color, offset_chars, is_todo) = if after_prefix.starts_with("[x] ") || after_prefix.starts_with("[X] ") {
-                (LucideIcon::CheckSquare, theme.ansi[2], prefix.len() + 4, true)
-            } else if after_prefix.starts_with("[ ] ") {
-                (LucideIcon::Square, theme.ansi[8], prefix.len() + 4, true)
-            } else {
-                (LucideIcon::Dot, theme.accent_color(), 2, false)
-            };
+            let (icon, color, offset_chars, is_todo) =
+                if after_prefix.starts_with("[x] ") || after_prefix.starts_with("[X] ") {
+                    (
+                        LucideIcon::CheckSquare,
+                        theme.ansi[2],
+                        prefix.len() + 4,
+                        true,
+                    )
+                } else if after_prefix.starts_with("[ ] ") {
+                    (LucideIcon::Square, theme.ansi[8], prefix.len() + 4, true)
+                } else {
+                    (LucideIcon::Dot, theme.accent_color(), 2, false)
+                };
             let text_x = base_x + offset_chars as i32 * cw;
             if first_segment {
                 let cx = base_x + cw / 2;
@@ -701,19 +733,30 @@ impl TerminalRenderer {
                 let rest_text = if is_todo {
                     trimmed
                         .strip_prefix(prefix)
-                        .and_then(|r| r.strip_prefix("[x] ").or_else(|| r.strip_prefix("[X] ")).or_else(|| r.strip_prefix("[ ] ")))
+                        .and_then(|r| {
+                            r.strip_prefix("[x] ")
+                                .or_else(|| r.strip_prefix("[X] "))
+                                .or_else(|| r.strip_prefix("[ ] "))
+                        })
                         .unwrap_or(trimmed)
                 } else {
                     trimmed.strip_prefix(prefix).unwrap_or(trimmed)
                 };
-                self.draw_md_inline(canvas, clip, rest_text, text_x, baseline_y, ctx, theme, fg, false, init_state);
+                self.draw_md_inline(
+                    canvas, clip, rest_text, text_x, baseline_y, ctx, theme, fg, false, init_state,
+                );
             } else {
-                self.draw_md_inline(canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state);
+                self.draw_md_inline(
+                    canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state,
+                );
             }
             return;
         }
 
-        let digits = full_trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+        let digits = full_trimmed
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
         if digits > 0 && full_trimmed[digits..].starts_with(". ") {
             let prefix_len = digits + 2;
             let text_x = base_x + prefix_len as i32 * cw;
@@ -730,7 +773,11 @@ impl TerminalRenderer {
                     true,
                     init_state,
                 );
-                let rest_text = if trimmed.len() >= prefix_len { &trimmed[prefix_len..] } else { "" };
+                let rest_text = if trimmed.len() >= prefix_len {
+                    &trimmed[prefix_len..]
+                } else {
+                    ""
+                };
                 self.draw_md_inline(
                     canvas,
                     clip,
@@ -744,7 +791,9 @@ impl TerminalRenderer {
                     init_state,
                 );
             } else {
-                self.draw_md_inline(canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state);
+                self.draw_md_inline(
+                    canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state,
+                );
             }
             return;
         }
@@ -754,8 +803,14 @@ impl TerminalRenderer {
             .take_while(|c| *c == ' ' || *c == '\t')
             .map(|c| if c == '\t' { 4 } else { 1 })
             .sum::<i32>();
-        let x = if first_segment { cur_x + seg_indent * cw } else { base_x };
-        self.draw_md_inline(canvas, clip, trimmed, x, baseline_y, ctx, theme, fg, false, init_state);
+        let x = if first_segment {
+            cur_x + seg_indent * cw
+        } else {
+            base_x
+        };
+        self.draw_md_inline(
+            canvas, clip, trimmed, x, baseline_y, ctx, theme, fg, false, init_state,
+        );
     }
 
     /// Separador vertical fino de las tablas
@@ -1104,10 +1159,16 @@ mod tests {
         assert_eq!(md_inline_state_at(line, 27), (true, false, false, false));
         // Dentro del tachado
         let strike_idx = line.find("tachado").unwrap();
-        assert_eq!(md_inline_state_at(line, strike_idx + 2), (false, false, false, true));
+        assert_eq!(
+            md_inline_state_at(line, strike_idx + 2),
+            (false, false, false, true)
+        );
         // Dentro de la cursiva
         let italic_idx = line.find("cursiva").unwrap();
-        assert_eq!(md_inline_state_at(line, italic_idx + 2), (false, false, true, false));
+        assert_eq!(
+            md_inline_state_at(line, italic_idx + 2),
+            (false, false, true, false)
+        );
     }
 
     #[test]
@@ -1121,7 +1182,10 @@ mod tests {
         let wide = [10, 60, 20];
         let fitted_shrunk = fit_table_column_widths(&wide, 40);
         let total: usize = fitted_shrunk.iter().sum::<usize>() + 4; // 3 columnas + 4 separadores
-        assert!(total <= 40, "la tabla ajustada debe caber en 40 columnas, total = {total}");
+        assert!(
+            total <= 40,
+            "la tabla ajustada debe caber en 40 columnas, total = {total}"
+        );
         // La columna más ancha (60) absorbió la mayor parte de la reducción
         assert!(fitted_shrunk[1] < 60);
         // Cada columna preserva un mínimo legible
