@@ -1304,6 +1304,52 @@ impl TearminalApp {
                     char_w,
                     viewer.lines.len(),
                 );
+
+                let is_over_search_bar = if viewer.search_open {
+                    let s_rects = crate::renderer::FileViewerSearchRects::compute(&lay);
+                    let hov_prev = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.prev_btn);
+                    let hov_next = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.next_btn);
+                    let hov_close = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.close_btn);
+                    let is_over_input = crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.input);
+
+                    if viewer.hovered_search_prev != hov_prev {
+                        viewer.hovered_search_prev = hov_prev;
+                        needs_redraw = true;
+                    }
+                    if viewer.hovered_search_next != hov_next {
+                        viewer.hovered_search_next = hov_next;
+                        needs_redraw = true;
+                    }
+                    if viewer.hovered_search_close != hov_close {
+                        viewer.hovered_search_close = hov_close;
+                        needs_redraw = true;
+                    }
+
+                    if hov_prev || hov_next || hov_close {
+                        is_pointer = true;
+                    } else if is_over_input {
+                        is_text = true;
+                    }
+
+                    crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.bar)
+                } else {
+                    false
+                };
+
+                if viewer.search_open && viewer.search_input.is_dragging {
+                    let s_rects = crate::renderer::FileViewerSearchRects::compute(&lay);
+                    let char_idx = if let Some(r) = &self.renderer {
+                        viewer.search_input.hit_test(mx, s_rects.text_start_x, |s| {
+                            r.measure_ui_text(s, crate::renderer::tokens::BODY, true)
+                        })
+                    } else {
+                        viewer.search_input.len()
+                    };
+                    viewer.search_input.mouse_drag(char_idx);
+                    self.cursor_on = true;
+                    self.cursor_timer = std::time::Instant::now();
+                    needs_redraw = true;
+                }
                 let gutter_w = lay.gutter_w;
                 let over_gutter =
                     mx >= offset && mx < lay.sep_x && my >= content_y && my < top_offset + viewer_h;
@@ -1364,7 +1410,8 @@ impl TearminalApp {
                     needs_redraw = true;
                 }
 
-                if !viewer.is_binary
+                if !is_over_search_bar
+                    && !viewer.is_binary
                     && mx >= offset
                     && mx < offset + viewer_w
                     && my >= content_y

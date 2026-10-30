@@ -649,6 +649,13 @@ impl TearminalApp {
             // 2. Cerrar visor o cancelar selección: Escape o Ctrl + W
             if matches!(logical_key, Key::Named(NamedKey::Escape)) {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    if viewer.search_open {
+                        viewer.close_search();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
                     if viewer.has_selection() {
                         viewer.clear_selection();
                         if let Some(w) = &self.window {
@@ -663,6 +670,80 @@ impl TearminalApp {
             if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
                 self.close_tab(self.active_tab_index);
                 return;
+            }
+
+            // Búsqueda interna en el visor: Ctrl + F
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'f') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    viewer.open_search(visible_lines);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                return;
+            }
+
+            // Interceptación de entrada de teclado cuando la búsqueda interna está abierta
+            if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                if viewer.search_open {
+                    if matches!(logical_key, Key::Named(NamedKey::Enter)) {
+                        if shift {
+                            viewer.search_prev(visible_lines);
+                        } else {
+                            viewer.search_next(visible_lines);
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if matches!(logical_key, Key::Named(NamedKey::F3)) {
+                        if shift {
+                            viewer.search_prev(visible_lines);
+                        } else {
+                            viewer.search_next(visible_lines);
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) {
+                        viewer.search_prev(visible_lines);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                    if matches!(logical_key, Key::Named(NamedKey::ArrowDown)) {
+                        viewer.search_next(visible_lines);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+
+                    let mut input = std::mem::take(&mut viewer.search_input);
+                    let (consumed, changed) = self.handle_text_input_key(
+                        &mut input,
+                        &logical_key,
+                        physical_key,
+                        text.as_deref(),
+                    );
+                    if let Some(ref mut v) = self.tabs[self.active_tab_index].file_viewer {
+                        v.search_input = input;
+                        if changed {
+                            v.update_search_matches();
+                            v.jump_to_active_match(visible_lines);
+                        }
+                    }
+                    if consumed {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
+                }
             }
 
             // Seleccionar todo: Ctrl + A

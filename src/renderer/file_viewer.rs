@@ -559,7 +559,12 @@ impl TerminalRenderer {
             let mut marks: smallvec::SmallVec<[(i32, bool); 32]> = smallvec::SmallVec::new();
             if let Some(((l1, c1), (l2, c2))) = selection {
                 if line_idx >= l1 && line_idx <= l2 {
-                    let mut acc = cur_x;
+                    let full_line = viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+                    let mut acc = if !first_segment && viewer.render_markdown && is_markdown {
+                        cur_x + crate::renderer::md_preview::md_continuation_indent(full_line, char_w)
+                    } else {
+                        cur_x
+                    };
                     let mut sx: Option<i32> = None;
                     let mut ex = cur_x;
                     use unicode_segmentation::UnicodeSegmentation;
@@ -604,10 +609,80 @@ impl TerminalRenderer {
                 }
             }
 
+            // Resaltado de coincidencias de búsqueda interna (`Ctrl + F`)
+            if viewer.search_open && !viewer.search_matches.is_empty() {
+                let full_line = viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
+                let line_acc = if !first_segment && viewer.render_markdown && is_markdown {
+                    cur_x + crate::renderer::md_preview::md_continuation_indent(full_line, char_w)
+                } else {
+                    cur_x
+                };
+
+                let start_match = viewer
+                    .search_matches
+                    .partition_point(|&(l, _, _)| l < line_idx);
+                for (offset_idx, &(ml, mc1, mc2)) in viewer.search_matches[start_match..].iter().enumerate() {
+                    if ml > line_idx {
+                        break;
+                    }
+                    let m_idx = start_match + offset_idx;
+                    let mut m_sx: Option<i32> = None;
+                    let mut m_ex = line_acc;
+                    let mut acc = line_acc;
+                    use unicode_segmentation::UnicodeSegmentation;
+                    for (ci, g) in seg.graphemes(true).enumerate() {
+                        let col = row.start + ci;
+                        let adv = if g == "\t" {
+                            tab_adv
+                        } else {
+                            use unicode_width::UnicodeWidthStr;
+                            char_w as i32 * g.width().max(1) as i32
+                        };
+                        if col >= mc1 && col < mc2 {
+                            m_sx.get_or_insert(acc);
+                            m_ex = acc + adv;
+                        }
+                        acc += adv;
+                    }
+                    if let Some(sx) = m_sx {
+                        let draw_sx = sx.max(text_clip.0 as i32) as usize;
+                        let draw_ex = m_ex.min(text_clip.2 as i32).max(draw_sx as i32) as usize;
+                        if draw_ex > draw_sx {
+                            let is_active = Some(m_idx) == viewer.search_active_idx;
+                            let match_bg = if is_active {
+                                theme.mix(theme.background, theme.accent_color(), 0.65)
+                            } else {
+                                theme.mix(theme.background, theme.ansi[3], 0.35)
+                            };
+                            canvas.fill_rect(
+                                text_clip,
+                                draw_sx,
+                                row_y,
+                                draw_ex - draw_sx,
+                                row_h,
+                                match_bg,
+                            );
+                        }
+                    }
+                }
+            }
+
             match md_blocks.as_ref().and_then(|b| b.get(line_idx)) {
                 Some(block) => self.render_md_line(
-                    canvas, text_clip, seg, block, cur_x, row_y, row_h, baseline_y, text_max_x,
-                    char_w, theme,
+                    canvas,
+                    text_clip,
+                    seg,
+                    viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or(""),
+                    row.start,
+                    is_last_segment,
+                    block,
+                    cur_x,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    text_max_x,
+                    char_w,
+                    theme,
                 ),
                 None => self.render_highlighted_line(
                     canvas,
@@ -718,6 +793,22 @@ impl TerminalRenderer {
                 self.scrollbars_awake,
                 theme,
             );
+
+            // Marcas de coincidencia sobre el carril de la barra de desplazamiento
+            if viewer.search_open && !viewer.search_matches.is_empty() {
+                let total_lines = viewer.lines.len().max(1);
+                let (track_x, track_y, track_w, track_h) = track;
+                for (idx, &(line, _, _)) in viewer.search_matches.iter().enumerate() {
+                    let mark_y = track_y + (track_h.saturating_sub(3) * line) / total_lines;
+                    let is_active = Some(idx) == viewer.search_active_idx;
+                    let mark_color = if is_active {
+                        theme.accent_color()
+                    } else {
+                        theme.mix(theme.background, theme.ansi[3], 0.75)
+                    };
+                    canvas.fill_rect(clip, track_x, mark_y, track_w, 2, mark_color);
+                }
+            }
         }
 
         // 6. Barra de desplazamiento horizontal (solo si alguna línea excede el ancho visible)
@@ -731,6 +822,149 @@ impl TerminalRenderer {
                 theme,
             );
         }
+
+        // 7. Barra flotante de búsqueda interna (`Ctrl + F`)
+        if viewer.search_open {
+            self.draw_search_bar(canvas, clip, &lay, viewer, cursor_visible, theme);
+        }
+    }
+
+    /// Renderiza la barra flotante de búsqueda compacta en la esquina superior derecha del visor.
+    fn draw_search_bar(
+        &mut self,
+        canvas: &mut Canvas,
+        clip: Clip,
+        lay: &crate::renderer::FileViewerLayout,
+        viewer: &FileViewerState,
+        cursor_visible: bool,
+        theme: &Theme,
+    ) {
+        let s_rects = crate::renderer::FileViewerSearchRects::compute(lay);
+        let (bx, by, bw, bh) = s_rects.bar;
+
+        // Caja contenedora de la barra
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.chrome_bg());
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.card_outline());
+
+        // Icono de lupa
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Search,
+            bx + 14,
+            by + bh / 2,
+            13.0,
+            theme.text_muted(),
+        );
+
+        // Caja de entrada de texto
+        let (ix, iy, iw, ih) = s_rects.input;
+        canvas.rounded_fill(ix, iy, iw, ih, tokens::RADIUS_ROW, theme.surface_bg());
+        canvas.rounded_stroke(ix, iy, iw, ih, tokens::RADIUS_ROW, theme.chrome_line());
+
+        let input_base_y = self.centered_baseline(iy + ih / 2);
+        self.render_text_input_content(
+            canvas,
+            &viewer.search_input,
+            s_rects.text_start_x,
+            input_base_y,
+            ix + iw - 4,
+            iy,
+            ih,
+            cursor_visible,
+            "Buscar...",
+            true,
+            theme,
+        );
+
+        // Contador de coincidencias (ej: "3/12" o "0/0")
+        let (cx, cy, cw, ch) = s_rects.counter;
+        let counter_text = if viewer.search_input.text().is_empty() {
+            String::new()
+        } else if viewer.search_matches.is_empty() {
+            "0/0".to_string()
+        } else {
+            format!(
+                "{}/{}",
+                viewer.search_active_idx.map_or(0, |i| i + 1),
+                viewer.search_matches.len()
+            )
+        };
+        if !counter_text.is_empty() {
+            let counter_base_y = self.centered_baseline(cy + ch / 2);
+            let counter_color = if viewer.search_matches.is_empty() {
+                theme.ansi[1]
+            } else {
+                theme.text_muted()
+            };
+            self.draw_ui_text(
+                canvas,
+                &counter_text,
+                cx,
+                counter_base_y,
+                cx + cw,
+                counter_color,
+                tokens::DETAIL,
+                false,
+            );
+        }
+
+        // Botón anterior (ChevronLeft)
+        let (px, py, pw, ph) = s_rects.prev_btn;
+        if viewer.hovered_search_prev {
+            canvas.rounded_fill(px, py, pw, ph, tokens::RADIUS_ROW, theme.surface_hover());
+        }
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::ChevronLeft,
+            px + pw / 2,
+            py + ph / 2,
+            13.0,
+            if viewer.hovered_search_prev {
+                theme.foreground
+            } else {
+                theme.text_muted()
+            },
+        );
+
+        // Botón siguiente (ChevronRight)
+        let (nx, ny, nw, nh) = s_rects.next_btn;
+        if viewer.hovered_search_next {
+            canvas.rounded_fill(nx, ny, nw, nh, tokens::RADIUS_ROW, theme.surface_hover());
+        }
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::ChevronRight,
+            nx + nw / 2,
+            ny + nh / 2,
+            13.0,
+            if viewer.hovered_search_next {
+                theme.foreground
+            } else {
+                theme.text_muted()
+            },
+        );
+
+        // Separador vertical sutil entre navegación y cierre
+        let sep_x = nx + nw + 3;
+        canvas.fill_rect(clip, sep_x, by + 6, 1, bh.saturating_sub(12), theme.chrome_line());
+
+        // Botón cerrar (X)
+        let (close_x, close_y, close_w, close_h) = s_rects.close_btn;
+        if viewer.hovered_search_close {
+            canvas.rounded_fill(close_x, close_y, close_w, close_h, tokens::RADIUS_ROW, theme.surface_hover());
+        }
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::X,
+            close_x + close_w / 2,
+            close_y + close_h / 2,
+            12.0,
+            if viewer.hovered_search_close {
+                theme.foreground
+            } else {
+                theme.text_muted()
+            },
+        );
     }
 
     /// Botón de la cabecera del visor: icono Lucide + texto sobre un fondo redondeado

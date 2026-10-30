@@ -413,15 +413,23 @@ impl TerminalRenderer {
             return;
         }
 
+        let cur_h = 16.min(box_h.saturating_sub(4)).max(12);
+        let cur_y = box_y + (box_h.saturating_sub(cur_h)) / 2;
+        let cursor_color = if theme.cursor != theme.background {
+            theme.cursor
+        } else {
+            theme.accent_color()
+        };
+
         if text.is_empty() && is_active {
             if cursor_visible {
                 canvas.rounded_fill(
                     text_start_x,
-                    box_y + 7,
+                    cur_y,
                     2,
-                    box_h.saturating_sub(14),
+                    cur_h,
                     1,
-                    theme.accent_color(),
+                    cursor_color,
                 );
             }
             self.draw_ui_text(
@@ -437,45 +445,96 @@ impl TerminalRenderer {
             return;
         }
 
-        // Resaltado de selección si existe
-        if let Some((start, end)) = input.selection() {
+        // Selección activa: color nítido y alto contraste
+        let selection = input.selection();
+        let (sel_bg, sel_fg) = if theme.selection != theme.background {
+            (theme.selection, theme.selection_fg)
+        } else {
+            (theme.mix(theme.background, theme.accent_color(), 0.55), theme.foreground)
+        };
+
+        if let Some((start, end)) = selection {
             let x_start = text_start_x + self.measure_ui_text(&text[..start], tokens::BODY, true);
             let x_end = text_start_x + self.measure_ui_text(&text[..end], tokens::BODY, true);
             let sel_x = x_start.min(text_max_x);
             let sel_w = (x_end.saturating_sub(x_start)).min(text_max_x.saturating_sub(sel_x));
             if sel_w > 0 {
+                let sel_h = 18.min(box_h.saturating_sub(2)).max(14);
+                let sel_y = box_y + (box_h.saturating_sub(sel_h)) / 2;
                 canvas.rounded_fill(
                     sel_x,
-                    box_y + 6,
+                    sel_y,
                     sel_w,
-                    box_h.saturating_sub(12),
-                    2,
-                    theme.accent_soft(80),
+                    sel_h,
+                    3,
+                    sel_bg,
                 );
             }
-        }
 
-        self.draw_ui_text(
-            canvas,
-            text,
-            text_start_x,
-            text_y,
-            text_max_x,
-            theme.foreground,
-            tokens::BODY,
-            true,
-        );
+            // Dibujar los tramos de texto: antes, seleccionado (en sel_fg) y después
+            let prefix = &text[..start];
+            let selected = &text[start..end];
+            let suffix = &text[end..];
+
+            if !prefix.is_empty() {
+                self.draw_ui_text(
+                    canvas,
+                    prefix,
+                    text_start_x,
+                    text_y,
+                    x_start.min(text_max_x),
+                    theme.foreground,
+                    tokens::BODY,
+                    true,
+                );
+            }
+            if !selected.is_empty() {
+                self.draw_ui_text(
+                    canvas,
+                    selected,
+                    x_start,
+                    text_y,
+                    x_end.min(text_max_x),
+                    sel_fg,
+                    tokens::BODY,
+                    true,
+                );
+            }
+            if !suffix.is_empty() {
+                self.draw_ui_text(
+                    canvas,
+                    suffix,
+                    x_end,
+                    text_y,
+                    text_max_x,
+                    theme.foreground,
+                    tokens::BODY,
+                    true,
+                );
+            }
+        } else {
+            self.draw_ui_text(
+                canvas,
+                text,
+                text_start_x,
+                text_y,
+                text_max_x,
+                theme.foreground,
+                tokens::BODY,
+                true,
+            );
+        }
 
         if is_active && cursor_visible {
             let cur_offset = self.measure_ui_text(&text[..input.cursor], tokens::BODY, true);
             let cur_x = (text_start_x + cur_offset).min(text_max_x);
             canvas.rounded_fill(
                 cur_x,
-                box_y + 7,
+                cur_y,
                 2,
-                box_h.saturating_sub(14),
+                cur_h,
                 1,
-                theme.accent_color(),
+                cursor_color,
             );
         }
     }

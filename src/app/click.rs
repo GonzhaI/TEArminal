@@ -146,11 +146,7 @@ impl TearminalApp {
             return;
         }
         if button == MouseButton::Left && state == ElementState::Released {
-            self.settings_page_state.search_input.mouse_up();
-            self.settings_page_state.theme_search_input.mouse_up();
-            if let Some(p) = &mut self.palette {
-                p.input.mouse_up();
-            }
+            self.handle_all_text_inputs_mouse_up();
             if let Some(drag_idx) = self.tab_drag.take() {
                 let torn_off = if self.is_horizontal_tabs() {
                     my >= TopTabBarRects::HEIGHT + 15 || my >= win_h || mx >= win_w
@@ -210,11 +206,7 @@ impl TearminalApp {
 
         // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
         if button == MouseButton::Left && state == ElementState::Released {
-            self.settings_page_state.search_input.mouse_up();
-            self.settings_page_state.theme_search_input.mouse_up();
-            if let Some(p) = &mut self.palette {
-                p.input.mouse_up();
-            }
+            self.handle_all_text_inputs_mouse_up();
             self.viewer_drag_selecting = false;
             self.viewer_drag_start = None;
             let was_mouse_down = std::mem::take(&mut self.mouse_down);
@@ -1264,6 +1256,31 @@ impl TearminalApp {
                                 char_w,
                                 viewer.lines.len(),
                             );
+
+                            // Interacción con la barra flotante de búsqueda (`Ctrl + F`)
+                            if viewer.search_open {
+                                let s_rects = crate::renderer::FileViewerSearchRects::compute(&lay);
+                                if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.bar) {
+                                    let visible_lines = (lay.content_h / lay.row_h.max(16)).max(1);
+                                    if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.close_btn) {
+                                        viewer.close_search();
+                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.prev_btn) {
+                                        viewer.search_prev(visible_lines);
+                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.next_btn) {
+                                        viewer.search_next(visible_lines);
+                                    } else if crate::renderer::FileViewerSearchRects::inside(mx, my, s_rects.input) {
+                                        let mut input = std::mem::take(&mut viewer.search_input);
+                                        self.handle_text_input_click(&mut input, mx, s_rects.text_start_x);
+                                        if let Some(ref mut v) = self.tabs[self.active_tab_index].file_viewer {
+                                            v.search_input = input;
+                                        }
+                                    }
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
 
                             // Barra de desplazamiento horizontal
                             let max_x = viewer.max_scroll_x();

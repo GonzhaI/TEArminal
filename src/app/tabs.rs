@@ -168,7 +168,11 @@ impl TearminalApp {
         };
         match old_preview {
             Some(pos) => {
+                let old_id = self.tabs[pos].id;
+                let new_id = tab.id;
                 self.tabs[pos] = tab;
+                self.tab_history.retain(|&id| id != old_id);
+                self.record_tab_active(new_id);
                 if pos == self.active_tab_index {
                     self.update_window_title();
                 } else {
@@ -267,11 +271,17 @@ impl TearminalApp {
         self.tabs.push(TerminalTab::new(tab_id, title, pane));
 
         self.active_tab_index = self.tabs.len() - 1;
+        self.record_tab_active(tab_id);
         self.update_window_title();
         self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    pub(crate) fn record_tab_active(&mut self, tab_id: TabId) {
+        self.tab_history.retain(|&id| id != tab_id);
+        self.tab_history.push(tab_id);
     }
 
     pub(crate) fn close_tab(&mut self, index: usize) {
@@ -285,7 +295,11 @@ impl TearminalApp {
             }
         }
 
+        let closed_id = self.tabs[index].id;
+        let was_active = index == self.active_tab_index;
+
         self.tabs.remove(index);
+        self.tab_history.retain(|&id| id != closed_id);
         self.prune_pending_remote();
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando la ventana");
@@ -293,16 +307,34 @@ impl TearminalApp {
             return;
         }
 
-        if index < self.active_tab_index {
+        if was_active {
+            let next_idx = self
+                .tab_history
+                .iter()
+                .rev()
+                .find_map(|&id| self.tabs.iter().position(|t| t.id == id))
+                .unwrap_or_else(|| index.min(self.tabs.len() - 1));
+            self.active_tab_index = next_idx;
+        } else if index < self.active_tab_index {
             self.active_tab_index -= 1;
         } else if self.active_tab_index >= self.tabs.len() {
             self.active_tab_index = self.tabs.len() - 1;
         }
-        if index < self.last_terminal_tab_index {
-            self.last_terminal_tab_index -= 1;
-        } else if self.last_terminal_tab_index >= self.tabs.len() {
-            self.last_terminal_tab_index = self.tabs.len() - 1;
+
+        if !self.tabs[self.active_tab_index].is_settings {
+            self.last_terminal_tab_index = self.active_tab_index;
+        } else {
+            let last_term = self
+                .tab_history
+                .iter()
+                .rev()
+                .find_map(|&id| self.tabs.iter().position(|t| t.id == id && !t.is_settings))
+                .unwrap_or(0);
+            self.last_terminal_tab_index = last_term;
         }
+        let active_id = self.tabs[self.active_tab_index].id;
+        self.record_tab_active(active_id);
+
         self.tabs[self.active_tab_index].has_unread = false;
         self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
@@ -326,19 +358,41 @@ impl TearminalApp {
             }
         }
 
+        let closed_id = self.tabs[index].id;
+        let was_active = index == self.active_tab_index;
+
         let tab = self.tabs.remove(index);
+        self.tab_history.retain(|&id| id != closed_id);
         self.prune_pending_remote();
 
-        if index < self.active_tab_index {
+        if was_active {
+            let next_idx = self
+                .tab_history
+                .iter()
+                .rev()
+                .find_map(|&id| self.tabs.iter().position(|t| t.id == id))
+                .unwrap_or_else(|| index.min(self.tabs.len() - 1));
+            self.active_tab_index = next_idx;
+        } else if index < self.active_tab_index {
             self.active_tab_index -= 1;
         } else if self.active_tab_index >= self.tabs.len() {
             self.active_tab_index = self.tabs.len() - 1;
         }
-        if index < self.last_terminal_tab_index {
-            self.last_terminal_tab_index -= 1;
-        } else if self.last_terminal_tab_index >= self.tabs.len() {
-            self.last_terminal_tab_index = self.tabs.len() - 1;
+
+        if !self.tabs[self.active_tab_index].is_settings {
+            self.last_terminal_tab_index = self.active_tab_index;
+        } else {
+            let last_term = self
+                .tab_history
+                .iter()
+                .rev()
+                .find_map(|&id| self.tabs.iter().position(|t| t.id == id && !t.is_settings))
+                .unwrap_or(0);
+            self.last_terminal_tab_index = last_term;
         }
+        let active_id = self.tabs[self.active_tab_index].id;
+        self.record_tab_active(active_id);
+
         self.tabs[self.active_tab_index].has_unread = false;
         self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
@@ -359,9 +413,11 @@ impl TearminalApp {
     /// Acopla una pestaña existente (transferida desde otra ventana) en esta ventana
     pub(crate) fn attach_tab(&mut self, mut tab: TerminalTab) {
         tab.id = self.alloc_tab_id();
+        let tab_id = tab.id;
         let new_idx = self.tabs.len();
         self.tabs.push(tab);
         self.active_tab_index = new_idx;
+        self.record_tab_active(tab_id);
         if !self.tabs[new_idx].is_settings {
             self.last_terminal_tab_index = new_idx;
         }
@@ -390,9 +446,11 @@ impl TearminalApp {
             }
         }
         self.tabs.retain(|t| t.id == id);
+        self.tab_history.retain(|&tid| tid == id);
         self.prune_pending_remote();
         self.active_tab_index = 0;
         self.last_terminal_tab_index = 0;
+        self.record_tab_active(id);
         self.tabs[0].has_unread = false;
         self.sync_file_explorer_root();
         self.clamp_sidebar_scroll();
@@ -650,18 +708,22 @@ impl TearminalApp {
     }
 
     pub(crate) fn switch_to_tab(&mut self, index: usize) {
-        if index < self.tabs.len() && index != self.active_tab_index {
-            if !self.tabs[self.active_tab_index].is_settings {
-                self.last_terminal_tab_index = self.active_tab_index;
-            }
-            self.active_tab_index = index;
-            self.tabs[index].has_unread = false;
-            self.sync_file_explorer_root();
-            self.update_window_title();
-            self.recompute_grid_for_all_tabs();
-            self.save_session();
-            if let Some(w) = &self.window {
-                w.request_redraw();
+        if index < self.tabs.len() {
+            let tab_id = self.tabs[index].id;
+            self.record_tab_active(tab_id);
+            if index != self.active_tab_index {
+                if !self.tabs[self.active_tab_index].is_settings {
+                    self.last_terminal_tab_index = self.active_tab_index;
+                }
+                self.active_tab_index = index;
+                self.tabs[index].has_unread = false;
+                self.sync_file_explorer_root();
+                self.update_window_title();
+                self.recompute_grid_for_all_tabs();
+                self.save_session();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
             }
         }
     }

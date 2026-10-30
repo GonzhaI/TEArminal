@@ -29,7 +29,7 @@ pub(crate) struct RowRef {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RowsCache {
-    key: (u64, u64, usize, bool),
+    key: (u64, u64, usize, bool, bool),
     rows: Rc<[RowRef]>,
     max_cols_gen: u64,
     max_cols: usize,
@@ -84,10 +84,43 @@ pub(crate) fn indent_of(line: &str) -> Option<usize> {
     })
 }
 
-/// Parte `line` en tramos de como mucho `cols` columnas, prefiriendo cortar tras un espacio.
-fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
-    let cols = cols.max(8);
-    if line_col_width(line) <= cols {
+/// Sangría colgante para líneas continuadas de listas o citas en vista previa de Markdown
+fn md_hanging_indent(line: &str) -> usize {
+    let trimmed = line.trim_start();
+    let indent = line.len() - trimmed.len();
+    for prefix in ["- ", "* ", "+ "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            if rest.starts_with("[x] ") || rest.starts_with("[X] ") || rest.starts_with("[ ] ") {
+                return indent + 6;
+            }
+            return indent + 2;
+        }
+    }
+    let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digits > 0 && trimmed[digits..].starts_with(". ") {
+        return indent + digits + 2;
+    }
+    if trimmed.starts_with('>') {
+        let depth = trimmed.chars().take_while(|c| *c == '>').count();
+        return indent + depth * 2;
+    }
+    if indent > 0 {
+        return indent;
+    }
+    0
+}
+
+/// Parte `line` en tramos con ancho configurable para el primer tramo y los continuados.
+fn wrap_line_with_indent(
+    line: &str,
+    first_cols: usize,
+    cont_cols: usize,
+    line_idx: usize,
+    out: &mut Vec<RowRef>,
+) {
+    let first_cols = first_cols.max(8);
+    let cont_cols = cont_cols.max(8);
+    if line_col_width(line) <= first_cols {
         out.push(RowRef {
             line: line_idx,
             start: 0,
@@ -96,7 +129,9 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
         return;
     }
     let (mut start, mut width, mut last_break) = (0usize, 0usize, None::<(usize, usize)>);
+    let mut is_first = true;
     for (i, g) in line.graphemes(true).enumerate() {
+        let cols = if is_first { first_cols } else { cont_cols };
         let adv = if g == "\t" {
             4
         } else {
@@ -114,6 +149,7 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
                 end: at,
             });
             start = at;
+            is_first = false;
             last_break = None;
             width = rem_width;
         }
@@ -127,6 +163,11 @@ fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
         start,
         end: usize::MAX,
     });
+}
+
+/// Parte `line` en tramos de como mucho `cols` columnas, prefiriendo cortar tras un espacio.
+fn wrap_line(line: &str, cols: usize, line_idx: usize, out: &mut Vec<RowRef>) {
+    wrap_line_with_indent(line, cols, cols, line_idx, out);
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +223,15 @@ pub(crate) struct FileViewerState {
     pub edit_gen: u64,
     pub fold_gen: u64,
     pub rows_cache: RefCell<Option<RowsCache>>,
+    /// Barra flotante de búsqueda interna (`Ctrl + F`)
+    pub search_open: bool,
+    pub search_input: crate::ui::TextInput,
+    /// Coincidencias de búsqueda: `(line_idx, start_col, end_col)` en coordenadas de grafemas
+    pub search_matches: Vec<(usize, usize, usize)>,
+    pub search_active_idx: Option<usize>,
+    pub hovered_search_prev: bool,
+    pub hovered_search_next: bool,
+    pub hovered_search_close: bool,
 }
 
 /// Texto de un archivo tal como lo ve el visor, más lo necesario para escribirlo igual que se leyó
@@ -247,9 +297,9 @@ impl FileViewerState {
             .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
     }
 
-    /// El ajuste de línea no se aplica a la vista previa de Markdown (se dibuja línea a línea)
+    /// El ajuste de línea está activo si se solicitó explícitamente o en vista previa de Markdown
     pub(crate) fn wrap_active(&self) -> bool {
-        self.word_wrap && !(self.render_markdown && self.is_markdown())
+        self.word_wrap || (self.render_markdown && self.is_markdown())
     }
 
     /// Detecta si el archivo utiliza sangría de 2 o 4 espacios (por defecto 4).
@@ -280,7 +330,8 @@ impl FileViewerState {
     /// Filas visuales (ajuste de línea + plegado), en caché mientras no cambien texto, pliegues, ancho ni modo.
     pub(crate) fn rows(&self) -> Rc<[RowRef]> {
         let wrap = self.wrap_active();
-        let key = (self.edit_gen, self.fold_gen, self.visible_cols, wrap);
+        let is_md_preview = self.render_markdown && self.is_markdown();
+        let key = (self.edit_gen, self.fold_gen, self.visible_cols, wrap, is_md_preview);
         let prev_max_cols = {
             let borrow = self.rows_cache.borrow();
             if let Some(c) = &*borrow {
@@ -295,8 +346,16 @@ impl FileViewerState {
         let mut rows = Vec::with_capacity(self.lines.len());
         let mut i = 0;
         while i < self.lines.len() {
-            if wrap {
-                wrap_line(&self.lines[i], self.visible_cols, i, &mut rows);
+            let line = &self.lines[i];
+            let is_table = is_md_preview && line.trim_start().starts_with('|');
+            if wrap && !is_table {
+                if is_md_preview {
+                    let hanging = md_hanging_indent(line);
+                    let cont_cols = self.visible_cols.saturating_sub(hanging).max(8);
+                    wrap_line_with_indent(line, self.visible_cols, cont_cols, i, &mut rows);
+                } else {
+                    wrap_line(line, self.visible_cols, i, &mut rows);
+                }
             } else {
                 rows.push(RowRef {
                     line: i,
@@ -496,7 +555,11 @@ impl FileViewerState {
     }
 
     /// Máximo `scroll_offset_x`: deja 2 columnas libres para el cursor al final de la línea más larga.
+    /// Con ajuste de línea activo (`wrap_active`), todo el contenido se adapta al ancho y no hay scroll horizontal.
     pub(crate) fn max_scroll_x(&self) -> usize {
+        if self.wrap_active() {
+            return 0;
+        }
         (self.max_cols() + 2).saturating_sub(self.visible_cols.max(1))
     }
 
@@ -824,6 +887,148 @@ impl FileViewerState {
             self.scroll_offset_x = self.cursor_col;
         } else if self.cursor_col >= self.scroll_offset_x + self.visible_cols {
             self.scroll_offset_x = self.cursor_col.saturating_sub(self.visible_cols - 1);
+        }
+    }
+
+    /// Abre la barra de búsqueda flotante (`Ctrl + F`). Si hay texto seleccionado en una sola línea,
+    /// lo usa como consulta inicial y lo selecciona.
+    pub(crate) fn open_search(&mut self, visible_lines: usize) {
+        self.search_open = true;
+        if let Some(text) = self.selected_text() {
+            let first = text.lines().next().unwrap_or("").trim();
+            if !first.is_empty() {
+                self.search_input = crate::ui::TextInput::new(first);
+                self.search_input.select_all();
+            }
+        } else if !self.search_input.text().is_empty() {
+            self.search_input.select_all();
+        }
+        self.update_search_matches();
+        if self.search_active_idx.is_some() {
+            self.jump_to_active_match(visible_lines);
+        }
+    }
+
+    /// Cierra la búsqueda flotante y limpia las coincidencias activas.
+    pub(crate) fn close_search(&mut self) {
+        self.search_open = false;
+        self.search_matches.clear();
+        self.search_active_idx = None;
+    }
+
+    /// Recalcula todas las coincidencias de búsqueda sobre el contenido actual.
+    pub(crate) fn update_search_matches(&mut self) {
+        self.search_matches.clear();
+        let query = self.search_input.text().trim();
+        if query.is_empty() {
+            self.search_active_idx = None;
+            return;
+        }
+
+        let is_ascii = query.is_ascii();
+        let q_lower = query.to_lowercase();
+        let q_chars: Vec<char> = q_lower.chars().collect();
+
+        for (line_idx, line) in self.lines.iter().enumerate() {
+            if is_ascii && line.is_ascii() {
+                let line_lower = line.to_ascii_lowercase();
+                let q_str = q_lower.as_str();
+                let q_len = q_str.len();
+                let mut offset = 0;
+                while let Some(pos) = line_lower[offset..].find(q_str) {
+                    let start = offset + pos;
+                    self.search_matches.push((line_idx, start, start + q_len));
+                    offset = start + q_len.max(1);
+                }
+            } else {
+                use unicode_segmentation::UnicodeSegmentation;
+                let graphemes: Vec<&str> = line.graphemes(true).collect();
+                let g_lowers: Vec<String> = graphemes.iter().map(|g| g.to_lowercase()).collect();
+                let total_g = graphemes.len();
+                let mut i = 0;
+                while i < total_g {
+                    let mut matched_chars = 0;
+                    let mut j = i;
+                    let mut is_match = false;
+                    while j < total_g {
+                        let g_str = &g_lowers[j];
+                        let mut all_matched = true;
+                        for c in g_str.chars() {
+                            if matched_chars < q_chars.len() && q_chars[matched_chars] == c {
+                                matched_chars += 1;
+                            } else {
+                                all_matched = false;
+                                break;
+                            }
+                        }
+                        if !all_matched {
+                            break;
+                        }
+                        if matched_chars == q_chars.len() {
+                            is_match = true;
+                            j += 1;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if is_match {
+                        self.search_matches.push((line_idx, i, j));
+                        i = j;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        }
+
+        if self.search_matches.is_empty() {
+            self.search_active_idx = None;
+        } else {
+            let cur = (self.cursor_line, self.cursor_col);
+            let nearest = self
+                .search_matches
+                .iter()
+                .position(|&(l, c, _)| (l, c) >= cur)
+                .unwrap_or(0);
+            self.search_active_idx = Some(nearest);
+        }
+    }
+
+    /// Salta a la siguiente coincidencia cíclica.
+    pub(crate) fn search_next(&mut self, visible_lines: usize) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let next = match self.search_active_idx {
+            Some(idx) => (idx + 1) % self.search_matches.len(),
+            None => 0,
+        };
+        self.search_active_idx = Some(next);
+        self.jump_to_active_match(visible_lines);
+    }
+
+    /// Salta a la coincidencia anterior cíclica.
+    pub(crate) fn search_prev(&mut self, visible_lines: usize) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let prev = match self.search_active_idx {
+            Some(0) | None => self.search_matches.len().saturating_sub(1),
+            Some(idx) => idx - 1,
+        };
+        self.search_active_idx = Some(prev);
+        self.jump_to_active_match(visible_lines);
+    }
+
+    /// Revela la línea y posiciona el cursor en la coincidencia activa.
+    pub(crate) fn jump_to_active_match(&mut self, visible_lines: usize) {
+        if let Some(idx) = self.search_active_idx {
+            if let Some(&(line, start_col, _)) = self.search_matches.get(idx) {
+                self.cursor_line = line;
+                self.cursor_col = start_col;
+                self.reveal_line(line);
+                self.ensure_cursor_visible(visible_lines.max(1));
+            }
         }
     }
 

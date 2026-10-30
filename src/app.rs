@@ -86,6 +86,8 @@ pub(crate) struct TearminalApp {
     proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
     pub tabs: Vec<TerminalTab>,
     pub active_tab_index: usize,
+    /// Historial de activación de pestañas (MRU) para volver a la última abierta al cerrar una
+    pub tab_history: Vec<TabId>,
     next_tab_id: TabId,
     /// (pestaña, panel) cuya carpeta mostró por última vez el explorador: si el foco pasa a otra terminal
     /// de la misma pestaña, `on_redraw` reorienta el explorador (`sync_file_explorer_root`).
@@ -401,6 +403,20 @@ impl TearminalApp {
         true
     }
 
+    /// Finaliza el arrastre y estado de ratón en todos los campos de texto activos de la aplicación.
+    pub(crate) fn handle_all_text_inputs_mouse_up(&mut self) {
+        self.settings_page_state.search_input.mouse_up();
+        self.settings_page_state.theme_search_input.mouse_up();
+        if let Some(p) = &mut self.palette {
+            p.input.mouse_up();
+        }
+        for tab in &mut self.tabs {
+            if let Some(ref mut viewer) = tab.file_viewer {
+                viewer.search_input.mouse_up();
+            }
+        }
+    }
+
     /// Solicita un redibujado de la ventana si está abierta.
     #[inline]
     pub(crate) fn request_redraw(&self) {
@@ -590,12 +606,14 @@ impl TearminalApp {
         }
         let clipboard = arboard::Clipboard::new().ok();
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
+        let tab_history = tabs.get(active_tab_index).map(|t| vec![t.id]).unwrap_or_default();
         let mut app = Self {
             config,
             theme,
             proxy,
             tabs,
             active_tab_index,
+            tab_history,
             next_tab_id,
             sidebar_visible,
             hovered_tab: None,

@@ -1767,6 +1767,35 @@ fn test_close_tab_preserves_active_tab_and_close_other_tabs_keeps_target() {
 }
 
 #[test]
+fn test_close_tab_mru_history() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let tab_a = app.tabs[0].id;
+    let tab_b = TabId(2);
+    let tab_c = TabId(3);
+
+    app.tabs.push(TerminalTab::new_settings(tab_b));
+    app.switch_to_tab(1);
+    assert_eq!(app.tabs[app.active_tab_index].id, tab_b);
+
+    app.tabs.push(TerminalTab::new_settings(tab_c));
+    app.switch_to_tab(2);
+    assert_eq!(app.tabs[app.active_tab_index].id, tab_c);
+
+    // Volver a Tab A
+    app.switch_to_tab(0);
+    assert_eq!(app.tabs[app.active_tab_index].id, tab_a);
+
+    // Al cerrar Tab A (activa), debe devolver a Tab C (la última que estuvo activa antes de A)
+    app.close_tab(0);
+    assert_eq!(app.tabs[app.active_tab_index].id, tab_c);
+
+    // Al cerrar Tab C, debe devolver a Tab B
+    let c_idx = app.tabs.iter().position(|t| t.id == tab_c).unwrap();
+    app.close_tab(c_idx);
+    assert_eq!(app.tabs[app.active_tab_index].id, tab_b);
+}
+
+#[test]
 fn test_get_git_branch_worktree_detached_head() {
     let dir = std::env::temp_dir().join(format!("tearminal_test_wt_{}", std::process::id()));
     let real_git = dir.join("real_git");
@@ -1854,6 +1883,123 @@ fn test_viewer_save_preserves_undo_redo_and_autosave_blank_lines() {
     assert!(v.save_to_disk().is_ok());
     assert_eq!(v.lines.len(), 3);
     assert!(v.cursor_line < v.lines.len());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_viewer_search_matching_and_navigation() {
+    let src = "fn foo() {\n    let foo_bar = foo();\n    println!(\"foo\");\n}\n";
+    let (mut tab, path) = viewer_with("search_test.rs", src);
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    v.search_input = crate::ui::TextInput::new("foo");
+    v.update_search_matches();
+
+    // Debe encontrar 4 coincidencias:
+    // línea 0: col 3..6 ("foo")
+    // línea 1: col 8..11 ("foo"), col 18..21 ("foo")
+    // línea 2: col 14..17 ("foo")
+    assert_eq!(v.search_matches.len(), 4);
+    assert_eq!(v.search_matches[0], (0, 3, 6));
+    assert_eq!(v.search_matches[1], (1, 8, 11));
+    assert_eq!(v.search_matches[2], (1, 18, 21));
+    assert_eq!(v.search_matches[3], (2, 14, 17));
+    assert_eq!(v.search_active_idx, Some(0));
+
+    // Navegación hacia adelante (search_next)
+    v.search_next(10);
+    assert_eq!(v.search_active_idx, Some(1));
+    assert_eq!(v.cursor_line, 1);
+    assert_eq!(v.cursor_col, 8);
+
+    v.search_next(10);
+    assert_eq!(v.search_active_idx, Some(2));
+    assert_eq!(v.cursor_line, 1);
+    assert_eq!(v.cursor_col, 18);
+
+    v.search_next(10);
+    assert_eq!(v.search_active_idx, Some(3));
+    assert_eq!(v.cursor_line, 2);
+    assert_eq!(v.cursor_col, 14);
+
+    // Ciclo (wrap-around) al inicio
+    v.search_next(10);
+    assert_eq!(v.search_active_idx, Some(0));
+    assert_eq!(v.cursor_line, 0);
+    assert_eq!(v.cursor_col, 3);
+
+    // Navegación hacia atrás (search_prev) desde 0 cicla al final
+    v.search_prev(10);
+    assert_eq!(v.search_active_idx, Some(3));
+    assert_eq!(v.cursor_line, 2);
+    assert_eq!(v.cursor_col, 14);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_viewer_search_reveals_folded_blocks() {
+    let src = "fn fold_me() {\n    let hidden_secret = 42;\n    return;\n}\n";
+    let (mut tab, path) = viewer_with("search_fold.rs", src);
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    // Plegar la función
+    v.toggle_fold(0);
+    assert!(v.folded.contains(&0));
+    assert_eq!(v.row_of(1, 0), None, "la línea 1 está oculta");
+
+    // Buscar texto dentro del bloque plegado
+    v.search_input = crate::ui::TextInput::new("secret");
+    v.update_search_matches();
+    assert_eq!(v.search_matches.len(), 1);
+    assert_eq!(v.search_matches[0].0, 1);
+
+    // Al saltar a la coincidencia activa, debe desplegarse automáticamente
+    v.jump_to_active_match(10);
+    assert!(!v.folded.contains(&0), "el bloque plegado debe haberse desplegado");
+    assert_eq!(v.cursor_line, 1);
+    assert!(v.row_of(1, 0).is_some(), "la línea 1 ahora es visible");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_viewer_search_open_with_selection_and_close() {
+    let src = "primera linea con palabra clave\nsegunda linea\n";
+    let (mut tab, path) = viewer_with("search_sel.txt", src);
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    // Seleccionar "palabra" (índice 18..25)
+    v.selection = Some(((0, 18), (0, 25)));
+    v.open_search(10);
+
+    assert!(v.search_open);
+    assert_eq!(v.search_input.text(), "palabra");
+    assert_eq!(v.search_matches.len(), 1);
+    assert_eq!(v.search_active_idx, Some(0));
+
+    // Cerrar búsqueda
+    v.close_search();
+    assert!(!v.search_open);
+    assert!(v.search_matches.is_empty());
+    assert_eq!(v.search_active_idx, None);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_viewer_search_unicode_case_insensitive() {
+    let src = "Café con leche\nCAFÉ doble\notra línea\n";
+    let (mut tab, path) = viewer_with("search_unicode.txt", src);
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    v.search_input = crate::ui::TextInput::new("café");
+    v.update_search_matches();
+
+    assert_eq!(v.search_matches.len(), 2);
+    assert_eq!(v.search_matches[0], (0, 0, 4));
+    assert_eq!(v.search_matches[1], (1, 0, 4));
 
     let _ = std::fs::remove_file(path);
 }

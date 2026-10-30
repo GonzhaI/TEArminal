@@ -14,6 +14,7 @@ pub(crate) enum MenuAction {
     ViewerCut,
     ViewerPaste,
     ViewerSelectAll,
+    ViewerSearch,
     ViewerUndo,
     ViewerRedo,
     ViewerSave,
@@ -645,6 +646,13 @@ impl TearminalApp {
                 MenuAction::ViewerSelectAll,
                 !v.is_binary,
             ),
+            MenuItem::new(
+                "Buscar",
+                LucideIcon::Search,
+                "Ctrl+F",
+                MenuAction::ViewerSearch,
+                !v.is_binary,
+            ),
             MenuItem::separator(),
             MenuItem::new(
                 "Deshacer",
@@ -879,6 +887,11 @@ impl TearminalApp {
                 if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
                     v.select_all();
                     v.ensure_cursor_visible(visible_lines);
+                }
+            }
+            MenuAction::ViewerSearch => {
+                if let Some(v) = self.tabs[idx].file_viewer.as_mut() {
+                    v.open_search(visible_lines);
                 }
             }
             MenuAction::ViewerUndo | MenuAction::ViewerRedo => {

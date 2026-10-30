@@ -8,6 +8,7 @@ use winit::event_loop::{ControlFlow, EventLoopProxy};
 pub(crate) struct TearminalHost {
     proxy: Option<EventLoopProxy<TearminalEvent>>,
     windows: Vec<TearminalApp>,
+    window_history: Vec<WindowId>,
 }
 
 impl TearminalHost {
@@ -34,7 +35,11 @@ impl TearminalHost {
         for w in &windows {
             w.save_session();
         }
-        Self { proxy, windows }
+        Self {
+            proxy,
+            windows,
+            window_history: Vec::new(),
+        }
     }
 
     /// Tras cada evento: abre las ventanas pedidas, retira las cerradas y sale si no queda ninguna
@@ -50,6 +55,10 @@ impl TearminalHost {
         for (config, session) in requested {
             let mut app = TearminalApp::from_session(config, self.proxy.clone(), Some(session));
             app.init_window(event_loop);
+            if let Some(wid) = app.window_id() {
+                self.window_history.retain(|&id| id != wid);
+                self.window_history.push(wid);
+            }
             app.save_session();
             self.windows.push(app);
         }
@@ -66,6 +75,10 @@ impl TearminalHost {
         for (config, tab) in requested_tabs {
             let mut app = TearminalApp::from_tab(config, self.proxy.clone(), tab);
             app.init_window(event_loop);
+            if let Some(wid) = app.window_id() {
+                self.window_history.retain(|&id| id != wid);
+                self.window_history.push(wid);
+            }
             app.save_session();
             self.windows.push(app);
         }
@@ -161,6 +174,10 @@ impl TearminalHost {
                     win.set_outer_position(winit::dpi::PhysicalPosition::new(sx.max(0), sy.max(0)));
                     win.focus_window();
                 }
+                if let Some(wid) = app.window_id() {
+                    self.window_history.retain(|&id| id != wid);
+                    self.window_history.push(wid);
+                }
                 app.save_session();
                 self.windows.push(app);
             }
@@ -175,13 +192,39 @@ impl TearminalHost {
             // Cerrar una ventana con otras abiertas la quita de la sesión; la última se conserva para restaurarla
             let others_remain = self.windows.iter().any(|w| !w.closing);
             self.windows.retain(|w| {
-                if w.closing && others_remain {
-                    SessionState::forget_window(w.session_id);
+                if w.closing {
+                    if let Some(wid) = w.window_id() {
+                        self.window_history.retain(|&id| id != wid);
+                    }
+                    if others_remain {
+                        SessionState::forget_window(w.session_id);
+                    }
                 }
                 !w.closing
             });
             if self.windows.is_empty() {
                 event_loop.exit();
+            } else {
+                // Devolver el foco a la ventana más recientemente usada que sigue abierta
+                let target_wid = self
+                    .window_history
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|&wid| self.windows.iter().any(|w| w.window_id() == Some(wid)));
+
+                let target_app = if let Some(wid) = target_wid {
+                    self.windows.iter_mut().find(|w| w.window_id() == Some(wid))
+                } else {
+                    self.windows.last_mut()
+                };
+
+                if let Some(w) = target_app {
+                    if let Some(win) = &w.window {
+                        win.focus_window();
+                        win.request_redraw();
+                    }
+                }
             }
         }
     }
@@ -209,6 +252,11 @@ impl ApplicationHandler<TearminalEvent> for TearminalHost {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         for w in &mut self.windows {
             w.init_window(event_loop);
+            if let Some(wid) = w.window_id() {
+                if !self.window_history.contains(&wid) {
+                    self.window_history.push(wid);
+                }
+            }
         }
     }
 
@@ -218,6 +266,10 @@ impl ApplicationHandler<TearminalEvent> for TearminalHost {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if matches!(event, WindowEvent::Focused(true)) {
+            self.window_history.retain(|&id| id != window_id);
+            self.window_history.push(window_id);
+        }
         if let Some(w) = self
             .windows
             .iter_mut()

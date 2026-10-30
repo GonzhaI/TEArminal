@@ -564,6 +564,13 @@ impl TerminalTab {
             edit_gen: 0,
             fold_gen: 0,
             rows_cache: Default::default(),
+            search_open: false,
+            search_input: crate::ui::TextInput::new(""),
+            search_matches: Vec::new(),
+            search_active_idx: None,
+            hovered_search_prev: false,
+            hovered_search_next: false,
+            hovered_search_close: false,
         };
 
         Self {
@@ -687,6 +694,13 @@ impl TerminalTab {
             edit_gen: 0,
             fold_gen: 0,
             rows_cache: Default::default(),
+            search_open: false,
+            search_input: crate::ui::TextInput::new(""),
+            search_matches: Vec::new(),
+            search_active_idx: None,
+            hovered_search_prev: false,
+            hovered_search_next: false,
+            hovered_search_close: false,
         };
 
         Self {

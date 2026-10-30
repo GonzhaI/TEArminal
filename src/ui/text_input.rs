@@ -28,6 +28,8 @@ pub(crate) struct TextInput {
     pub select_anchor: Option<usize>,
     /// Indica si se está arrastrando con el ratón para seleccionar
     pub is_dragging: bool,
+    undo_stack: Vec<(String, usize)>,
+    redo_stack: Vec<(String, usize)>,
 }
 
 #[allow(dead_code)]
@@ -40,6 +42,47 @@ impl TextInput {
             cursor,
             select_anchor: None,
             is_dragging: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+        }
+    }
+
+    /// Guarda una instantánea del estado actual en el historial de deshacer
+    fn push_undo(&mut self) {
+        if self.undo_stack.last().map(|(t, _)| t.as_str()) != Some(&self.text) {
+            if self.undo_stack.len() >= 50 {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push((self.text.clone(), self.cursor));
+        }
+        self.redo_stack.clear();
+    }
+
+    /// Deshace la última edición de texto (Ctrl+Z)
+    pub(crate) fn undo(&mut self) -> bool {
+        if let Some((prev_text, prev_cursor)) = self.undo_stack.pop() {
+            self.redo_stack.push((self.text.clone(), self.cursor));
+            self.text = prev_text;
+            self.cursor = prev_cursor.min(self.text.len());
+            self.select_anchor = None;
+            self.clamp_cursor();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rehace la última edición deshecha (Ctrl+Y / Ctrl+Shift+Z)
+    pub(crate) fn redo(&mut self) -> bool {
+        if let Some((next_text, next_cursor)) = self.redo_stack.pop() {
+            self.undo_stack.push((self.text.clone(), self.cursor));
+            self.text = next_text;
+            self.cursor = next_cursor.min(self.text.len());
+            self.select_anchor = None;
+            self.clamp_cursor();
+            true
+        } else {
+            false
         }
     }
 
@@ -56,6 +99,7 @@ impl TextInput {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.push_undo();
         self.text.clear();
         self.cursor = 0;
         self.select_anchor = None;
@@ -63,6 +107,7 @@ impl TextInput {
     }
 
     pub(crate) fn set_text(&mut self, s: impl Into<String>) {
+        self.push_undo();
         self.text = s.into();
         self.cursor = self.text.len();
         self.select_anchor = None;
@@ -99,6 +144,7 @@ impl TextInput {
     /// Borra el rango seleccionado si lo hay. Devuelve `true` si se borró algo.
     pub(crate) fn delete_selection(&mut self) -> bool {
         if let Some((start, end)) = self.selection() {
+            self.push_undo();
             self.text.drain(start..end);
             self.cursor = start;
             self.select_anchor = None;
@@ -109,6 +155,7 @@ impl TextInput {
 
     /// Inserta texto en la posición del cursor (reemplazando la selección si existe)
     pub(crate) fn insert_text(&mut self, s: &str) {
+        self.push_undo();
         self.delete_selection();
         self.clamp_cursor();
         self.text.insert_str(self.cursor, s);
@@ -128,6 +175,7 @@ impl TextInput {
             return true;
         }
         if self.cursor > 0 {
+            self.push_undo();
             let prev = self.prev_char_index(self.cursor);
             self.text.drain(prev..self.cursor);
             self.cursor = prev;
@@ -142,8 +190,10 @@ impl TextInput {
             return true;
         }
         if self.cursor < self.text.len() {
+            self.push_undo();
             let next = self.next_char_index(self.cursor);
             self.text.drain(self.cursor..next);
+            self.cursor = self.cursor.min(self.text.len());
             return true;
         }
         false
@@ -155,6 +205,7 @@ impl TextInput {
             return true;
         }
         if self.cursor > 0 {
+            self.push_undo();
             let target = self.word_boundary_left(self.cursor);
             self.text.drain(target..self.cursor);
             self.cursor = target;
@@ -169,6 +220,7 @@ impl TextInput {
             return true;
         }
         if self.cursor < self.text.len() {
+            self.push_undo();
             let target = self.word_boundary_right(self.cursor);
             self.text.drain(self.cursor..target);
             return true;
@@ -280,15 +332,16 @@ impl TextInput {
     }
 
     pub(crate) fn mouse_down(&mut self, char_idx: usize, extend_selection: bool) {
-        self.cursor = char_idx.min(self.text.len());
-        self.clamp_cursor();
+        let target = char_idx.min(self.text.len());
         if extend_selection {
             if self.select_anchor.is_none() {
                 self.select_anchor = Some(self.cursor);
             }
         } else {
-            self.select_anchor = Some(self.cursor);
+            self.select_anchor = Some(target);
         }
+        self.cursor = target;
+        self.clamp_cursor();
         self.is_dragging = true;
     }
 
@@ -327,6 +380,22 @@ impl TextInput {
         clipboard_paste: Option<&str>,
     ) -> (TextInputKeyResult, Option<String>) {
         if ctrl && !alt {
+            if key_is_char(logical_key, physical_key, 'z') {
+                if shift {
+                    if self.redo() {
+                        return (TextInputKeyResult::Changed, None);
+                    }
+                } else if self.undo() {
+                    return (TextInputKeyResult::Changed, None);
+                }
+                return (TextInputKeyResult::Navigated, None);
+            }
+            if key_is_char(logical_key, physical_key, 'y') {
+                if self.redo() {
+                    return (TextInputKeyResult::Changed, None);
+                }
+                return (TextInputKeyResult::Navigated, None);
+            }
             if key_is_char(logical_key, physical_key, 'a') {
                 self.select_all();
                 return (TextInputKeyResult::Navigated, None);
@@ -352,71 +421,95 @@ impl TextInput {
             }
         }
 
-        match logical_key {
-            Key::Named(NamedKey::ArrowLeft) => {
-                self.move_left(shift, ctrl);
+        let is_backspace = matches!(logical_key, Key::Named(NamedKey::Backspace))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Backspace))
+            || matches!(logical_key, Key::Character(s) if s == "\x17" || s == "\x08" || s == "\x7f");
+
+        let is_delete = matches!(logical_key, Key::Named(NamedKey::Delete))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Delete));
+
+        let is_left = matches!(logical_key, Key::Named(NamedKey::ArrowLeft))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::ArrowLeft));
+
+        let is_right = matches!(logical_key, Key::Named(NamedKey::ArrowRight))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::ArrowRight));
+
+        let is_home = matches!(logical_key, Key::Named(NamedKey::Home))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::Home));
+
+        let is_end = matches!(logical_key, Key::Named(NamedKey::End))
+            || matches!(physical_key, PhysicalKey::Code(winit::keyboard::KeyCode::End));
+
+        if is_left {
+            self.move_left(shift, ctrl);
+            return (TextInputKeyResult::Navigated, None);
+        }
+        if is_right {
+            self.move_right(shift, ctrl);
+            return (TextInputKeyResult::Navigated, None);
+        }
+        if is_home {
+            self.move_home(shift);
+            return (TextInputKeyResult::Navigated, None);
+        }
+        if is_end {
+            self.move_end(shift);
+            return (TextInputKeyResult::Navigated, None);
+        }
+        if is_backspace {
+            let changed = if ctrl || alt {
+                self.delete_word_backward()
+            } else {
+                self.delete_backward()
+            };
+            return if changed {
+                (TextInputKeyResult::Changed, None)
+            } else {
                 (TextInputKeyResult::Navigated, None)
-            }
-            Key::Named(NamedKey::ArrowRight) => {
-                self.move_right(shift, ctrl);
+            };
+        }
+        if is_delete {
+            let changed = if ctrl {
+                self.delete_word_forward()
+            } else {
+                self.delete_forward()
+            };
+            return if changed {
+                (TextInputKeyResult::Changed, None)
+            } else {
                 (TextInputKeyResult::Navigated, None)
-            }
-            Key::Named(NamedKey::Home) => {
-                self.move_home(shift);
-                (TextInputKeyResult::Navigated, None)
-            }
-            Key::Named(NamedKey::End) => {
-                self.move_end(shift);
-                (TextInputKeyResult::Navigated, None)
-            }
-            Key::Named(NamedKey::Backspace) => {
-                let changed = if ctrl || alt {
-                    self.delete_word_backward()
-                } else {
-                    self.delete_backward()
-                };
+            };
+        }
+        if matches!(logical_key, Key::Named(NamedKey::Escape)) && self.has_selection() {
+            self.clear_selection();
+            return (TextInputKeyResult::Navigated, None);
+        }
+
+        if matches!(
+            logical_key,
+            Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
+        ) {
+            return (TextInputKeyResult::Ignored, None);
+        }
+
+        if !ctrl && !alt {
+            let input_str = text.or(match logical_key {
+                Key::Character(s) => Some(s.as_str()),
+                _ => None,
+            });
+            if let Some(t) = input_str {
+                let mut changed = false;
+                for ch in t.chars().filter(|c| !c.is_control()) {
+                    self.insert_char(ch);
+                    changed = true;
+                }
                 if changed {
-                    (TextInputKeyResult::Changed, None)
-                } else {
-                    (TextInputKeyResult::Navigated, None)
+                    return (TextInputKeyResult::Changed, None);
                 }
-            }
-            Key::Named(NamedKey::Delete) => {
-                let changed = if ctrl {
-                    self.delete_word_forward()
-                } else {
-                    self.delete_forward()
-                };
-                if changed {
-                    (TextInputKeyResult::Changed, None)
-                } else {
-                    (TextInputKeyResult::Navigated, None)
-                }
-            }
-            _ => {
-                if matches!(
-                    logical_key,
-                    Key::Named(
-                        NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super
-                    )
-                ) {
-                    return (TextInputKeyResult::Ignored, None);
-                }
-                if !ctrl && !alt {
-                    if let Some(t) = text {
-                        let mut changed = false;
-                        for ch in t.chars().filter(|c| !c.is_control()) {
-                            self.insert_char(ch);
-                            changed = true;
-                        }
-                        if changed {
-                            return (TextInputKeyResult::Changed, None);
-                        }
-                    }
-                }
-                (TextInputKeyResult::Ignored, None)
             }
         }
+
+        (TextInputKeyResult::Ignored, None)
     }
 
     // --- Métodos internos de cálculo de límites ---
@@ -638,5 +731,50 @@ mod tests {
         assert_eq!(input.hit_test(26, 10, measure), 2);
         assert_eq!(input.hit_test(36, 10, measure), 3);
         assert_eq!(input.hit_test(100, 10, measure), 3);
+    }
+
+    #[test]
+    fn test_text_input_undo_redo() {
+        let mut input = TextInput::new("hola");
+        input.insert_text(" mundo");
+        assert_eq!(input.text(), "hola mundo");
+
+        assert!(input.undo());
+        assert_eq!(input.text(), "hola");
+
+        assert!(input.redo());
+        assert_eq!(input.text(), "hola mundo");
+    }
+
+    #[test]
+    fn test_text_input_shift_click_selection() {
+        let mut input = TextInput::new("hola mundo");
+        input.mouse_down(0, false);
+        input.mouse_up();
+        assert_eq!(input.cursor, 0);
+        assert!(!input.has_selection());
+
+        input.mouse_down(4, true);
+        assert_eq!(input.cursor, 4);
+        assert_eq!(input.selected_text(), Some("hola"));
+    }
+
+    #[test]
+    fn test_text_input_escape_clears_selection() {
+        let mut input = TextInput::new("texto");
+        input.select_all();
+        assert!(input.has_selection());
+
+        let (res, _) = input.handle_key(
+            &Key::Named(NamedKey::Escape),
+            PhysicalKey::Code(winit::keyboard::KeyCode::Escape),
+            None,
+            false,
+            false,
+            false,
+            None,
+        );
+        assert_eq!(res, TextInputKeyResult::Navigated);
+        assert!(!input.has_selection());
     }
 }

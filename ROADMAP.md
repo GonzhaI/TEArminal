@@ -18,10 +18,19 @@ TEArminal se define por cuatro pilares irrenunciables:
 
 ### 2.1. Visor y Editor de Archivos (`src/renderer/file_viewer.rs`, `src/app/viewer.rs`)
 
-* **Búsqueda interna (`Ctrl + F`)**:
-  * Barra flotante compacta en la esquina superior derecha (`RADIUS_CONTROL`).
-  * Conteo de coincidencias (`X / N`), navegación con `Enter` / `Shift + Enter` y cierre con `Esc`.
-  * Resaltado visual con tinte translúcido (`Canvas::fill_rect`) y marcas de posición sobre el carril de la barra de desplazamiento ([`ScrollbarRects`](file:///src/renderer/geometry.rs)).
+* **Búsqueda interna (`Ctrl + F`)** ✅ *[Completado]*:
+  * Barra flotante compacta en la esquina superior derecha (`RADIUS_CONTROL`, `Theme::card_outline()`, `Theme::chrome_bg()`).
+  * Conteo de coincidencias en tiempo real (`X / N`), navegación con `Enter` / `Shift + Enter` / `F3` y cierre con `Esc`.
+  * Resaltado visual con tinte translúcido mezclado sobre el fondo y marcas de posición sobre el carril de la barra de desplazamiento ([`ScrollbarRects`](file:///src/renderer/geometry.rs)).
+  * Despliegue automático de bloques plegados ([`FileViewerState::reveal_line()`](file:///src/app/viewer.rs)) al saltar a coincidencias.
+* **Modo lectura Markdown adaptable y fluido** ✅ *[Completado]*:
+  * Ajuste de línea (`word_wrap`) automático para párrafos, listas, citas y bloques en modo lectura.
+  * Formato adaptativo de tablas y contenido con eliminación de barras de desplazamiento horizontal innecesarias.
+* **Unificación de inputs de texto y cursor de alta visibilidad** ✅ *[Completado]*:
+  * Cursor de 16 px centrado con `theme.cursor` y selección nítida (`theme.selection`, `theme.selection_fg`).
+  * Pila de Undo/Redo (50 pasos), soporte completo de teclado (Ctrl+Z, Ctrl+Y, Shift+Flechas, etc.), selección con ratón y Shift+Click en todos los inputs de la interfaz.
+* **Historial MRU en cierre de pestañas y ventanas** ✅ *[Completado]*:
+  * Cierre de pestañas y ventanas (`Ctrl + W`, `Esc`, `×`) devuelve siempre a la pestaña o ventana más recientemente activa en lugar de un índice adyacente ciego.
 * **Salto rápido a línea (`Ctrl + G`)**:
   * Input modal para saltar directamente a `línea[:columna]`.
   * Reutiliza [`FileViewerState::reveal_line()`](file:///src/app/viewer.rs) para desplegar bloques plegados si la línea está oculta.
@@ -105,20 +114,23 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 
 ## 4. Matriz de Priorización y Plan de Acción
 
-| Área | Acción | Tipo | Prioridad | Impacto |
-| :--- | :--- | :--- | :--- | :--- |
-| **Visor** | Búsqueda interna en archivo (`Ctrl + F`) | Característica | **P1** | Alto |
-| **Visor** | Salto a línea (`Ctrl + G`) | Característica | **P1** | Medio |
-| **Explorador** | Gestión de archivos (Nuevo, Renombrar, Papelera Win32) | Característica | **P1** | Alto |
-| **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | Medio (Claridad) |
-| **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | Bajo (Arranque) |
-| **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | Alto |
-| **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | Alto |
-| **Terminal** | Perfiles rápidos de Shell en botón `+` | Característica | **P2** | Alto |
-| **Visor** | Visor nativo de imágenes (`.png`, `.jpg`) | Característica | **P2** | Medio-Alto |
-| **IA / Telemetría** | Simplificar AGY y eliminar sondeos superfluos de cuota | Limpieza | **P2** | Medio |
-| **Terminal** | Búsqueda en el scrollback (`Ctrl + Shift + F`) | Característica | **P3** | Alto |
-| **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | Medio-Alto |
-| **Ajustes** | Selector de fuentes instaladas del sistema (`DirectWrite`) | Característica | **P3** | Medio |
-| **SSH** | Consolidar listados remotos en `SshConnection` vs OSC en banda | Limpieza / Refactor | **P3** | Alto (Estabilidad) |
-| **Visor** | Diff lado a lado (*Side-by-side*) | Característica | **P4** | Medio-Alto |
+| Área | Acción | Tipo | Prioridad | Estado | Impacto |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Visor** | Búsqueda interna en archivo (`Ctrl + F`) | Característica | **P1** | ✅ Completado | Alto |
+| **Visor** | Lectura Markdown responsiva y tablas adaptadas | Usabilidad | **P1** | ✅ Completado | Alto |
+| **UI** | Cursor nítido, selección y Undo/Redo en inputs | Usabilidad | **P1** | ✅ Completado | Alto |
+| **Ventanas** | Navegación MRU al cerrar pestañas y ventanas | UX / Flujo | **P1** | ✅ Completado | Alto |
+| **Visor** | Salto a línea (`Ctrl + G`) | Característica | **P1** | Pendiente | Medio |
+| **Explorador** | Gestión de archivos (Nuevo, Renombrar, Papelera Win32) | Característica | **P1** | Pendiente | Alto |
+| **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | Pendiente | Medio (Claridad) |
+| **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | Pendiente | Bajo (Arranque) |
+| **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | Pendiente | Alto |
+| **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | Pendiente | Alto |
+| **Terminal** | Perfiles rápidos de Shell en botón `+` | Característica | **P2** | Pendiente | Alto |
+| **Visor** | Visor nativo de imágenes (`.png`, `.jpg`) | Característica | **P2** | Pendiente | Medio-Alto |
+| **IA / Telemetría** | Simplificar AGY y eliminar sondeos superfluos de cuota | Limpieza | **P2** | Pendiente | Medio |
+| **Terminal** | Búsqueda en el scrollback (`Ctrl + Shift + F`) | Característica | **P3** | Pendiente | Alto |
+| **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | Pendiente | Medio-Alto |
+| **Ajustes** | Selector de fuentes instaladas del sistema (`DirectWrite`) | Característica | **P3** | Pendiente | Medio |
+| **SSH** | Consolidar listados remotos en `SshConnection` vs OSC en banda | Limpieza / Refactor | **P3** | Pendiente | Alto (Estabilidad) |
+| **Visor** | Diff lado a lado (*Side-by-side*) | Característica | **P4** | Pendiente | Medio-Alto |

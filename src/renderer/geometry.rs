@@ -724,6 +724,63 @@ impl FileViewerLayout {
     }
 }
 
+/// Rectángulos de la barra flotante de búsqueda interna en el visor de archivos (`Ctrl + F`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FileViewerSearchRects {
+    pub bar: (usize, usize, usize, usize),
+    pub input: (usize, usize, usize, usize),
+    pub text_start_x: usize,
+    pub counter: (usize, usize, usize, usize),
+    pub prev_btn: (usize, usize, usize, usize),
+    pub next_btn: (usize, usize, usize, usize),
+    pub close_btn: (usize, usize, usize, usize),
+}
+
+impl FileViewerSearchRects {
+    pub(crate) fn compute(lay: &FileViewerLayout) -> Self {
+        let max_w = lay.text_max_x.saturating_sub(lay.sep_x);
+        let bar_w = 296.min(max_w).max(180);
+        let bar_h: usize = 32;
+        let bar_x = lay.text_max_x.saturating_sub(bar_w + 8);
+        let bar_y = lay.content_y + 8;
+        let bar = (bar_x, bar_y, bar_w, bar_h);
+
+        let input_x = bar_x + 28;
+        let input_w = if bar_w >= 296 { 110 } else { bar_w.saturating_sub(186) };
+        let input = (input_x, bar_y + 4, input_w, 24);
+        let text_start_x = input_x + 4;
+
+        let counter_x = input_x + input_w + 4;
+        let counter_w = 48;
+        let counter = (counter_x, bar_y + 4, counter_w, 24);
+
+        let btn_y = bar_y + (bar_h.saturating_sub(22)) / 2;
+        let prev_x = counter_x + counter_w + 2;
+        let prev_btn = (prev_x, btn_y, 22, 22);
+
+        let next_x = prev_x + 22 + 2;
+        let next_btn = (next_x, btn_y, 22, 22);
+
+        let close_x = next_x + 22 + 6;
+        let close_btn = (close_x, btn_y, 22, 22);
+
+        Self {
+            bar,
+            input,
+            text_start_x,
+            counter,
+            prev_btn,
+            next_btn,
+            close_btn,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
+        mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+    }
+}
+
 /// Geometría de la barra lateral: riel de ajustes y columna de sesiones (una sola fuente para dibujo,
 /// clic, hover y arrastre).
 ///
