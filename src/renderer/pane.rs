@@ -233,34 +233,24 @@ impl TerminalRenderer {
             return;
         }
         let rects = PaneHeaderRects::compute(x, y, w);
-        let clip: Clip = (
-            x,
-            y,
-            (x + w).min(width),
-            (y + PaneHeaderRects::CONTENT_OFFSET).min(height),
-        );
-        canvas.fill_rect(clip, x, y, w, PaneHeaderRects::HEIGHT, theme.chrome_bg());
+        let total_h = PaneHeaderRects::header_total_h(y);
+        let content_offset = PaneHeaderRects::content_offset_for(y);
+        let clip: Clip = (x, y, (x + w).min(width), (y + content_offset).min(height));
+        canvas.fill_rect(clip, x, y, w, total_h, theme.chrome_bg());
         // Línea que separa la cabecera del terminal y acento del panel enfocado sobre ella
         canvas.fill_rect(
             clip,
             x,
-            y + PaneHeaderRects::HEIGHT,
+            y + total_h,
             w,
             PaneHeaderRects::BORDER,
             theme.chrome_line(),
         );
         if focused {
-            canvas.fill_rect(
-                clip,
-                x,
-                y + PaneHeaderRects::HEIGHT - 2,
-                w,
-                2,
-                theme.accent_color(),
-            );
+            canvas.fill_rect(clip, x, y + total_h - 2, w, 2, theme.accent_color());
         }
 
-        let cy = y + PaneHeaderRects::HEIGHT / 2;
+        let cy = rects.header.1 + PaneHeaderRects::HEIGHT / 2;
 
         // El texto no invade los botones que se dibujan en este panel
         let buttons_left = if focused {

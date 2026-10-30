@@ -1991,7 +1991,6 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         let right_x = SIDEBAR_WIDTH + left_w + 2;
         let right_w = w - right_x;
         let top_pane_h = 472;
-        let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
 
         let mut agent = crate::terminal::TerminalState::new(62, 30, 2000, theme.clone());
         agent.process_bytes(
@@ -2137,6 +2136,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
                 None,
                 &theme,
             );
+            let header_offset = crate::renderer::PaneHeaderRects::content_offset_for(y);
             r.render_pane(
                 &mut canvas,
                 x,
@@ -2269,7 +2269,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             None,
             &theme,
         );
-        let header_offset = crate::renderer::PaneHeaderRects::CONTENT_OFFSET;
+        let header_offset = crate::renderer::PaneHeaderRects::content_offset_for(pane_y);
         r.render_pane(
             &mut canvas,
             pane_x,
@@ -4983,5 +4983,73 @@ mod gpu_scenes {
             "debe terminar en '...': got '{res_long}'"
         );
         assert!(r.measure_ui_text(&res_long, tokens::BODY, false) <= 80);
+    }
+
+    #[test]
+    fn test_explorer_hover_overflow_expansion() {
+        use crate::config::TearminalConfig;
+        use crate::explorer::{ExplorerItem, FileExplorer};
+        use crate::renderer::{test_support, TerminalRenderer};
+        use crate::theme::Theme;
+        use std::path::PathBuf;
+
+        let cfg = TearminalConfig::default();
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let theme = Theme::from_name(Theme::DEFAULT_DARK);
+
+        let mut explorer = FileExplorer::new(None, true);
+        explorer.visible = true;
+        explorer.width = 200;
+        explorer.dock = Some((0, 38, 200, 600));
+
+        let short_item = ExplorerItem {
+            name: "short.rs".into(),
+            path: PathBuf::from("short.rs"),
+            is_dir: false,
+            is_expanded: false,
+            depth: 0,
+            git_status: None,
+        };
+        let long_item = ExplorerItem {
+            name: "check_inventario_herramientas_checklistherramientas.rs".into(),
+            path: PathBuf::from("check_inventario_herramientas_checklistherramientas.rs"),
+            is_dir: false,
+            is_expanded: false,
+            depth: 1,
+            git_status: None,
+        };
+        explorer.items = vec![short_item, long_item];
+
+        // 1. Elemento corto bajo hover: cabe en el panel, no se expande
+        explorer.hovered_index = Some(0);
+        let geo_short = r.explorer_hovered_item_geometry(1000, 700, 38, 28, &explorer);
+        assert!(
+            geo_short.is_none(),
+            "un elemento corto que cabe en el panel no debe expandirse"
+        );
+
+        // 2. Elemento largo bajo hover: sobrepasa el ancho del panel y se expande
+        explorer.hovered_index = Some(1);
+        let geo_long = r.explorer_hovered_item_geometry(1000, 700, 38, 28, &explorer);
+        assert!(
+            geo_long.is_some(),
+            "un elemento largo debe retornar geometría expandida"
+        );
+        let (idx, _item_y, item_h, row_w) = geo_long.unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(item_h, FileExplorer::ITEM_HEIGHT);
+        assert!(
+            row_w > 200,
+            "el ancho expandido ({row_w}) debe ser mayor al panel (200)"
+        );
+
+        // 3. Renderizado del overlay sin panics
+        let mut canvas = test_support::new_canvas(1000, 700);
+        let ops_before = canvas.scene().ops.len();
+        r.render_file_explorer_hover_overlay(&mut canvas, 38, 28, &explorer, &theme);
+        assert!(
+            canvas.scene().ops.len() > ops_before,
+            "el overlay debe grabar operaciones de dibujo para el elemento expandido"
+        );
     }
 }

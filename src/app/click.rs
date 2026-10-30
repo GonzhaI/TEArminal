@@ -1012,7 +1012,26 @@ impl TearminalApp {
             let (panel_x, panel_y, panel_w, panel_h) =
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
-            if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
+            let expanded_hover = self.renderer.as_mut().and_then(|r| {
+                r.explorer_hovered_item_geometry(
+                    win_w,
+                    win_h,
+                    top_offset,
+                    status_bar_h,
+                    &self.file_explorer,
+                )
+            });
+            let in_expanded_item = expanded_hover.is_some_and(|(idx, item_y, item_h, row_w)| {
+                self.file_explorer.hovered_index == Some(idx)
+                    && my >= item_y
+                    && my < item_y + item_h
+                    && mx >= panel_x
+                    && mx < panel_x + row_w
+            });
+            let in_panel =
+                mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h;
+
+            if in_panel || in_expanded_item {
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     // Pestañas «Archivos» · «Cambios»
                     let tabs = crate::renderer::ExplorerTabsRects::compute(
@@ -1033,43 +1052,53 @@ impl TearminalApp {
                         return;
                     }
 
-                    // Clic en la barra de desplazamiento del explorador de archivos
-                    if let Some((track, thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
-                        win_w,
-                        win_h,
-                        top_offset,
-                        status_bar_h,
-                        &self.file_explorer,
-                    ) {
-                        if crate::renderer::ScrollbarRects::hit(track, panel_x + panel_w, mx, my) {
-                            if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                                self.explorer_scrollbar_dragging = true;
-                                self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
-                                self.last_scroll_time = Instant::now();
-                            } else {
-                                let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
-                                let list_start_y = panel_y
-                                    + crate::explorer::FileExplorer::HEADER_HEIGHT
-                                    + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
-                                    + crate::explorer::FileExplorer::LIST_TOP_PAD;
-                                let list_h = (panel_y + panel_h).saturating_sub(list_start_y);
-                                let visible_count = list_h.checked_div(item_h).unwrap_or(1);
-                                let max_offset =
-                                    self.file_explorer.items.len().saturating_sub(visible_count);
-                                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
-                                    track,
-                                    thumb,
-                                    my.saturating_sub(thumb.3 / 2) as f32,
-                                    max_offset,
-                                ) {
-                                    self.file_explorer.scroll_offset = off;
+                    // Clic en la barra de desplazamiento del explorador de archivos (si no estamos sobre elemento expandido)
+                    if !in_expanded_item {
+                        if let Some((track, thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
+                            win_w,
+                            win_h,
+                            top_offset,
+                            status_bar_h,
+                            &self.file_explorer,
+                        ) {
+                            if crate::renderer::ScrollbarRects::hit(
+                                track,
+                                panel_x + panel_w,
+                                mx,
+                                my,
+                            ) {
+                                if my >= thumb.1 && my < thumb.1 + thumb.3 {
+                                    self.explorer_scrollbar_dragging = true;
+                                    self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
                                     self.last_scroll_time = Instant::now();
-                                    if let Some(w) = &self.window {
-                                        w.request_redraw();
+                                } else {
+                                    let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
+                                    let list_start_y = panel_y
+                                        + crate::explorer::FileExplorer::HEADER_HEIGHT
+                                        + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+                                        + crate::explorer::FileExplorer::LIST_TOP_PAD;
+                                    let list_h = (panel_y + panel_h).saturating_sub(list_start_y);
+                                    let visible_count = list_h.checked_div(item_h).unwrap_or(1);
+                                    let max_offset = self
+                                        .file_explorer
+                                        .items
+                                        .len()
+                                        .saturating_sub(visible_count);
+                                    if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                                        track,
+                                        thumb,
+                                        my.saturating_sub(thumb.3 / 2) as f32,
+                                        max_offset,
+                                    ) {
+                                        self.file_explorer.scroll_offset = off;
+                                        self.last_scroll_time = Instant::now();
+                                        if let Some(w) = &self.window {
+                                            w.request_redraw();
+                                        }
                                     }
                                 }
+                                return;
                             }
-                            return;
                         }
                     }
 
@@ -1077,8 +1106,14 @@ impl TearminalApp {
                     self.file_explorer.is_focused = true;
 
                     // Solo procesar clics en elementos si estamos a la izquierda de la barra de desplazamiento
-                    if mx < panel_x + panel_w.saturating_sub(16) {
-                        if let Some(idx) = self.file_explorer.item_at_y(my, panel_y) {
+                    // o sobre un elemento expandido bajo el cursor
+                    if in_expanded_item || mx < panel_x + panel_w.saturating_sub(16) {
+                        let clicked_idx = if in_expanded_item {
+                            self.file_explorer.hovered_index
+                        } else {
+                            self.file_explorer.item_at_y(my, panel_y)
+                        };
+                        if let Some(idx) = clicked_idx {
                             if idx < self.file_explorer.items.len() {
                                 self.file_explorer.selected_index = Some(idx);
                                 let item = self.file_explorer.items[idx].clone();

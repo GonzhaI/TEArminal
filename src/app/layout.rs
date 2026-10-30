@@ -912,7 +912,7 @@ impl TerminalTab {
             .filter(|id| *id == self.active_pane_id && self.find_pane(*id).is_some())
         {
             let offset = if has_header {
-                crate::renderer::PaneHeaderRects::CONTENT_OFFSET
+                crate::renderer::PaneHeaderRects::content_offset_for(y)
             } else {
                 0
             };
@@ -953,7 +953,7 @@ impl TerminalTab {
         else {
             if let PaneNode::Leaf(pane_id) = node {
                 let offset = if has_header {
-                    crate::renderer::PaneHeaderRects::CONTENT_OFFSET
+                    crate::renderer::PaneHeaderRects::content_offset_for(y)
                 } else {
                     0
                 };

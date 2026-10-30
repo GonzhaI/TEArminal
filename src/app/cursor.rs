@@ -901,15 +901,35 @@ impl TearminalApp {
             let (panel_x, panel_y, panel_w, panel_h) =
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
-            if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let is_over_scrollbar = if let Some((track, _thumb)) =
-                    TerminalRenderer::explorer_scrollbar_geometry(
-                        win_w,
-                        win_h,
-                        top_offset,
-                        status_bar_h,
-                        &self.file_explorer,
-                    ) {
+            let expanded_hover = self.renderer.as_mut().and_then(|r| {
+                r.explorer_hovered_item_geometry(
+                    win_w,
+                    win_h,
+                    top_offset,
+                    status_bar_h,
+                    &self.file_explorer,
+                )
+            });
+            let in_expanded_item = expanded_hover.is_some_and(|(idx, item_y, item_h, row_w)| {
+                self.file_explorer.hovered_index == Some(idx)
+                    && my >= item_y
+                    && my < item_y + item_h
+                    && mx >= panel_x
+                    && mx < panel_x + row_w
+            });
+            let in_panel =
+                mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h;
+
+            if in_panel || in_expanded_item {
+                let is_over_scrollbar = if in_expanded_item {
+                    false
+                } else if let Some((track, _thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
+                    win_w,
+                    win_h,
+                    top_offset,
+                    status_bar_h,
+                    &self.file_explorer,
+                ) {
                     crate::renderer::ScrollbarRects::hit(track, panel_x + panel_w, mx, my)
                 } else {
                     false
@@ -926,9 +946,11 @@ impl TearminalApp {
                     self.file_explorer.hovered_tab = hovered_tab;
                     needs_redraw = true;
                 }
-                is_pointer |= is_over_scrollbar || hovered_tab.is_some();
+                is_pointer |= is_over_scrollbar || hovered_tab.is_some() || in_expanded_item;
 
-                let item_hover = if is_over_scrollbar {
+                let item_hover = if in_expanded_item {
+                    self.file_explorer.hovered_index
+                } else if is_over_scrollbar {
                     None
                 } else {
                     self.file_explorer.item_at_y(my, panel_y)

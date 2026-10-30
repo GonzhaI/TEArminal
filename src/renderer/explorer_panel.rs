@@ -377,4 +377,260 @@ impl TerminalRenderer {
             explorer.scroll_offset,
         )
     }
+
+    /// Si el elemento bajo el cursor sobrepasa el ancho permitido del explorador, calcula su geometría
+    /// expandida: `(hovered_idx, item_y, item_h, row_w)`.
+    pub(crate) fn explorer_hovered_item_geometry(
+        &mut self,
+        width: usize,
+        height: usize,
+        top_offset: usize,
+        status_bar_h: usize,
+        explorer: &crate::explorer::FileExplorer,
+    ) -> Option<(usize, usize, usize, usize)> {
+        if !explorer.visible {
+            return None;
+        }
+        let hovered_idx = explorer.hovered_index?;
+        if hovered_idx < explorer.scroll_offset || hovered_idx >= explorer.items.len() {
+            return None;
+        }
+        let (panel_x, panel_y, panel_w, panel_h) =
+            explorer.panel_geometry(width, height, top_offset, status_bar_h);
+        if panel_w == 0 || panel_h < 80 {
+            return None;
+        }
+
+        let rel_idx = hovered_idx - explorer.scroll_offset;
+        let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
+        let list_y = panel_y
+            + header_h
+            + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+            + crate::explorer::FileExplorer::LIST_TOP_PAD;
+        let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
+        let list_max_y = panel_y + panel_h.saturating_sub(8);
+        let item_y = list_y + rel_idx * item_h;
+        if item_y + item_h > list_max_y {
+            return None;
+        }
+
+        let item = &explorer.items[hovered_idx];
+        let is_selected = explorer.selected_index == Some(hovered_idx)
+            || explorer.selected_path.as_ref() == Some(&item.path);
+
+        let indent = item.depth * 12;
+        let content_x = panel_x + 18 + indent;
+        let icon_text_offset = if item.is_dir { 36 } else { 26 };
+        let text_x = content_x + icon_text_offset;
+        let badge_w = if item.git_status.is_some() { 16 } else { 0 };
+        let default_max_x = panel_x + panel_w.saturating_sub(SidebarRects::PAD_R + badge_w + 6);
+        let name_w = self.measure_ui_text(&item.name, tokens::BODY, is_selected);
+
+        if text_x + name_w <= default_max_x {
+            return None;
+        }
+
+        let needed_w =
+            (text_x + name_w + SidebarRects::PAD_R + badge_w + 12).saturating_sub(panel_x);
+        let max_allowed_w = width.saturating_sub(panel_x + 8);
+        let row_w = panel_w.max(needed_w).min(max_allowed_w);
+        Some((hovered_idx, item_y, item_h, row_w))
+    }
+
+    /// Dibuja la fila expandida flotante por encima del panel, contorno y barras de desplazamiento
+    /// para permitir leer el nombre completo del archivo o carpeta cómodamente.
+    pub(crate) fn render_file_explorer_hover_overlay(
+        &mut self,
+        canvas: &mut Canvas,
+        top_offset: usize,
+        status_bar_h: usize,
+        explorer: &crate::explorer::FileExplorer,
+        theme: &Theme,
+    ) {
+        let (width, height) = canvas.size();
+        if width == 0 || height == 0 {
+            return;
+        }
+        let (hovered_idx, item_y, item_h, row_w) = match self.explorer_hovered_item_geometry(
+            width,
+            height,
+            top_offset,
+            status_bar_h,
+            explorer,
+        ) {
+            Some(geo) => geo,
+            None => return,
+        };
+
+        let (panel_x, panel_y, _panel_w, panel_h) =
+            explorer.panel_geometry(width, height, top_offset, status_bar_h);
+        let item = &explorer.items[hovered_idx];
+        let is_selected = explorer.selected_index == Some(hovered_idx)
+            || explorer.selected_path.as_ref() == Some(&item.path);
+
+        let pill_x = panel_x + 8;
+        let pill_w = row_w.saturating_sub(16);
+
+        let fill = if is_selected && !explorer.is_focused {
+            theme.surface_bg()
+        } else {
+            theme.surface_hover()
+        };
+        canvas.rounded_fill(pill_x, item_y, pill_w, item_h, tokens::RADIUS_ROW, fill);
+        canvas.rounded_stroke(
+            pill_x,
+            item_y,
+            pill_w,
+            item_h,
+            tokens::RADIUS_ROW,
+            theme.card_outline(),
+        );
+
+        if is_selected {
+            let bar = if explorer.is_focused {
+                theme.accent_color()
+            } else {
+                theme.chrome_line_strong()
+            };
+            canvas.rounded_fill(
+                panel_x + 12,
+                item_y + 6,
+                2,
+                item_h.saturating_sub(12),
+                1,
+                bar,
+            );
+        }
+
+        let item_center_y = item_y + (item_h / 2);
+        let item_base = self.centered_baseline(item_center_y);
+        let indent = item.depth * 12;
+        let content_x = panel_x + 18 + indent;
+
+        if item.depth > 0 {
+            let guide_color = theme.mix(theme.chrome_bg(), theme.foreground, 0.22);
+            let clip = (panel_x, panel_y, panel_x + row_w, panel_y + panel_h);
+            for d in 0..item.depth {
+                let guide_x = panel_x + 18 + d * 12 + 5;
+                canvas.fill_rect(clip, guide_x, item_y, 1, item_h, guide_color);
+            }
+        }
+
+        let badge_w = if item.git_status.is_some() { 16 } else { 0 };
+        let max_name_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + badge_w + 6);
+
+        if item.is_dir {
+            let chevron_icon = if item.is_expanded {
+                crate::ui::LucideIcon::ChevronDown
+            } else {
+                crate::ui::LucideIcon::ChevronRight
+            };
+            self.draw_lucide_icon(
+                canvas,
+                chevron_icon,
+                content_x + 5,
+                item_center_y,
+                10.5,
+                theme.text_muted(),
+            );
+
+            let folder_icon = if item.is_expanded {
+                crate::ui::LucideIcon::FolderOpen
+            } else {
+                crate::ui::LucideIcon::Folder
+            };
+            self.draw_lucide_icon(
+                canvas,
+                folder_icon,
+                content_x + 22,
+                item_center_y,
+                12.0,
+                if is_selected {
+                    theme.accent_color()
+                } else {
+                    theme.text_muted()
+                },
+            );
+
+            let dir_color = if let Some(git) = item.git_status {
+                Self::git_status_color(git, theme)
+            } else if is_selected {
+                theme.accent_color()
+            } else {
+                theme.foreground
+            };
+            self.draw_ui_text(
+                canvas,
+                &item.name,
+                content_x + 36,
+                item_base,
+                max_name_x,
+                dir_color,
+                tokens::BODY,
+                true,
+            );
+        } else {
+            let ext = item.path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let (file_icon, file_fg) = match ext {
+                "rs" => (crate::ui::LucideIcon::FileCode, theme.ansi[1]),
+                "toml" | "json" | "yaml" | "yml" => {
+                    (crate::ui::LucideIcon::FileJson, theme.ansi[3])
+                }
+                "md" | "txt" => (crate::ui::LucideIcon::FileText, theme.ansi[6]),
+                "png" | "jpg" | "svg" => (crate::ui::LucideIcon::File, theme.ansi[5]),
+                "exe" | "bat" | "ps1" => (crate::ui::LucideIcon::FileCog, theme.ansi[2]),
+                _ => (crate::ui::LucideIcon::File, theme.ansi[8]),
+            };
+
+            self.draw_lucide_icon(
+                canvas,
+                file_icon,
+                content_x + 10,
+                item_center_y,
+                12.0,
+                file_fg,
+            );
+
+            let text_color = if let Some(git) = item.git_status {
+                Self::git_status_color(git, theme)
+            } else if is_selected {
+                theme.accent_color()
+            } else {
+                theme.foreground
+            };
+            self.draw_ui_text(
+                canvas,
+                &item.name,
+                content_x + 26,
+                item_base,
+                max_name_x,
+                text_color,
+                tokens::BODY,
+                is_selected,
+            );
+        }
+
+        if let Some(git) = item.git_status {
+            let badge_letter = match git {
+                crate::explorer::GitFileStatus::Modified => "M",
+                crate::explorer::GitFileStatus::Untracked => "U",
+                crate::explorer::GitFileStatus::Added => "A",
+                crate::explorer::GitFileStatus::Deleted => "D",
+                crate::explorer::GitFileStatus::Renamed => "R",
+            };
+            let badge_color = Self::git_status_color(git, theme);
+            let bw = self.measure_mono_text(badge_letter, tokens::MICRO, true);
+            let badge_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + bw);
+            self.draw_mono_text(
+                canvas,
+                badge_letter,
+                badge_x,
+                item_base,
+                panel_x + row_w,
+                badge_color,
+                tokens::MICRO,
+                true,
+            );
+        }
+    }
 }

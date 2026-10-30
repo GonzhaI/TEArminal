@@ -434,6 +434,16 @@ fn draw_full_scene(
         );
     }
 
+    if file_explorer.visible {
+        renderer.render_file_explorer_hover_overlay(
+            canvas,
+            p.top_offset,
+            p.status_bar_h,
+            file_explorer,
+            theme,
+        );
+    }
+
     if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
         renderer.render_floating_sidebar_toggle(
             canvas,

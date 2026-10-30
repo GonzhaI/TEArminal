@@ -265,17 +265,18 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(h_rects[0].width, 1000);
     assert_eq!(h_rects[1].width, 1000);
     // Cada panel reserva su cabecera: contenido + cabecera + divisor suman exactamente 600
-    let hdr = PaneHeaderRects::CONTENT_OFFSET;
+    let hdr0 = PaneHeaderRects::content_offset_for(h_rects[0].slot_y);
+    let hdr1 = PaneHeaderRects::content_offset_for(h_rects[1].slot_y);
     assert!(h_rects[0].has_header && h_rects[1].has_header);
-    assert_eq!(h_rects[0].height + h_rects[1].height + 2 + hdr * 2, 600);
+    assert_eq!(h_rects[0].height + h_rects[1].height + 2 + hdr0 + hdr1, 600);
     assert_eq!(h_rects[0].slot_y, 0);
-    assert_eq!(h_rects[0].y, hdr);
-    assert_eq!(h_rects[1].slot_y, h_rects[0].height + hdr + 2);
-    assert_eq!(h_rects[1].y, h_rects[1].slot_y + hdr);
+    assert_eq!(h_rects[0].y, hdr0);
+    assert_eq!(h_rects[1].slot_y, h_rects[0].height + hdr0 + 2);
+    assert_eq!(h_rects[1].y, h_rects[1].slot_y + hdr1);
 
     let dividers = tab.compute_dividers(0, 0, 1000, 600);
     assert_eq!(dividers.len(), 1);
-    assert_eq!(dividers[0].rect, (0, h_rects[0].height + hdr, 1000, 2));
+    assert_eq!(dividers[0].rect, (0, h_rects[0].height + hdr0, 1000, 2));
 
     // 2b. Maximizar: solo el panel activo ocupa el área (con su cabecera) y no quedan divisores
     assert!(tab.toggle_pane_zoom(PaneId(2)));
@@ -283,7 +284,7 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(zoomed.len(), 1);
     assert_eq!(zoomed[0].pane_id, PaneId(2));
     assert_eq!(zoomed[0].width, 1000);
-    assert_eq!(zoomed[0].height, 600 - hdr);
+    assert_eq!(zoomed[0].height, 600 - hdr0);
     assert!(tab.compute_dividers(0, 0, 1000, 600).is_empty());
     // Restaurar el reparto
     assert!(tab.toggle_pane_zoom(PaneId(2)));

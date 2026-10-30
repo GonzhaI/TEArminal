@@ -1188,7 +1188,8 @@ impl PaneHeaderRects {
     pub(crate) const HEIGHT: usize = 38;
     /// Línea inferior que separa la cabecera del terminal
     pub(crate) const BORDER: usize = 1;
-    /// Lo que hay que descontar del hueco del panel para obtener el área del terminal
+    /// Lo que hay que descontar del hueco del panel para obtener el área del terminal (sin padding de tarjeta)
+    #[allow(dead_code)]
     pub(crate) const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
     pub(crate) const BTN: usize = 26;
     pub(crate) const BTN_GAP: usize = 10;
@@ -1198,10 +1199,33 @@ impl PaneHeaderRects {
     pub(crate) const ICON_X: usize = 24;
     pub(crate) const TEXT_X: usize = 20;
 
+    /// Margen superior del hueco si la cabecera coincide con el borde superior de la tarjeta de contenido.
+    /// La tarjeta recorta `SidebarRects::CARD_INSET` px de margen, de modo que la cabecera visible
+    /// arranca en `y + top_pad` y mide `HEIGHT` (38 px), alineándose exactamente con el explorador y el visor.
+    #[inline]
+    pub(crate) fn top_pad(y: usize) -> usize {
+        if y <= SidebarRects::TOP {
+            SidebarRects::CARD_INSET
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    pub(crate) fn header_total_h(y: usize) -> usize {
+        Self::top_pad(y) + Self::HEIGHT
+    }
+
+    #[inline]
+    pub(crate) fn content_offset_for(y: usize) -> usize {
+        Self::header_total_h(y) + Self::BORDER
+    }
+
     #[allow(dead_code)]
     pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {
+        let pad = Self::top_pad(y);
         let right = x + w;
-        let by = y + (Self::HEIGHT.saturating_sub(Self::BTN)) / 2;
+        let by = y + pad + (Self::HEIGHT.saturating_sub(Self::BTN)) / 2;
         let close_btn = (
             right.saturating_sub(Self::PAD_RIGHT + Self::BTN),
             by,
@@ -1221,7 +1245,7 @@ impl PaneHeaderRects {
             Self::BTN,
         );
         Self {
-            header: (x, y, w, Self::HEIGHT),
+            header: (x, y + pad, w, Self::HEIGHT),
             split_btn,
             zoom_btn,
             close_btn,
