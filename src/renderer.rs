@@ -43,6 +43,7 @@ pub(crate) use gpu::{GpuSurface, Presented};
 pub(crate) use scene::ImageRef;
 pub(crate) use state::*;
 
+pub(crate) use crate::config::KeepAwakeMode;
 use crate::config::TearminalConfig;
 use crate::terminal::{Cell, TerminalState};
 use crate::theme::{Color, Theme};

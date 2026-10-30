@@ -50,7 +50,49 @@ impl TerminalRenderer {
         );
     }
 
+    pub(crate) fn keep_awake_button_width(&self, mode: KeepAwakeMode) -> usize {
+        let label_w = self.measure_ui_text(mode.label(), STATUS_LABEL_SIZE, true);
+        label_w + 26
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn render_status_bar_with_ai(
+        &mut self,
+        canvas: &mut Canvas,
+        sidebar_offset: usize,
+        cwd: Option<&str>,
+        git_branch: Option<&str>,
+        ssh_host: Option<&str>,
+        cols: usize,
+        rows: usize,
+        ai_status: AiAgentStatus,
+        active_model: Option<&str>,
+        meters: &[StatusMeter],
+        hovered_ai_badge: bool,
+        explorer_visible: bool,
+        theme: &Theme,
+    ) {
+        self.render_status_bar_full(
+            canvas,
+            sidebar_offset,
+            cwd,
+            git_branch,
+            ssh_host,
+            cols,
+            rows,
+            ai_status,
+            active_model,
+            meters,
+            KeepAwakeMode::Off,
+            false,
+            false,
+            hovered_ai_badge,
+            explorer_visible,
+            theme,
+        );
+    }
+
+    pub(crate) fn render_status_bar_full(
         &mut self,
         canvas: &mut Canvas,
         _sidebar_offset: usize,
@@ -62,6 +104,9 @@ impl TerminalRenderer {
         ai_status: AiAgentStatus,
         active_model: Option<&str>,
         meters: &[StatusMeter],
+        keep_awake: KeepAwakeMode,
+        keep_awake_working: bool,
+        hovered_keep_awake: bool,
         _hovered_ai_badge: bool,
         _explorer_visible: bool,
         theme: &Theme,
@@ -79,9 +124,9 @@ impl TerminalRenderer {
         // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
         Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
 
-        // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones de la rejilla.
+        // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones · keep-awake.
         let (badge_icon, badge_label, ai_fg) =
-            Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
+            Self::status_bar_badge(ai_status, ssh_host, active_model, theme);
         let ai_text_w = self.measure_ui_text(&badge_label, STATUS_LABEL_SIZE, true);
         let update_info = crate::updater::get_available_update();
         let update_text = update_info
@@ -98,19 +143,69 @@ impl TerminalRenderer {
             (0, None)
         };
         let meters_w = self.status_meters_width(meters);
-        let rects = StatusBarRects::compute_with_status(
-            width, height, ai_text_w, update_w, dims_w, meters_w,
+        let kw_w = self.keep_awake_button_width(keep_awake);
+        let rects = StatusBarRects::compute_full(
+            width, height, ai_text_w, update_w, dims_w, meters_w, kw_w,
         );
 
-        // Dimensiones como dato, en el extremo derecho (solo si está activo en la configuración).
+        // Selector de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha.
+        // Sin cápsula ni contorno: solo icono y texto, que se aclara al pasar el ratón o con el selector abierto.
+        let (kw_x, _kw_y, kw_btn_w, _kw_btn_h) = rects.keep_awake_btn;
+        if kw_btn_w > 0 {
+            let (icon, icon_fg, mut text_fg) = match keep_awake {
+                KeepAwakeMode::Active => (
+                    crate::ui::LucideIcon::Eye,
+                    theme.accent_color(),
+                    theme.foreground,
+                ),
+                KeepAwakeMode::Agent => {
+                    let fg = if keep_awake_working {
+                        theme.ansi[6]
+                    } else {
+                        theme.text_secondary()
+                    };
+                    (crate::ui::LucideIcon::Sparkles, fg, theme.foreground)
+                }
+                KeepAwakeMode::Off => (
+                    crate::ui::LucideIcon::Eye,
+                    theme.text_muted(),
+                    theme.text_muted(),
+                ),
+            };
+            if hovered_keep_awake {
+                text_fg = theme.foreground;
+            }
+
+            self.draw_lucide_icon(canvas, icon, kw_x + 7, center_y, 10.0, icon_fg);
+            self.draw_ui_text(
+                canvas,
+                keep_awake.label(),
+                kw_x + 20,
+                baseline,
+                kw_x + kw_btn_w,
+                text_fg,
+                STATUS_LABEL_SIZE,
+                true,
+            );
+        }
+
+        // Dimensiones como dato, a la izquierda del botón de keep-awake.
         if let Some(ref dims) = dims_str {
-            let dims_x = width.saturating_sub(StatusBarRects::RIGHT_PAD + dims_w);
+            let dims_right = if rects.keep_awake_btn.2 > 0 {
+                rects
+                    .keep_awake_btn
+                    .0
+                    .saturating_sub(StatusBarRects::GROUP_GAP)
+            } else {
+                width.saturating_sub(StatusBarRects::RIGHT_PAD)
+            };
+            let dims_x = dims_right.saturating_sub(dims_w);
             self.draw_mono_text(
                 canvas,
                 dims,
                 dims_x,
                 baseline,
-                width.saturating_sub(StatusBarRects::RIGHT_PAD),
+                dims_right,
                 theme.text_muted(),
                 tokens::MICRO,
                 false,
@@ -132,23 +227,6 @@ impl TerminalRenderer {
         }
 
         let (bx, _by, bw, _bh) = rects.ai_badge;
-
-        // Cápsula con contorno alrededor de los medidores. Se omite si la barra no deja
-        // sitio a la ruta y la rama. El indicador de agente / estado va limpio como texto e icono.
-        let cap_y = bar_y + 4;
-        let cap_h = bar_h.saturating_sub(8);
-        let outline = theme.card_outline();
-        if bx >= StatusBarRects::MIN_CONTENT_W && rects.meters.2 > 0 {
-            let (mx, _, mw, _) = rects.meters;
-            canvas.rounded_stroke(
-                mx - 8,
-                cap_y,
-                mw + 16,
-                cap_h,
-                tokens::RADIUS_CONTROL,
-                outline,
-            );
-        }
 
         // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
         let mut cur_x = 14;
@@ -263,10 +341,14 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Badge de agente: icono del agente + nombre legible y modelo.
-        // Es puramente informativo (sin interacción ni estilo de selección).
-        self.draw_lucide_icon(canvas, badge_icon, bx + 8, center_y, 10.0, ai_fg);
-        let label_fg = if ai_status == AiAgentStatus::None {
+        // 5. Entorno (Local / SSH) y agente: icono opcional + texto, sin cápsula ni interacción.
+        let text_x = if let Some(icon) = badge_icon {
+            self.draw_lucide_icon(canvas, icon, bx + 8, center_y, 10.0, ai_fg);
+            bx + 22
+        } else {
+            bx + 8
+        };
+        let label_fg = if ai_status == AiAgentStatus::None && ssh_host.is_none() {
             ai_fg
         } else {
             theme.foreground
@@ -274,13 +356,128 @@ impl TerminalRenderer {
         self.draw_ui_text(
             canvas,
             &badge_label,
-            bx + 22,
+            text_x,
             baseline,
             bx + bw,
             label_fg,
             STATUS_LABEL_SIZE,
             true,
         );
+    }
+
+    /// Entorno de trabajo siempre visible: «Local» o «SSH», y con un agente activo se antepone al agente
+    /// («Local · Claude Sonnet 5.5»). Sin agente y en local no lleva icono.
+    pub(crate) fn status_bar_badge(
+        ai_status: AiAgentStatus,
+        ssh_host: Option<&str>,
+        active_model: Option<&str>,
+        theme: &Theme,
+    ) -> (Option<crate::ui::LucideIcon>, String, Color) {
+        let (icon, label, fg) =
+            Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
+        if ai_status == AiAgentStatus::None {
+            let icon = ssh_host.map(|_| icon);
+            return (icon, label, fg);
+        }
+        let env = if ssh_host.is_some() { "SSH" } else { "Local" };
+        (Some(icon), format!("{env} · {label}"), fg)
+    }
+
+    /// Selector de pantalla encendida: tarjeta elevada que se despliega hacia arriba con las tres opciones,
+    /// cada una con su icono, su nombre, una marca en la activa y un texto descriptivo.
+    pub(crate) fn render_keep_awake_popup(
+        &mut self,
+        canvas: &mut Canvas,
+        current: KeepAwakeMode,
+        hovered: Option<usize>,
+        working: bool,
+        theme: &Theme,
+    ) {
+        let (width, height) = canvas.size();
+        if width < 120 || height < StatusBarRects::BAR_H + 60 {
+            return;
+        }
+        let (x, y, w, h) = StatusBarRects::keep_awake_popup_rect(width, height);
+        canvas.rounded_fill(
+            x + 1,
+            y + 3,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            Color::from_rgba(0, 0, 0, 80),
+        );
+        canvas.rounded_fill(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_bg_elevated(),
+        );
+        canvas.rounded_stroke(
+            x,
+            y,
+            w,
+            h,
+            tokens::RADIUS_CONTROL,
+            theme.chrome_line_strong(),
+        );
+
+        let modes = [
+            KeepAwakeMode::Off,
+            KeepAwakeMode::Agent,
+            KeepAwakeMode::Active,
+        ];
+        for (i, mode) in modes.into_iter().enumerate() {
+            let (rx, ry, rw, rh) = StatusBarRects::keep_awake_option_rect(width, height, i);
+            let selected = mode == current;
+            if hovered == Some(i) {
+                canvas.rounded_fill(rx, ry, rw, rh, tokens::RADIUS_ROW, theme.surface_hover());
+            }
+            let icon_fg = match mode {
+                KeepAwakeMode::Off => theme.text_muted(),
+                KeepAwakeMode::Agent if working => theme.ansi[6],
+                KeepAwakeMode::Agent => theme.text_secondary(),
+                KeepAwakeMode::Active => theme.accent_color(),
+            };
+            let icon = if mode == KeepAwakeMode::Agent {
+                crate::ui::LucideIcon::Sparkles
+            } else {
+                crate::ui::LucideIcon::Eye
+            };
+            let title_y = ry + 19;
+            self.draw_lucide_icon(canvas, icon, rx + 16, ry + rh / 2, 12.0, icon_fg);
+            self.draw_ui_text(
+                canvas,
+                mode.label(),
+                rx + 34,
+                title_y,
+                rx + rw - 30,
+                theme.foreground,
+                11.5,
+                true,
+            );
+            self.draw_ui_text(
+                canvas,
+                mode.description(),
+                rx + 34,
+                ry + 35,
+                rx + rw - 12,
+                theme.text_secondary(),
+                10.0,
+                false,
+            );
+            if selected {
+                self.draw_lucide_icon(
+                    canvas,
+                    crate::ui::LucideIcon::Check,
+                    rx + rw - 16,
+                    title_y - 4,
+                    12.0,
+                    theme.accent_color(),
+                );
+            }
+        }
     }
 
     /// Separador `›` de las migas (SSH · carpeta · rama): `adv` es donde terminó el texto anterior.
@@ -440,12 +637,12 @@ impl TerminalRenderer {
                 if ssh_host.is_some() {
                     return (
                         crate::ui::LucideIcon::Server,
-                        "Remoto".to_string(),
+                        "SSH".to_string(),
                         theme.ansi[2],
                     );
                 }
                 return (
-                    crate::ui::LucideIcon::Dot,
+                    crate::ui::LucideIcon::Terminal,
                     "Local".to_string(),
                     theme.text_muted(),
                 );

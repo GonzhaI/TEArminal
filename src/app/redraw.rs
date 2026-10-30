@@ -24,6 +24,11 @@ struct SceneParams<'a> {
     hovered_win_max: bool,
     hovered_win_close: bool,
     hovered_ai_badge: bool,
+    hovered_keep_awake: bool,
+    keep_awake_popup_open: bool,
+    hovered_keep_awake_option: Option<usize>,
+    keep_awake: KeepAwakeMode,
+    keep_awake_working: bool,
     sidebar_scroll_offset: usize,
     sidebar_scrollbar_hovered: bool,
     palette_scrollbar_hovered: bool,
@@ -107,6 +112,8 @@ impl TearminalApp {
             })
             .collect();
 
+        let keep_awake_working = self.has_working_agent();
+
         let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) else {
             return;
         };
@@ -157,6 +164,11 @@ impl TearminalApp {
             hovered_win_max: self.hovered_win_max,
             hovered_win_close: self.hovered_win_close,
             hovered_ai_badge: self.hovered_ai_badge,
+            hovered_keep_awake: self.hovered_keep_awake,
+            keep_awake_popup_open: self.keep_awake_popup_open,
+            hovered_keep_awake_option: self.hovered_keep_awake_option,
+            keep_awake: self.config.terminal.keep_awake,
+            keep_awake_working,
             sidebar_scroll_offset: self.sidebar_scroll_offset,
             sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
             palette_scrollbar_hovered,
@@ -475,7 +487,7 @@ fn draw_full_scene(
 
         let active_model = ai_snapshot.model_for(ai_status);
         let meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
-        renderer.render_status_bar_with_ai(
+        renderer.render_status_bar_full(
             canvas,
             p.offset,
             cwd.as_deref(),
@@ -486,10 +498,22 @@ fn draw_full_scene(
             ai_status,
             active_model,
             &meters,
+            p.keep_awake,
+            p.keep_awake_working,
+            p.hovered_keep_awake,
             p.hovered_ai_badge,
             p.explorer_visible,
             theme,
         );
+        if p.keep_awake_popup_open {
+            renderer.render_keep_awake_popup(
+                canvas,
+                p.keep_awake,
+                p.hovered_keep_awake_option,
+                p.keep_awake_working,
+                theme,
+            );
+        }
     }
 
     if let Some(menu) = context_menu {

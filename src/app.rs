@@ -26,6 +26,7 @@ mod tabs;
 mod viewer;
 mod wheel;
 
+pub(crate) use crate::config::KeepAwakeMode;
 pub(crate) use crate::renderer::PaletteRects;
 pub(crate) use ai_usage::*;
 pub(crate) use context_menu::*;
@@ -204,6 +205,14 @@ pub(crate) struct TearminalApp {
     hovered_ai_badge: bool,
     /// Hover sobre el indicador de actualización disponible en la barra de estado inferior
     pub hovered_update_badge: bool,
+    /// Hover sobre el botón de modo pantalla encendida (Activo/Agente/Apagado) en la esquina inferior derecha
+    pub hovered_keep_awake: bool,
+    /// Selector de pantalla encendida desplegado hacia arriba sobre la barra de estado
+    pub keep_awake_popup_open: bool,
+    /// Opción del selector bajo el ratón (0 Apagado, 1 Agente, 2 Activo)
+    pub hovered_keep_awake_option: Option<usize>,
+    /// Estado actual de pantalla encendida aplicado a Windows (`SetThreadExecutionState`)
+    pub keep_awake_active: bool,
     /// Estado de consumo y cuotas de modelos de IA para el menú flotante
     pub ai_usage: AiUsageState,
     /// Observador de cambios del sistema de archivos local para refresco reactivo de Git y archivos
@@ -581,7 +590,7 @@ impl TearminalApp {
         }
         let clipboard = arboard::Clipboard::new().ok();
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
-        Self {
+        let mut app = Self {
             config,
             theme,
             proxy,
@@ -679,9 +688,15 @@ impl TearminalApp {
             tab_drag: None,
             hovered_ai_badge: false,
             hovered_update_badge: false,
+            hovered_keep_awake: false,
+            keep_awake_popup_open: false,
+            hovered_keep_awake_option: None,
+            keep_awake_active: false,
             ai_usage: AiUsageState::default(),
             fs_watcher: None,
-        }
+        };
+        app.update_keep_awake();
+        app
     }
 
     /// Estado de esta ventana tal como se restaurará: solo pestañas de terminal, con sus paneles
@@ -915,6 +930,39 @@ impl TearminalApp {
             }
         }
     }
+
+    /// Comprueba si algún panel en alguna pestaña tiene un agente de IA en ejecución.
+    pub(crate) fn has_working_agent(&self) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| tab.panes.iter().any(|pane| pane.is_agent_pane()))
+    }
+
+    /// Actualiza el estado de suspensión de Windows según la configuración y el estado actual.
+    pub(crate) fn update_keep_awake(&mut self) {
+        let should_stay_awake = match self.config.terminal.keep_awake {
+            KeepAwakeMode::Active => true,
+            KeepAwakeMode::Agent => self.has_working_agent(),
+            KeepAwakeMode::Off => false,
+        };
+        if self.keep_awake_active != should_stay_awake {
+            self.keep_awake_active = should_stay_awake;
+            platform::set_keep_awake(should_stay_awake);
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// Establece un modo específico de pantalla encendida y lo persiste en la configuración.
+    pub(crate) fn set_keep_awake_mode(&mut self, mode: KeepAwakeMode) {
+        self.config.terminal.keep_awake = mode;
+        let _ = self.config.save();
+        self.update_keep_awake();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
 }
 
 /// Lo necesario para lanzar shells al abrir o restaurar una ventana
@@ -994,6 +1042,14 @@ impl SpawnCtx<'_> {
                 first: Box::new(self.restore_layout(first, panes)),
                 second: Box::new(self.restore_layout(second, panes)),
             },
+        }
+    }
+}
+
+impl Drop for TearminalApp {
+    fn drop(&mut self) {
+        if self.keep_awake_active {
+            platform::set_keep_awake(false);
         }
     }
 }

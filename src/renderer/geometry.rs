@@ -246,15 +246,31 @@ pub(crate) struct SettingsPageRects {
     pub opacity_value_box: (usize, usize, usize, usize),
 
     pub cursor_blink_btn: (usize, usize, usize, usize),
+    pub cursor_shape_block_btn: (usize, usize, usize, usize),
+    pub cursor_shape_beam_btn: (usize, usize, usize, usize),
+    pub cursor_shape_underline_btn: (usize, usize, usize, usize),
+    pub shell_pwsh_btn: (usize, usize, usize, usize),
+    pub shell_powershell_btn: (usize, usize, usize, usize),
+    pub shell_cmd_btn: (usize, usize, usize, usize),
+    pub scrollback_minus_btn: (usize, usize, usize, usize),
+    pub scrollback_plus_btn: (usize, usize, usize, usize),
+    pub scrollback_value_box: (usize, usize, usize, usize),
     pub shell_integration_btn: (usize, usize, usize, usize),
     pub copy_on_select_btn: (usize, usize, usize, usize),
     pub status_bar_toggle_btn: (usize, usize, usize, usize),
+    pub show_dimensions_btn: (usize, usize, usize, usize),
     pub file_explorer_toggle_btn: (usize, usize, usize, usize),
     pub restore_session_btn: (usize, usize, usize, usize),
     pub auto_save_btn: (usize, usize, usize, usize),
     pub word_wrap_btn: (usize, usize, usize, usize),
     pub ssh_integration_btn: (usize, usize, usize, usize),
+    pub osc52_btn: (usize, usize, usize, usize),
     pub ligatures_btn: (usize, usize, usize, usize),
+    pub ai_limits_btn: (usize, usize, usize, usize),
+    pub auto_check_updates_btn: (usize, usize, usize, usize),
+    pub keep_awake_off_btn: (usize, usize, usize, usize),
+    pub keep_awake_agent_btn: (usize, usize, usize, usize),
+    pub keep_awake_active_btn: (usize, usize, usize, usize),
     pub open_file_btn: (usize, usize, usize, usize),
     pub reset_defaults_btn: (usize, usize, usize, usize),
     pub search_box: (usize, usize, usize, usize),
@@ -274,9 +290,9 @@ impl SettingsPageRects {
     pub(crate) const THEME_ROW_H: usize = 30;
     pub(crate) const THEME_CARD_H: usize = 428;
     pub(crate) const INTERFACE_CARD_H: usize = 270;
-    pub(crate) const TYPOGRAPHY_CARD_H: usize = 236;
+    pub(crate) const TYPOGRAPHY_CARD_H: usize = 278;
     /// Alto de la tarjeta «Comportamiento del terminal»
-    pub(crate) const TERMINAL_CARD_H: usize = 464;
+    pub(crate) const TERMINAL_CARD_H: usize = 738;
     pub(crate) const TERMINAL_ROW_H: usize = 28;
     pub(crate) const DISK_CARD_H: usize = 118;
     pub(crate) const SHORTCUTS_CARD_H: usize = 392;
@@ -286,8 +302,8 @@ impl SettingsPageRects {
     pub(crate) fn content_height(section: super::state::SettingsSection) -> usize {
         use super::state::SettingsSection::*;
         match section {
-            Appearance => 970,
-            Terminal => 620,
+            Appearance => 1012,
+            Terminal => 894,
             Shortcuts => 424,
             About => 360,
         }
@@ -388,18 +404,18 @@ impl SettingsPageRects {
         let panel_side_left_btn = (ctrl_x, card2_y + 148, btn2_w, 30);
         let panel_side_right_btn = (ctrl_x + btn2_w + 8, card2_y + 148, btn2_w, 30);
 
-        // Tarjeta 3: Tipografía y ventana (Font Size, Spacing)
+        // Tarjeta 3: Tipografía y ventana (Font Size, UI Font Size, Spacing)
         let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
         let step_btn_w = 30;
         let step_span = 150;
         let font_minus_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
         let font_plus_btn = (ctrl_x + step_span, card3_y + 50, step_btn_w, 30);
 
-        let ui_font_minus_btn = (0, 0, 0, 0);
-        let ui_font_plus_btn = (0, 0, 0, 0);
+        let ui_font_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
+        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
 
-        let spacing_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
-        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
+        let spacing_minus_btn = (ctrl_x, card3_y + 134, step_btn_w, 30);
+        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 134, step_btn_w, 30);
 
         // La opacidad pertenece a «Interfaz», no a tipografía.
         let opacity_minus_btn = (ctrl_x, card2_y + 198, step_btn_w, 30);
@@ -413,7 +429,14 @@ impl SettingsPageRects {
                 .saturating_sub(font_minus_btn.0 + font_minus_btn.2 + 8),
             font_minus_btn.3,
         );
-        let ui_font_value_box = (0, 0, 0, 0);
+        let ui_font_value_box = (
+            ui_font_minus_btn.0 + ui_font_minus_btn.2 + 4,
+            ui_font_minus_btn.1,
+            ui_font_plus_btn
+                .0
+                .saturating_sub(ui_font_minus_btn.0 + ui_font_minus_btn.2 + 8),
+            ui_font_minus_btn.3,
+        );
         let spacing_value_box = (
             spacing_minus_btn.0 + spacing_minus_btn.2 + 4,
             spacing_minus_btn.1,
@@ -435,15 +458,40 @@ impl SettingsPageRects {
         let toggle_w = 180;
         let row_h = Self::TERMINAL_ROW_H;
         let cursor_blink_btn = (ctrl_x, card_y + 72, toggle_w, row_h);
-        let copy_on_select_btn = (ctrl_x, card_y + 106, toggle_w, row_h);
-        let word_wrap_btn = (ctrl_x, card_y + 140, toggle_w, row_h);
-        let shell_integration_btn = (ctrl_x, card_y + 196, toggle_w, row_h);
-        let ssh_integration_btn = (ctrl_x, card_y + 230, toggle_w, row_h);
-        let ligatures_btn = (ctrl_x, card_y + 264, toggle_w, row_h);
-        let status_bar_toggle_btn = (ctrl_x, card_y + 320, toggle_w, row_h);
-        let file_explorer_toggle_btn = (ctrl_x, card_y + 354, toggle_w, row_h);
-        let restore_session_btn = (ctrl_x, card_y + 388, toggle_w, row_h);
-        let auto_save_btn = (ctrl_x, card_y + 422, toggle_w, row_h);
+        let cursor_shape_block_btn = (ctrl_x, card_y + 106, btn3_w, row_h);
+        let cursor_shape_beam_btn = (ctrl_x + btn3_w + 8, card_y + 106, btn3_w, row_h);
+        let cursor_shape_underline_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 106, btn3_w, row_h);
+        let copy_on_select_btn = (ctrl_x, card_y + 140, toggle_w, row_h);
+        let word_wrap_btn = (ctrl_x, card_y + 174, toggle_w, row_h);
+
+        let shell_pwsh_btn = (ctrl_x, card_y + 230, btn3_w, row_h);
+        let shell_powershell_btn = (ctrl_x + btn3_w + 8, card_y + 230, btn3_w, row_h);
+        let shell_cmd_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 230, btn3_w, row_h);
+        let scrollback_minus_btn = (ctrl_x, card_y + 264, step_btn_w, row_h);
+        let scrollback_plus_btn = (ctrl_x + step_span, card_y + 264, step_btn_w, row_h);
+        let scrollback_value_box = (
+            scrollback_minus_btn.0 + scrollback_minus_btn.2 + 4,
+            scrollback_minus_btn.1,
+            scrollback_plus_btn
+                .0
+                .saturating_sub(scrollback_minus_btn.0 + scrollback_minus_btn.2 + 8),
+            scrollback_minus_btn.3,
+        );
+        let shell_integration_btn = (ctrl_x, card_y + 298, toggle_w, row_h);
+        let ssh_integration_btn = (ctrl_x, card_y + 332, toggle_w, row_h);
+        let osc52_btn = (ctrl_x, card_y + 366, toggle_w, row_h);
+        let ligatures_btn = (ctrl_x, card_y + 400, toggle_w, row_h);
+
+        let status_bar_toggle_btn = (ctrl_x, card_y + 456, toggle_w, row_h);
+        let show_dimensions_btn = (ctrl_x, card_y + 490, toggle_w, row_h);
+        let file_explorer_toggle_btn = (ctrl_x, card_y + 524, toggle_w, row_h);
+        let restore_session_btn = (ctrl_x, card_y + 558, toggle_w, row_h);
+        let auto_save_btn = (ctrl_x, card_y + 592, toggle_w, row_h);
+        let ai_limits_btn = (ctrl_x, card_y + 626, toggle_w, row_h);
+        let auto_check_updates_btn = (ctrl_x, card_y + 660, toggle_w, row_h);
+        let keep_awake_off_btn = (ctrl_x, card_y + 694, btn3_w, row_h);
+        let keep_awake_agent_btn = (ctrl_x + btn3_w + 8, card_y + 694, btn3_w, row_h);
+        let keep_awake_active_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 694, btn3_w, row_h);
 
         let cfg_y = card_y + Self::TERMINAL_CARD_H + 14;
         let cfg_btn_w = (card_w.saturating_sub(50)) / 2;
@@ -484,15 +532,31 @@ impl SettingsPageRects {
             opacity_plus_btn,
             opacity_value_box,
             cursor_blink_btn,
+            cursor_shape_block_btn,
+            cursor_shape_beam_btn,
+            cursor_shape_underline_btn,
+            shell_pwsh_btn,
+            shell_powershell_btn,
+            shell_cmd_btn,
+            scrollback_minus_btn,
+            scrollback_plus_btn,
+            scrollback_value_box,
             shell_integration_btn,
             copy_on_select_btn,
             status_bar_toggle_btn,
+            show_dimensions_btn,
             file_explorer_toggle_btn,
             restore_session_btn,
             auto_save_btn,
             word_wrap_btn,
             ssh_integration_btn,
+            osc52_btn,
             ligatures_btn,
+            ai_limits_btn,
+            auto_check_updates_btn,
+            keep_awake_off_btn,
+            keep_awake_agent_btn,
+            keep_awake_active_btn,
             open_file_btn,
             reset_defaults_btn,
             search_box,
@@ -921,6 +985,8 @@ pub(crate) struct StatusBarRects {
     pub(crate) update_badge: Option<Rect>,
     /// Medidores de límites; `0` de ancho cuando no hay sitio y no se dibujan.
     pub(crate) meters: Rect,
+    /// Botón de selección de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha.
+    pub(crate) keep_awake_btn: Rect,
 }
 
 impl StatusBarRects {
@@ -947,11 +1013,11 @@ impl StatusBarRects {
         label_w: usize,
         update_w: Option<usize>,
     ) -> Self {
-        Self::compute_with_status(width, height, label_w, update_w, 0, 0)
+        Self::compute_full(width, height, label_w, update_w, 0, 0, 0)
     }
 
-    /// Como `compute`, reservando a la derecha del badge las dimensiones de la rejilla (`dims_w`) y los
-    /// medidores de límites (`meters_w`). El grupo se ancla al borde derecho y el badge queda a su izquierda.
+    /// Como `compute_full`, con `keep_awake_w = 0`.
+    #[allow(dead_code)]
     pub(crate) fn compute_with_status(
         width: usize,
         height: usize,
@@ -960,8 +1026,34 @@ impl StatusBarRects {
         dims_w: usize,
         meters_w: usize,
     ) -> Self {
+        Self::compute_full(width, height, label_w, update_w, dims_w, meters_w, 0)
+    }
+
+    /// Como `compute`, reservando a la derecha del badge las dimensiones de la rejilla (`dims_w`), los
+    /// medidores de límites (`meters_w`) y el selector de modo de pantalla encendida (`keep_awake_w`).
+    /// El grupo se ancla al borde derecho y el badge queda a su izquierda.
+    pub(crate) fn compute_full(
+        width: usize,
+        height: usize,
+        label_w: usize,
+        update_w: Option<usize>,
+        dims_w: usize,
+        meters_w: usize,
+        keep_awake_w: usize,
+    ) -> Self {
         let bar_y = height.saturating_sub(Self::BAR_H);
         let badge_w = (label_w + 24).min(width);
+
+        let (kw_block, keep_awake_btn) = if keep_awake_w > 0 {
+            let kw_x = width.saturating_sub(Self::RIGHT_PAD + keep_awake_w);
+            (
+                keep_awake_w + Self::GROUP_GAP,
+                (kw_x, bar_y, keep_awake_w, Self::BAR_H),
+            )
+        } else {
+            (0, (0, bar_y, 0, 0))
+        };
+
         let dims_block = if dims_w > 0 {
             dims_w + Self::GROUP_GAP
         } else {
@@ -975,10 +1067,13 @@ impl StatusBarRects {
         // El grupo derecho no puede comerse el espacio de la ruta y la rama: si al colocar el badge no
         // queda sitio para la izquierda, los medidores (lo opcional) se caen antes que el badge.
         let mut badge_x =
-            width.saturating_sub(Self::RIGHT_PAD + dims_block + meters_block + badge_w);
+            width.saturating_sub(Self::RIGHT_PAD + kw_block + dims_block + meters_block + badge_w);
         if badge_x < Self::MIN_CONTENT_W && meters_block > 0 {
             meters_block = 0;
-            badge_x = width.saturating_sub(Self::RIGHT_PAD + dims_block + badge_w);
+            badge_x = width.saturating_sub(Self::RIGHT_PAD + kw_block + dims_block + badge_w);
+        }
+        if badge_x < Self::MIN_CONTENT_W && dims_block > 0 {
+            badge_x = width.saturating_sub(Self::RIGHT_PAD + kw_block + badge_w);
         }
         let badge_right = badge_x + badge_w;
         let ai_badge = (badge_x, bar_y, badge_w, Self::BAR_H);
@@ -1000,6 +1095,7 @@ impl StatusBarRects {
             ai_badge,
             update_badge,
             meters,
+            keep_awake_btn,
         }
     }
 
@@ -1011,6 +1107,41 @@ impl StatusBarRects {
         let bar_y = height.saturating_sub(Self::BAR_H);
         let y = bar_y.saturating_sub(popup_h + 6);
         (x, y, w, popup_h)
+    }
+
+    /// Ancho, alto de cada opción y margen interior del selector de pantalla encendida.
+    pub(crate) const KA_POPUP_W: usize = 290;
+    pub(crate) const KA_ROW_H: usize = 46;
+    pub(crate) const KA_PAD: usize = 6;
+
+    /// Rectángulo del selector de pantalla encendida: se despliega hacia arriba, pegado a la derecha.
+    pub(crate) fn keep_awake_popup_rect(width: usize, height: usize) -> Rect {
+        let w = Self::KA_POPUP_W.min(width.saturating_sub(16));
+        let h = 3 * Self::KA_ROW_H + 2 * Self::KA_PAD;
+        let x = width.saturating_sub(w + Self::RIGHT_PAD);
+        let y = height.saturating_sub(Self::BAR_H + h + 6);
+        (x, y, w, h)
+    }
+
+    /// Rectángulo de la opción `i` (0..3) dentro del selector.
+    pub(crate) fn keep_awake_option_rect(width: usize, height: usize, i: usize) -> Rect {
+        let (x, y, w, _) = Self::keep_awake_popup_rect(width, height);
+        (
+            x + Self::KA_PAD,
+            y + Self::KA_PAD + i * Self::KA_ROW_H,
+            w.saturating_sub(2 * Self::KA_PAD),
+            Self::KA_ROW_H,
+        )
+    }
+
+    /// Opción del selector bajo el ratón.
+    pub(crate) fn keep_awake_option_at(
+        width: usize,
+        height: usize,
+        mx: usize,
+        my: usize,
+    ) -> Option<usize> {
+        (0..3).find(|&i| Self::inside(mx, my, Self::keep_awake_option_rect(width, height, i)))
     }
 
     #[inline]

@@ -402,6 +402,37 @@ impl TearminalApp {
                     }
                     return;
                 }
+                // 1b. Si la pestaña de Ajustes está editando un buscador
+                if self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .is_some_and(|t| t.is_settings)
+                {
+                    match self.settings_page_state.editing_setting {
+                        Some(EditingSettingField::ThemeSearch) => {
+                            self.settings_page_state
+                                .theme_search_input
+                                .insert_text(&text);
+                            self.sync_theme_search_filter();
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        Some(EditingSettingField::GeneralSearch) => {
+                            let dummy_key = Key::Character(text.as_str().into());
+                            self.edit_general_settings_search(
+                                &dummy_key,
+                                PhysicalKey::Unidentified(
+                                    winit::keyboard::NativeKeyCode::Unidentified,
+                                ),
+                                Some(&text),
+                            );
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 // 2. Si el visor de archivos está activo
                 let auto_save = self.config.terminal.auto_save;
                 let visible = self.viewer_visible_lines();
@@ -541,6 +572,9 @@ impl TearminalApp {
 
         if got_bytes {
             self.process_remote_results();
+            if self.config.terminal.keep_awake == KeepAwakeMode::Agent {
+                self.update_keep_awake();
+            }
         }
 
         // 2. Revisar si algún panel tiene su proceso terminado (tras haber consumido toda su salida)

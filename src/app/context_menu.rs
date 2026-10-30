@@ -53,6 +53,8 @@ pub(crate) enum MenuAction {
     ExplorerRefresh,
     ExplorerCollapseAll,
     ExplorerExpandAll,
+    // Modo pantalla encendida (keep-awake)
+    SetKeepAwake(KeepAwakeMode),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +280,17 @@ impl TearminalApp {
                 true,
             ));
             items
+        } else if self.config.appearance.show_status_bar && my >= win_h.saturating_sub(status_bar_h)
+        {
+            let keep_awake_w = self.renderer.as_ref().map_or(65, |r| {
+                r.keep_awake_button_width(self.config.terminal.keep_awake)
+            });
+            let rects = StatusBarRects::compute_full(win_w, win_h, 0, None, 0, 0, keep_awake_w);
+            if StatusBarRects::inside(mx, my, rects.keep_awake_btn) {
+                self.keep_awake_menu()
+            } else {
+                return false;
+            }
         } else if self.tabs[self.active_tab_index].file_viewer.is_some() {
             let in_viewer = mx >= offset
                 && mx < win_w.saturating_sub(right_offset)
@@ -750,6 +763,46 @@ impl TearminalApp {
         items
     }
 
+    /// Menú contextual para la opción de modo pantalla encendida (keep-awake)
+    pub(super) fn keep_awake_menu(&self) -> Vec<MenuItem> {
+        let current = self.config.terminal.keep_awake;
+        vec![
+            MenuItem::new(
+                if current == KeepAwakeMode::Off {
+                    "✓ Apagado (ajustes del sistema)"
+                } else {
+                    "    Apagado (ajustes del sistema)"
+                },
+                LucideIcon::Eye,
+                "",
+                MenuAction::SetKeepAwake(KeepAwakeMode::Off),
+                true,
+            ),
+            MenuItem::new(
+                if current == KeepAwakeMode::Agent {
+                    "✓ Agente (solo trabajando)"
+                } else {
+                    "    Agente (solo trabajando)"
+                },
+                LucideIcon::Sparkles,
+                "",
+                MenuAction::SetKeepAwake(KeepAwakeMode::Agent),
+                true,
+            ),
+            MenuItem::new(
+                if current == KeepAwakeMode::Active {
+                    "✓ Activo (pantalla siempre encendida)"
+                } else {
+                    "    Activo (pantalla siempre encendida)"
+                },
+                LucideIcon::Eye,
+                "",
+                MenuAction::SetKeepAwake(KeepAwakeMode::Active),
+                true,
+            ),
+        ]
+    }
+
     /// Filas de texto visibles en el visor de la pestaña activa
     pub(super) fn viewer_visible_lines(&self) -> usize {
         let win_h = self
@@ -954,6 +1007,9 @@ impl TearminalApp {
                 self.file_explorer.refresh();
                 self.pump_explorer_ssh();
                 self.sync_fs_watcher();
+            }
+            MenuAction::SetKeepAwake(mode) => {
+                self.set_keep_awake_mode(mode);
             }
         }
         if let Some(w) = &self.window {

@@ -104,6 +104,26 @@ impl TearminalApp {
             }
             return;
         }
+        // Selector de pantalla encendida abierto: un clic sobre una opción la aplica; cualquier otro clic lo cierra
+        // (el clic sobre su propio botón lo alterna, así que ese no lo reabre)
+        if self.keep_awake_popup_open && !is_settings_active && state == ElementState::Pressed {
+            let option = StatusBarRects::keep_awake_option_at(win_w, win_h, mx, my);
+            self.keep_awake_popup_open = false;
+            self.hovered_keep_awake_option = None;
+            self.request_redraw();
+            if button == MouseButton::Left {
+                if let Some(i) = option {
+                    let mode = [
+                        KeepAwakeMode::Off,
+                        KeepAwakeMode::Agent,
+                        KeepAwakeMode::Active,
+                    ][i];
+                    self.set_keep_awake_mode(mode);
+                }
+                return;
+            }
+        }
+
         if button == MouseButton::Right
             && state == ElementState::Pressed
             && self.open_context_menu(mx, my)
@@ -126,6 +146,7 @@ impl TearminalApp {
             return;
         }
         if button == MouseButton::Left && state == ElementState::Released {
+            self.settings_page_state.search_input.mouse_up();
             self.settings_page_state.theme_search_input.mouse_up();
             if let Some(p) = &mut self.palette {
                 p.input.mouse_up();
@@ -189,6 +210,7 @@ impl TearminalApp {
 
         // Si soltamos el botón izquierdo, cancelar arrastre de la barra de desplazamiento y selección
         if button == MouseButton::Left && state == ElementState::Released {
+            self.settings_page_state.search_input.mouse_up();
             self.settings_page_state.theme_search_input.mouse_up();
             if let Some(p) = &mut self.palette {
                 p.input.mouse_up();
@@ -624,12 +646,15 @@ impl TearminalApp {
                 if SettingsPageRects::inside(mx, my, rects.search_box) {
                     self.settings_page_state.editing_setting =
                         Some(crate::renderer::EditingSettingField::GeneralSearch);
-                    self.cursor_on = true;
-                    self.cursor_timer = Instant::now();
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
+                    let text_start_x = rects.search_box.0 + 28;
+                    let mut input = std::mem::take(&mut self.settings_page_state.search_input);
+                    self.handle_text_input_click(&mut input, mx, text_start_x);
+                    self.settings_page_state.search_input = input;
                     return;
+                } else if self.settings_page_state.editing_setting
+                    == Some(crate::renderer::EditingSettingField::GeneralSearch)
+                {
+                    self.settings_page_state.editing_setting = None;
                 }
 
                 // Pestañas de navegación
@@ -823,55 +848,142 @@ impl TearminalApp {
                     }
                     SettingsSection::Terminal => {
                         if SettingsPageRects::inside(mx, my, rects.cursor_blink_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en parpadeo del cursor");
                             self.toggle_cursor_blink();
                             return;
+                        } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_block_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_cursor_shape("block");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_beam_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_cursor_shape("beam");
+                            return;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.cursor_shape_underline_btn,
+                        ) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_cursor_shape("underline");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.shell_pwsh_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_default_shell("pwsh");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.shell_powershell_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_default_shell("powershell");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.shell_cmd_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_default_shell("cmd");
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.scrollback_value_box) {
+                            self.settings_page_state.editing_setting =
+                                Some(crate::renderer::EditingSettingField::ScrollbackLines);
+                            self.settings_page_state.setting_input_buffer =
+                                format!("{}", self.config.terminal.scrollback_lines);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.scrollback_minus_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.adjust_scrollback_lines(-1000);
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.scrollback_plus_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.adjust_scrollback_lines(1000);
+                            return;
                         } else if SettingsPageRects::inside(mx, my, rects.shell_integration_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en integración de shell");
                             self.toggle_shell_integration();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.copy_on_select_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en copiar al seleccionar");
                             self.toggle_copy_on_select();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar barra de estado");
                             self.toggle_status_bar();
                             return;
+                        } else if SettingsPageRects::inside(mx, my, rects.show_dimensions_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.toggle_show_dimensions();
+                            return;
                         } else if SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn)
                         {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log(
                                 "-> Clic en alternar explorador lateral de archivos (Settings)",
                             );
                             self.toggle_file_explorer();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.restore_session_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar restaurar pestañas al iniciar");
                             self.toggle_restore_session();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.auto_save_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar auto-guardar archivos");
                             self.toggle_auto_save();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.word_wrap_btn) {
+                            self.settings_page_state.editing_setting = None;
                             self.toggle_word_wrap();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.ssh_integration_btn) {
+                            self.settings_page_state.editing_setting = None;
                             self.toggle_ssh_integration();
                             return;
+                        } else if SettingsPageRects::inside(mx, my, rects.osc52_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.toggle_osc52();
+                            return;
                         } else if SettingsPageRects::inside(mx, my, rects.ligatures_btn) {
+                            self.settings_page_state.editing_setting = None;
                             self.toggle_ligatures();
                             return;
+                        } else if SettingsPageRects::inside(mx, my, rects.ai_limits_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.toggle_ai_limits();
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.auto_check_updates_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.toggle_auto_check_updates();
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.keep_awake_off_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_keep_awake_mode(KeepAwakeMode::Off);
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.keep_awake_agent_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_keep_awake_mode(KeepAwakeMode::Agent);
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.keep_awake_active_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.set_keep_awake_mode(KeepAwakeMode::Active);
+                            return;
                         } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en abrir archivo tearminal.toml");
                             self.open_config_file();
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
+                            self.settings_page_state.editing_setting = None;
                             crate::logger::log(
                                 "-> Clic en restablecer valores por defecto (Terminal)",
                             );
                             self.reset_to_defaults();
                             return;
+                        } else {
+                            self.settings_page_state.editing_setting = None;
                         }
                     }
                     SettingsSection::About => {
@@ -1018,6 +1130,19 @@ impl TearminalApp {
             && button == MouseButton::Left
         {
             crate::updater::trigger_update();
+            return;
+        }
+
+        // Clic sobre el botón de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha
+        if self.hovered_keep_awake
+            && self.config.appearance.show_status_bar
+            && !self.tabs[self.active_tab_index].is_settings
+            && state == ElementState::Pressed
+            && button == MouseButton::Left
+        {
+            self.keep_awake_popup_open = !self.keep_awake_popup_open;
+            self.hovered_keep_awake_option = None;
+            self.request_redraw();
             return;
         }
 

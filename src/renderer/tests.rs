@@ -680,9 +680,52 @@ fn test_ai_agent_detection_and_status_bar() {
         Some("Gemini 4 Argon (Medium)"),
         &theme,
     );
-    assert_eq!(icon_none, crate::ui::LucideIcon::Dot);
+    assert_eq!(icon_none, crate::ui::LucideIcon::Terminal);
     assert_eq!(label_none, "Local");
     assert_eq!(fg_none, theme.text_muted());
+
+    // Local sin agente: solo texto, sin punto ni icono; con SSH, icono de servidor
+    let (icon, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
+        AiAgentStatus::None,
+        None,
+        None,
+        &theme,
+    );
+    assert_eq!((icon, label.as_str()), (None, "Local"));
+    let (icon, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
+        AiAgentStatus::None,
+        Some("host"),
+        None,
+        &theme,
+    );
+    assert_eq!(
+        (icon, label.as_str()),
+        (Some(crate::ui::LucideIcon::Server), "SSH")
+    );
+    // Con un agente el entorno sigue visible
+    let (_, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
+        AiAgentStatus::Claude,
+        Some("host"),
+        None,
+        &theme,
+    );
+    assert_eq!(label, "SSH · Claude");
+
+    // El selector de pantalla encendida: tres opciones dentro de su tarjeta, sobre la barra de estado
+    {
+        use crate::renderer::StatusBarRects;
+        let (w, h) = (1000usize, 600usize);
+        let (px, py, pw, ph) = StatusBarRects::keep_awake_popup_rect(w, h);
+        assert!(py + ph < h - StatusBarRects::BAR_H && px + pw <= w);
+        for i in 0..3 {
+            let (rx, ry, ..) = StatusBarRects::keep_awake_option_rect(w, h, i);
+            assert_eq!(
+                StatusBarRects::keep_awake_option_at(w, h, rx + 5, ry + 5),
+                Some(i)
+            );
+        }
+        assert_eq!(StatusBarRects::keep_awake_option_at(w, h, 5, 5), None);
+    }
 
     let (icon_agy, label_agy, fg_agy) = crate::renderer::TerminalRenderer::status_bar_badge_info(
         AiAgentStatus::Agy,
@@ -1057,7 +1100,40 @@ fn test_render_pane_with_and_without_ligatures() {
 fn test_settings_ligatures_toggle_rect() {
     let r = SettingsPageRects::compute(0, 0, 800, 600);
     assert!(r.ligatures_btn.2 > 0 && r.ligatures_btn.3 > 0);
-    assert_eq!(r.ligatures_btn.1, SettingsPageRects::CONTENT_TOP + 264);
+    assert_eq!(r.ligatures_btn.1, SettingsPageRects::CONTENT_TOP + 400);
+    assert!(r.ui_font_minus_btn.2 > 0 && r.ui_font_plus_btn.2 > 0);
+    assert!(r.cursor_shape_block_btn.2 > 0 && r.cursor_shape_beam_btn.2 > 0);
+    assert!(r.shell_pwsh_btn.2 > 0 && r.scrollback_value_box.2 > 0);
+    assert!(r.osc52_btn.2 > 0 && r.show_dimensions_btn.2 > 0);
+    assert!(r.ai_limits_btn.2 > 0 && r.auto_check_updates_btn.2 > 0);
+    assert!(r.keep_awake_off_btn.2 > 0 && r.keep_awake_agent_btn.2 > 0);
+}
+
+#[test]
+fn test_settings_search_box_renders_caret_when_empty_and_focused() {
+    use crate::renderer::{EditingSettingField, SettingsPageState};
+    let cfg = TearminalConfig::default();
+    let theme = Theme::from_name(&cfg.appearance.theme);
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (900usize, 400usize);
+
+    let state = SettingsPageState {
+        editing_setting: Some(EditingSettingField::GeneralSearch),
+        ..SettingsPageState::default()
+    };
+
+    let mut c_on = test_support::new_canvas(w, h);
+    r.render_settings_page(&mut c_on, 0, 0, 0, 26, &cfg, &state, true, &theme);
+    let snap_on = c_on.snapshot();
+
+    let mut c_off = test_support::new_canvas(w, h);
+    r.render_settings_page(&mut c_off, 0, 0, 0, 26, &cfg, &state, false, &theme);
+    let snap_off = c_off.snapshot();
+
+    assert_ne!(
+        snap_on, snap_off,
+        "El buscador de ajustes debe mostrar la barra de cursor parpadeante al enfocarse incluso vacío"
+    );
 }
 
 #[test]
@@ -2849,8 +2925,7 @@ fn test_status_bar_drops_branch_when_cwd_fills_the_left_side() {
     );
 }
 
-/// La cápsula de medidores se dibuja con sitio y se omite en barras estrechas:
-/// a 200 px y a 400 px no cabe, y a 1440 px se dibuja. El indicador de agente va limpio sin contorno.
+/// Ni el indicador de agente ni los medidores de límites llevan cápsula o borde exterior.
 #[test]
 fn test_status_bar_capsules_dropped_when_narrow() {
     use crate::renderer::{StatusBarRects, StatusMeter};
@@ -2871,7 +2946,7 @@ fn test_status_bar_capsules_dropped_when_narrow() {
             percent: 18.0,
         },
     ];
-    for (w, capsules) in [(200usize, 0usize), (400, 0), (1440, 1)] {
+    for (w, capsules) in [(200usize, 0usize), (400, 0), (1440, 0)] {
         let buf = test_support::with_canvas(w, h, |c| {
             c.clear(theme.bar_bg());
             r.render_status_bar_with_ai(

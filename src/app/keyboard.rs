@@ -53,6 +53,16 @@ impl TearminalApp {
             }
         }
 
+        // Selector de pantalla encendida: Escape lo cierra
+        if self.keep_awake_popup_open && logical_key == Key::Named(NamedKey::Escape) {
+            self.keep_awake_popup_open = false;
+            self.hovered_keep_awake_option = None;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+
         // Con la paleta de comandos abierta, interceptar teclado por completo
         if self.palette.is_some() && self.handle_palette_key(&logical_key, physical_key, &text) {
             return;
@@ -207,6 +217,11 @@ impl TearminalApp {
                                     let _ = self.config.save();
                                 }
                             }
+                            EditingSettingField::ScrollbackLines => {
+                                if let Ok(val) = input.parse::<usize>() {
+                                    self.set_scrollback_lines(val);
+                                }
+                            }
                             EditingSettingField::ThemeSearch
                             | EditingSettingField::GeneralSearch => {}
                             EditingSettingField::WindowOpacity => {
@@ -266,6 +281,15 @@ impl TearminalApp {
             {
                 crate::logger::log("-> Cerrando / alternando pestaña de Ajustes");
                 self.open_or_switch_settings_tab();
+                return;
+            }
+            if ctrl && !shift && key_is_char(&logical_key, physical_key, 'f') {
+                self.settings_page_state.editing_setting = Some(EditingSettingField::GeneralSearch);
+                self.cursor_on = true;
+                self.cursor_timer = Instant::now();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
                 return;
             }
             if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
@@ -1264,38 +1288,24 @@ impl TearminalApp {
             }
         }
 
-        // Salto de palabras y edición en línea de comandos (Ctrl + Flechas, Ctrl + Delete)
-        if ctrl && !shift {
-            match logical_key {
-                Key::Named(NamedKey::ArrowLeft) => {
-                    active.pty.write_input(b"\x1b[1;5D"); // Salto palabra atrás
-                    return;
-                }
-                Key::Named(NamedKey::ArrowRight) => {
-                    active.pty.write_input(b"\x1b[1;5C"); // Salto palabra adelante
-                    return;
-                }
-                Key::Named(NamedKey::ArrowUp) => {
-                    active.pty.write_input(b"\x1b[1;5A");
-                    return;
-                }
-                Key::Named(NamedKey::ArrowDown) => {
-                    active.pty.write_input(b"\x1b[1;5B");
-                    return;
-                }
-                Key::Named(NamedKey::Delete) => {
-                    active.pty.write_input(b"\x1b[3;5~"); // Borrar palabra adelante
-                    return;
-                }
-                Key::Named(NamedKey::Home) => {
-                    active.pty.write_input(b"\x1b[1;5H");
-                    return;
-                }
-                Key::Named(NamedKey::End) => {
-                    active.pty.write_input(b"\x1b[1;5F");
-                    return;
-                }
-                _ => {}
+        // Salto de palabras y selección en línea de comandos (Ctrl [+ Shift] + Flechas/Home/End/Supr).
+        // Ctrl = modificador 5 y Ctrl+Shift = 6 (PSReadLine y readline: SelectBackwardWord…).
+        // Ctrl+Shift+Arriba/Abajo ya se atendieron arriba (navegación entre comandos).
+        if ctrl {
+            let m = if shift { '6' } else { '5' };
+            let seq = match logical_key {
+                Key::Named(NamedKey::ArrowLeft) => Some(format!("\x1b[1;{m}D")),
+                Key::Named(NamedKey::ArrowRight) => Some(format!("\x1b[1;{m}C")),
+                Key::Named(NamedKey::ArrowUp) => Some(format!("\x1b[1;{m}A")),
+                Key::Named(NamedKey::ArrowDown) => Some(format!("\x1b[1;{m}B")),
+                Key::Named(NamedKey::Delete) => Some(format!("\x1b[3;{m}~")),
+                Key::Named(NamedKey::Home) => Some(format!("\x1b[1;{m}H")),
+                Key::Named(NamedKey::End) => Some(format!("\x1b[1;{m}F")),
+                _ => None,
+            };
+            if let Some(seq) = seq {
+                active.pty.write_input(seq.as_bytes());
+                return;
             }
         }
 

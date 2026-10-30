@@ -629,20 +629,38 @@ impl TearminalApp {
             let mut h_op = false;
             let mut h_ob = false;
             let mut h_cb = false;
+            let mut h_cshape = None;
+            let mut h_dshell = None;
+            let mut h_sbm = false;
+            let mut h_sbp = false;
+            let mut h_sbb = false;
             let mut h_gp = false;
             let mut h_cs = false;
             let mut h_sb = false;
+            let mut h_sdim = false;
             let mut h_fe = false;
             let mut h_rs = false;
             let mut h_as = false;
             let mut h_ww = false;
             let mut h_si = false;
+            let mut h_osc52 = false;
             let mut h_lig = false;
+            let mut h_ail = false;
+            let mut h_acu = false;
+            let mut h_ka = None;
             let mut h_of = false;
             let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
             let h_search = SettingsPageRects::inside(mx, my, rects.search_box);
             if h_search {
                 is_text = true;
+            }
+            if self.settings_page_state.search_input.is_dragging {
+                let text_start_x = rects.search_box.0 + 28;
+                let mut input = std::mem::take(&mut self.settings_page_state.search_input);
+                if self.handle_text_input_drag(&mut input, mx, text_start_x) {
+                    needs_redraw = true;
+                }
+                self.settings_page_state.search_input = input;
             }
 
             match self.settings_page_state.section {
@@ -700,15 +718,43 @@ impl TearminalApp {
                 }
                 SettingsSection::Terminal => {
                     h_cb = SettingsPageRects::inside(mx, my, rects.cursor_blink_btn);
+                    if SettingsPageRects::inside(mx, my, rects.cursor_shape_block_btn) {
+                        h_cshape = Some(0);
+                    } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_beam_btn) {
+                        h_cshape = Some(1);
+                    } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_underline_btn) {
+                        h_cshape = Some(2);
+                    }
+                    if SettingsPageRects::inside(mx, my, rects.shell_pwsh_btn) {
+                        h_dshell = Some(0);
+                    } else if SettingsPageRects::inside(mx, my, rects.shell_powershell_btn) {
+                        h_dshell = Some(1);
+                    } else if SettingsPageRects::inside(mx, my, rects.shell_cmd_btn) {
+                        h_dshell = Some(2);
+                    }
+                    h_sbm = SettingsPageRects::inside(mx, my, rects.scrollback_minus_btn);
+                    h_sbp = SettingsPageRects::inside(mx, my, rects.scrollback_plus_btn);
+                    h_sbb = SettingsPageRects::inside(mx, my, rects.scrollback_value_box);
                     h_gp = SettingsPageRects::inside(mx, my, rects.shell_integration_btn);
                     h_cs = SettingsPageRects::inside(mx, my, rects.copy_on_select_btn);
                     h_sb = SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn);
+                    h_sdim = SettingsPageRects::inside(mx, my, rects.show_dimensions_btn);
                     h_fe = SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn);
                     h_rs = SettingsPageRects::inside(mx, my, rects.restore_session_btn);
                     h_as = SettingsPageRects::inside(mx, my, rects.auto_save_btn);
                     h_ww = SettingsPageRects::inside(mx, my, rects.word_wrap_btn);
                     h_si = SettingsPageRects::inside(mx, my, rects.ssh_integration_btn);
+                    h_osc52 = SettingsPageRects::inside(mx, my, rects.osc52_btn);
                     h_lig = SettingsPageRects::inside(mx, my, rects.ligatures_btn);
+                    h_ail = SettingsPageRects::inside(mx, my, rects.ai_limits_btn);
+                    h_acu = SettingsPageRects::inside(mx, my, rects.auto_check_updates_btn);
+                    if SettingsPageRects::inside(mx, my, rects.keep_awake_off_btn) {
+                        h_ka = Some(0);
+                    } else if SettingsPageRects::inside(mx, my, rects.keep_awake_agent_btn) {
+                        h_ka = Some(1);
+                    } else if SettingsPageRects::inside(mx, my, rects.keep_awake_active_btn) {
+                        h_ka = Some(2);
+                    }
                     h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
                     h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
                 }
@@ -736,15 +782,25 @@ impl TearminalApp {
                 || h_op
                 || h_ob
                 || h_cb
+                || h_cshape.is_some()
+                || h_dshell.is_some()
+                || h_sbm
+                || h_sbp
+                || h_sbb
                 || h_gp
                 || h_cs
                 || h_sb
+                || h_sdim
                 || h_fe
                 || h_rs
                 || h_as
                 || h_ww
                 || h_si
+                || h_osc52
                 || h_lig
+                || h_ail
+                || h_acu
+                || h_ka.is_some()
                 || h_of
                 || h_reset
             {
@@ -770,15 +826,25 @@ impl TearminalApp {
                 || st.hovered_opacity_plus != h_op
                 || st.hovered_opacity_box != h_ob
                 || st.hovered_cursor_blink != h_cb
+                || st.hovered_cursor_shape != h_cshape
+                || st.hovered_default_shell != h_dshell
+                || st.hovered_scrollback_minus != h_sbm
+                || st.hovered_scrollback_plus != h_sbp
+                || st.hovered_scrollback_box != h_sbb
                 || st.hovered_shell_integration != h_gp
                 || st.hovered_copy_on_select != h_cs
                 || st.hovered_status_bar != h_sb
+                || st.hovered_show_dimensions != h_sdim
                 || st.hovered_file_explorer != h_fe
                 || st.hovered_restore_session != h_rs
                 || st.hovered_auto_save != h_as
                 || st.hovered_word_wrap != h_ww
                 || st.hovered_ssh_integration != h_si
+                || st.hovered_osc52 != h_osc52
                 || st.hovered_ligatures != h_lig
+                || st.hovered_ai_limits != h_ail
+                || st.hovered_auto_check_updates != h_acu
+                || st.hovered_keep_awake != h_ka
                 || st.hovered_open_file != h_of
                 || st.hovered_reset_defaults != h_reset
                 || st.hovered_search_box != h_search
@@ -801,15 +867,25 @@ impl TearminalApp {
                 st.hovered_opacity_plus = h_op;
                 st.hovered_opacity_box = h_ob;
                 st.hovered_cursor_blink = h_cb;
+                st.hovered_cursor_shape = h_cshape;
+                st.hovered_default_shell = h_dshell;
+                st.hovered_scrollback_minus = h_sbm;
+                st.hovered_scrollback_plus = h_sbp;
+                st.hovered_scrollback_box = h_sbb;
                 st.hovered_shell_integration = h_gp;
                 st.hovered_copy_on_select = h_cs;
                 st.hovered_status_bar = h_sb;
+                st.hovered_show_dimensions = h_sdim;
                 st.hovered_file_explorer = h_fe;
                 st.hovered_restore_session = h_rs;
                 st.hovered_auto_save = h_as;
                 st.hovered_word_wrap = h_ww;
                 st.hovered_ssh_integration = h_si;
+                st.hovered_osc52 = h_osc52;
                 st.hovered_ligatures = h_lig;
+                st.hovered_ai_limits = h_ail;
+                st.hovered_auto_check_updates = h_acu;
+                st.hovered_keep_awake = h_ka;
                 st.hovered_open_file = h_of;
                 st.hovered_reset_defaults = h_reset;
                 st.hovered_search_box = h_search;
@@ -1295,8 +1371,11 @@ impl TearminalApp {
             }
         }
 
-        // Hover en el indicador de modelo/agente de IA y de actualización en la barra de estado inferior
-        let (new_hovered_ai, new_hovered_update) = if self.config.appearance.show_status_bar
+        // Hover en el indicador de modelo/agente de IA, actualización y modo keep-awake en la barra de estado
+        let (new_hovered_ai, new_hovered_update, new_hovered_keep_awake) = if self
+            .config
+            .appearance
+            .show_status_bar
             && !is_settings_active
         {
             let active_tab = &self.tabs[self.active_tab_index];
@@ -1323,12 +1402,8 @@ impl TearminalApp {
                 (None, AiAgentStatus::None, (100, 30))
             };
             let active_model = self.ai_usage.snapshot.model_for(ai_status);
-            let badge_info = TerminalRenderer::status_bar_badge_info(
-                ai_status,
-                ssh_host,
-                active_model,
-                &self.theme,
-            );
+            let badge_info =
+                TerminalRenderer::status_bar_badge(ai_status, ssh_host, active_model, &self.theme);
             let (_, label, _) = &badge_info;
             let label_w = self
                 .renderer
@@ -1361,16 +1436,26 @@ impl TearminalApp {
                 .renderer
                 .as_ref()
                 .map_or(meters.len() * 150, |r| r.status_meters_width(&meters));
+            let keep_awake_w = self.renderer.as_ref().map_or(65, |r| {
+                r.keep_awake_button_width(self.config.terminal.keep_awake)
+            });
 
-            let sb_rects = StatusBarRects::compute_with_status(
-                win_w, win_h, label_w, update_w, dims_w, meters_w,
+            let sb_rects = StatusBarRects::compute_full(
+                win_w,
+                win_h,
+                label_w,
+                update_w,
+                dims_w,
+                meters_w,
+                keep_awake_w,
             );
             let update_hov = sb_rects
                 .update_badge
                 .is_some_and(|r| StatusBarRects::inside(mx, my, r));
-            (false, update_hov)
+            let keep_awake_hov = StatusBarRects::inside(mx, my, sb_rects.keep_awake_btn);
+            (false, update_hov, keep_awake_hov)
         } else {
-            (false, false)
+            (false, false, false)
         };
 
         if new_hovered_ai {
@@ -1392,8 +1477,23 @@ impl TearminalApp {
                 self.spawn_ai_local_scan(agents);
             }
         }
-        if new_hovered_update {
+        if new_hovered_update || new_hovered_keep_awake {
             is_pointer = true;
+        }
+        let new_ka_option = if self.keep_awake_popup_open
+            && self.config.appearance.show_status_bar
+            && !is_settings_active
+        {
+            StatusBarRects::keep_awake_option_at(win_w, win_h, mx, my)
+        } else {
+            None
+        };
+        if new_ka_option.is_some() {
+            is_pointer = true;
+        }
+        if self.hovered_keep_awake_option != new_ka_option {
+            self.hovered_keep_awake_option = new_ka_option;
+            needs_redraw = true;
         }
         if self.hovered_ai_badge != new_hovered_ai {
             self.hovered_ai_badge = new_hovered_ai;
@@ -1401,6 +1501,10 @@ impl TearminalApp {
         }
         if self.hovered_update_badge != new_hovered_update {
             self.hovered_update_badge = new_hovered_update;
+            needs_redraw = true;
+        }
+        if self.hovered_keep_awake != new_hovered_keep_awake {
+            self.hovered_keep_awake = new_hovered_keep_awake;
             needs_redraw = true;
         }
 

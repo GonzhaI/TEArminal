@@ -441,36 +441,20 @@ impl TerminalRenderer {
 
         let sb_text_x = sb.0 + 28;
         let sb_text_y = self.centered_baseline(sb.1 + sb.3 / 2);
-        let query = &state.search_input.text;
-        if query.is_empty() {
-            self.draw_ui_text(
-                canvas,
-                "Buscar ajustes...",
-                sb_text_x,
-                sb_text_y,
-                sb.0 + sb.2.saturating_sub(8),
-                theme.text_muted(),
-                tokens::DETAIL,
-                false,
-            );
-        } else {
-            let cursor_str = if is_searching && cursor_visible {
-                "|"
-            } else {
-                ""
-            };
-            let disp = format!("{query}{cursor_str}");
-            self.draw_ui_text(
-                canvas,
-                &disp,
-                sb_text_x,
-                sb_text_y,
-                sb.0 + sb.2.saturating_sub(8),
-                theme.foreground,
-                tokens::BODY,
-                false,
-            );
-        }
+        let sb_text_max_x = sb.0 + sb.2.saturating_sub(8);
+        self.render_text_input_content(
+            canvas,
+            &state.search_input,
+            sb_text_x,
+            sb_text_y,
+            sb_text_max_x,
+            sb.1,
+            sb.3,
+            cursor_visible,
+            "Buscar ajustes...",
+            is_searching,
+            theme,
+        );
 
         Self::draw_rect(
             canvas,
@@ -1016,6 +1000,16 @@ impl TerminalRenderer {
                 format!("{:.1} pt", config.appearance.font_size),
             ),
             (
+                rects.ui_font_minus_btn,
+                rects.ui_font_plus_btn,
+                "Tamaño de fuente UI",
+                state.editing_setting == Some(EditingSettingField::UiFontSize),
+                state.hovered_ui_font_minus,
+                state.hovered_ui_font_plus,
+                state.hovered_ui_font_box,
+                format!("{:.1} pt", config.appearance.ui_font_size),
+            ),
+            (
                 rects.spacing_minus_btn,
                 rects.spacing_plus_btn,
                 "Interlineado",
@@ -1031,7 +1025,7 @@ impl TerminalRenderer {
                 canvas,
                 content_x + 20,
                 minus.1,
-                content_x + 230,
+                minus.0.saturating_sub(12),
                 label,
                 theme,
             );
@@ -1046,7 +1040,7 @@ impl TerminalRenderer {
         }
 
         // Muestra: valores de máquina en mono con el tamaño de fuente configurado.
-        let preview = (content_x + 20, card3_y + 140, card_w.saturating_sub(40), 66);
+        let preview = (content_x + 20, card3_y + 182, card_w.saturating_sub(40), 66);
         canvas.rounded_fill(
             preview.0,
             preview.1,
@@ -1118,8 +1112,7 @@ impl TerminalRenderer {
         );
 
         let label_x = content_x + 20;
-        let label_max = content_x + card_w / 2 + 40;
-        let on_off = |on: bool| if on { "Activado" } else { "Desactivado" };
+        let label_max = rects.cursor_blink_btn.0.saturating_sub(12);
 
         self.draw_group_label(canvas, label_x, card_y + 62, label_max, "ENTRADA", theme);
         self.draw_toggle_row(
@@ -1132,6 +1125,44 @@ impl TerminalRenderer {
             state.hovered_cursor_blink,
             theme,
         );
+
+        self.draw_label(
+            canvas,
+            label_x,
+            rects.cursor_shape_block_btn.1,
+            label_max,
+            "Forma del cursor",
+            theme,
+        );
+        let cs = config.terminal.cursor_shape.to_ascii_lowercase();
+        let is_beam = cs == "beam" || cs == "bar" || cs == "line";
+        let is_under = cs == "underline";
+        let is_block = !is_beam && !is_under;
+        self.draw_button(
+            canvas,
+            rects.cursor_shape_block_btn,
+            "Bloque",
+            state.hovered_cursor_shape == Some(0),
+            is_block,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.cursor_shape_beam_btn,
+            "Barra",
+            state.hovered_cursor_shape == Some(1),
+            is_beam,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.cursor_shape_underline_btn,
+            "Subrayado",
+            state.hovered_cursor_shape == Some(2),
+            is_under,
+            theme,
+        );
+
         self.draw_toggle_row(
             canvas,
             label_x,
@@ -1153,7 +1184,84 @@ impl TerminalRenderer {
             theme,
         );
 
-        self.draw_group_label(canvas, label_x, card_y + 186, label_max, "SHELL", theme);
+        self.draw_group_label(canvas, label_x, card_y + 220, label_max, "SHELL", theme);
+        self.draw_label(
+            canvas,
+            label_x,
+            rects.shell_pwsh_btn.1,
+            label_max,
+            "Shell por defecto",
+            theme,
+        );
+        let sh = config.terminal.default_shell.to_ascii_lowercase();
+        let is_pwsh = sh.contains("pwsh");
+        let is_cmd = sh.ends_with("cmd.exe") || sh == "cmd";
+        let is_winps = !is_pwsh && !is_cmd;
+        self.draw_button(
+            canvas,
+            rects.shell_pwsh_btn,
+            "PowerShell 7",
+            state.hovered_default_shell == Some(0),
+            is_pwsh,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.shell_powershell_btn,
+            "PowerShell",
+            state.hovered_default_shell == Some(1),
+            is_winps,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.shell_cmd_btn,
+            "CMD",
+            state.hovered_default_shell == Some(2),
+            is_cmd,
+            theme,
+        );
+
+        self.draw_label(
+            canvas,
+            label_x,
+            rects.scrollback_minus_btn.1,
+            label_max,
+            "Historial (scrollback)",
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.scrollback_minus_btn,
+            "−",
+            state.hovered_scrollback_minus,
+            false,
+            theme,
+        );
+        let is_editing_sb = state.editing_setting == Some(EditingSettingField::ScrollbackLines);
+        let sb_str = if is_editing_sb {
+            state.setting_input_buffer.clone()
+        } else {
+            format!("{}", config.terminal.scrollback_lines)
+        };
+        self.draw_stepper_value(
+            canvas,
+            rects.scrollback_minus_btn,
+            rects.scrollback_plus_btn,
+            &sb_str,
+            is_editing_sb,
+            state.hovered_scrollback_box,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.scrollback_plus_btn,
+            "+",
+            state.hovered_scrollback_plus,
+            false,
+            theme,
+        );
+
         self.draw_toggle_row(
             canvas,
             label_x,
@@ -1178,6 +1286,16 @@ impl TerminalRenderer {
             canvas,
             label_x,
             label_max,
+            rects.osc52_btn,
+            "Portapapeles remoto (OSC 52)",
+            config.terminal.osc52,
+            state.hovered_osc52,
+            theme,
+        );
+        self.draw_toggle_row(
+            canvas,
+            label_x,
+            label_max,
             rects.ligatures_btn,
             "Ligaduras de código (->, !=, ==)",
             config.terminal.ligatures,
@@ -1185,7 +1303,7 @@ impl TerminalRenderer {
             theme,
         );
 
-        self.draw_group_label(canvas, label_x, card_y + 310, label_max, "INTERFAZ", theme);
+        self.draw_group_label(canvas, label_x, card_y + 446, label_max, "INTERFAZ", theme);
         self.draw_toggle_row(
             canvas,
             label_x,
@@ -1194,6 +1312,16 @@ impl TerminalRenderer {
             "Barra inferior (Status Bar)",
             config.appearance.show_status_bar,
             state.hovered_status_bar,
+            theme,
+        );
+        self.draw_toggle_row(
+            canvas,
+            label_x,
+            label_max,
+            rects.show_dimensions_btn,
+            "Dimensiones de la rejilla (cols × filas)",
+            config.appearance.show_dimensions,
+            state.hovered_show_dimensions,
             theme,
         );
         self.draw_toggle_row(
@@ -1226,8 +1354,60 @@ impl TerminalRenderer {
             state.hovered_auto_save,
             theme,
         );
+        self.draw_toggle_row(
+            canvas,
+            label_x,
+            label_max,
+            rects.ai_limits_btn,
+            "Consultar cuotas de IA (Claude Code)",
+            config.terminal.ai_limits,
+            state.hovered_ai_limits,
+            theme,
+        );
+        self.draw_toggle_row(
+            canvas,
+            label_x,
+            label_max,
+            rects.auto_check_updates_btn,
+            "Buscar actualizaciones al iniciar",
+            config.terminal.auto_check_updates,
+            state.hovered_auto_check_updates,
+            theme,
+        );
 
-        let _ = on_off;
+        self.draw_label(
+            canvas,
+            label_x,
+            rects.keep_awake_off_btn.1,
+            label_max,
+            "Pantalla encendida",
+            theme,
+        );
+        let kw = config.terminal.keep_awake;
+        self.draw_button(
+            canvas,
+            rects.keep_awake_off_btn,
+            "Apagado",
+            state.hovered_keep_awake == Some(0),
+            kw == crate::config::KeepAwakeMode::Off,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.keep_awake_agent_btn,
+            "Agente",
+            state.hovered_keep_awake == Some(1),
+            kw == crate::config::KeepAwakeMode::Agent,
+            theme,
+        );
+        self.draw_button(
+            canvas,
+            rects.keep_awake_active_btn,
+            "Activo",
+            state.hovered_keep_awake == Some(2),
+            kw == crate::config::KeepAwakeMode::Active,
+            theme,
+        );
 
         // Tarjeta 2: configuración en disco
         let cfg_y = card_y + SettingsPageRects::TERMINAL_CARD_H + 14;

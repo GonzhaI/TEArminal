@@ -901,6 +901,33 @@ fn test_status_bar_ssh_with_cwd_and_branch() {
 }
 
 #[test]
+fn test_keep_awake_mode_cycle_and_rects() {
+    use crate::config::KeepAwakeMode;
+    use crate::renderer::StatusBarRects;
+
+    // 1. Ciclo de modos
+    assert_eq!(KeepAwakeMode::Off.next(), KeepAwakeMode::Agent);
+    assert_eq!(KeepAwakeMode::Agent.next(), KeepAwakeMode::Active);
+    assert_eq!(KeepAwakeMode::Active.next(), KeepAwakeMode::Off);
+
+    // 2. Geometría en la esquina inferior derecha
+    let width = 1000;
+    let height = 600;
+    let kw_w = 65;
+    let rects = StatusBarRects::compute_full(width, height, 100, None, 0, 0, kw_w);
+    assert_eq!(
+        rects.keep_awake_btn.0 + rects.keep_awake_btn.2,
+        width - StatusBarRects::RIGHT_PAD,
+        "El botón de keep-awake debe terminar exactamente en el margen derecho de la barra"
+    );
+    assert_eq!(
+        rects.keep_awake_btn.1,
+        height - StatusBarRects::BAR_H,
+        "El botón debe pertenecer a la barra de estado inferior"
+    );
+}
+
+#[test]
 fn test_branch_from_output_line_multilanguage() {
     use super::shell_context::branch_from_output_line as b;
     assert_eq!(b("En la rama qa").as_deref(), Some("qa"));
@@ -2150,7 +2177,7 @@ fn test_encode_kitty_key_various_combinations() {
         Some(b"\x1b[122;6u".to_vec())
     );
 
-    // Flecha arriba con Ctrl con flag 1: \x1b[57362;5u
+    // Flecha arriba con Ctrl con flag 1: forma clásica \x1b[1;5A (sin tipo de evento)
     let up_key = Key::Named(NamedKey::ArrowUp);
     let phys_up = PhysicalKey::Code(KeyCode::ArrowUp);
     assert_eq!(
@@ -2164,7 +2191,7 @@ fn test_encode_kitty_key_various_combinations() {
             KeyEventType::Press,
             1
         ),
-        Some(b"\x1b[57362;5u".to_vec())
+        Some(b"\x1b[1;5A".to_vec())
     );
 
     // Flecha arriba sin modificadores con flag 1 (disambiguate): None (debe emitir secuencia VT estándar \x1b[A o \x1bOA)

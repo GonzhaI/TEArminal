@@ -1,6 +1,6 @@
 [package]
 name = "tearminal"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2021"
 license = "MIT"
 description = "TEArminal: Terminal nativa veloz para Windows optimizada para agentes CLI"
@@ -35,6 +35,7 @@ windows-sys = { version = "0.52", features = [
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    "Win32_System_Power",
 ] }
 
 # DirectX 11 y DXGI para renderizado por GPU nativo en Windows 11 (DirectFlip)

@@ -192,6 +192,19 @@ pub(crate) fn encode_kitty_key(
 
     let key_num = kitty_key_number(logical_key, physical_key)?;
 
+    // Flechas, Home/End y Supr conservan su forma clásica (`CSI 1;mod D`, `CSI 3;mod ~`) en el
+    // protocolo Kitty; los códigos 573xx de la tabla no son los que esperan los clientes.
+    let legacy_nav = match key_num {
+        57360 => Some(("1", 'D')),
+        57361 => Some(("1", 'C')),
+        57362 => Some(("1", 'A')),
+        57363 => Some(("1", 'B')),
+        57366 => Some(("1", 'H')),
+        57367 => Some(("1", 'F')),
+        57359 => Some(("3", '~')),
+        _ => None,
+    };
+
     let mut mod_mask = 0u8;
     if shift {
         mod_mask |= 1;
@@ -216,6 +229,26 @@ pub(crate) fn encode_kitty_key(
     //    - Enter, Tab, Backspace y las teclas de navegación (flechas, Home, End, PageUp, etc.) NO deben
     //      enviarse como CSI u cuando se pulsan sin modificadores a menos que flag 8 esté activo, para
     //      preservar las secuencias VT clásicas (\r, \t, \x7f, \x1b[A, \x1bOA) que esperan los agentes CLI y shells.
+    if let Some((num, fin)) = legacy_nav {
+        // Sin modificadores ni eventos extra se deja a la ruta VT clásica (\x1b[A, \x1bOA…)
+        if mod_val == 1 && (flags & 2) == 0 {
+            return None;
+        }
+        let ev = match event_type {
+            KeyEventType::Press => 1,
+            KeyEventType::Repeat => 2,
+            KeyEventType::Release => 3,
+        };
+        // El tipo de evento solo se informa con el flag 2, igual que en CSI u
+        let suffix = if (flags & 2) != 0 {
+            format!(";{mod_val}:{ev}")
+        } else {
+            format!(";{mod_val}")
+        };
+        let seq = format!("\x1b[{num}{suffix}{fin}");
+        return Some(seq.into_bytes());
+    }
+
     let should_encode =
         (flags & 8) != 0 || (flags & 2) != 0 || mod_val > 1 || (key_num == 27 && (flags & 1) != 0);
 

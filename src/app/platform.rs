@@ -63,6 +63,24 @@ pub(crate) fn shell_open_url(url: &str) -> bool {
     result > 32
 }
 
+/// Modifica el estado de suspensión de Windows (`SetThreadExecutionState`):
+/// - `stay_awake = true`: `ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED`
+///   mantiene la pantalla y el sistema encendidos.
+/// - `stay_awake = false`: `ES_CONTINUOUS` restablece el comportamiento por defecto de Windows.
+pub(crate) fn set_keep_awake(stay_awake: bool) {
+    use windows_sys::Win32::System::Power::{
+        SetThreadExecutionState, ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED,
+    };
+    let flags = if stay_awake {
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    unsafe {
+        SetThreadExecutionState(flags);
+    }
+}
+
 pub(super) fn create_native_icon() -> Icon {
     const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon-256.png");
     if let Ok(img) = image::load_from_memory(ICON_BYTES) {

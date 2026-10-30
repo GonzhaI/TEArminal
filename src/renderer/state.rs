@@ -107,6 +107,7 @@ pub(crate) enum EditingSettingField {
     UiFontSize,
     LineSpacing,
     WindowOpacity,
+    ScrollbackLines,
     ThemeSearch,
     GeneralSearch,
 }
@@ -133,15 +134,25 @@ pub(crate) struct SettingsPageState {
     pub hovered_opacity_plus: bool,
     pub hovered_opacity_box: bool,
     pub hovered_cursor_blink: bool,
+    pub hovered_cursor_shape: Option<usize>,
+    pub hovered_default_shell: Option<usize>,
+    pub hovered_scrollback_minus: bool,
+    pub hovered_scrollback_plus: bool,
+    pub hovered_scrollback_box: bool,
     pub hovered_shell_integration: bool,
     pub hovered_copy_on_select: bool,
     pub hovered_status_bar: bool,
+    pub hovered_show_dimensions: bool,
     pub hovered_file_explorer: bool,
     pub hovered_restore_session: bool,
     pub hovered_auto_save: bool,
     pub hovered_word_wrap: bool,
     pub hovered_ssh_integration: bool,
+    pub hovered_osc52: bool,
     pub hovered_ligatures: bool,
+    pub hovered_ai_limits: bool,
+    pub hovered_auto_check_updates: bool,
+    pub hovered_keep_awake: Option<usize>,
     pub hovered_open_file: bool,
     pub hovered_reset_defaults: bool,
     pub hovered_scrollbar: bool,
@@ -180,15 +191,25 @@ impl SettingsPageState {
             || self.hovered_opacity_plus
             || self.hovered_opacity_box
             || self.hovered_cursor_blink
+            || self.hovered_cursor_shape.is_some()
+            || self.hovered_default_shell.is_some()
+            || self.hovered_scrollback_minus
+            || self.hovered_scrollback_plus
+            || self.hovered_scrollback_box
             || self.hovered_shell_integration
             || self.hovered_copy_on_select
             || self.hovered_status_bar
+            || self.hovered_show_dimensions
             || self.hovered_file_explorer
             || self.hovered_restore_session
             || self.hovered_auto_save
             || self.hovered_word_wrap
             || self.hovered_ssh_integration
+            || self.hovered_osc52
             || self.hovered_ligatures
+            || self.hovered_ai_limits
+            || self.hovered_auto_check_updates
+            || self.hovered_keep_awake.is_some()
             || self.hovered_open_file
             || self.hovered_reset_defaults
             || self.hovered_search_box
@@ -212,15 +233,25 @@ impl SettingsPageState {
             self.hovered_opacity_plus = false;
             self.hovered_opacity_box = false;
             self.hovered_cursor_blink = false;
+            self.hovered_cursor_shape = None;
+            self.hovered_default_shell = None;
+            self.hovered_scrollback_minus = false;
+            self.hovered_scrollback_plus = false;
+            self.hovered_scrollback_box = false;
             self.hovered_shell_integration = false;
             self.hovered_copy_on_select = false;
             self.hovered_status_bar = false;
+            self.hovered_show_dimensions = false;
             self.hovered_file_explorer = false;
             self.hovered_restore_session = false;
             self.hovered_auto_save = false;
             self.hovered_word_wrap = false;
             self.hovered_ssh_integration = false;
+            self.hovered_osc52 = false;
             self.hovered_ligatures = false;
+            self.hovered_ai_limits = false;
+            self.hovered_auto_check_updates = false;
+            self.hovered_keep_awake = None;
             self.hovered_open_file = false;
             self.hovered_reset_defaults = false;
             self.hovered_search_box = false;
@@ -254,15 +285,25 @@ impl Default for SettingsPageState {
             hovered_opacity_plus: false,
             hovered_opacity_box: false,
             hovered_cursor_blink: false,
+            hovered_cursor_shape: None,
+            hovered_default_shell: None,
+            hovered_scrollback_minus: false,
+            hovered_scrollback_plus: false,
+            hovered_scrollback_box: false,
             hovered_shell_integration: false,
             hovered_copy_on_select: false,
             hovered_status_bar: false,
+            hovered_show_dimensions: false,
             hovered_file_explorer: false,
             hovered_restore_session: false,
             hovered_auto_save: false,
             hovered_word_wrap: false,
             hovered_ssh_integration: false,
+            hovered_osc52: false,
             hovered_ligatures: false,
+            hovered_ai_limits: false,
+            hovered_auto_check_updates: false,
+            hovered_keep_awake: None,
             hovered_open_file: false,
             hovered_reset_defaults: false,
             hovered_scrollbar: false,

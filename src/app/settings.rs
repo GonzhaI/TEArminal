@@ -230,30 +230,79 @@ impl TearminalApp {
                             || q.contains("color")
                             || q.contains("oscuro")
                             || q.contains("claro")
-                            || q.contains("sistema")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Appearance;
+                            self.settings_page_state.scroll_y = 0;
+                        } else if q.contains("sistema")
                             || q.contains("pestaña")
+                            || q.contains("vertical")
+                            || q.contains("superior")
                             || q.contains("panel")
+                            || q.contains("izquierda")
+                            || q.contains("derecha")
                             || q.contains("opacid")
-                            || q.contains("fuente")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Appearance;
+                            self.settings_page_state.scroll_y = SettingsPageRects::THEME_CARD_H;
+                        } else if q.contains("fuente")
+                            || q.contains("tipograf")
+                            || q.contains("interline")
                             || q.contains("espaci")
                         {
                             self.settings_page_state.section =
                                 crate::renderer::SettingsSection::Appearance;
-                        } else if q.contains("term")
-                            || q.contains("shell")
-                            || q.contains("cursor")
+                            self.settings_page_state.scroll_y = SettingsPageRects::THEME_CARD_H
+                                + SettingsPageRects::INTERFACE_CARD_H;
+                        } else if q.contains("cursor")
+                            || q.contains("parpad")
+                            || q.contains("bloque")
+                            || q.contains("subray")
                             || q.contains("copi")
-                            || q.contains("barra")
-                            || q.contains("explor")
-                            || q.contains("sesi")
-                            || q.contains("guard")
-                            || q.contains("ajust")
-                            || q.contains("ssh")
-                            || q.contains("ligat")
-                            || q.contains("archiv")
+                            || q.contains("visor")
+                            || q.contains("wrap")
                         {
                             self.settings_page_state.section =
                                 crate::renderer::SettingsSection::Terminal;
+                            self.settings_page_state.scroll_y = 0;
+                        } else if q.contains("shell")
+                            || q.contains("pwsh")
+                            || q.contains("powershell")
+                            || q.contains("cmd")
+                            || q.contains("scrollback")
+                            || q.contains("historial")
+                            || q.contains("osc")
+                            || q.contains("portapapel")
+                            || q.contains("ssh")
+                            || q.contains("ligat")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Terminal;
+                            self.settings_page_state.scroll_y = 180;
+                        } else if q.contains("term")
+                            || q.contains("barra")
+                            || q.contains("status")
+                            || q.contains("dimens")
+                            || q.contains("rejilla")
+                            || q.contains("explor")
+                            || q.contains("sesi")
+                            || q.contains("restaur")
+                            || q.contains("guard")
+                            || q.contains("cuota")
+                            || q.contains("claude")
+                            || q.contains("pantalla")
+                            || q.contains("encendid")
+                            || q.contains("agente")
+                            || q.contains("suspens")
+                            || q.contains("actualiz")
+                            || q.contains("ajust")
+                            || q.contains("archiv")
+                            || q.contains("toml")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Terminal;
+                            self.settings_page_state.scroll_y = 380;
                         } else if q.contains("ataj")
                             || q.contains("ctrl")
                             || q.contains("alt")
@@ -265,14 +314,15 @@ impl TearminalApp {
                         {
                             self.settings_page_state.section =
                                 crate::renderer::SettingsSection::Shortcuts;
+                            self.settings_page_state.scroll_y = 0;
                         } else if q.contains("acerc")
                             || q.contains("version")
                             || q.contains("versión")
                             || q.contains("updat")
-                            || q.contains("actualiz")
                         {
                             self.settings_page_state.section =
                                 crate::renderer::SettingsSection::About;
+                            self.settings_page_state.scroll_y = 0;
                         }
                     }
                     if let Some(w) = &self.window {
@@ -445,6 +495,102 @@ impl TearminalApp {
         }
     }
 
+    pub(crate) fn set_cursor_shape(&mut self, shape: &str) {
+        self.config.terminal.cursor_shape = shape.to_string();
+        let parsed = crate::terminal::CursorShape::from_str_name(shape);
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.cursor_shape = parsed;
+            }
+        }
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_default_shell(&mut self, shell_kind: &str) {
+        let resolved = match shell_kind {
+            "pwsh" => {
+                let pref = crate::config::detect_preferred_shell();
+                if pref.to_ascii_lowercase().contains("pwsh") {
+                    pref
+                } else {
+                    "pwsh.exe".to_string()
+                }
+            }
+            "cmd" => "cmd.exe".to_string(),
+            _ => "powershell.exe".to_string(),
+        };
+        self.config.terminal.default_shell = resolved;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn set_scrollback_lines(&mut self, lines: usize) {
+        let clamped = lines.clamp(100, 100_000);
+        self.config.terminal.scrollback_lines = clamped;
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.max_scrollback = clamped;
+                while pane.terminal.scrollback.len() > clamped {
+                    pane.terminal.scrollback.pop_front();
+                }
+                pane.terminal.scroll_offset = pane
+                    .terminal
+                    .scroll_offset
+                    .min(pane.terminal.scrollback.len());
+            }
+        }
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn adjust_scrollback_lines(&mut self, delta: isize) {
+        let cur = self.config.terminal.scrollback_lines as isize;
+        let next = (cur + delta).clamp(500, 100_000) as usize;
+        self.set_scrollback_lines(next);
+    }
+
+    pub(crate) fn toggle_osc52(&mut self) {
+        self.config.terminal.osc52 = !self.config.terminal.osc52;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn toggle_show_dimensions(&mut self) {
+        self.config.appearance.show_dimensions = !self.config.appearance.show_dimensions;
+        if let Some(r) = &mut self.renderer {
+            r.show_dimensions = self.config.appearance.show_dimensions;
+        }
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn toggle_ai_limits(&mut self) {
+        self.config.terminal.ai_limits = !self.config.terminal.ai_limits;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn toggle_auto_check_updates(&mut self) {
+        self.config.terminal.auto_check_updates = !self.config.terminal.auto_check_updates;
+        let _ = self.config.save();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     pub(crate) fn open_config_file(&self) {
         let path = TearminalConfig::config_path();
         if !path.exists() {
@@ -470,9 +616,20 @@ impl TearminalApp {
     fn apply_loaded_config(&mut self) {
         self.apply_active_theme();
         self.apply_ssh_integration_env();
+        self.update_keep_awake();
+        let parsed_shape =
+            crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);
+        let max_sb = self.config.terminal.scrollback_lines;
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                pane.terminal.cursor_shape = parsed_shape;
+                pane.terminal.max_scrollback = max_sb;
+            }
+        }
         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
             let scale_factor = window.scale_factor();
             renderer.ligatures = self.config.terminal.ligatures;
+            renderer.show_dimensions = self.config.appearance.show_dimensions;
             renderer.update_scale(&self.config, scale_factor);
             update_windows_theme(window, &self.theme);
             apply_window_opacity_native(window, self.config.appearance.window_opacity);

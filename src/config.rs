@@ -85,6 +85,56 @@ pub(crate) struct TerminalConfig {
     /// (`~/.claude/.credentials.json`, solo lectura). Con `false` TEArminal no lee esa credencial ni hace la llamada.
     #[serde(default = "default_true")]
     pub(crate) ai_limits: bool,
+    /// Modo para mantener la pantalla encendida: "off" / "apagado", "agent" / "agente", "active" / "activo".
+    #[serde(default)]
+    pub(crate) keep_awake: KeepAwakeMode,
+}
+
+/// Modos de suspensión y pantalla encendida (keep-awake) para Windows.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum KeepAwakeMode {
+    /// Ajustes por defecto del dispositivo (suspensión / bloqueo habitual).
+    #[default]
+    #[serde(alias = "off", alias = "apagado", alias = "default")]
+    Off,
+    /// Mantiene la pantalla encendida solo mientras un agente de IA esté trabajando.
+    #[serde(alias = "agent", alias = "agente")]
+    Agent,
+    /// Mantiene la pantalla y el sistema encendidos siempre.
+    #[serde(alias = "active", alias = "activo", alias = "always")]
+    Active,
+}
+
+impl KeepAwakeMode {
+    /// Pasa cíclicamente al siguiente modo: Apagado -> Agente -> Activo -> Apagado.
+    #[allow(dead_code)]
+    pub(crate) fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Agent,
+            Self::Agent => Self::Active,
+            Self::Active => Self::Off,
+        }
+    }
+
+    /// Etiqueta corta para la barra de estado inferior.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Apagado",
+            Self::Agent => "Agente",
+            Self::Active => "Activo",
+        }
+    }
+
+    /// Descripción explicativa para menús y configuración.
+    #[allow(dead_code)]
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::Off => "Ajustes por defecto del dispositivo",
+            Self::Agent => "Pantalla encendida cuando un agente trabaja",
+            Self::Active => "Pantalla siempre encendida",
+        }
+    }
 }
 
 fn default_font_size() -> f32 {
@@ -211,6 +261,7 @@ impl Default for TearminalConfig {
                 cursor_shape: "block".to_string(),
                 auto_check_updates: true,
                 ai_limits: true,
+                keep_awake: KeepAwakeMode::Off,
             },
         }
     }
@@ -228,7 +279,7 @@ impl Default for TerminalConfig {
     }
 }
 
-fn detect_preferred_shell() -> String {
+pub(crate) fn detect_preferred_shell() -> String {
     #[cfg(target_os = "windows")]
     {
         // 1. Comprobar rutas estándar de instalación de PowerShell 7 en Program Files
@@ -871,5 +922,28 @@ gpu = true
         let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
         assert_eq!(reloaded.appearance.font_size, 18.0);
         assert_eq!(reloaded.terminal.cursor_shape, "beam");
+    }
+
+    #[test]
+    fn test_keep_awake_mode_cycle_and_parsing() {
+        assert_eq!(KeepAwakeMode::Off.next(), KeepAwakeMode::Agent);
+        assert_eq!(KeepAwakeMode::Agent.next(), KeepAwakeMode::Active);
+        assert_eq!(KeepAwakeMode::Active.next(), KeepAwakeMode::Off);
+
+        #[derive(Deserialize)]
+        struct TestMode {
+            mode: KeepAwakeMode,
+        }
+
+        let parsed: TestMode = toml::from_str(r#"mode = "apagado""#).unwrap();
+        assert_eq!(parsed.mode, KeepAwakeMode::Off);
+        let parsed: TestMode = toml::from_str(r#"mode = "agente""#).unwrap();
+        assert_eq!(parsed.mode, KeepAwakeMode::Agent);
+        let parsed: TestMode = toml::from_str(r#"mode = "activo""#).unwrap();
+        assert_eq!(parsed.mode, KeepAwakeMode::Active);
+        let parsed: TestMode = toml::from_str(r#"mode = "agent""#).unwrap();
+        assert_eq!(parsed.mode, KeepAwakeMode::Agent);
+        let parsed: TestMode = toml::from_str(r#"mode = "active""#).unwrap();
+        assert_eq!(parsed.mode, KeepAwakeMode::Active);
     }
 }
