@@ -125,7 +125,7 @@ impl TerminalRenderer {
         Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
 
         // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones · keep-awake.
-        let (badge_icon, badge_label, ai_fg) =
+        let (_, badge_label, ai_fg) =
             Self::status_bar_badge(ai_status, ssh_host, active_model, theme);
         let ai_text_w = self.measure_ui_text(&badge_label, STATUS_LABEL_SIZE, true);
         let update_info = crate::updater::get_available_update();
@@ -154,7 +154,7 @@ impl TerminalRenderer {
         if kw_btn_w > 0 {
             let (icon, icon_fg, mut text_fg) = match keep_awake {
                 KeepAwakeMode::Active => (
-                    crate::ui::LucideIcon::Eye,
+                    crate::ui::LucideIcon::Coffee,
                     theme.accent_color(),
                     theme.foreground,
                 ),
@@ -228,7 +228,7 @@ impl TerminalRenderer {
 
         let (bx, _by, bw, _bh) = rects.ai_badge;
 
-        // 3. Izquierda: SSH, carpeta y rama. Sin separadores: el espacio en blanco ya agrupa.
+        // 3. Izquierda: SSH, carpeta (solo texto) y rama. Sin separadores: el espacio en blanco ya agrupa.
         let mut cur_x = 14;
         let mut room = true;
         let text_limit = rects
@@ -268,15 +268,6 @@ impl TerminalRenderer {
         }
 
         if let (Some(dir), true) = (cwd, room) {
-            self.draw_lucide_icon(
-                canvas,
-                crate::ui::LucideIcon::Folder,
-                cur_x + 7,
-                center_y,
-                11.0,
-                theme.text_muted(),
-            );
-            cur_x += 21;
             let adv = self.draw_mono_text(
                 canvas,
                 dir,
@@ -341,13 +332,8 @@ impl TerminalRenderer {
             );
         }
 
-        // 5. Entorno (Local / SSH) y agente: icono opcional + texto, sin cápsula ni interacción.
-        let text_x = if let Some(icon) = badge_icon {
-            self.draw_lucide_icon(canvas, icon, bx + 8, center_y, 10.0, ai_fg);
-            bx + 22
-        } else {
-            bx + 8
-        };
+        // 5. Entorno (Local / SSH) y agente: solo texto, sin icono, cápsula ni interacción.
+        let text_x = bx + 12;
         let label_fg = if ai_status == AiAgentStatus::None && ssh_host.is_none() {
             ai_fg
         } else {
@@ -440,10 +426,10 @@ impl TerminalRenderer {
                 KeepAwakeMode::Agent => theme.text_secondary(),
                 KeepAwakeMode::Active => theme.accent_color(),
             };
-            let icon = if mode == KeepAwakeMode::Agent {
-                crate::ui::LucideIcon::Sparkles
-            } else {
-                crate::ui::LucideIcon::Eye
+            let icon = match mode {
+                KeepAwakeMode::Agent => crate::ui::LucideIcon::Sparkles,
+                KeepAwakeMode::Active => crate::ui::LucideIcon::Coffee,
+                KeepAwakeMode::Off => crate::ui::LucideIcon::Eye,
             };
             let title_y = ry + 19;
             self.draw_lucide_icon(canvas, icon, rx + 16, ry + rh / 2, 12.0, icon_fg);

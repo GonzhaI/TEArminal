@@ -1171,7 +1171,7 @@ impl StatusBarRects {
     }
 
     /// Ancho, alto de cada opción y margen interior del selector de pantalla encendida.
-    pub(crate) const KA_POPUP_W: usize = 290;
+    pub(crate) const KA_POPUP_W: usize = 330;
     pub(crate) const KA_ROW_H: usize = 46;
     pub(crate) const KA_PAD: usize = 6;
 

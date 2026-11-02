@@ -194,8 +194,7 @@ impl TearminalApp {
     }
 
     /// Guarda una imagen del portapapeles en la carpeta de caché local de TEArminal (`%LOCALAPPDATA%\tearminal\tearminal\cache\clipboard`) como PNG.
-    /// Realiza limpieza pasiva periódica de capturas antiguas (>24 horas) con aceleración (máximo una vez por hora)
-    /// y elimina cualquier carpeta temporal obsoleta en `%TEMP%\tearminal_clipboard` para evitar alertas heurísticas de antivirus.
+    /// Realiza limpieza pasiva periódica de capturas antiguas (>24 horas) con aceleración (máximo una vez por hora).
     pub(crate) fn save_clipboard_image(&self, img: &arboard::ImageData) -> Option<String> {
         let clip_dir = crate::config::cache_dir_or_fallback().join("clipboard");
         let _ = std::fs::create_dir_all(&clip_dir);
@@ -224,12 +223,6 @@ impl TearminalApp {
                         }
                     }
                 }
-            }
-
-            // 2. Limpieza proactiva del directorio temporal obsoleto en %TEMP%\tearminal_clipboard
-            let legacy_temp = std::env::temp_dir().join("tearminal_clipboard");
-            if legacy_temp.exists() {
-                let _ = std::fs::remove_dir_all(legacy_temp);
             }
         }
 

@@ -39,6 +39,48 @@ mod bench {
         println!("render_pane {w}x{h} ({cols}x{rows} celdas): {record:.2} ms/frame (SOLO grabar la escena; no incluye dibujarla)");
     }
 
+    /// Peor caso de arte con braille, sextantes y octantes: la pantalla entera de celdas dibujadas de forma
+    /// procedural (hasta 8 rectángulos por celda). Mide solo la grabación, como `bench_render_pane_full_frame`;
+    /// `cargo test --release bench_render_pane_procedural -- --nocapture`.
+    #[test]
+    fn bench_render_pane_procedural_glyphs_full_screen() {
+        let cfg = TearminalConfig::default();
+        let theme = Theme::from_name(&cfg.appearance.theme);
+        let mut r = TerminalRenderer::new(&cfg, 1.0);
+        let (w, h) = (1920usize, 1080usize);
+        let (cols, rows) = r.compute_pane_grid_size(w, h);
+        // Una familia de caracteres por pantalla; patrones variados (nunca vacíos) en cada celda
+        let families: [(&str, u32, u32); 3] = [
+            ("braille", 0x2800, 255),
+            ("sextantes", 0x1FB00, 60),
+            ("octantes", 0x1CD00, 230),
+        ];
+        for (name, base, count) in families {
+            let mut term = TerminalState::new(cols, rows, 1000, theme.clone());
+            for row in 0..rows - 1 {
+                let line: String = (0..cols - 1)
+                    .map(|col| {
+                        let n = (row * 31 + col * 17) as u32 % count + (base == 0x2800) as u32;
+                        char::from_u32(base + n).unwrap()
+                    })
+                    .collect();
+                term.process_bytes(format!("\x1b[3{}m{line}\x1b[0m\r\n", 1 + row % 7).as_bytes());
+            }
+            let mut canvas = Canvas::new();
+            canvas.begin(w as u32, h as u32);
+            r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false); // calienta cachés
+            let ops = canvas.scene().ops.len();
+            let n = if cfg!(debug_assertions) { 4 } else { 200 };
+            let t = Instant::now();
+            for _ in 0..n {
+                canvas.begin(w as u32, h as u32);
+                r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
+            }
+            let record = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+            println!("{name} {cols}x{rows}: {record:.2} ms/frame grabando, {ops} operaciones");
+        }
+    }
+
     /// Coste en CPU de un fotograma por la ruta GPU: grabar (`Canvas`) + `GpuRenderer::render` (encode, subida del
     /// buffer de instancias y llamadas de dibujo) sobre un destino fuera de pantalla. NO es el tiempo de GPU: al
     /// final se vacía la cola y se espera con una lectura de 1x1 para que el trabajo pendiente no se acumule.
@@ -292,7 +334,7 @@ mod bench {
                 has_unread: i % 3 == 0,
                 pane_count: 1 + (i % 2),
                 is_settings: false,
-                is_file_viewer: i == 5,
+                file_path: (i == 5).then(|| std::path::PathBuf::from("main.rs")),
                 is_preview: i == 5,
             })
             .collect();
@@ -541,7 +583,7 @@ fn test_sidebar_rendering_and_layout() {
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
         SidebarTabItem {
@@ -553,7 +595,7 @@ fn test_sidebar_rendering_and_layout() {
             has_unread: true,
             pane_count: 2,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
     ];
@@ -1298,7 +1340,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: false,
             pane_count: 2,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
         SidebarTabItem {
@@ -1310,7 +1352,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: true,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
         SidebarTabItem {
@@ -1322,7 +1364,19 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
+            is_preview: false,
+        },
+        SidebarTabItem {
+            index: 3,
+            status: None,
+            title: "pane.rs".into(),
+            detail: None,
+            is_active: false,
+            has_unread: false,
+            pane_count: 1,
+            is_settings: false,
+            file_path: Some(std::path::PathBuf::from("src/renderer/pane.rs")),
             is_preview: false,
         },
     ];
@@ -1895,7 +1949,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
         SidebarTabItem {
@@ -1907,7 +1961,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
         SidebarTabItem {
@@ -1919,7 +1973,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         },
     ];
@@ -2298,6 +2352,69 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             &theme,
         );
         push_scene(canvas, "bloques-osc133");
+    }
+
+    // 11. Paleta de comandos: etiquetas de categoría legibles (ya no se cortan), fila seleccionada con
+    // título y ruta con contraste, iconos de archivo por tipo y atajos
+    {
+        use crate::app::{PaletteAction, PaletteCategory, PaletteItem, PaletteState};
+        use crate::ui::LucideIcon;
+        let item = |category, title: &str, subtitle: &str, icon, file: Option<&str>| PaletteItem {
+            category,
+            title: title.into(),
+            subtitle: subtitle.into(),
+            icon,
+            file: file.map(std::path::PathBuf::from),
+            action: PaletteAction::SelectTab(0),
+        };
+        let state = PaletteState::new(vec![
+            item(
+                PaletteCategory::Session,
+                "Pestaña de trabajo (actual)",
+                r"git: main (~\GitHub\TEArminal)",
+                LucideIcon::Sparkles,
+                None,
+            ),
+            item(
+                PaletteCategory::Command,
+                "Nueva pestaña",
+                "Ctrl+T",
+                LucideIcon::Plus,
+                None,
+            ),
+            item(
+                PaletteCategory::Command,
+                "Dividir panel horizontalmente",
+                "Ctrl+Shift+D",
+                LucideIcon::Rows2,
+                None,
+            ),
+            item(
+                PaletteCategory::File,
+                "main.rs",
+                r"src\main.rs",
+                LucideIcon::File,
+                Some("src/main.rs"),
+            ),
+            item(
+                PaletteCategory::File,
+                "Cargo.toml",
+                "Cargo.toml",
+                LucideIcon::File,
+                Some("Cargo.toml"),
+            ),
+            item(
+                PaletteCategory::File,
+                "README.md",
+                "README.md",
+                LucideIcon::File,
+                Some("README.md"),
+            ),
+        ]);
+        let mut canvas = test_support::new_canvas(w, h);
+        canvas.clear(theme.background);
+        r.render_palette(&mut canvas, &state, false, false, &theme);
+        push_scene(canvas, "paleta");
     }
 
     scenes
@@ -2746,7 +2863,7 @@ fn test_tab_chip_stays_inside_tab_rect() {
                 has_unread: false,
                 pane_count: 1,
                 is_settings: false,
-                is_file_viewer: false,
+                file_path: None,
                 is_preview: false,
             })
             .collect();
@@ -2807,7 +2924,7 @@ fn test_sidebar_hovered_row_uses_row_radius() {
             has_unread: false,
             pane_count: 1,
             is_settings: false,
-            is_file_viewer: false,
+            file_path: None,
             is_preview: false,
         })
         .collect();
@@ -3281,6 +3398,173 @@ fn test_scene_image_table_copies_rgba_and_skips_invalid() {
     let got = s.image(image);
     assert_eq!((got.width, got.height), (2, 2));
     assert_eq!(got.rgba, &rgba[..]);
+}
+
+#[test]
+fn test_file_viewer_draws_an_image_centered_and_capped_at_4x() {
+    use scene::Op;
+    let dir = std::env::temp_dir().join(format!("tearminal-viewer-img-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let png = dir.join("pequena.png");
+    image::RgbaImage::new(100, 50).save(&png).unwrap();
+    let viewer = crate::app::TerminalTab::new_file_viewer(crate::app::TabId(1), png)
+        .file_viewer
+        .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+
+    let cfg = TearminalConfig::default();
+    let theme = Theme::from_name(&cfg.appearance.theme);
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (800, 600);
+    let mut canvas = test_support::new_canvas(w, h);
+    r.render_file_viewer(&mut canvas, 0, 0, w, h, 0, true, &viewer, &theme);
+
+    let images: Vec<_> = canvas
+        .scene()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, Op::Image { .. }))
+        .collect();
+    assert_eq!(images.len(), 1, "una sola imagen en el área de contenido");
+    let Op::Image {
+        x, y, w: iw, h: ih, ..
+    } = *images[0]
+    else {
+        unreachable!()
+    };
+    // Cabe de sobra: se amplía como mucho 4x, conserva la proporción y queda centrada
+    assert_eq!((iw, ih), (400, 200));
+    assert_eq!(x, (w as i32 - 400) / 2);
+    assert!(y >= 0 && y as usize + 200 <= h);
+}
+
+/// Píxeles (x, y), relativos a la celda, que `c` enciende al dibujarse de forma procedural; `None` si no lo es
+fn procedural_pixels(r: &TerminalRenderer, c: char) -> Option<Vec<(usize, usize)>> {
+    let (w, h, origin) = (80, 80, 10);
+    let mut canvas = test_support::new_canvas(w, h);
+    canvas.clear(Color::from_rgb(0, 0, 0));
+    let white = Color::from_rgb(255, 255, 255);
+    if !r.draw_block_element(&mut canvas, (0, 0, w, h), c, origin, origin, white) {
+        return None;
+    }
+    let snap = canvas.snapshot();
+    let lit = (0..h)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .filter(|&(x, y)| snap[y * w + x] != snap[0])
+        .map(|(x, y)| (x - origin, y - origin))
+        .collect();
+    Some(lit)
+}
+
+#[test]
+fn test_braille_is_drawn_procedurally_one_dot_per_bit() {
+    let r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let (cw, rh) = (r.char_width, r.row_height);
+    let lit = |c: u32| procedural_pixels(&r, char::from_u32(c).unwrap()).expect("procedural");
+
+    assert!(lit(0x2800).is_empty(), "el braille vacío no pinta nada");
+    // Cada bit es un punto en su casilla (2 columnas x 4 filas), sin tocar las demás
+    let in_slot = |bit: usize, p: &(usize, usize)| {
+        let (col, row) = [
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (0, 3),
+            (1, 3),
+        ][bit];
+        (cw * col / 2..cw * (col + 1) / 2).contains(&p.0)
+            && (rh * row / 4..rh * (row + 1) / 4).contains(&p.1)
+    };
+    let mut union = Vec::new();
+    for bit in 0..8 {
+        let dot = lit(0x2800 + (1 << bit));
+        assert!(!dot.is_empty(), "el punto {} se dibuja", bit + 1);
+        assert!(dot.iter().all(|p| in_slot(bit, p)), "punto {}", bit + 1);
+        union.extend(dot);
+    }
+    let mut full = lit(0x28FF);
+    full.sort_unstable();
+    union.sort_unstable();
+    assert_eq!(full, union, "⣿ son los ocho puntos, sin solaparse");
+}
+
+#[test]
+fn test_sextants_fill_their_slots_and_skip_the_half_blocks() {
+    let r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let (cw, rh) = (r.char_width, r.row_height);
+    let lit = |c: u32| procedural_pixels(&r, char::from_u32(c).unwrap()).expect("procedural");
+
+    // 🬀 (patrón 1) = arriba a la izquierda, exactamente su casilla
+    let tl = lit(0x1FB00);
+    assert_eq!(tl.len(), (cw / 2) * (rh / 3));
+    assert!(tl.iter().all(|&(x, y)| x < cw / 2 && y < rh / 3));
+    // 🬓 = patrón 20 (centro e inferior izquierdos): la última antes de ▌ (21), que el estándar omite
+    let left_lower = lit(0x1FB13);
+    assert_eq!(left_lower.len(), (cw / 2) * (rh - rh / 3));
+    assert!(left_lower.iter().all(|&(x, y)| x < cw / 2 && y >= rh / 3));
+    // 🬔 = patrón 22 (arriba a la derecha + izquierdos centro e inferior): la primera tras ▌
+    let after_half = lit(0x1FB14);
+    assert!(after_half.contains(&(cw - 1, 0)) && !after_half.contains(&(0, 0)));
+    assert!(after_half.contains(&(0, rh - 1)));
+    // 🬻 = patrón 62: todo menos arriba a la izquierda
+    let last = lit(0x1FB3B);
+    assert!(!last.contains(&(0, 0)));
+    for corner in [(cw - 1, 0), (0, rh - 1), (cw - 1, rh - 1)] {
+        assert!(last.contains(&corner), "{corner:?}");
+    }
+    // Fuera del bloque de sextantes no se dibuja aquí
+    assert!(procedural_pixels(&r, 'a').is_none());
+    assert!(procedural_pixels(&r, '\u{1FB3C}').is_none());
+}
+
+#[test]
+fn test_octants_follow_the_unicode_names_and_skip_omitted_patterns() {
+    use crate::renderer::pane::octant_pattern;
+    // Casillas «BLOCK OCTANT-…» del nombre Unicode (1 2 / 3 4 / 5 6 / 7 8) para entradas de UnicodeData 16.0
+    let from_name = |cells: &str| cells.bytes().fold(0u8, |m, d| m | 1 << (d - b'1'));
+    for (cp, name) in [
+        (0x1CD00, "3"),
+        (0x1CD01, "23"),
+        (0x1CD02, "123"),
+        (0x1CD03, "4"),
+        (0x1CD04, "14"),
+        (0x1CD05, "124"),
+        (0x1CDE4, "1345678"),
+        (0x1CDE5, "2345678"),
+    ] {
+        let c = char::from_u32(cp).unwrap();
+        assert_eq!(
+            octant_pattern(c),
+            from_name(name),
+            "U+{cp:X} = OCTANT-{name}"
+        );
+    }
+    // Los 230 son crecientes y distintos (ninguno de los 26 omitidos ni el vacío o el lleno)
+    let patterns: Vec<u8> = ('\u{1CD00}'..='\u{1CDE5}').map(octant_pattern).collect();
+    assert_eq!(patterns.len(), 230);
+    assert!(patterns.windows(2).all(|w| w[0] < w[1]));
+    assert!(patterns.iter().all(|&p| p != 0 && p != 255));
+
+    let r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
+    let (cw, rh) = (r.char_width, r.row_height);
+    let lit = |c: u32| procedural_pixels(&r, char::from_u32(c).unwrap()).expect("procedural");
+    // OCTANT-3 = solo la casilla izquierda de la segunda fila (cuarta parte de la altura)
+    let third = lit(0x1CD00);
+    assert_eq!(third.len(), (cw / 2) * (rh / 2 - rh / 4));
+    assert!(third
+        .iter()
+        .all(|&(x, y)| x < cw / 2 && (rh / 4..rh / 2).contains(&y)));
+    // OCTANT-124 = arriba a ambos lados + derecha de la segunda fila; falta la izquierda de la segunda
+    let l = lit(0x1CD05);
+    assert!(l.contains(&(0, 0)) && l.contains(&(cw - 1, 0)) && l.contains(&(cw - 1, rh / 4)));
+    assert!(!l.contains(&(0, rh / 4)));
+    // OCTANT-2345678 = todo menos arriba a la izquierda
+    let last = lit(0x1CDE5);
+    assert!(!last.contains(&(0, 0)) && last.contains(&(cw - 1, 0)) && last.contains(&(0, rh - 1)));
+    assert!(procedural_pixels(&r, '\u{1CDE6}').is_none());
 }
 
 #[test]

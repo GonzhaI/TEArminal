@@ -55,6 +55,10 @@ impl TearminalApp {
             self.explorer_focus = focus;
             self.sync_file_explorer_root();
         }
+        // Perder el foco (clic fuera, cambio de pestaña) cancela el nombre que se estaba editando
+        if !self.file_explorer.is_focused {
+            self.file_explorer.cancel_edit();
+        }
         let is_horizontal = self.is_horizontal_tabs();
         let offset = self.sidebar_offset();
         let right_offset = self.file_explorer_offset();
@@ -107,7 +111,7 @@ impl TearminalApp {
                 has_unread: t.has_unread,
                 pane_count: t.panes.len(),
                 is_settings: t.is_settings,
-                is_file_viewer: t.file_viewer.is_some(),
+                file_path: t.file_viewer.as_ref().map(|v| v.path.clone()),
                 is_preview: t.is_preview,
             })
             .collect();

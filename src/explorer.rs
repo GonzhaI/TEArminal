@@ -2,6 +2,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod edit;
+pub(crate) use edit::{EditKind, ExplorerEdit};
+
 pub(crate) const FILE_EXPLORER_WIDTH: usize = 256;
 pub(crate) const FILE_EXPLORER_MIN_WIDTH: usize = 168;
 
@@ -215,6 +218,8 @@ pub(crate) struct FileExplorer {
     pub hovered_pin_btn: bool,
     pub remote_session: Option<RemoteSshSession>,
     pub error_message: Option<String>,
+    /// Nombre en edición (nuevo archivo/carpeta o renombrar): ver `explorer/edit.rs`
+    pub edit: Option<ExplorerEdit>,
     /// Última sesión remota pedida con `set_remote_session` (la raíz canónica de `remote_session` puede diferir)
     remote_requested: Option<RemoteSshSession>,
     /// Generación de la vista remota por SSH lento: las respuestas de una anterior se ignoran
@@ -358,6 +363,7 @@ impl FileExplorer {
             hovered_pin_btn: false,
             remote_session: None,
             error_message: None,
+            edit: None,
         };
 
         if visible {

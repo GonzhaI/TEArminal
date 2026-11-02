@@ -177,24 +177,12 @@ impl TerminalRenderer {
             let item_cy = tab_y + tab_item_h / 2;
             let show_close = tabs.len() > 1 && is_hovered;
 
-            let maybe_icon = tab_icon(tab);
-            let has_leading = maybe_icon.is_some();
+            let has_leading = tab.file_path.is_some();
             let has_detail = tab.detail.is_some();
 
-            if let Some(icon) = maybe_icon {
+            if let Some(path) = &tab.file_path {
                 let icon_cy = if has_detail { tab_y + 16 } else { item_cy };
-                self.draw_lucide_icon(
-                    canvas,
-                    icon,
-                    tab_x + 18,
-                    icon_cy,
-                    14.0,
-                    if tab.is_active {
-                        theme.accent_color()
-                    } else {
-                        theme.text_muted()
-                    },
-                );
+                self.draw_file_icon(canvas, path, tab_x + 18, icon_cy, tokens::BODY, theme);
             }
 
             // Al pasar el ratón se reserva espacio para el botón de cerrar.

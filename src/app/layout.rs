@@ -471,10 +471,11 @@ impl TerminalTab {
         let disk_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
         let mut is_binary = false;
+        let mut image = None;
         let mut lines = Vec::new();
         let mut text_meta = (false, true, false);
 
-        if file_size > 5 * 1024 * 1024 {
+        if file_size > crate::app::viewer::ViewerImage::max_preview_bytes(&path) {
             is_binary = true;
             lines.push(format!(
                 "El archivo es demasiado grande ({:.1} MB) para previsualizar.",
@@ -484,7 +485,11 @@ impl TerminalTab {
             match std::fs::read(&path) {
                 Ok(bytes) => {
                     let check_len = bytes.len().min(4096);
-                    if bytes[..check_len].contains(&0) {
+                    if let Some(img) = crate::app::viewer::ViewerImage::decode(&path, &bytes) {
+                        is_binary = true;
+                        lines.push(format!("{} × {} px", img.source_size.0, img.source_size.1));
+                        image = Some(img);
+                    } else if bytes[..check_len].contains(&0) {
                         is_binary = true;
                         lines.push(
                             "Archivo binario detectado. No se puede previsualizar en modo texto."
@@ -530,6 +535,7 @@ impl TerminalTab {
             scroll_offset: 0,
             scroll_offset_x: 0,
             is_binary,
+            image,
             file_size,
             cursor_line: 0,
             cursor_col: 0,
@@ -565,6 +571,7 @@ impl TerminalTab {
             fold_gen: 0,
             rows_cache: Default::default(),
             search_open: false,
+            goto_mode: false,
             search_input: crate::ui::TextInput::new(""),
             search_matches: Vec::new(),
             search_active_idx: None,
@@ -603,6 +610,7 @@ impl TerminalTab {
 
         let mut lines = Vec::new();
         let mut is_binary = false;
+        let mut image = None;
         let mut file_size = 0;
         let mut non_utf8 = false;
         // Fin de línea y salto final del archivo remoto: `remote_content` los conserva al guardar
@@ -611,12 +619,16 @@ impl TerminalTab {
         match data {
             Ok(bytes) => {
                 file_size = bytes.len() as u64;
-                if file_size > 5 * 1024 * 1024 {
+                if file_size > crate::app::viewer::ViewerImage::max_preview_bytes(&path) {
                     is_binary = true;
                     lines.push(format!(
                         "El archivo es demasiado grande ({:.1} MB) para previsualizar.",
                         file_size as f64 / (1024.0 * 1024.0)
                     ));
+                } else if let Some(img) = crate::app::viewer::ViewerImage::decode(&path, &bytes) {
+                    is_binary = true;
+                    lines.push(format!("{} × {} px", img.source_size.0, img.source_size.1));
+                    image = Some(img);
                 } else if bytes[..bytes.len().min(4096)].contains(&0) {
                     is_binary = true;
                     lines.push(
@@ -660,6 +672,7 @@ impl TerminalTab {
             scroll_offset: 0,
             scroll_offset_x: 0,
             is_binary,
+            image,
             file_size,
             cursor_line: 0,
             cursor_col: 0,
@@ -695,6 +708,7 @@ impl TerminalTab {
             fold_gen: 0,
             rows_cache: Default::default(),
             search_open: false,
+            goto_mode: false,
             search_input: crate::ui::TextInput::new(""),
             search_matches: Vec::new(),
             search_active_idx: None,

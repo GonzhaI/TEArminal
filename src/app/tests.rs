@@ -415,6 +415,109 @@ fn test_file_viewer_tab_creation_and_title() {
 }
 
 #[test]
+fn test_file_viewer_opens_images_and_falls_back_when_corrupt() {
+    let dir = std::env::temp_dir().join(format!("tearminal-img-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Una imagen ancha se reduce por el lado mayor y conserva sus dimensiones reales
+    let png = dir.join("ancha.PNG");
+    image::RgbaImage::new(4096, 2).save(&png).unwrap();
+    let tab = TerminalTab::new_file_viewer(TabId(1), png);
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    let img = viewer.image.as_ref().expect("la imagen se decodifica");
+    assert!(viewer.is_binary && !viewer.is_editable());
+    assert_eq!(img.source_size, (4096, 2));
+    assert_eq!((img.width, img.height), (2048, 1));
+    assert!(!img.is_animated());
+    assert_eq!(img.frames[0].rgba_data.len(), 2048 * 4);
+
+    // Una imagen dañada no se muestra: cae al aviso de binario
+    let bad = dir.join("rota.png");
+    std::fs::write(&bad, b"\x89PNG\0\0 no es una imagen").unwrap();
+    let tab = TerminalTab::new_file_viewer(TabId(2), bad);
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    assert!(viewer.is_binary && viewer.image.is_none());
+
+    // Un archivo de texto con extensión de imagen no se trata como imagen
+    let txt = dir.join("texto.png");
+    std::fs::write(&txt, "hola\n").unwrap();
+    let tab = TerminalTab::new_file_viewer(TabId(3), txt);
+    let viewer = tab.file_viewer.as_ref().unwrap();
+    assert!(viewer.image.is_none());
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// GIF de dos fotogramas (rojo y azul) de 200 ms cada uno
+fn two_frame_gif() -> Vec<u8> {
+    use image::{codecs::gif::GifEncoder, Delay, Frame, Rgba, RgbaImage};
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = GifEncoder::new(&mut bytes);
+        for color in [[255, 0, 0, 255], [0, 0, 255, 255]] {
+            let img = RgbaImage::from_pixel(8, 8, Rgba(color));
+            let frame = Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(200, 1));
+            encoder.encode_frame(frame).unwrap();
+        }
+    }
+    bytes
+}
+
+#[test]
+fn test_file_viewer_plays_every_frame_of_a_gif_local_and_remote() {
+    let gif = two_frame_gif();
+    let dir = std::env::temp_dir().join(format!("tearminal-gif-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("anim.gif");
+    std::fs::write(&path, &gif).unwrap();
+
+    let local = TerminalTab::new_file_viewer(TabId(1), path);
+    std::fs::remove_dir_all(&dir).ok();
+    // El mismo GIF llegado por SSH se ve igual que el local
+    let remote = TerminalTab::new_remote_file_viewer_from(
+        TabId(2),
+        "usuario@host".into(),
+        std::path::PathBuf::from("/home/usuario/anim.gif"),
+        None,
+        Ok(gif),
+    );
+    assert!(remote
+        .file_viewer
+        .as_ref()
+        .unwrap()
+        .remote_destination
+        .is_some());
+
+    for tab in [local, remote] {
+        let viewer = tab.file_viewer.as_ref().unwrap();
+        let img = viewer.image.as_ref().expect("el GIF se decodifica");
+        assert!(viewer.is_binary && img.is_animated());
+        assert_eq!(img.frames.len(), 2);
+        assert!(img.frames.iter().all(|f| f.delay_ms == 200));
+        // Rojo, luego azul (la cuantización del GIF admite pequeñas desviaciones)
+        let (first, second) = (&img.frames[0].rgba_data, &img.frames[1].rgba_data);
+        assert!(first[0] > 200 && first[2] < 60, "{:?}", &first[..4]);
+        assert!(second[2] > 200 && second[0] < 60, "{:?}", &second[..4]);
+        let (frame, remaining) = img.current();
+        assert!(frame < 2 && (1..=200).contains(&remaining));
+    }
+}
+
+#[test]
+fn test_current_frame_follows_the_loop_and_needs_durations() {
+    use crate::terminal::{current_frame, ImageFrame};
+    let frame = |delay_ms| ImageFrame {
+        rgba_data: Vec::new(),
+        delay_ms,
+    };
+    assert_eq!(current_frame(&[]), None);
+    assert_eq!(current_frame(&[frame(0), frame(0)]), None);
+    let (i, remaining) = current_frame(&[frame(100), frame(300)]).unwrap();
+    assert!(i < 2);
+    assert!((1..=if i == 0 { 100 } else { 300 }).contains(&remaining));
+}
+
+#[test]
 fn test_file_viewer_editing_and_dirty_state() {
     let temp_dir = std::env::temp_dir();
     let temp_file = temp_dir.join(format!("tearminal_test_edit_{}.rs", std::process::id()));
@@ -1987,6 +2090,42 @@ fn test_viewer_search_open_with_selection_and_close() {
     assert!(!v.search_open);
     assert!(v.search_matches.is_empty());
     assert_eq!(v.search_active_idx, None);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_viewer_goto_line_and_column() {
+    let (mut tab, path) = viewer_with("goto.txt", "uno\ndos\ntres\ncuatro\n");
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    v.open_goto();
+    assert!(v.search_open && v.goto_mode);
+    // Escribir no genera coincidencias de búsqueda
+    v.search_input = crate::ui::TextInput::new("3:2");
+    assert!(v.goto_line(10));
+    assert_eq!((v.cursor_line, v.cursor_col), (2, 1));
+    assert!(
+        !v.search_open && !v.goto_mode,
+        "al saltar se cierra la barra"
+    );
+
+    // Fuera de rango: se ajusta a la última línea y al final de la línea
+    v.open_goto();
+    v.search_input = crate::ui::TextInput::new("999:99");
+    assert!(v.goto_line(10));
+    assert_eq!(v.cursor_line, v.lines.len() - 1);
+    assert_eq!(v.cursor_col, v.lines[v.cursor_line].chars().count());
+
+    // Entrada inválida: no se mueve y la barra sigue abierta
+    v.open_goto();
+    v.search_input = crate::ui::TextInput::new("abc");
+    assert!(!v.goto_line(10));
+    assert!(v.search_open && v.goto_mode);
+
+    // Ctrl+F desde «Ir a línea» vuelve a la búsqueda con la entrada vacía
+    v.open_search(10);
+    assert!(!v.goto_mode && v.search_input.text().is_empty());
 
     let _ = std::fs::remove_file(path);
 }

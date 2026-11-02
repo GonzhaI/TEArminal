@@ -1025,6 +1025,24 @@ impl TearminalApp {
 
             if in_panel || in_expanded_item {
                 if state == ElementState::Pressed && button == MouseButton::Left {
+                    // Barra de edición de nombre (nuevo/renombrar): un clic dentro coloca el cursor; fuera la cancela
+                    if self.file_explorer.edit.is_some() {
+                        let bar =
+                            crate::explorer::FileExplorer::edit_bar_rect(panel_x, panel_y, panel_w);
+                        if TopTabBarRects::inside(mx, my, bar) {
+                            if let Some(mut edit) = self.file_explorer.edit.take() {
+                                let text_x = bar.0 + crate::explorer::FileExplorer::EDIT_TEXT_DX;
+                                self.handle_text_input_click(&mut edit.input, mx, text_x);
+                                self.file_explorer.edit = Some(edit);
+                            }
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
+                        }
+                        self.file_explorer.cancel_edit();
+                    }
+
                     // Pestañas «Archivos» · «Cambios»
                     let tabs = crate::renderer::ExplorerTabsRects::compute(
                         panel_x,
@@ -1272,17 +1290,21 @@ impl TearminalApp {
                                         s_rects.close_btn,
                                     ) {
                                         viewer.close_search();
-                                    } else if crate::renderer::FileViewerSearchRects::inside(
-                                        mx,
-                                        my,
-                                        s_rects.prev_btn,
-                                    ) {
+                                    } else if !viewer.goto_mode
+                                        && crate::renderer::FileViewerSearchRects::inside(
+                                            mx,
+                                            my,
+                                            s_rects.prev_btn,
+                                        )
+                                    {
                                         viewer.search_prev(visible_lines);
-                                    } else if crate::renderer::FileViewerSearchRects::inside(
-                                        mx,
-                                        my,
-                                        s_rects.next_btn,
-                                    ) {
+                                    } else if !viewer.goto_mode
+                                        && crate::renderer::FileViewerSearchRects::inside(
+                                            mx,
+                                            my,
+                                            s_rects.next_btn,
+                                        )
+                                    {
                                         viewer.search_next(visible_lines);
                                     } else if crate::renderer::FileViewerSearchRects::inside(
                                         mx,

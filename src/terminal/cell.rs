@@ -172,28 +172,13 @@ impl InlineImage {
 
     /// Retorna los bytes RGBA del fotograma activo según el tiempo del sistema
     pub(crate) fn active_rgba(&self) -> &[u8] {
-        if self.frames.is_empty() {
-            return &self.rgba_data;
+        match current_frame(&self.frames) {
+            Some((i, _)) => &self.frames[i].rgba_data,
+            None => self
+                .frames
+                .first()
+                .map_or(&self.rgba_data, |f| &f.rgba_data),
         }
-        let total_ms: u64 = self.frames.iter().map(|f| f.delay_ms as u64).sum();
-        if total_ms == 0 {
-            return &self.frames[0].rgba_data;
-        }
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let mut rem = now_ms % total_ms;
-        for frame in &self.frames {
-            let d = frame.delay_ms as u64;
-            if rem < d {
-                return &frame.rgba_data;
-            }
-            rem -= d;
-        }
-        self.frames
-            .last()
-            .map_or(&self.rgba_data, |frame| &frame.rgba_data)
     }
 
     /// Retorna el retraso en milisegundos restante para el próximo fotograma si es animada
@@ -201,25 +186,31 @@ impl InlineImage {
         if self.frames.len() <= 1 {
             return None;
         }
-        let total_ms: u64 = self.frames.iter().map(|f| f.delay_ms as u64).sum();
-        if total_ms == 0 {
-            return None;
-        }
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let mut rem = now_ms % total_ms;
-        for frame in &self.frames {
-            let d = frame.delay_ms as u64;
-            if rem < d {
-                let remaining = d - rem;
-                return Some(remaining.max(10) as u32);
-            }
-            rem -= d;
-        }
-        Some(40)
+        current_frame(&self.frames).map(|(_, remaining)| remaining.max(10))
     }
+}
+
+/// Fotograma que toca ahora en una animación en bucle y los ms que le quedan, medidos con el reloj del
+/// sistema (sin estado: cualquier vista de la misma animación va al compás). `None` si no hay fotogramas
+/// o ninguno tiene duración.
+pub(crate) fn current_frame(frames: &[ImageFrame]) -> Option<(usize, u32)> {
+    let total_ms: u64 = frames.iter().map(|f| f.delay_ms as u64).sum();
+    if total_ms == 0 {
+        return None;
+    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let mut rem = now_ms % total_ms;
+    for (i, frame) in frames.iter().enumerate() {
+        let d = frame.delay_ms as u64;
+        if rem < d {
+            return Some((i, (d - rem) as u32));
+        }
+        rem -= d;
+    }
+    None
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]

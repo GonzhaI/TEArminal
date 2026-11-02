@@ -62,16 +62,21 @@ pub(crate) struct KittyChunkState {
 
 /// Decodifica una imagen que llega por la salida de la terminal (Kitty, iTerm2): entrada NO confiable, así que
 /// con tope de dimensiones y de memoria (un PNG diminuto puede declarar miles de millones de píxeles)
-pub(super) fn decode_untrusted(bytes: &[u8]) -> Option<RgbaImage> {
+pub(crate) fn decode_untrusted(bytes: &[u8]) -> Option<RgbaImage> {
     let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
+    reader.limits(untrusted_limits());
+    reader.decode().ok().map(|img| img.to_rgba8())
+}
+
+/// Topes de dimensiones y de memoria al decodificar una imagen que no controlamos
+pub(crate) fn untrusted_limits() -> image::Limits {
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
     limits.max_alloc = Some(128 * 1024 * 1024);
-    reader.limits(limits);
-    reader.decode().ok().map(|img| img.to_rgba8())
+    limits
 }
 
 /// Reduce `img` a `tw` x `th` píxeles si es mayor (acota la RAM de las imágenes que viven en el historial)

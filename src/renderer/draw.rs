@@ -46,6 +46,10 @@ impl TerminalRenderer {
             &self.inter_semibold_font
         } else if self.inter_font.has_glyph(c) {
             &self.inter_font
+        } else if matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..) && self.nerd_font(c).has_glyph(c)
+        {
+            // Iconos de archivo y de lenguaje (`ui::file_icons`): de la fuente Nerd embebida, no de una del sistema
+            self.nerd_font(c)
         } else if let Some(fb) = self.fallback_font_for(c) {
             fb
         } else if semibold {
@@ -250,6 +254,49 @@ impl TerminalRenderer {
         self.draw_ui_text(
             canvas, text, start_x, baseline_y, max_x, color, size_px, bold,
         )
+    }
+
+    /// Glifo Nerd (`ui::file_icons`) centrado en `center_x`, a la altura de la línea de texto para que
+    /// alinee con el nombre que lo acompaña.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn draw_glyph_icon(
+        &mut self,
+        canvas: &mut Canvas,
+        glyph: char,
+        color: Color,
+        center_x: usize,
+        center_y: usize,
+        size_px: f32,
+    ) {
+        let mut buf = [0u8; 4];
+        let text: &str = glyph.encode_utf8(&mut buf);
+        let w = self.measure_ui_text(text, size_px, false);
+        let base = self.centered_baseline(center_y);
+        let x = center_x.saturating_sub(w / 2);
+        self.draw_ui_text(
+            canvas,
+            text,
+            x,
+            base,
+            x + w + size_px as usize,
+            color,
+            size_px,
+            false,
+        );
+    }
+
+    /// Icono del archivo `path` (lenguaje o tipo) con su color ANSI del tema.
+    pub(crate) fn draw_file_icon(
+        &mut self,
+        canvas: &mut Canvas,
+        path: &std::path::Path,
+        center_x: usize,
+        center_y: usize,
+        size_px: f32,
+        theme: &Theme,
+    ) {
+        let (glyph, slot) = crate::ui::file_icons::file_glyph(path);
+        self.draw_glyph_icon(canvas, glyph, theme.ansi[slot], center_x, center_y, size_px);
     }
 
     /// Tecla individual del chrome: caja de 18 px, borde hairline y glifo mono centrado.

@@ -1,3 +1,4 @@
+pub(crate) mod file_icons;
 pub(crate) mod icons;
 pub(crate) mod text_input;
 

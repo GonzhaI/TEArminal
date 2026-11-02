@@ -31,11 +31,14 @@ TEArminal se define por cuatro pilares irrenunciables:
   * Pila de Undo/Redo (50 pasos), soporte completo de teclado (Ctrl+Z, Ctrl+Y, Shift+Flechas, etc.), selección con ratón y Shift+Click en todos los inputs de la interfaz.
 * **Historial MRU en cierre de pestañas y ventanas** ✅ *[Completado]*:
   * Cierre de pestañas y ventanas (`Ctrl + W`, `Esc`, `×`) devuelve siempre a la pestaña o ventana más recientemente activa en lugar de un índice adyacente ciego.
-* **Salto rápido a línea (`Ctrl + G`)**:
+* **Salto rápido a línea (`Ctrl + G`)** ✅ *[Completado]*:
   * Input modal para saltar directamente a `línea[:columna]`.
   * Reutiliza [`FileViewerState::reveal_line()`](file:///src/app/viewer.rs) para desplegar bloques plegados si la línea está oculta.
-* **Visor nativo de imágenes (`.png`, `.jpg`, `.webp`, `.ico`)**:
-  * En lugar de mostrar código binario o texto corrupto, decodifica imágenes y las proyecta centradas en el lienzo mediante el atlas de texturas Direct3D 11.
+* **Visor nativo de imágenes (`.png`, `.jpg`, `.gif`, `.webp`, `.ico`)** ✅ *[Completado]*:
+  * En lugar de mostrar código binario o texto corrupto, decodifica imágenes y las proyecta centradas en el lienzo mediante el atlas de texturas Direct3D 11 (`Canvas::image`), ajustadas al área y ampliadas como máximo 4×. Las transparencias se ven sobre el fondo del visor.
+  * Los **GIF animados** se reproducen completos en bucle (`ViewerImage::frames`, fotograma elegido con el reloj del sistema en `current_frame`); el bucle de eventos solo despierta en el próximo fotograma y repinta únicamente cuando cambia.
+  * Funciona igual con archivos **remotos** por SSH (`new_remote_file_viewer_from`).
+  * Decodificación con los mismos topes que las imágenes del protocolo kitty (`untrusted_limits`); el lado mayor se reduce a 2048 px y un GIF conserva fotogramas hasta 96 MB. Archivos de hasta 20 MB (texto: 5 MB); una imagen dañada cae al aviso de binario.
 * **Diff lado a lado (*Side-by-side*)**:
   * Conmutador en cabecera para comparar en dos columnas sincronizadas (versión en `HEAD` vs versión en disco), facilitando la revisión de cambios masivos producidos por agentes.
 
@@ -43,9 +46,9 @@ TEArminal se define por cuatro pilares irrenunciables:
 
 * **Filtro rápido en el árbol (Fuzzy Filter / `Ctrl + P`)**:
   * Filtrado difuso en memoria sobre [`FileExplorer::flat_indices`](file:///src/explorer.rs) sin reconsultar el disco ni bloquear el renderizado.
-* **Gestión contextual de archivos (Menú contextual)**:
+* **Gestión contextual de archivos (Menú contextual)** ✅ *[Completado]*:
   * Opciones: *Nuevo archivo*, *Nueva carpeta*, *Renombrar* y *Eliminar*.
-  * La eliminación utiliza la API Win32 (`IFileOperation` con `FOF_ALLOWUNDO`) para enviar a la **Papelera de Reciclaje**, protegiendo el trabajo del usuario.
+  * La eliminación utiliza la API Win32 (`SHFileOperationW` con `FOF_ALLOWUNDO`, sin dependencias nuevas) para enviar a la **Papelera de Reciclaje**, protegiendo el trabajo del usuario.
 * **Arrastrar y soltar (Drag & Drop) hacia la terminal**:
   * Soporte de `WM_DROPFILES` para soltar archivos desde el explorador o desde Windows hacia el panel de terminal activo, inyectando su ruta entrecomillada.
 * **Acciones rápidas de Git en pestaña "Cambios"**:
@@ -80,12 +83,12 @@ TEArminal se define por cuatro pilares irrenunciables:
 
 Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica, se identifican las siguientes áreas de **limpieza y simplificación**:
 
-### 3.1. Configuración Zombie / Obsoleta: `terminal.gpu`
+### 3.1. Configuración Zombie / Obsoleta: `terminal.gpu` ✅ *[Completado]*
 * **Situación:** En `src/config.rs` se mantiene la opción booleana `terminal.gpu`. Como indica expresamente `AGENTS.md`: *«terminal.gpu se ignora (se conserva en la configuración por compatibilidad: ya no hay otro camino)»*.
 * **Por qué sobra:** El renderer Direct3D 11 (o su fallback WARP por software) es la única vía de dibujo existente en el código. Mantener una opción de configuración que no hace nada genera confusión en el usuario y líneas de parsing innecesarias.
 * **Acción recomendada:** Eliminar `terminal.gpu` de la interfaz de Ajustes y del struct de configuración (o marcarla como deprecada e ignorada en silencio durante la carga de configs antiguas).
 
-### 3.2. Código legado de limpieza de temporales obsoletos
+### 3.2. Código legado de limpieza de temporales obsoletos ✅ *[Completado]*
 * **Situación:** En `src/main.rs` y `src/app/clipboard.rs` existen bloques dedicados a buscar y eliminar carpetas temporales antiguas como `tearminal_clipboard` en `%TEMP%` creadas por versiones preliminares (pre-0.18).
 * **Por qué sobra:** Esas rutas ya no se generan hace múltiples versiones. Ejecutar comprobaciones de disco en cada arranque o uso del portapapeles para migrar versiones antiguas añade I/O inútil en la ruta de inicio.
 * **Acción recomendada:** Eliminar la lógica de limpieza de carpetas temporales obsoletas.
@@ -120,14 +123,14 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 | **Visor** | Lectura Markdown responsiva y tablas adaptadas | Usabilidad | **P1** | ✅ Completado | Alto |
 | **UI** | Cursor nítido, selección y Undo/Redo en inputs | Usabilidad | **P1** | ✅ Completado | Alto |
 | **Ventanas** | Navegación MRU al cerrar pestañas y ventanas | UX / Flujo | **P1** | ✅ Completado | Alto |
-| **Visor** | Salto a línea (`Ctrl + G`) | Característica | **P1** | Pendiente | Medio |
-| **Explorador** | Gestión de archivos (Nuevo, Renombrar, Papelera Win32) | Característica | **P1** | Pendiente | Alto |
-| **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | Pendiente | Medio (Claridad) |
-| **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | Pendiente | Bajo (Arranque) |
+| **Visor** | Salto a línea (`Ctrl + G`) | Característica | **P1** | ✅ Completado | Medio |
+| **Explorador** | Gestión de archivos (Nuevo, Renombrar, Papelera Win32) | Característica | **P1** | ✅ Completado | Alto |
+| **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | ✅ Completado | Medio (Claridad) |
+| **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | ✅ Completado | Bajo (Arranque) |
 | **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | Pendiente | Alto |
 | **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | Pendiente | Alto |
 | **Terminal** | Perfiles rápidos de Shell en botón `+` | Característica | **P2** | Pendiente | Alto |
-| **Visor** | Visor nativo de imágenes (`.png`, `.jpg`) | Característica | **P2** | Pendiente | Medio-Alto |
+| **Visor** | Visor nativo de imágenes (`.png`, `.jpg`, `.gif` animado, `.webp`, `.ico`; local y remoto) | Característica | **P2** | ✅ Completado | Medio-Alto |
 | **IA / Telemetría** | Simplificar AGY y eliminar sondeos superfluos de cuota | Limpieza | **P2** | Pendiente | Medio |
 | **Terminal** | Búsqueda en el scrollback (`Ctrl + Shift + F`) | Característica | **P3** | Pendiente | Alto |
 | **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | Pendiente | Medio-Alto |

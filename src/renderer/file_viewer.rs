@@ -46,26 +46,18 @@ impl TerminalRenderer {
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_lowercase();
-        let file_icon = match ext.as_str() {
-            "rs" | "py" | "js" | "ts" | "go" | "c" | "cpp" | "h" | "cs" | "html" | "css" => {
-                crate::ui::LucideIcon::FileCode
-            }
-            "toml" | "json" | "yaml" | "yml" => crate::ui::LucideIcon::FileJson,
-            "md" | "txt" | "log" => crate::ui::LucideIcon::FileText,
-            _ => crate::ui::LucideIcon::File,
-        };
 
         let header_center_y =
             y + SidebarRects::CARD_INSET + (header_h.saturating_sub(SidebarRects::CARD_INSET)) / 2;
         let header_base = self.centered_baseline(header_center_y);
 
-        self.draw_lucide_icon(
+        self.draw_file_icon(
             canvas,
-            file_icon,
+            &viewer.path,
             x + SidebarRects::CARD_INSET + 16,
             header_center_y,
-            13.0,
-            theme.text_muted(),
+            tokens::BODY,
+            theme,
         );
 
         // Botones (modo y vista previa), chips informativos y, con el espacio sobrante, el nombre del archivo
@@ -200,7 +192,10 @@ impl TerminalRenderer {
         }
         chips.push((size_text, theme.ansi[7], chip_bg));
         chips.push((
-            format!("{} líneas", viewer.lines.len()),
+            match &viewer.image {
+                Some(img) => format!("{} × {} px", img.source_size.0, img.source_size.1),
+                None => format!("{} líneas", viewer.lines.len()),
+            },
             theme.ansi[7],
             chip_bg,
         ));
@@ -238,29 +233,6 @@ impl TerminalRenderer {
             right_x = right_x.saturating_sub(9);
         }
 
-        // Carpeta contenedora: dato de máquina, en mono y en segundo plano tras el nombre.
-        let folder_label = viewer
-            .path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .map(|p| p.to_string_lossy().replace('\\', "/"));
-        if let Some(folder) = folder_label.as_deref() {
-            let folder_x = name_end_x + 14;
-            if folder_x + 24 < right_x {
-                Self::draw_rect(canvas, name_end_x + 7, sep_y, 1, 12, theme.chrome_line());
-                self.draw_mono_text(
-                    canvas,
-                    folder,
-                    folder_x,
-                    header_base,
-                    right_x,
-                    theme.text_muted(),
-                    tokens::DETAIL,
-                    false,
-                );
-            }
-        }
-
         // Solo el nombre del archivo: la ruta completa ya se muestra en la barra de estado
         self.draw_ui_text(
             canvas,
@@ -277,6 +249,37 @@ impl TerminalRenderer {
         let content_y = y + header_h;
         let content_h = h.saturating_sub(header_h);
         if content_h == 0 {
+            return;
+        }
+
+        // Imagen: se ajusta al área (sin pasar de 4x) y se centra
+        if let Some(img) = &viewer.image {
+            const PAD: usize = 24;
+            let (avail_w, avail_h) = (
+                w.saturating_sub(2 * PAD).max(1),
+                content_h.saturating_sub(2 * PAD).max(1),
+            );
+            let scale = (avail_w as f32 / img.width as f32)
+                .min(avail_h as f32 / img.height as f32)
+                .min(4.0);
+            let tw = ((img.width as f32 * scale).round() as usize).max(1);
+            let th = ((img.height as f32 * scale).round() as usize).max(1);
+            let (frame, _) = img.current();
+            img.shown_frame.set(frame);
+            canvas.image(
+                (x, content_y, x + w, content_y + content_h),
+                crate::renderer::scene::ImageRef {
+                    rgba: &img.frames[frame].rgba_data,
+                    width: img.width,
+                    height: img.height,
+                },
+                (
+                    (x + w.saturating_sub(tw) / 2) as i32,
+                    (content_y + content_h.saturating_sub(th) / 2) as i32,
+                    tw,
+                    th,
+                ),
+            );
             return;
         }
 
@@ -849,10 +852,14 @@ impl TerminalRenderer {
         canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.chrome_bg());
         canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.card_outline());
 
-        // Icono de lupa
+        // Icono de lupa (o de lista numerada en «Ir a línea»)
         self.draw_lucide_icon(
             canvas,
-            crate::ui::LucideIcon::Search,
+            if viewer.goto_mode {
+                crate::ui::LucideIcon::ListOrdered
+            } else {
+                crate::ui::LucideIcon::Search
+            },
             bx + 14,
             by + bh / 2,
             13.0,
@@ -874,14 +881,20 @@ impl TerminalRenderer {
             iy,
             ih,
             cursor_visible,
-            "Buscar...",
+            if viewer.goto_mode {
+                "Línea[:col]"
+            } else {
+                "Buscar..."
+            },
             true,
             theme,
         );
 
-        // Contador de coincidencias (ej: "3/12" o "0/0")
+        // Contador de coincidencias (ej: "3/12" o "0/0"); en «Ir a línea», el total de líneas
         let (cx, cy, cw, ch) = s_rects.counter;
-        let counter_text = if viewer.search_input.text().is_empty() {
+        let counter_text = if viewer.goto_mode {
+            format!("/{}", viewer.lines.len())
+        } else if viewer.search_input.text().is_empty() {
             String::new()
         } else if viewer.search_matches.is_empty() {
             "0/0".to_string()
@@ -894,7 +907,7 @@ impl TerminalRenderer {
         };
         if !counter_text.is_empty() {
             let counter_base_y = self.centered_baseline(cy + ch / 2);
-            let counter_color = if viewer.search_matches.is_empty() {
+            let counter_color = if viewer.search_matches.is_empty() && !viewer.goto_mode {
                 theme.ansi[1]
             } else {
                 theme.text_muted()
@@ -911,52 +924,54 @@ impl TerminalRenderer {
             );
         }
 
-        // Botón anterior (ChevronLeft)
-        let (px, py, pw, ph) = s_rects.prev_btn;
-        if viewer.hovered_search_prev {
-            canvas.rounded_fill(px, py, pw, ph, tokens::RADIUS_ROW, theme.surface_hover());
-        }
-        self.draw_lucide_icon(
-            canvas,
-            crate::ui::LucideIcon::ChevronLeft,
-            px + pw / 2,
-            py + ph / 2,
-            13.0,
+        if !viewer.goto_mode {
+            // Botón anterior (ChevronLeft)
+            let (px, py, pw, ph) = s_rects.prev_btn;
             if viewer.hovered_search_prev {
-                theme.foreground
-            } else {
-                theme.text_muted()
-            },
-        );
+                canvas.rounded_fill(px, py, pw, ph, tokens::RADIUS_ROW, theme.surface_hover());
+            }
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::ChevronLeft,
+                px + pw / 2,
+                py + ph / 2,
+                13.0,
+                if viewer.hovered_search_prev {
+                    theme.foreground
+                } else {
+                    theme.text_muted()
+                },
+            );
 
-        // Botón siguiente (ChevronRight)
-        let (nx, ny, nw, nh) = s_rects.next_btn;
-        if viewer.hovered_search_next {
-            canvas.rounded_fill(nx, ny, nw, nh, tokens::RADIUS_ROW, theme.surface_hover());
-        }
-        self.draw_lucide_icon(
-            canvas,
-            crate::ui::LucideIcon::ChevronRight,
-            nx + nw / 2,
-            ny + nh / 2,
-            13.0,
+            // Botón siguiente (ChevronRight)
+            let (nx, ny, nw, nh) = s_rects.next_btn;
             if viewer.hovered_search_next {
-                theme.foreground
-            } else {
-                theme.text_muted()
-            },
-        );
+                canvas.rounded_fill(nx, ny, nw, nh, tokens::RADIUS_ROW, theme.surface_hover());
+            }
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::ChevronRight,
+                nx + nw / 2,
+                ny + nh / 2,
+                13.0,
+                if viewer.hovered_search_next {
+                    theme.foreground
+                } else {
+                    theme.text_muted()
+                },
+            );
 
-        // Separador vertical sutil entre navegación y cierre
-        let sep_x = nx + nw + 3;
-        canvas.fill_rect(
-            clip,
-            sep_x,
-            by + 6,
-            1,
-            bh.saturating_sub(12),
-            theme.chrome_line(),
-        );
+            // Separador vertical sutil entre navegación y cierre
+            let sep_x = nx + nw + 3;
+            canvas.fill_rect(
+                clip,
+                sep_x,
+                by + 6,
+                1,
+                bh.saturating_sub(12),
+                theme.chrome_line(),
+            );
+        }
 
         // Botón cerrar (X)
         let (close_x, close_y, close_w, close_h) = s_rects.close_btn;

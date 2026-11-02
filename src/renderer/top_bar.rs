@@ -139,7 +139,18 @@ impl TerminalRenderer {
             } else {
                 theme.text_muted()
             };
-            let title_x = r.0 + 14;
+            let mut title_x = r.0 + 14;
+            if let Some(path) = &tab.file_path {
+                self.draw_file_icon(
+                    canvas,
+                    path,
+                    title_x + 6,
+                    r.1 + r.3 / 2,
+                    tokens::BODY,
+                    theme,
+                );
+                title_x += 20;
+            }
             let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
             // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
             // barra muestra solo el destino («staging-01»), como en el bosquejo.

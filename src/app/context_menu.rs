@@ -51,6 +51,10 @@ pub(crate) enum MenuAction {
     // Explorador
     ExplorerOpen(usize),
     ExplorerCopyPath(PathBuf),
+    ExplorerNewFile,
+    ExplorerNewDir,
+    ExplorerRename,
+    ExplorerDelete,
     ExplorerRefresh,
     ExplorerCollapseAll,
     ExplorerExpandAll,
@@ -257,6 +261,38 @@ impl TearminalApp {
                 ));
                 items.push(MenuItem::separator());
             }
+            let can_manage = self.file_explorer.can_manage_files();
+            items.push(MenuItem::new(
+                "Nuevo archivo",
+                LucideIcon::File,
+                "",
+                MenuAction::ExplorerNewFile,
+                can_manage,
+            ));
+            items.push(MenuItem::new(
+                "Nueva carpeta",
+                LucideIcon::Folder,
+                "",
+                MenuAction::ExplorerNewDir,
+                can_manage,
+            ));
+            if idx.is_some() {
+                items.push(MenuItem::new(
+                    "Renombrar",
+                    LucideIcon::Pencil,
+                    "F2",
+                    MenuAction::ExplorerRename,
+                    can_manage,
+                ));
+                items.push(MenuItem::new(
+                    "Eliminar",
+                    LucideIcon::Trash2,
+                    "Supr",
+                    MenuAction::ExplorerDelete,
+                    can_manage,
+                ));
+            }
+            items.push(MenuItem::separator());
             let any_open = self.file_explorer.items.iter().any(|i| i.is_expanded);
             items.push(MenuItem::new(
                 "Contraer todo",
@@ -1007,6 +1043,19 @@ impl TearminalApp {
             MenuAction::ExplorerCopyPath(path) => {
                 self.set_clipboard_text(&path.to_string_lossy());
             }
+            MenuAction::ExplorerNewFile => {
+                self.file_explorer
+                    .begin_edit(crate::explorer::EditKind::NewFile);
+            }
+            MenuAction::ExplorerNewDir => {
+                self.file_explorer
+                    .begin_edit(crate::explorer::EditKind::NewDir);
+            }
+            MenuAction::ExplorerRename => {
+                self.file_explorer
+                    .begin_edit(crate::explorer::EditKind::Rename);
+            }
+            MenuAction::ExplorerDelete => self.delete_explorer_selection(),
             MenuAction::ExplorerCollapseAll => self.file_explorer.collapse_all(),
             MenuAction::ExplorerExpandAll => {
                 if self.file_explorer.inband_remote {
@@ -1028,6 +1077,39 @@ impl TearminalApp {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+}
+
+impl TearminalApp {
+    /// Filas de la lista del explorador que caben a la vista (para dejar visible lo recién creado o seleccionado).
+    pub(crate) fn explorer_max_visible(&self) -> usize {
+        let win_h = self
+            .window
+            .as_ref()
+            .map_or(600, |w| w.inner_size().height as usize);
+        let (_, _, _, panel_h) = self.file_explorer.panel_geometry(
+            800,
+            win_h,
+            self.top_offset(),
+            self.status_bar_height(),
+        );
+        let list_h = panel_h.saturating_sub(
+            crate::explorer::FileExplorer::HEADER_HEIGHT
+                + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
+        );
+        (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1)
+    }
+
+    /// Envía a la Papelera el elemento seleccionado del explorador (Supr y «Eliminar» del menú).
+    pub(crate) fn delete_explorer_selection(&mut self) {
+        let max_visible = self.explorer_max_visible();
+        match self.file_explorer.delete_selected(max_visible) {
+            Ok(path) => {
+                crate::logger::log(&format!("Explorador: a la Papelera {}", path.display()))
+            }
+            Err(e) => crate::logger::log(&format!("Explorador: no se pudo eliminar: {e}")),
+        }
+        self.sync_fs_watcher();
     }
 }
 

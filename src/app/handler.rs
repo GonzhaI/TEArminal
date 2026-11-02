@@ -693,6 +693,29 @@ impl TearminalApp {
             }
         }
 
+        // GIF animado abierto en el visor: despierta en el próximo fotograma y repinta solo si cambió
+        // (`shown_frame` lo fija el render; así el repintado no se encadena a sí mismo)
+        if !self.occluded {
+            let animated = self
+                .tabs
+                .get(self.active_tab_index)
+                .and_then(|t| t.file_viewer.as_ref())
+                .and_then(|v| v.image.as_ref())
+                .filter(|img| img.is_animated());
+            if let Some(img) = animated {
+                let (frame, remaining_ms) = img.current();
+                if frame != img.shown_frame.get() {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+                earliest(
+                    &mut wake,
+                    now + std::time::Duration::from_millis(remaining_ms.max(10) as u64),
+                );
+            }
+        }
+
         // Auto-ocultamiento de la barra de desplazamiento: un repintado exacto al expirar
         let hide_at = self.last_scroll_time + std::time::Duration::from_millis(1250);
         if now < hide_at {

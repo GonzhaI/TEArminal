@@ -142,12 +142,8 @@ impl<'a> Perform for Performer<'a> {
                             self.state.sync_update_mode = true;
                             self.state.sync_update_start = Some(std::time::Instant::now());
                         }
-                        // Reporte de modo claro/oscuro (DEC 2031)
-                        2031 => {
-                            self.state.report_color_scheme_mode = true;
-                            let resp = self.state.color_scheme_report_bytes();
-                            self.state.pty_write_queue.push(resp);
-                        }
+                        // Aviso de cambio de esquema claro/oscuro (CSI ?997 al cambiar de tema)
+                        2031 => self.state.report_color_scheme_mode = true,
                         // Activar Bracketed Paste Mode (negociado con Claude Code, Aider, shells)
                         2004 => self.state.bracketed_paste_mode = true,
                         _ => {}
@@ -178,10 +174,20 @@ impl<'a> Perform for Performer<'a> {
                         2004 => self.state.bracketed_paste_mode = false,
                         _ => {}
                     },
-                    // Consulta DECRQM: \x1b[?2031$p o similares
-                    'p' if mode == 2031 => {
+                    // Consulta del esquema actual: \x1b[?996n → \x1b[?997;1n (oscuro) / ;2n (claro)
+                    'n' if mode == 996 => {
                         let resp = self.state.color_scheme_report_bytes();
                         self.state.pty_write_queue.push(resp);
+                    }
+                    // Consulta DECRQM: \x1b[?2031$p → estado del modo (1 activo, 2 inactivo)
+                    'p' if mode == 2031 => {
+                        let status = if self.state.report_color_scheme_mode {
+                            1
+                        } else {
+                            2
+                        };
+                        let resp = format!("\x1b[?2031;{status}$y");
+                        self.state.pty_write_queue.push(resp.into_bytes());
                     }
                     'p' if mode == 2026 => {
                         let status = if self.state.sync_update_mode { 1 } else { 2 };

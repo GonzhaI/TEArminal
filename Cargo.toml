@@ -1,6 +1,6 @@
 [package]
 name = "tearminal"
-version = "0.23.0"
+version = "0.24.0"
 edition = "2021"
 license = "MIT"
 description = "TEArminal: Terminal nativa veloz para Windows optimizada para agentes CLI"
@@ -60,8 +60,8 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 directories = "5.0"
 
-# Soporte para protocolos gráficos de imagen (PNG, JPEG, GIF, decodificación base64)
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+# Soporte para protocolos gráficos de imagen y visor de imágenes (PNG, JPEG, GIF, WebP, ICO; decodificación base64)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
 base64 = "0.22"
 
 # Soporte tipográfico Unicode completo, anchos y clústeres de grafemas

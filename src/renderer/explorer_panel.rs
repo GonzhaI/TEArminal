@@ -129,7 +129,8 @@ impl TerminalRenderer {
             } else if explorer.remote_session.is_some() {
                 ("Cargando archivos remotos...", theme.ansi[8])
             } else if explorer.changes_only {
-                ("(Sin cambios en git)", theme.ansi[8])
+                // Sin cambios: la pestaña queda vacía, sin mensaje.
+                return;
             } else {
                 ("(Directorio vacío)", theme.ansi[8])
             };
@@ -143,6 +144,7 @@ impl TerminalRenderer {
                 tokens::DETAIL,
                 false,
             );
+            self.draw_explorer_edit_bar(canvas, explorer, panel_x, panel_y, panel_w, theme);
             return;
         }
 
@@ -209,22 +211,18 @@ impl TerminalRenderer {
                     theme.text_muted(),
                 );
 
-                let folder_icon = if item.is_expanded {
-                    crate::ui::LucideIcon::FolderOpen
+                let folder_color = if is_selected {
+                    theme.accent_color()
                 } else {
-                    crate::ui::LucideIcon::Folder
+                    theme.text_muted()
                 };
-                self.draw_lucide_icon(
+                self.draw_glyph_icon(
                     canvas,
-                    folder_icon,
+                    crate::ui::file_icons::folder_glyph(item.is_expanded),
+                    folder_color,
                     content_x + 22,
                     item_center_y,
-                    12.0,
-                    if is_selected {
-                        theme.accent_color()
-                    } else {
-                        theme.text_muted()
-                    },
+                    tokens::BODY,
                 );
 
                 // Con cambios de git, el nombre y la letra llevan el color del estado.
@@ -250,25 +248,13 @@ impl TerminalRenderer {
                 );
             } else {
                 // Archivo: Lucide file icons por extensión
-                let ext = item.path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                let (file_icon, file_fg) = match ext {
-                    "rs" => (crate::ui::LucideIcon::FileCode, theme.ansi[1]),
-                    "toml" | "json" | "yaml" | "yml" => {
-                        (crate::ui::LucideIcon::FileJson, theme.ansi[3])
-                    }
-                    "md" | "txt" => (crate::ui::LucideIcon::FileText, theme.ansi[6]),
-                    "png" | "jpg" | "svg" => (crate::ui::LucideIcon::File, theme.ansi[5]),
-                    "exe" | "bat" | "ps1" => (crate::ui::LucideIcon::FileCog, theme.ansi[2]),
-                    _ => (crate::ui::LucideIcon::File, theme.ansi[8]),
-                };
-
-                self.draw_lucide_icon(
+                self.draw_file_icon(
                     canvas,
-                    file_icon,
+                    &item.path,
                     content_x + 10,
                     item_center_y,
-                    12.0,
-                    file_fg,
+                    tokens::BODY,
+                    theme,
                 );
 
                 let text_color = if let Some(git) = item.git_status {
@@ -334,6 +320,70 @@ impl TerminalRenderer {
                 explorer.hovered_scrollbar,
                 self.scrollbars_awake,
                 theme,
+            );
+        }
+
+        self.draw_explorer_edit_bar(canvas, explorer, panel_x, panel_y, panel_w, theme);
+    }
+
+    /// Barra de edición de nombre (nuevo archivo/carpeta o renombrar), sobre las primeras filas de la lista.
+    /// El motivo del último rechazo (nombre repetido o no válido) va en una tira bajo ella.
+    fn draw_explorer_edit_bar(
+        &mut self,
+        canvas: &mut Canvas,
+        explorer: &crate::explorer::FileExplorer,
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+        theme: &Theme,
+    ) {
+        use crate::explorer::{EditKind, FileExplorer};
+        let Some(edit) = explorer.edit.as_ref() else {
+            return;
+        };
+        let (bx, by, bw, bh) = FileExplorer::edit_bar_rect(panel_x, panel_y, panel_w);
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.surface_bg());
+        let outline = if edit.error.is_some() {
+            theme.ansi[1]
+        } else {
+            theme.accent_color()
+        };
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_CONTROL, outline);
+
+        let (icon, placeholder) = match edit.kind {
+            EditKind::NewFile => (crate::ui::LucideIcon::File, "Nombre del archivo"),
+            EditKind::NewDir => (crate::ui::LucideIcon::Folder, "Nombre de la carpeta"),
+            EditKind::Rename => (crate::ui::LucideIcon::Pencil, "Nuevo nombre"),
+        };
+        self.draw_lucide_icon(canvas, icon, bx + 16, by + bh / 2, 12.0, theme.text_muted());
+        let base = self.centered_baseline(by + bh / 2);
+        self.render_text_input_content(
+            canvas,
+            &edit.input,
+            bx + FileExplorer::EDIT_TEXT_DX,
+            base,
+            bx + bw - 8,
+            by,
+            bh,
+            true,
+            placeholder,
+            true,
+            theme,
+        );
+
+        if let Some(err) = &edit.error {
+            let (ey, eh) = (by + bh + 2, 22);
+            canvas.rounded_fill(bx, ey, bw, eh, tokens::RADIUS_ROW, theme.chrome_bg());
+            let err_base = self.centered_baseline(ey + eh / 2);
+            self.draw_ui_text(
+                canvas,
+                err,
+                bx + 8,
+                err_base,
+                bx + bw - 8,
+                theme.ansi[1],
+                tokens::DETAIL,
+                false,
             );
         }
     }
@@ -534,22 +584,18 @@ impl TerminalRenderer {
                 theme.text_muted(),
             );
 
-            let folder_icon = if item.is_expanded {
-                crate::ui::LucideIcon::FolderOpen
+            let folder_color = if is_selected {
+                theme.accent_color()
             } else {
-                crate::ui::LucideIcon::Folder
+                theme.text_muted()
             };
-            self.draw_lucide_icon(
+            self.draw_glyph_icon(
                 canvas,
-                folder_icon,
+                crate::ui::file_icons::folder_glyph(item.is_expanded),
+                folder_color,
                 content_x + 22,
                 item_center_y,
-                12.0,
-                if is_selected {
-                    theme.accent_color()
-                } else {
-                    theme.text_muted()
-                },
+                tokens::BODY,
             );
 
             let dir_color = if let Some(git) = item.git_status {
@@ -570,25 +616,13 @@ impl TerminalRenderer {
                 true,
             );
         } else {
-            let ext = item.path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let (file_icon, file_fg) = match ext {
-                "rs" => (crate::ui::LucideIcon::FileCode, theme.ansi[1]),
-                "toml" | "json" | "yaml" | "yml" => {
-                    (crate::ui::LucideIcon::FileJson, theme.ansi[3])
-                }
-                "md" | "txt" => (crate::ui::LucideIcon::FileText, theme.ansi[6]),
-                "png" | "jpg" | "svg" => (crate::ui::LucideIcon::File, theme.ansi[5]),
-                "exe" | "bat" | "ps1" => (crate::ui::LucideIcon::FileCog, theme.ansi[2]),
-                _ => (crate::ui::LucideIcon::File, theme.ansi[8]),
-            };
-
-            self.draw_lucide_icon(
+            self.draw_file_icon(
                 canvas,
-                file_icon,
+                &item.path,
                 content_x + 10,
                 item_center_y,
-                12.0,
-                file_fg,
+                tokens::BODY,
+                theme,
             );
 
             let text_color = if let Some(git) = item.git_status {

@@ -1701,30 +1701,32 @@ fn test_dec_2031_color_scheme_mode() {
     let dark_theme = Theme::from_name(Theme::DEFAULT_DARK);
     let mut term = TerminalState::new(80, 24, 1000, dark_theme);
 
-    // Activar DEC 2031 (modo oscuro reporta 1)
+    // DECRQM con el modo apagado: 2 (reset)
+    term.process_bytes(b"\x1b[?2031$p");
+    assert_eq!(term.pty_write_queue.pop().unwrap(), b"\x1b[?2031;2$y");
+
+    // Activar DEC 2031: sin respuesta inmediata
     term.process_bytes(b"\x1b[?2031h");
     assert!(term.report_color_scheme_mode);
-    assert_eq!(term.pty_write_queue.len(), 1);
-    assert_eq!(term.pty_write_queue[0], b"\x1b[?2031;1$y");
+    assert!(term.pty_write_queue.is_empty());
 
-    term.pty_write_queue.clear();
-
-    // Consulta DECRQM \x1b[?2031$p
+    // DECRQM con el modo activo: 1 (set)
     term.process_bytes(b"\x1b[?2031$p");
-    assert_eq!(term.pty_write_queue.len(), 1);
-    assert_eq!(term.pty_write_queue[0], b"\x1b[?2031;1$y");
+    assert_eq!(term.pty_write_queue.pop().unwrap(), b"\x1b[?2031;1$y");
 
-    term.pty_write_queue.clear();
+    // Consulta del esquema \x1b[?996n: tema oscuro = 1
+    term.process_bytes(b"\x1b[?996n");
+    assert_eq!(term.pty_write_queue.pop().unwrap(), b"\x1b[?997;1n");
 
     // Desactivar DEC 2031
     term.process_bytes(b"\x1b[?2031l");
     assert!(!term.report_color_scheme_mode);
 
-    // Tema claro reporta 2
+    // Tema claro = 2
     let light_theme = Theme::from_name(Theme::DEFAULT_LIGHT);
     let mut light_term = TerminalState::new(80, 24, 1000, light_theme);
-    light_term.process_bytes(b"\x1b[?2031h");
-    assert_eq!(light_term.pty_write_queue[0], b"\x1b[?2031;2$y");
+    light_term.process_bytes(b"\x1b[?996n");
+    assert_eq!(light_term.pty_write_queue[0], b"\x1b[?997;2n");
 }
 
 #[test]

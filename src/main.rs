@@ -26,14 +26,6 @@ fn main() -> Result<()> {
     // 1. Cargar configuración de TEArminal
     let config = TearminalConfig::load_or_default();
 
-    // Limpieza única en arranque de directorios temporales obsoletos
-    for name in &["tearminal_clipboard", "axon_clipboard"] {
-        let legacy = std::env::temp_dir().join(name);
-        if legacy.exists() {
-            let _ = std::fs::remove_dir_all(&legacy);
-        }
-    }
-
     // 2. Crear EventLoop nativo de Windows con soporte para eventos asíncronos de ConPTY
     let event_loop = EventLoop::<TearminalEvent>::with_user_event()
         .build()

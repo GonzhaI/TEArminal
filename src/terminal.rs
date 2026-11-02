@@ -263,10 +263,11 @@ impl TerminalState {
         true
     }
 
-    /// Genera la secuencia de reporte de modo de color para DEC 2031 (1 = oscuro, 2 = claro).
+    /// Notificación de esquema de color (`CSI ?997;Ps n`, 1 = oscuro, 2 = claro): respuesta a
+    /// `CSI ?996n` y aviso de cambio de tema con el modo 2031 activo.
     pub(crate) fn color_scheme_report_bytes(&self) -> Vec<u8> {
         let code = if self.theme.is_dark() { 1 } else { 2 };
-        format!("\x1b[?2031;{code}$y").into_bytes()
+        format!("\x1b[?997;{code}n").into_bytes()
     }
 
     /// Actualiza el tema de la terminal migrando coherentemente el estado del emulador y las celdas

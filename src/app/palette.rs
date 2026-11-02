@@ -37,6 +37,9 @@ pub(crate) struct PaletteItem {
     pub title: String,
     pub subtitle: String,
     pub icon: LucideIcon,
+    /// Archivo que representa (resultado de archivo o sesión del visor): se dibuja su icono de lenguaje o tipo
+    /// en vez de `icon`.
+    pub file: Option<PathBuf>,
     pub action: PaletteAction,
 }
 
@@ -281,7 +284,9 @@ impl TearminalApp {
         // 1. Sesiones (pestañas abiertas)
         for (idx, tab) in self.tabs.iter_mut().enumerate() {
             let is_active = idx == self.active_tab_index;
+            let mut file = None;
             let (icon, subtitle) = if let Some(viewer) = &tab.file_viewer {
+                file = Some(viewer.path.clone());
                 (LucideIcon::File, viewer.path.display().to_string())
             } else if let Some(pane) = tab.active_pane_mut() {
                 let ssh_host = pane
@@ -337,6 +342,7 @@ impl TearminalApp {
                 title,
                 subtitle,
                 icon,
+                file,
                 action: PaletteAction::SelectTab(idx),
             });
         }
@@ -347,6 +353,7 @@ impl TearminalApp {
             title: "Nueva pestaña".to_string(),
             subtitle: "Ctrl+T".to_string(),
             icon: LucideIcon::Plus,
+            file: None,
             action: PaletteAction::Execute(MenuAction::NewTab),
         });
         items.push(PaletteItem {
@@ -354,6 +361,7 @@ impl TearminalApp {
             title: "Dividir panel horizontalmente".to_string(),
             subtitle: "Ctrl+Shift+D".to_string(),
             icon: LucideIcon::Rows2,
+            file: None,
             action: PaletteAction::Execute(MenuAction::SplitHorizontal),
         });
         items.push(PaletteItem {
@@ -361,6 +369,7 @@ impl TearminalApp {
             title: "Dividir panel verticalmente".to_string(),
             subtitle: "Alt+Shift+D".to_string(),
             icon: LucideIcon::Columns2,
+            file: None,
             action: PaletteAction::Execute(MenuAction::SplitVertical),
         });
         items.push(PaletteItem {
@@ -368,6 +377,7 @@ impl TearminalApp {
             title: "Cerrar panel activo".to_string(),
             subtitle: "Ctrl+Shift+W".to_string(),
             icon: LucideIcon::X,
+            file: None,
             action: PaletteAction::Execute(MenuAction::ClosePane),
         });
         items.push(PaletteItem {
@@ -375,6 +385,7 @@ impl TearminalApp {
             title: "Cerrar pestaña actual".to_string(),
             subtitle: "Ctrl+W".to_string(),
             icon: LucideIcon::X,
+            file: None,
             action: PaletteAction::Execute(MenuAction::CloseTab(self.active_tab_index)),
         });
         items.push(PaletteItem {
@@ -382,6 +393,7 @@ impl TearminalApp {
             title: "Abrir Ajustes".to_string(),
             subtitle: "Ctrl+,".to_string(),
             icon: LucideIcon::Settings,
+            file: None,
             action: PaletteAction::Execute(MenuAction::OpenSettings),
         });
         items.push(PaletteItem {
@@ -389,6 +401,7 @@ impl TearminalApp {
             title: "Mostrar u ocultar explorador de archivos".to_string(),
             subtitle: "Ctrl+B".to_string(),
             icon: LucideIcon::Folder,
+            file: None,
             action: PaletteAction::Execute(MenuAction::ToggleExplorer),
         });
         items.push(PaletteItem {
@@ -396,6 +409,7 @@ impl TearminalApp {
             title: "Limpiar pantalla y scrollback".to_string(),
             subtitle: "Ctrl+Shift+K".to_string(),
             icon: LucideIcon::Trash2,
+            file: None,
             action: PaletteAction::Execute(MenuAction::ClearTerminal),
         });
         items.push(PaletteItem {
@@ -403,6 +417,7 @@ impl TearminalApp {
             title: "Alternar ajuste de línea (Word Wrap)".to_string(),
             subtitle: "Alt+Z".to_string(),
             icon: LucideIcon::Code,
+            file: None,
             action: PaletteAction::Execute(MenuAction::ToggleWordWrap),
         });
         items.push(PaletteItem {
@@ -410,6 +425,7 @@ impl TearminalApp {
             title: "Alternar vista previa Markdown".to_string(),
             subtitle: "Ctrl+Shift+M".to_string(),
             icon: LucideIcon::Eye,
+            file: None,
             action: PaletteAction::Execute(MenuAction::ViewerTogglePreview),
         });
 
@@ -434,7 +450,8 @@ impl TearminalApp {
                 category: PaletteCategory::File,
                 title: name,
                 subtitle: rel_path,
-                icon: crate::ui::icons::file_icon(&path),
+                icon: LucideIcon::File,
+                file: Some(path.clone()),
                 action: PaletteAction::OpenFile(path),
             });
         }
@@ -545,6 +562,7 @@ mod tests {
                 title: "PowerShell".to_string(),
                 subtitle: "C:\\Users\\dev".to_string(),
                 icon: LucideIcon::Terminal,
+                file: None,
                 action: PaletteAction::SelectTab(0),
             },
             PaletteItem {
@@ -552,6 +570,7 @@ mod tests {
                 title: "Nueva pestaña".to_string(),
                 subtitle: "Ctrl+T".to_string(),
                 icon: LucideIcon::Plus,
+                file: None,
                 action: PaletteAction::Execute(MenuAction::NewTab),
             },
             PaletteItem {
@@ -559,6 +578,7 @@ mod tests {
                 title: "main.rs".to_string(),
                 subtitle: "src\\main.rs".to_string(),
                 icon: LucideIcon::File,
+                file: None,
                 action: PaletteAction::OpenFile(PathBuf::from("src/main.rs")),
             },
         ];
@@ -594,6 +614,7 @@ mod tests {
                 title: "1".to_string(),
                 subtitle: "".to_string(),
                 icon: LucideIcon::Plus,
+                file: None,
                 action: PaletteAction::Execute(MenuAction::NewTab),
             },
             PaletteItem {
@@ -601,6 +622,7 @@ mod tests {
                 title: "2".to_string(),
                 subtitle: "".to_string(),
                 icon: LucideIcon::Plus,
+                file: None,
                 action: PaletteAction::Execute(MenuAction::NewTab),
             },
             PaletteItem {
@@ -608,6 +630,7 @@ mod tests {
                 title: "3".to_string(),
                 subtitle: "".to_string(),
                 icon: LucideIcon::Plus,
+                file: None,
                 action: PaletteAction::Execute(MenuAction::NewTab),
             },
         ];
@@ -647,6 +670,7 @@ mod tests {
                 title: format!("Comando {i}"),
                 subtitle: String::new(),
                 icon: LucideIcon::Command,
+                file: None,
                 action: PaletteAction::Execute(MenuAction::NewTab),
             })
             .collect();

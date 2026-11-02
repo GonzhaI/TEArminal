@@ -59,7 +59,8 @@ pub(crate) struct SidebarTabItem {
     pub has_unread: bool,
     pub pane_count: usize,
     pub is_settings: bool,
-    pub is_file_viewer: bool,
+    /// Archivo del visor: su icono de lenguaje o tipo va delante del título (`None` en terminales y Ajustes).
+    pub file_path: Option<std::path::PathBuf>,
     /// Vista previa (no fijada): su título va subrayado
     pub is_preview: bool,
 }
@@ -73,10 +74,6 @@ pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
         return true;
     }
     h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))
-}
-
-pub(crate) fn tab_icon(_tab: &SidebarTabItem) -> Option<crate::ui::LucideIcon> {
-    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

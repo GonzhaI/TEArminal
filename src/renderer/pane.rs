@@ -2,6 +2,27 @@
 
 use super::*;
 
+/// Octantes (Unicode 16, «Symbols for Legacy Computing Supplement»): 230 patrones de 2x4 contiguos
+const OCTANTS_START: char = '\u{1CD00}';
+const OCTANTS_END: char = '\u{1CDE5}';
+/// Patrones de 2x4 (bit 0 = arriba a la izquierda, por filas) que NO son octantes porque el estándar ya los
+/// codifica en otro sitio (vacío, bloques, cuadrantes, octavos...); los octantes recorren el resto en orden.
+const OCTANTS_OMITTED: [u8; 26] = [
+    0, 1, 2, 3, 5, 10, 15, 20, 40, 63, 64, 80, 85, 90, 95, 128, 160, 165, 170, 175, 192, 240, 245,
+    250, 252, 255,
+];
+
+/// Patrón de 2x4 de un octante (`OCTANTS_START..=OCTANTS_END`)
+pub(crate) fn octant_pattern(c: char) -> u8 {
+    let mut pattern = c as u32 - OCTANTS_START as u32;
+    for omitted in OCTANTS_OMITTED {
+        if pattern >= omitted as u32 {
+            pattern += 1;
+        }
+    }
+    pattern as u8
+}
+
 pub(crate) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
     let bg = if cell.inverse() {
         if cell.fg != Color::TRANSPARENT {
@@ -24,7 +45,10 @@ pub(crate) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
     } else if cell.fg != Color::TRANSPARENT {
         // Los caracteres de dibujo de bloques, gráficos y braille no deben alterarse por contraste:
         // las aplicaciones (logos de agentes, imágenes CLI, sparklines) usan paletas y sombras intencionales.
-        if matches!(cell.c as u32, 0x2500..=0x259F | 0x2800..=0x28FF) {
+        if matches!(
+            cell.c as u32,
+            0x2500..=0x259F | 0x2800..=0x28FF | 0x1FB00..=0x1FBFF | 0x1CD00..=0x1CDE5
+        ) {
             cell.fg
         } else {
             // Garantizar contraste mínimo legible contra el fondo de la celda
@@ -81,8 +105,9 @@ impl TerminalRenderer {
         Some((x, y, w, h))
     }
 
-    /// Dibuja de forma procedural caracteres de bloque sólido (U+2580..=U+2590, U+2594..=U+259F)
-    /// garantizando ajuste pixel-perfect a la celda, sin costuras, rebabas ni desbordamiento vertical.
+    /// Dibuja de forma procedural caracteres de bloque sólido (U+2580..=U+2590, U+2594..=U+259F), braille
+    /// (U+2800..=U+28FF), sextantes (U+1FB00..=U+1FB3B) y octantes (U+1CD00..=U+1CDE5), garantizando ajuste pixel-perfect a la celda,
+    /// sin costuras, rebabas ni desbordamiento vertical, y sin depender de que la fuente tenga el glifo.
     pub(crate) fn draw_block_element(
         &self,
         canvas: &mut Canvas,
@@ -185,7 +210,102 @@ impl TerminalRenderer {
                 }
                 true
             }
+            '\u{2800}'..='\u{28FF}' => {
+                self.draw_braille(
+                    (c as u32 - 0x2800) as u8,
+                    canvas,
+                    clip,
+                    cell_x,
+                    cell_y,
+                    color,
+                );
+                true
+            }
+            '\u{1FB00}'..='\u{1FB3B}' => {
+                // 60 patrones de 2x3 numerados 1..=62: el estándar omite 21 (▌), 42 (▐) y 63 (█)
+                let mut pattern = c as u32 - 0x1FB00 + 1;
+                if pattern >= 21 {
+                    pattern += 1;
+                }
+                if pattern >= 42 {
+                    pattern += 1;
+                }
+                self.draw_cells(pattern as u8, 3, canvas, clip, cell_x, cell_y, color);
+                true
+            }
+            OCTANTS_START..=OCTANTS_END => {
+                self.draw_cells(octant_pattern(c), 4, canvas, clip, cell_x, cell_y, color);
+                true
+            }
             _ => false,
+        }
+    }
+
+    /// Braille: cada punto del patrón de 2 columnas x 4 filas (bit 0 = punto 1 … bit 7 = punto 8) es un
+    /// cuadrado de 2/3 de su casilla, centrado en ella.
+    fn draw_braille(
+        &self,
+        bits: u8,
+        canvas: &mut Canvas,
+        clip: Clip,
+        cell_x: usize,
+        cell_y: usize,
+        color: Color,
+    ) {
+        // (columna, fila) de cada bit: los puntos 7 y 8 (bits 6 y 7) son la fila inferior
+        const DOTS: [(usize, usize); 8] = [
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (0, 3),
+            (1, 3),
+        ];
+        let (cw, rh) = (self.char_width, self.row_height);
+        for (bit, &(col, row)) in DOTS.iter().enumerate() {
+            if bits & (1 << bit) == 0 {
+                continue;
+            }
+            let (x0, x1) = (cw * col / 2, cw * (col + 1) / 2);
+            let (y0, y1) = (rh * row / 4, rh * (row + 1) / 4);
+            let (slot_w, slot_h) = (x1 - x0, y1 - y0);
+            let (dot_w, dot_h) = ((slot_w * 2 / 3).max(1), (slot_h * 2 / 3).max(1));
+            canvas.fill_rect(
+                clip,
+                cell_x + x0 + slot_w.saturating_sub(dot_w) / 2,
+                cell_y + y0 + slot_h.saturating_sub(dot_h) / 2,
+                dot_w,
+                dot_h,
+                color,
+            );
+        }
+    }
+
+    /// Sextantes (`rows` = 3) y octantes (`rows` = 4): rejilla de 2 columnas x `rows` filas; el bit 0 es
+    /// arriba a la izquierda y se avanza por filas. Las casillas comparten borde exacto, así que no hay
+    /// costuras entre ellas ni entre celdas.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_cells(
+        &self,
+        pattern: u8,
+        rows: usize,
+        canvas: &mut Canvas,
+        clip: Clip,
+        cell_x: usize,
+        cell_y: usize,
+        color: Color,
+    ) {
+        let (cw, rh) = (self.char_width, self.row_height);
+        for slot in 0..rows * 2 {
+            if pattern & (1 << slot) == 0 {
+                continue;
+            }
+            let (col, row) = (slot % 2, slot / 2);
+            let (x0, x1) = (cw * col / 2, cw * (col + 1) / 2);
+            let (y0, y1) = (rh * row / rows, rh * (row + 1) / rows);
+            canvas.fill_rect(clip, cell_x + x0, cell_y + y0, x1 - x0, y1 - y0, color);
         }
     }
 

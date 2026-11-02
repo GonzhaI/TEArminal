@@ -169,6 +169,37 @@ impl TearminalApp {
             return;
         }
 
+        // Nombre en edición en el explorador (nuevo archivo/carpeta o renombrar): la barra absorbe todo el teclado
+        if self.file_explorer.visible && self.file_explorer.edit.is_some() {
+            match &logical_key {
+                Key::Named(NamedKey::Escape) => self.file_explorer.cancel_edit(),
+                Key::Named(NamedKey::Enter) => {
+                    let max_visible = self.explorer_max_visible();
+                    if self.file_explorer.commit_edit(max_visible).is_some() {
+                        self.sync_fs_watcher();
+                    }
+                }
+                _ => {
+                    if let Some(mut edit) = self.file_explorer.edit.take() {
+                        let (_, changed) = self.handle_text_input_key(
+                            &mut edit.input,
+                            &logical_key,
+                            physical_key,
+                            text.as_deref(),
+                        );
+                        if changed {
+                            edit.error = None;
+                        }
+                        self.file_explorer.edit = Some(edit);
+                    }
+                }
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+
         // Si estamos en la pestaña de Ajustes, capturar Escape, Ctrl+, o Ctrl+W para cerrarla/alternarla
         let active_is_settings = self
             .tabs
@@ -602,6 +633,21 @@ impl TearminalApp {
                     }
                     return;
                 }
+                Key::Named(NamedKey::F2) => {
+                    self.file_explorer
+                        .begin_edit(crate::explorer::EditKind::Rename);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Delete) => {
+                    self.delete_explorer_selection();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 Key::Named(NamedKey::Escape) => {
                     self.file_explorer.is_focused = false;
                     if let Some(w) = &self.window {
@@ -683,9 +729,29 @@ impl TearminalApp {
                 return;
             }
 
+            // Ir a línea en el visor: Ctrl + G
+            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'g') {
+                if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                    if !viewer.is_binary {
+                        viewer.open_goto();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+                return;
+            }
+
             // Interceptación de entrada de teclado cuando la búsqueda interna está abierta
             if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                 if viewer.search_open {
+                    if viewer.goto_mode && matches!(logical_key, Key::Named(NamedKey::Enter)) {
+                        viewer.goto_line(visible_lines);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return;
+                    }
                     if matches!(logical_key, Key::Named(NamedKey::Enter)) {
                         if shift {
                             viewer.search_prev(visible_lines);
@@ -732,7 +798,7 @@ impl TearminalApp {
                     );
                     if let Some(ref mut v) = self.tabs[self.active_tab_index].file_viewer {
                         v.search_input = input;
-                        if changed {
+                        if changed && !v.goto_mode {
                             v.update_search_matches();
                             v.jump_to_active_match(visible_lines);
                         }
