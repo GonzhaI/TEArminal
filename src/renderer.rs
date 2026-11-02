@@ -16,12 +16,14 @@ mod files_panel;
 mod geometry;
 mod glyphs;
 mod gpu;
+mod machine_modal;
 mod md_preview;
 mod palette;
 mod pane;
 mod scene;
 mod settings_page;
 mod sidebar;
+mod spaces_panel;
 mod state;
 mod status_bar;
 #[cfg(test)]
@@ -41,6 +43,7 @@ pub(crate) use geometry::*;
 pub(crate) use glyphs::{is_ligature_candidate, CachedGlyph};
 pub(crate) use gpu::{GpuSurface, Presented};
 pub(crate) use scene::ImageRef;
+pub(crate) use spaces_panel::{SpaceItem, SpacesHover};
 pub(crate) use state::*;
 
 pub(crate) use crate::config::KeepAwakeMode;
@@ -82,6 +85,7 @@ pub(crate) struct TerminalRenderer {
     pub ligatures: bool,
     #[allow(dead_code)]
     pub show_dimensions: bool,
+    pub(crate) hovered_url_span: Option<(usize, usize, usize)>,
     regular_face: Option<rustybuzz::Face<'static>>,
     bold_face_rb: OnceCell<Option<rustybuzz::Face<'static>>>,
     ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
@@ -135,6 +139,7 @@ impl TerminalRenderer {
             scrollbars_awake: false,
             ligatures: config.terminal.ligatures,
             show_dimensions: config.appearance.show_dimensions,
+            hovered_url_span: None,
             regular_face,
             bold_face_rb: OnceCell::new(),
             ligature_cache: FastMap::default(),

@@ -6,7 +6,6 @@ impl TearminalApp {
     /// Rueda del ratón: scroll del historial, listas y TUIs.
     pub(super) fn on_mouse_wheel(&mut self, delta: MouseScrollDelta) {
         let bypass = self.modifiers.shift_key();
-        let offset = self.sidebar_offset();
         let mx = self.mouse_pos.x as usize;
         let my = self.mouse_pos.y as usize;
 
@@ -44,26 +43,25 @@ impl TearminalApp {
         if self.tabs[self.active_tab_index].is_settings {
             // Sobre la lista de temas la rueda la desplaza a ella, no a la página
             if self.settings_page_state.section == SettingsSection::Appearance {
-                let rects = SettingsPageRects::compute(
-                    offset,
-                    top_offset,
-                    win_w.saturating_sub(offset + self.panel_right_inset()),
-                    win_h.saturating_sub(top_offset),
-                );
-                let page_y = if my >= top_offset + SettingsPageRects::CONTENT_TOP {
-                    my + self.settings_scroll()
+                let (modal_x, modal_y, modal_w, modal_h) = self.settings_modal();
+                let rects = SettingsPageRects::compute_modal(0, 0, modal_w, modal_h);
+                let (lx, ly) = (mx.wrapping_sub(modal_x), my.wrapping_sub(modal_y));
+                let page_y = if ly >= SettingsPageRects::CONTENT_TOP {
+                    ly + self.settings_scroll()
                 } else {
-                    my
+                    ly
                 };
-                if rects.theme_row_at(mx, page_y).is_some() {
+                if lx < modal_w && ly < modal_h && rects.theme_row_at(lx, page_y).is_some() {
                     let rows = (-scroll_y_lines * scroll_multiplier).round() as isize;
                     self.scroll_theme_list(rows);
                     return;
                 }
             }
             let dy = (scroll_y_lines * 48.0).round() as isize;
-            let viewport_h =
-                win_h.saturating_sub(top_offset + SettingsPageRects::CONTENT_TOP + status_bar_h);
+            let viewport_h = self
+                .settings_modal()
+                .3
+                .saturating_sub(SettingsPageRects::CONTENT_TOP);
             let max = SettingsPageRects::max_scroll(self.settings_page_state.section, viewport_h);
             self.settings_page_state.scroll_y =
                 (self.settings_scroll() as isize - dy).clamp(0, max as isize) as usize;
@@ -71,21 +69,15 @@ impl TearminalApp {
             return;
         }
 
-        // Scroll en la lista de pestañas verticales de la barra lateral
-        if self.panel_local_x(mx, my, win_w).is_some() {
-            let scroll_steps = scroll_y_lines.round() as isize;
-            let usable_h = win_h.saturating_sub(status_bar_h);
-            let (total, visible) = self.panel_scroll_extent(usable_h);
-            let max_offset = total.saturating_sub(visible);
-
-            if scroll_steps > 0 {
-                self.sidebar_scroll_offset = self
-                    .sidebar_scroll_offset
-                    .saturating_sub(scroll_steps as usize);
-            } else if scroll_steps < 0 {
-                self.sidebar_scroll_offset =
-                    (self.sidebar_scroll_offset + scroll_steps.unsigned_abs()).min(max_offset);
-            }
+        // Scroll en la lista de Spaces
+        if self.spaces_rects(win_h).contains(mx, my, win_h) {
+            let steps = scroll_y_lines.round() as isize;
+            self.spaces_scroll = if steps > 0 {
+                self.spaces_scroll.saturating_sub(steps as usize)
+            } else {
+                self.spaces_scroll + steps.unsigned_abs()
+            };
+            self.clamp_spaces_scroll();
             self.request_redraw();
             return;
         }
@@ -98,7 +90,7 @@ impl TearminalApp {
                 let lines = (scroll_y_lines * scroll_multiplier).round() as isize;
                 let list_h = panel_h.saturating_sub(
                     crate::explorer::FileExplorer::HEADER_HEIGHT
-                        + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
+                        + self.file_explorer.subheader_height(),
                 );
                 let max_lines = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
                 self.file_explorer.scroll(lines, max_lines);

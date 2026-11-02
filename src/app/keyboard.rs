@@ -63,6 +63,12 @@ impl TearminalApp {
             return;
         }
 
+        // Con el modal «Añadir máquina» abierto, interceptar teclado por completo
+        if self.machine_modal.is_some() {
+            self.handle_machine_key(&logical_key, physical_key, &text);
+            return;
+        }
+
         // Con la paleta de comandos abierta, interceptar teclado por completo
         if self.palette.is_some() && self.handle_palette_key(&logical_key, physical_key, &text) {
             return;
@@ -200,6 +206,66 @@ impl TearminalApp {
             return;
         }
 
+        // Filtro rápido de archivos en el explorador: la barra absorbe el teclado mientras esté abierta
+        if self.file_explorer.visible
+            && self.file_explorer.filter.is_some()
+            && self.file_explorer.is_focused
+        {
+            let max_visible = self.explorer_max_visible();
+
+            match &logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.file_explorer.close_filter();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.file_explorer.navigate_selection(-1, max_visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.file_explorer.navigate_selection(1, max_visible);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if let Some(path) = self.file_explorer.handle_enter(max_visible) {
+                        self.file_explorer.close_filter();
+                        self.open_file_in_viewer(&path, true);
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+                _ => {
+                    if let Some(mut filter_input) = self.file_explorer.filter.take() {
+                        let (_, changed) = self.handle_text_input_key(
+                            &mut filter_input,
+                            &logical_key,
+                            physical_key,
+                            text.as_deref(),
+                        );
+                        self.file_explorer.filter = Some(filter_input);
+                        if changed {
+                            self.file_explorer.update_filter();
+                        }
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+            }
+        }
+
         // Si estamos en la pestaña de Ajustes, capturar Escape, Ctrl+, o Ctrl+W para cerrarla/alternarla
         let active_is_settings = self
             .tabs
@@ -307,11 +373,30 @@ impl TearminalApp {
                 }
             }
 
+            // Arriba / abajo: sección anterior / siguiente de la navegación lateral
+            if let Key::Named(arrow @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) = &logical_key {
+                use crate::renderer::SettingsSection::{About, Appearance, Shortcuts, Terminal};
+                let order = [Appearance, Terminal, Shortcuts, About];
+                let pos = order
+                    .iter()
+                    .position(|s| *s == self.settings_page_state.section)
+                    .unwrap_or(0);
+                let next = if matches!(arrow, NamedKey::ArrowDown) {
+                    (pos + 1) % order.len()
+                } else {
+                    (pos + order.len() - 1) % order.len()
+                };
+                self.settings_page_state.section = order[next];
+                self.settings_page_state.scroll_y = 0;
+                self.request_redraw();
+                return;
+            }
+
             if matches!(&logical_key, Key::Named(NamedKey::Escape))
                 || (ctrl && !shift && key_is_char(&logical_key, physical_key, ','))
             {
-                crate::logger::log("-> Cerrando / alternando pestaña de Ajustes");
-                self.open_or_switch_settings_tab();
+                crate::logger::log("-> Cerrando Ajustes");
+                self.close_settings();
                 return;
             }
             if ctrl && !shift && key_is_char(&logical_key, physical_key, 'f') {
@@ -341,6 +426,26 @@ impl TearminalApp {
         if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'k') {
             crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+K)");
             self.toggle_palette();
+            return;
+        }
+
+        // Filtro rápido de archivos en el árbol del explorador (Ctrl + P)
+        if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'p') {
+            crate::logger::log("-> Hotkey: Filtro rápido de archivos (Ctrl+P)");
+            self.open_explorer_filter();
+            return;
+        }
+
+        // Búsqueda / filtro en el explorador con Ctrl+F si tiene el foco
+        if ctrl
+            && !shift
+            && !alt
+            && key_is_char(&logical_key, physical_key, 'f')
+            && self.file_explorer.visible
+            && self.file_explorer.is_focused
+        {
+            crate::logger::log("-> Hotkey: Filtro en explorador (Ctrl+F)");
+            self.open_explorer_filter();
             return;
         }
 
@@ -454,11 +559,35 @@ impl TearminalApp {
                 },
             };
             if let Some(idx) = tab_num {
-                if idx < self.tabs.len() {
+                if let Some(&real) = self.visible_tab_indices().get(idx) {
                     crate::logger::log(&format!("-> Hotkey: Ir a pestaña {}", idx + 1));
-                    self.switch_to_tab(idx);
+                    self.switch_to_tab(real);
                     return;
                 }
+            }
+        }
+
+        // Spaces: Ctrl+Shift+T nuevo, Ctrl+Alt+↑/↓ anterior / siguiente, Ctrl+Shift+B colapsa el panel
+        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 't') {
+            let cwd = self.active_cwd();
+            self.create_space(cwd);
+            return;
+        }
+        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'b') {
+            self.toggle_spaces_panel();
+            return;
+        }
+        if ctrl && alt && !shift {
+            match &logical_key {
+                Key::Named(NamedKey::ArrowDown) => {
+                    self.step_space(true);
+                    return;
+                }
+                Key::Named(NamedKey::ArrowUp) => {
+                    self.step_space(false);
+                    return;
+                }
+                _ => {}
             }
         }
 
@@ -565,7 +694,7 @@ impl TearminalApp {
                     .panel_geometry(800, win_h, top_offset, status_bar_h);
             let list_h = panel_h.saturating_sub(
                 crate::explorer::FileExplorer::HEADER_HEIGHT
-                    + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
+                    + self.file_explorer.subheader_height(),
             );
             let max_visible = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
 

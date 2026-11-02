@@ -178,11 +178,6 @@ fn default_theme_mode() -> String {
 }
 
 impl AppearanceConfig {
-    /// ¿El panel de navegación va a la derecha de la ventana?
-    pub(crate) fn panel_on_right(&self) -> bool {
-        self.panel_side.eq_ignore_ascii_case("right")
-    }
-
     /// ¿El modo configurado usa el tema claro? `system_light` es el modo claro de Windows.
     pub(crate) fn uses_light_theme(&self, system_light: bool) -> bool {
         match self.theme_mode.to_ascii_lowercase().as_str() {
@@ -548,6 +543,13 @@ pub(crate) struct WindowSession {
     pub(crate) file_explorer_visible: bool,
     #[serde(default = "default_explorer_width")]
     pub(crate) file_explorer_width: usize,
+    /// Nombres de los Spaces, en orden; `TabSession::space` indexa esta lista. Vacía en sesiones
+    /// antiguas: todas las pestañas caen en un único Space.
+    #[serde(default)]
+    pub(crate) spaces: Vec<String>,
+    /// Panel de Spaces colapsado a riel
+    #[serde(default)]
+    pub(crate) spaces_collapsed: bool,
     pub(crate) tabs: Vec<TabSession>,
 }
 
@@ -558,6 +560,9 @@ pub(crate) struct TabSession {
     /// Panel activo: posición entre las hojas de `layout`, de izquierda a derecha
     #[serde(default)]
     pub(crate) active_pane: usize,
+    /// Posición del Space de la pestaña en `WindowSession::spaces`
+    #[serde(default)]
+    pub(crate) space: usize,
 }
 
 /// Árbol de paneles de una pestaña (espejo serializable de `app::PaneNode`)
@@ -589,6 +594,8 @@ impl Default for WindowSession {
             sidebar_visible: true,
             file_explorer_visible: false,
             file_explorer_width: default_explorer_width(),
+            spaces: Vec::new(),
+            spaces_collapsed: false,
             tabs: Vec::new(),
         }
     }
@@ -798,11 +805,14 @@ mod tests {
                 sidebar_visible: false,
                 file_explorer_visible: true,
                 file_explorer_width: 320,
+                spaces: vec!["Users".into(), "Trabajo".into()],
+                spaces_collapsed: true,
                 tabs: vec![
                     TabSession {
                         title: "Terminal 1".into(),
                         layout: leaf("C:/Users"),
                         active_pane: 0,
+                        space: 0,
                     },
                     TabSession {
                         title: "Terminal 2".into(),
@@ -818,6 +828,7 @@ mod tests {
                             }),
                         },
                         active_pane: 2,
+                        space: 1,
                     },
                 ],
             }],

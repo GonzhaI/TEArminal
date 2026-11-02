@@ -52,60 +52,6 @@ impl TerminalRenderer {
         );
     }
 
-    /// Botón de opción con icono Lucide y etiqueta (disposición de pestañas).
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn draw_icon_button(
-        &mut self,
-        canvas: &mut Canvas,
-        rect: Rect,
-        icon: crate::ui::LucideIcon,
-        text: &str,
-        hovered: bool,
-        active_accent: bool,
-        theme: &Theme,
-    ) {
-        let (bx, by, bw, bh) = rect;
-        let bg = if active_accent {
-            theme.accent_soft(32)
-        } else if hovered {
-            theme.surface_hover()
-        } else {
-            theme.mix(theme.background, theme.foreground, 0.05)
-        };
-        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_ROW, bg);
-        let border = if active_accent {
-            theme.accent_color()
-        } else if hovered {
-            theme.chrome_line_strong()
-        } else {
-            theme.chrome_line()
-        };
-        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_ROW, border);
-
-        let fg = if active_accent {
-            theme.accent_color()
-        } else if hovered {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        let text_w = self.measure_ui_text(text, tokens::BODY, active_accent);
-        let content_w = 22 + text_w;
-        let start = bx + (bw.saturating_sub(content_w) / 2);
-        let cy = by + bh / 2;
-        self.draw_lucide_icon(canvas, icon, start + 7, cy, 13.0, fg);
-        self.draw_ui_text(
-            canvas,
-            text,
-            start + 22,
-            self.centered_baseline(cy),
-            bx + bw,
-            fg,
-            tokens::BODY,
-            active_accent,
-        );
-    }
-
     pub(super) fn draw_stepper_value(
         &mut self,
         canvas: &mut Canvas,
@@ -338,33 +284,50 @@ impl TerminalRenderer {
 
         let page_w = width - page_x - right_inset;
         let page_h = height - page_y;
-        let rects = SettingsPageRects::compute(page_x, page_y, page_w, page_h);
+        let rects = SettingsPageRects::compute_modal(page_x, page_y, page_w, page_h);
 
-        // 1. Fondo de la página
-        Self::draw_rect(canvas, page_x, page_y, page_w, page_h, theme.background);
+        // 1. Fondo del modal con esquinas redondeadas; la columna de navegación se extiende bajo el contenido
+        //    (que la tapa) para que solo las esquinas izquierdas sean suyas.
+        let radius = tokens::RADIUS_CARD;
+        let nav_w = SettingsPageRects::NAV_W;
+        canvas.rounded_fill(page_x, page_y, page_w, page_h, radius, theme.background);
+        canvas.rounded_fill(
+            page_x,
+            page_y,
+            nav_w + radius,
+            page_h,
+            radius,
+            theme.chrome_bg(),
+        );
+        canvas.rounded_fill(
+            page_x + nav_w,
+            page_y,
+            page_w - nav_w,
+            page_h,
+            radius,
+            theme.background,
+        );
+        Self::draw_rect(
+            canvas,
+            page_x + nav_w - 1,
+            page_y + radius,
+            1,
+            page_h.saturating_sub(2 * radius),
+            theme.chrome_line(),
+        );
 
-        // 2. Encabezado editorial: título de 20 px, contexto y restablecer.
+        // 2. Título en la columna de navegación; restablecer y buscar encabezan el contenido.
         let content_x = rects.content_x;
         let card_w = rects.card_w;
         self.draw_ui_text(
             canvas,
             "Ajustes",
-            content_x,
-            page_y + 48,
-            content_x + card_w.saturating_sub(190),
+            page_x + 24,
+            page_y + 46,
+            page_x + nav_w - 16,
             theme.foreground,
             tokens::DISPLAY,
             true,
-        );
-        self.draw_ui_text(
-            canvas,
-            "Apariencia, terminal y atajos de teclado",
-            content_x,
-            page_y + 70,
-            content_x + card_w.saturating_sub(190),
-            theme.text_muted(),
-            tokens::DETAIL,
-            false,
         );
 
         let r_btn = rects.reset_defaults_btn;
@@ -496,6 +459,18 @@ impl TerminalRenderer {
         for (sec, icon, title, r) in sections {
             let is_active = state.section == sec;
             let is_hovered = state.hovered_section == Some(sec);
+            if is_active {
+                canvas.rounded_fill(r.0, r.1, r.2, r.3, tokens::RADIUS_ROW, theme.surface_bg());
+            } else if is_hovered {
+                canvas.rounded_fill(
+                    r.0,
+                    r.1,
+                    r.2,
+                    r.3,
+                    tokens::RADIUS_ROW,
+                    theme.surface_hover(),
+                );
+            }
             let fg = if is_active {
                 theme.foreground
             } else if is_hovered {
@@ -503,37 +478,26 @@ impl TerminalRenderer {
             } else {
                 theme.text_muted()
             };
-            let cy = r.1 + (r.3 / 2) - 1;
+            let cy = r.1 + r.3 / 2;
             self.draw_lucide_icon(
                 canvas,
                 icon,
-                r.0 + 14,
+                r.0 + 16,
                 cy,
-                12.0,
+                13.0,
                 if is_active { theme.accent_color() } else { fg },
             );
             self.draw_ui_text(
                 canvas,
                 title,
-                r.0 + 28,
+                r.0 + 34,
                 self.centered_baseline(cy),
-                r.0 + r.2,
+                r.0 + r.2 - 8,
                 fg,
                 tokens::BODY,
                 is_active,
             );
-            if is_active {
-                Self::draw_rect(canvas, r.0, r.1 + r.3 - 2, r.2, 2, theme.accent_color());
-            }
         }
-        Self::draw_rect(
-            canvas,
-            content_x,
-            rects.nav_appearance.1 + rects.nav_appearance.3,
-            card_w,
-            1,
-            theme.chrome_line(),
-        );
 
         // 4. Contenido: se dibuja en coordenadas locales (`width` x `top + content_h`) desplazadas por
         // el scroll y recortadas a la ventana visible; el fondo se pinta antes en esa ventana.
@@ -544,18 +508,10 @@ impl TerminalRenderer {
             .scroll_y
             .min(SettingsPageRects::max_scroll(state.section, viewport_h));
         let tmp_h = top + content_h;
-        let v = SettingsPageRects::compute(page_x, 0, page_w, page_h);
+        let v = SettingsPageRects::compute_modal(page_x, 0, page_w, page_h);
         let win_y = page_y + top;
         let win_end = (win_y + viewport_h.min(content_h - scroll)).min(height);
-        let window = (page_x, win_y, page_x + page_w, win_end);
-        Self::draw_rect(
-            canvas,
-            page_x,
-            win_y,
-            page_w,
-            win_end.saturating_sub(win_y),
-            theme.background,
-        );
+        let window = canvas.real_clip_of((page_x + nav_w, win_y, page_x + page_w, win_end));
         canvas.with_offset(
             0,
             page_y as i32 - scroll as i32,
@@ -601,6 +557,14 @@ impl TerminalRenderer {
                 theme,
             );
         }
+        canvas.rounded_stroke(
+            page_x,
+            page_y,
+            page_w,
+            page_h,
+            tokens::RADIUS_CARD,
+            theme.card_outline(),
+        );
     }
 
     /// Sección «Apariencia»: temas, interfaz y tipografía.
@@ -827,7 +791,7 @@ impl TerminalRenderer {
             canvas.rounded_fill(sx, swatch_y, swatch_w, 16, 2, ansi_color);
         }
 
-        // Tarjeta 2: Interfaz (modo, disposición y opacidad)
+        // Tarjeta 2: Interfaz (modo y opacidad)
         let card2_y = card_y + SettingsPageRects::THEME_CARD_H + 14;
         self.draw_card(
             canvas,
@@ -873,66 +837,6 @@ impl TerminalRenderer {
             "Claro",
             state.hovered_theme_mode == Some(2),
             is_light,
-            theme,
-        );
-
-        self.draw_label(
-            canvas,
-            content_x + 20,
-            rects.tab_layout_vertical_btn.1,
-            label_max_x,
-            "Disposición de pestañas",
-            theme,
-        );
-        let is_vert = !config
-            .appearance
-            .tab_layout
-            .eq_ignore_ascii_case("horizontal");
-        let is_horiz = !is_vert;
-        self.draw_icon_button(
-            canvas,
-            rects.tab_layout_vertical_btn,
-            crate::ui::LucideIcon::PanelLeft,
-            "Vertical",
-            state.hovered_tab_layout == Some(0),
-            is_vert,
-            theme,
-        );
-        self.draw_icon_button(
-            canvas,
-            rects.tab_layout_horizontal_btn,
-            crate::ui::LucideIcon::Rows2,
-            "Superior",
-            state.hovered_tab_layout == Some(1),
-            is_horiz,
-            theme,
-        );
-
-        self.draw_label(
-            canvas,
-            content_x + 20,
-            rects.panel_side_left_btn.1,
-            label_max_x,
-            "Lado del panel",
-            theme,
-        );
-        let on_right = config.appearance.panel_on_right();
-        self.draw_icon_button(
-            canvas,
-            rects.panel_side_left_btn,
-            crate::ui::LucideIcon::PanelLeft,
-            "Izquierda",
-            state.hovered_tab_layout == Some(2),
-            !on_right,
-            theme,
-        );
-        self.draw_icon_button(
-            canvas,
-            rects.panel_side_right_btn,
-            crate::ui::LucideIcon::PanelRight,
-            "Derecha",
-            state.hovered_tab_layout == Some(3),
-            on_right,
             theme,
         );
 

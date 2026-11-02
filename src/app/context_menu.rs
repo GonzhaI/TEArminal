@@ -33,6 +33,8 @@ pub(crate) enum MenuAction {
     ClosePane,
     ClearTerminal,
     // Pestañas y ventana
+    NewTabInSpace(SpaceId),
+    CloseSpace(SpaceId),
     PinTab(usize),
     MoveTabToNewWindow(usize),
     MoveTabToOtherWindow(usize),
@@ -58,6 +60,7 @@ pub(crate) enum MenuAction {
     ExplorerRefresh,
     ExplorerCollapseAll,
     ExplorerExpandAll,
+    FilterExplorer,
     // Modo pantalla encendida (keep-awake)
     SetKeepAwake(KeepAwakeMode),
 }
@@ -200,28 +203,27 @@ impl TearminalApp {
         let status_bar_h = self.status_bar_height();
         let right_offset = self.file_explorer_offset();
 
-        let items = if self.is_horizontal_tabs() && my < TopTabBarRects::HEIGHT {
-            let rects = TopTabBarRects::compute(win_w, self.tabs.len());
-            let hit = self.tabs.iter().enumerate().position(|(idx, _)| {
-                let r = rects.tab_rect(idx);
-                mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
-            });
-            self.tab_or_window_menu(hit)
-        } else if !self.is_horizontal_tabs() && my < crate::renderer::TopTitleBarRects::HEIGHT {
-            self.tab_or_window_menu(None)
-        } else if let Some(lx) = self.panel_local_x(mx, my, win_w) {
-            // Misma retícula que el dibujo y el clic izquierdo de la barra lateral
-            if self.is_horizontal_tabs() {
-                // Con pestañas superiores el panel es solo el explorador, que tiene su propio menú
-                return false;
-            } else if lx < crate::renderer::SidebarRects::RAIL_W {
-                // El riel solo lleva el botón de ajustes
-                return false;
-            } else {
-                let usable_h = win_h.saturating_sub(status_bar_h);
-                let hit = self.panel_tab_at(my, usable_h);
-                self.tab_or_window_menu(hit)
+        let items = if self.spaces_rects(win_h).contains(mx, my, win_h) {
+            match self.spaces_hit(mx, my, win_h) {
+                crate::renderer::SpacesHover::Row(i) => match self.space_menu(i) {
+                    Some(items) => items,
+                    None => return false,
+                },
+                _ => return false,
             }
+        } else if my < TopTabBarRects::HEIGHT {
+            let visible = self.visible_tab_indices();
+            let rects = TopTabBarRects::compute(win_w, self.spaces_w(), visible.len());
+            let hit = (0..visible.len())
+                .find(|&pos| {
+                    let r = rects.tab_rect(pos);
+                    mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+                })
+                .map(|pos| visible[pos]);
+            self.tab_or_window_menu(hit)
+        } else if self.panel_local_x(mx, my, win_w).is_some() {
+            // El panel derecho es solo el explorador, que tiene su propio menú
+            return false;
         } else if self.tabs[self.active_tab_index].is_settings {
             return false;
         } else if self.file_explorer.visible && {
@@ -237,29 +239,30 @@ impl TearminalApp {
             self.file_explorer.is_focused = true;
             let mut items = Vec::with_capacity(8);
             if let Some(idx) = idx {
-                let item = &self.file_explorer.items[idx];
-                self.file_explorer.selected_index = Some(idx);
-                self.file_explorer.selected_path = Some(item.path.clone());
-                let (label, icon) = if item.is_dir {
-                    ("Expandir / contraer", LucideIcon::FolderOpen)
-                } else {
-                    ("Abrir en el visor", LucideIcon::FileText)
-                };
-                items.push(MenuItem::new(
-                    label,
-                    icon,
-                    "",
-                    MenuAction::ExplorerOpen(idx),
-                    true,
-                ));
-                items.push(MenuItem::new(
-                    "Copiar ruta",
-                    LucideIcon::Copy,
-                    "",
-                    MenuAction::ExplorerCopyPath(item.path.clone()),
-                    true,
-                ));
-                items.push(MenuItem::separator());
+                if let Some(item) = self.file_explorer.visible_item(idx).cloned() {
+                    self.file_explorer.selected_index = Some(idx);
+                    self.file_explorer.selected_path = Some(item.path.clone());
+                    let (label, icon) = if item.is_dir {
+                        ("Expandir / contraer", LucideIcon::FolderOpen)
+                    } else {
+                        ("Abrir en el visor", LucideIcon::FileText)
+                    };
+                    items.push(MenuItem::new(
+                        label,
+                        icon,
+                        "",
+                        MenuAction::ExplorerOpen(idx),
+                        true,
+                    ));
+                    items.push(MenuItem::new(
+                        "Copiar ruta",
+                        LucideIcon::Copy,
+                        "",
+                        MenuAction::ExplorerCopyPath(item.path.clone()),
+                        true,
+                    ));
+                    items.push(MenuItem::separator());
+                }
             }
             let can_manage = self.file_explorer.can_manage_files();
             items.push(MenuItem::new(
@@ -309,6 +312,13 @@ impl TearminalApp {
                 self.file_explorer.remote_session.is_none() || self.file_explorer.inband_remote,
             ));
             items.push(MenuItem::separator());
+            items.push(MenuItem::new(
+                "Filtrar archivos...",
+                LucideIcon::Search,
+                "Ctrl+P",
+                MenuAction::FilterExplorer,
+                true,
+            ));
             items.push(MenuItem::new(
                 "Actualizar",
                 LucideIcon::RefreshCw,
@@ -1000,6 +1010,11 @@ impl TearminalApp {
                     p.pty.write_input(b"\x0c");
                 }
             }
+            MenuAction::NewTabInSpace(id) => {
+                self.select_space(id);
+                self.create_new_tab();
+            }
+            MenuAction::CloseSpace(id) => self.close_space(id),
             MenuAction::PinTab(i) => {
                 if let Some(t) = self.tabs.get_mut(i) {
                     t.is_preview = false;
@@ -1032,10 +1047,18 @@ impl TearminalApp {
             }
             MenuAction::CloseWindow => self.request_close(),
             MenuAction::ExplorerOpen(i) => {
-                if let Some(item) = self.file_explorer.items.get(i).cloned() {
+                if let Some(item) = self.file_explorer.visible_item(i).cloned() {
                     if item.is_dir {
-                        self.file_explorer.toggle_expand(i);
+                        if let Some(real_idx) = self.file_explorer.actual_index_for_visible(i) {
+                            self.file_explorer.toggle_expand(real_idx);
+                            if self.file_explorer.is_filtering() {
+                                self.file_explorer.update_filter();
+                            }
+                        }
                     } else {
+                        if self.file_explorer.is_filtering() {
+                            self.file_explorer.close_filter();
+                        }
                         self.open_file_in_viewer(&item.path, true);
                     }
                 }
@@ -1070,6 +1093,9 @@ impl TearminalApp {
                 self.pump_explorer_ssh();
                 self.sync_fs_watcher();
             }
+            MenuAction::FilterExplorer => {
+                self.open_explorer_filter();
+            }
             MenuAction::SetKeepAwake(mode) => {
                 self.set_keep_awake_mode(mode);
             }
@@ -1094,8 +1120,7 @@ impl TearminalApp {
             self.status_bar_height(),
         );
         let list_h = panel_h.saturating_sub(
-            crate::explorer::FileExplorer::HEADER_HEIGHT
-                + crate::explorer::FileExplorer::SUBHEADER_HEIGHT,
+            crate::explorer::FileExplorer::HEADER_HEIGHT + self.file_explorer.subheader_height(),
         );
         (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1)
     }

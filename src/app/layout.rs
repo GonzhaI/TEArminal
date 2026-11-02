@@ -37,6 +37,10 @@ impl std::ops::AddAssign<usize> for PaneId {
     }
 }
 
+/// Identificador de un Space (grupo de pestañas que lista el panel izquierdo).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub(crate) struct SpaceId(pub(crate) usize);
+
 /// Identificador de una pestaña.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub(crate) struct TabId(pub(crate) usize);
@@ -171,8 +175,10 @@ pub(crate) struct PaneRect {
     pub(crate) height: usize,
     /// Borde superior del hueco completo, cabecera incluida: de ahí cuelga `PaneHeaderRects`
     pub(crate) slot_y: usize,
-    /// El panel se dibuja con cabecera (pestaña dividida)
+    /// El panel se dibuja con cabecera (shell y carpeta), también con un solo panel
     pub(crate) has_header: bool,
+    /// La cabecera lleva los botones dividir · maximizar · cerrar (solo con varios paneles)
+    pub(crate) has_buttons: bool,
 }
 
 pub(crate) struct TerminalPane {
@@ -397,10 +403,10 @@ pub(crate) struct TerminalTab {
     pub(crate) file_viewer: Option<FileViewerState>,
     /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
     pub(crate) is_preview: bool,
-    /// Cuándo se abrió la pestaña (subtítulo «N min» de la lista de sesiones).
-    pub(crate) started_at: Instant,
     /// Panel maximizado: ocupa todo el área y el resto del reparto queda oculto (solo mientras es el activo)
     pub(crate) zoomed_pane: Option<PaneId>,
+    /// Space (grupo de pestañas) al que pertenece; `TearminalApp::push_tab` lo fija al añadirla.
+    pub(crate) space: SpaceId,
 }
 
 impl TerminalTab {
@@ -417,8 +423,8 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
-            started_at: Instant::now(),
             zoomed_pane: None,
+            space: SpaceId(0),
         }
     }
 
@@ -440,8 +446,8 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: None,
             is_preview: false,
-            started_at: Instant::now(),
             zoomed_pane: None,
+            space: SpaceId(0),
         }
     }
 
@@ -456,8 +462,8 @@ impl TerminalTab {
             is_settings: true,
             file_viewer: None,
             is_preview: false,
-            started_at: Instant::now(),
             zoomed_pane: None,
+            space: SpaceId(0),
         }
     }
 
@@ -590,8 +596,8 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
-            started_at: Instant::now(),
             zoomed_pane: None,
+            space: SpaceId(0),
         }
     }
 
@@ -727,65 +733,8 @@ impl TerminalTab {
             is_settings: false,
             file_viewer: Some(viewer),
             is_preview: false,
-            started_at: Instant::now(),
             zoomed_pane: None,
-        }
-    }
-
-    pub(crate) fn get_git_branch(&mut self) -> Option<String> {
-        if let Some(pane) = self.active_pane_mut() {
-            pane.get_git_branch()
-        } else if let Some(ref viewer) = self.file_viewer {
-            viewer.remote_branch.clone()
-        } else {
-            None
-        }
-    }
-
-    /// Contexto real de la pestaña para la segunda línea de la barra lateral:
-    /// carpeta contenedora, directorio remoto o número de paneles. Nada decorativo.
-    pub(crate) fn sidebar_detail(&self) -> Option<String> {
-        if self.is_settings {
-            return Some("Preferencias".to_string());
-        }
-        if let Some(ref viewer) = self.file_viewer {
-            if let Some(ref dest) = viewer.remote_destination {
-                return Some(dest.clone());
-            }
-            return viewer
-                .path
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .filter(|n| !n.is_empty())
-                .map(str::to_string)
-                .or_else(|| Some("Archivo".to_string()));
-        }
-        let active = self.active_pane()?;
-        let panes = if self.panes.len() > 1 {
-            Some(format!("{} paneles", self.panes.len()))
-        } else {
-            None
-        };
-        if let Some(ssh) = active.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
-            let remote = ssh
-                .remote_dir
-                .clone()
-                .unwrap_or_else(|| "Sesión remota".to_string());
-            return Some(match panes {
-                Some(panes) => format!("{remote} · {panes}"),
-                None => remote,
-            });
-        }
-        if panes.is_some() {
-            return panes;
-        }
-        let dir = active.terminal.current_dir.as_deref()?;
-        let text = dir.parent().unwrap_or(dir).display().to_string();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
+            space: SpaceId(0),
         }
     }
 
@@ -933,7 +882,7 @@ impl TerminalTab {
         if self.is_settings || self.file_viewer.is_some() || self.panes.is_empty() {
             return out;
         }
-        let has_header = self.panes.len() > 1;
+        let has_header = true;
         // El zoom solo vale mientras su panel es el activo: al navegar a otro se recupera el reparto
         if let Some(pane_id) = self
             .zoomed_pane
@@ -952,6 +901,7 @@ impl TerminalTab {
                 height: h.saturating_sub(offset),
                 slot_y: y,
                 has_header,
+                has_buttons: self.panes.len() > 1,
             });
             return out;
         }
@@ -962,6 +912,10 @@ impl TerminalTab {
             &mut Vec::new(),
             &mut out,
         );
+        let multi = self.panes.len() > 1;
+        for rect in &mut out.0 {
+            rect.has_buttons = multi;
+        }
         out
     }
 
@@ -993,6 +947,7 @@ impl TerminalTab {
                     height: h.saturating_sub(offset),
                     slot_y: y,
                     has_header,
+                    has_buttons: false,
                 });
             }
             return;

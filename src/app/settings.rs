@@ -3,23 +3,34 @@
 use super::*;
 
 impl TearminalApp {
-    /// Alto visible del contenido desplazable de Ajustes
-    fn settings_viewport_h(&self) -> usize {
-        let win_h = self.window_height();
-        win_h.saturating_sub(
-            self.top_offset() + SettingsPageRects::CONTENT_TOP + self.status_bar_height(),
-        )
+    /// Región `(x, y, ancho, alto)` del modal de Ajustes en coordenadas de ventana.
+    pub(super) fn settings_modal(&self) -> crate::renderer::Rect {
+        let (w, h) = self.window_size();
+        SettingsPageRects::modal_region(w, h, self.sidebar_offset())
     }
 
-    /// Pista y pulgar de la barra de scroll de Ajustes con la geometría actual
+    /// Cierra el modal de Ajustes (quita su pestaña) y vuelve a la terminal anterior.
+    pub(crate) fn close_settings(&mut self) {
+        if let Some(i) = self.tabs.iter().position(|t| t.is_settings) {
+            self.close_tab(i);
+        }
+    }
+
+    /// Alto visible del contenido desplazable de Ajustes (dentro del modal)
+    fn settings_viewport_h(&self) -> usize {
+        self.settings_modal()
+            .3
+            .saturating_sub(SettingsPageRects::CONTENT_TOP)
+    }
+
+    /// Pista y pulgar de la barra de scroll de Ajustes, en coordenadas locales al modal
     pub(super) fn settings_scrollbar(
         &self,
     ) -> Option<(crate::renderer::Rect, crate::renderer::Rect)> {
-        let win_w = self.window_width();
         SettingsPageRects::scrollbar(
             self.settings_page_state.section,
-            self.top_offset(),
-            win_w.saturating_sub(self.panel_right_inset()),
+            0,
+            self.settings_modal().2,
             self.settings_viewport_h(),
             self.settings_scroll(),
         )
@@ -370,29 +381,6 @@ impl TearminalApp {
             .uses_light_theme(crate::theme::is_windows_system_light_mode());
         self.reveal_current_theme();
         self.refresh_theme();
-    }
-
-    pub(crate) fn set_tab_layout(&mut self, layout: &str) {
-        self.config.appearance.tab_layout = layout.to_string();
-        // Con pestañas superiores el explorador va con el panel
-        if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
-            self.flip_file_explorer();
-        }
-        self.recompute_grid_for_all_tabs();
-        let _ = self.config.save();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
-    }
-
-    /// Lado de la ventana donde va el panel de navegación: `"left"` o `"right"`.
-    pub(crate) fn set_panel_side(&mut self, side: &str) {
-        self.config.appearance.panel_side = side.to_string();
-        self.recompute_grid_for_all_tabs();
-        let _ = self.config.save();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
     }
 
     pub(crate) fn toggle_status_bar(&mut self) {

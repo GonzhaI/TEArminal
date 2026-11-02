@@ -1066,14 +1066,106 @@ fn test_osc_8_explicit_hyperlinks() {
     assert_eq!(term2.url_at(2, 0), Some("https://example.com".to_string()));
     assert_eq!(term2.url_at(3, 0), Some("https://example.com".to_string()));
 
-    // 5. El texto plano sin secuencias OSC 8 no genera hipervínculos
+    // 7. El texto plano con URL es reconocido por patrón / regex
     term2.cursor_x = 0;
     term2.cursor_y = 1;
     term2.process_bytes(b"Visita https://github.com/GonzhaI/TEArminal para mas info.");
     assert_eq!(term2.url_at(0, 1), None);
-    assert_eq!(term2.url_at(7, 1), None);
-    assert_eq!(term2.url_at(20, 1), None);
-    assert_eq!(term2.url_at(36, 1), None);
+    assert_eq!(term2.url_at(6, 1), None);
+    assert_eq!(
+        term2.url_at(7, 1),
+        Some("https://github.com/GonzhaI/TEArminal".to_string())
+    );
+    assert_eq!(
+        term2.url_at(20, 1),
+        Some("https://github.com/GonzhaI/TEArminal".to_string())
+    );
+    assert_eq!(
+        term2.url_at(42, 1),
+        Some("https://github.com/GonzhaI/TEArminal".to_string())
+    );
+    assert_eq!(term2.url_at(43, 1), None);
+}
+
+#[test]
+fn test_interactive_hyperlinks_plain_text_and_spans() {
+    let mut term = TerminalState::new(100, 24, 100, Theme::default());
+
+    // 1. Enlace explícito OSC 8 con rango de columnas (span)
+    term.process_bytes(b"\x1b]8;;https://crates.io\x1b\\Crates\x1b]8;;\x1b\\");
+    assert_eq!(
+        term.url_and_span_at(0, 0),
+        Some(("https://crates.io".to_string(), 0, 5))
+    );
+    assert_eq!(
+        term.url_and_span_at(5, 0),
+        Some(("https://crates.io".to_string(), 0, 5))
+    );
+    assert_eq!(term.url_and_span_at(6, 0), None);
+
+    // 2. URL en texto plano con delimitadores y puntuación final
+    term.cursor_x = 0;
+    term.cursor_y = 1;
+    term.process_bytes(b"Ver (https://example.com/doc), o https://example.com/test.");
+    // "Ver (" -> cols 0..4; "https://example.com/doc" -> cols 5..27; ")" -> col 28; "," -> col 29
+    assert_eq!(term.url_and_span_at(4, 1), None);
+    assert_eq!(
+        term.url_and_span_at(5, 1),
+        Some(("https://example.com/doc".to_string(), 5, 27))
+    );
+    assert_eq!(
+        term.url_and_span_at(27, 1),
+        Some(("https://example.com/doc".to_string(), 5, 27))
+    );
+    assert_eq!(term.url_and_span_at(28, 1), None); // ')' no forma parte de la URL
+    assert_eq!(term.url_and_span_at(29, 1), None); // ',' tampoco
+
+    // "https://example.com/test." -> cols 33..56 (con '.' en col 57)
+    assert_eq!(
+        term.url_and_span_at(33, 1),
+        Some(("https://example.com/test".to_string(), 33, 56))
+    );
+    assert_eq!(
+        term.url_and_span_at(56, 1),
+        Some(("https://example.com/test".to_string(), 33, 56))
+    );
+    assert_eq!(term.url_and_span_at(57, 1), None); // '.' recortado
+
+    // 3. URLs en localhost y 127.0.0.1 con puerto
+    term.cursor_x = 0;
+    term.cursor_y = 2;
+    term.process_bytes(b"App: localhost:3000/api y 127.0.0.1:8080!");
+    // "App: " -> cols 0..4; "localhost:3000/api" -> cols 5..22
+    assert_eq!(
+        term.url_and_span_at(5, 2),
+        Some(("http://localhost:3000/api".to_string(), 5, 22))
+    );
+    assert_eq!(
+        term.url_and_span_at(15, 2),
+        Some(("http://localhost:3000/api".to_string(), 5, 22))
+    );
+    // "127.0.0.1:8080!" -> cols 26..39 (col 40 es '!')
+    assert_eq!(
+        term.url_and_span_at(26, 2),
+        Some(("http://127.0.0.1:8080".to_string(), 26, 39))
+    );
+    assert_eq!(term.url_and_span_at(40, 2), None); // '!' recortado
+
+    // 4. Paréntesis balanceados en URLs (ej. Wikipedia)
+    term.cursor_x = 0;
+    term.cursor_y = 3;
+    term.process_bytes(b"https://en.wikipedia.org/wiki/Rust_(programming_language)");
+    assert_eq!(
+        term.url_at(10, 3),
+        Some("https://en.wikipedia.org/wiki/Rust_(programming_language)".to_string())
+    );
+
+    // 5. Rechazo de falsos positivos
+    term.cursor_x = 0;
+    term.cursor_y = 4;
+    term.process_bytes(b"mylocalhost:3000 y localhost:sinpuerto");
+    assert_eq!(term.url_at(5, 4), None);
+    assert_eq!(term.url_at(20, 4), None);
 }
 
 /// Las secuencias de escape son entrada no confiable: no pueden fijar un destino SSH con metacaracteres

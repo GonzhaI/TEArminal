@@ -217,7 +217,7 @@ impl TearminalApp {
                 if let (Some(renderer), Some(_window)) = (&mut self.renderer, &self.window) {
                     renderer.update_scale(&self.config, scale_factor);
                 }
-                self.clamp_sidebar_scroll();
+                self.clamp_spaces_scroll();
                 self.schedule_pty_resize();
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -232,7 +232,7 @@ impl TearminalApp {
                         crate::logger::log(&format!("GPU: error al redimensionar: {e}"));
                     }
                 }
-                self.clamp_sidebar_scroll();
+                self.clamp_spaces_scroll();
                 self.schedule_pty_resize();
                 // Repintado síncrono: con `request_redraw` el WM_PAINT llega tarde (o se agrupa)
                 // dentro del bucle modal de Windows y el fotograma queda a la zaga del borde.
@@ -271,7 +271,11 @@ impl TearminalApp {
             }
 
             WindowEvent::ModifiersChanged(mods) => {
+                let prev_ctrl = self.modifiers.control_key();
                 self.modifiers = mods.state();
+                if prev_ctrl != self.modifiers.control_key() {
+                    self.on_cursor_moved(self.mouse_pos);
+                }
             }
 
             WindowEvent::KeyboardInput {
@@ -308,6 +312,14 @@ impl TearminalApp {
 
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
 
+            WindowEvent::CursorLeft { .. } => {
+                if self.hovered_pane_header.take().is_some()
+                    || self.hovered_pane_btn.take().is_some()
+                {
+                    self.request_redraw();
+                }
+            }
+
             WindowEvent::MouseInput { state, button, .. } => self.on_mouse_input(state, button),
 
             WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
@@ -327,7 +339,6 @@ impl TearminalApp {
                     self.tab_drag = None;
                     self.scrollbar_dragging = false;
                     self.scrollbar_drag_pane_id = None;
-                    self.sidebar_scrollbar_dragging = false;
                     self.explorer_scrollbar_dragging = false;
                     self.viewer_scrollbar_dragging = false;
                     self.viewer_hscrollbar_dragging = false;
@@ -336,6 +347,10 @@ impl TearminalApp {
                     self.viewer_drag_selecting = false;
                     self.viewer_drag_start = None;
                     self.explorer_resizing = false;
+                    if self.hovered_url_span.is_some() {
+                        self.hovered_url_span = None;
+                        self.request_redraw();
+                    }
                 } else {
                     self.modifiers = ModifiersState::empty();
                     self.last_focus_gained = Instant::now();
@@ -391,6 +406,13 @@ impl TearminalApp {
         match ime {
             winit::event::Ime::Commit(text) => {
                 if text.is_empty() {
+                    return;
+                }
+                // 0. Modal «Añadir máquina»
+                if let Some(m) = &mut self.machine_modal {
+                    m.input.insert_text(&text);
+                    m.error = None;
+                    self.request_redraw();
                     return;
                 }
                 // 1. Si la paleta de comandos está abierta

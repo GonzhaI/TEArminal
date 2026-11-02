@@ -37,6 +37,13 @@ pub(super) fn shell_open(path: &std::path::Path) -> bool {
 /// Abre una URL web externa con el navegador predeterminado del sistema (`ShellExecuteW`).
 /// Solo permite esquemas http://, https:// y mailto: por seguridad.
 pub(crate) fn shell_open_url(url: &str) -> bool {
+    let owned;
+    let url = if url.starts_with("localhost:") || url.starts_with("127.0.0.1:") {
+        owned = format!("http://{url}");
+        owned.as_str()
+    } else {
+        url
+    };
     if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("mailto:") {
         return false;
     }

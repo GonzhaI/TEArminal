@@ -406,6 +406,14 @@ impl TearminalApp {
         });
         items.push(PaletteItem {
             category: PaletteCategory::Command,
+            title: "Filtrar archivos en el explorador".to_string(),
+            subtitle: "Ctrl+P".to_string(),
+            icon: LucideIcon::Search,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::FilterExplorer),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
             title: "Limpiar pantalla y scrollback".to_string(),
             subtitle: "Ctrl+Shift+K".to_string(),
             icon: LucideIcon::Trash2,

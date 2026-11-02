@@ -44,7 +44,7 @@ TEArminal se define por cuatro pilares irrenunciables:
 
 ### 2.2. Panel Lateral y Explorador (`src/app/panel.rs`, `src/explorer.rs`)
 
-* **Filtro rápido en el árbol (Fuzzy Filter / `Ctrl + P`)**:
+* **Filtro rápido en el árbol (Fuzzy Filter / `Ctrl + P`)** ✅ *[Completado]*:
   * Filtrado difuso en memoria sobre [`FileExplorer::flat_indices`](file:///src/explorer.rs) sin reconsultar el disco ni bloquear el renderizado.
 * **Gestión contextual de archivos (Menú contextual)** ✅ *[Completado]*:
   * Opciones: *Nuevo archivo*, *Nueva carpeta*, *Renombrar* y *Eliminar*.
@@ -58,9 +58,9 @@ TEArminal se define por cuatro pilares irrenunciables:
 
 * **Búsqueda en el Scrollback (`Ctrl + Shift + F`)**:
   * Búsqueda sobre la `VecDeque` del buffer histórico con navegación y cajas de resaltado sobre las filas de la rejilla.
-* **Hipervínculos interactivos y protocolo OSC 8**:
-  * Soporte de enlaces explícitos OSC 8 y detección regex de URLs (`https?://`, `localhost:\d+`).
-  * Subrayado visual con `Ctrl + hover` y apertura en el navegador predeterminado mediante `ShellExecuteW`.
+* **Hipervínculos interactivos y protocolo OSC 8** (✅ Completado):
+  * Soporte de enlaces explícitos OSC 8 y detección regex de URLs (`https?://`, `localhost:\d+`, `127.0.0.1:\d+`).
+  * Subrayado visual con `Ctrl + hover`, cursor pointer (`hand`), menú contextual («Abrir enlace», «Copiar enlace») y apertura en el navegador predeterminado mediante `ShellExecuteW`.
 * **Perfiles rápidos de Shell en el selector `+`**:
   * Menú desplegable para abrir pestañas o dividir paneles eligiendo entre PowerShell 7, Windows PowerShell 5.1, WSL (Ubuntu/Debian), Git Bash o CMD.
 * **Diseños predefinidos de división (*Grid Layouts*)**:
@@ -75,7 +75,7 @@ TEArminal se define por cuatro pilares irrenunciables:
 * **Importación de temas `.itermcolors` externos**:
   * Soporte para cargar archivos `.itermcolors` colocados en `%APPDATA%\tearminal\themes\` o arrastrados a Ajustes, sin depender de la lista fija de `themes.txt`.
 * **Perfiles de agentes CLI configurables**:
-  * Registro de nombres de ejecutables de agentes adicionales para monitorización de consumo y anclaje de entrada en `init.ps1`.
+  * Registro de nombres de ejecutables de agentes adicionales para monitorización de consumo en `init.ps1`.
 
 ---
 
@@ -127,8 +127,8 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 | **Explorador** | Gestión de archivos (Nuevo, Renombrar, Papelera Win32) | Característica | **P1** | ✅ Completado | Alto |
 | **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | ✅ Completado | Medio (Claridad) |
 | **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | ✅ Completado | Bajo (Arranque) |
-| **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | Pendiente | Alto |
-| **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | Pendiente | Alto |
+| **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | ✅ Completado | Alto |
+| **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | ✅ Completado | Alto |
 | **Terminal** | Perfiles rápidos de Shell en botón `+` | Característica | **P2** | Pendiente | Alto |
 | **Visor** | Visor nativo de imágenes (`.png`, `.jpg`, `.gif` animado, `.webp`, `.ico`; local y remoto) | Característica | **P2** | ✅ Completado | Medio-Alto |
 | **IA / Telemetría** | Simplificar AGY y eliminar sondeos superfluos de cuota | Limpieza | **P2** | Pendiente | Medio |

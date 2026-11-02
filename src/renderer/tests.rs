@@ -370,6 +370,8 @@ mod bench {
             false,
             false,
             true,
+            false,
+            0,
             &theme,
         );
         r.render_status_bar(
@@ -427,6 +429,8 @@ mod bench {
                 false,
                 false,
                 true,
+                false,
+                0,
                 &theme,
             );
             r.render_status_bar(
@@ -461,6 +465,82 @@ mod bench {
         }
         let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
         println!("bench_render_ui_chrome (SOLO grabar): sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
+    }
+}
+
+/// Adaptadores de las escenas de referencia anteriores, escritas para el modo vertical (barra de título y lista
+/// de sesiones): dibujan la distribución actual, barra superior y panel de Spaces.
+impl TerminalRenderer {
+    #[allow(clippy::too_many_arguments)]
+    fn render_top_title_bar(
+        &mut self,
+        canvas: &mut Canvas,
+        _title: &str,
+        _branch: Option<&str>,
+        _files: bool,
+        _settings: bool,
+        hovered_win_min: bool,
+        hovered_win_max: bool,
+        hovered_win_close: bool,
+        is_maximized: bool,
+        explorer_visible: bool,
+        theme: &crate::theme::Theme,
+    ) {
+        self.render_top_tab_bar(
+            canvas,
+            &[],
+            None,
+            None,
+            false,
+            false,
+            false,
+            hovered_win_min,
+            hovered_win_max,
+            hovered_win_close,
+            is_maximized,
+            explorer_visible,
+            false,
+            crate::renderer::SpacesPanelRects::WIDTH,
+            theme,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_sidebar(
+        &mut self,
+        canvas: &mut Canvas,
+        _width: usize,
+        _status_h: usize,
+        _header: &crate::renderer::SidebarHeader,
+        tabs: &[crate::renderer::SidebarTabItem],
+        _scroll: usize,
+        _hovered: Option<usize>,
+        _hovered_close: Option<usize>,
+        _a: bool,
+        _b: bool,
+        _c: bool,
+        theme: &crate::theme::Theme,
+    ) {
+        let items: Vec<crate::renderer::SpaceItem> = tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| crate::renderer::SpaceItem {
+                name: t.title.clone(),
+                is_active: t.is_active,
+                tab_count: t.pane_count,
+                index: i,
+                // El último Space de cada escena se dibuja como remoto para ver los dos grupos
+                remote: i + 1 == tabs.len() && tabs.len() > 2,
+            })
+            .collect();
+        self.render_spaces_panel(
+            canvas,
+            &items,
+            false,
+            crate::renderer::SpacesHover::None,
+            0,
+            theme,
+        );
     }
 }
 
@@ -618,25 +698,6 @@ fn test_sidebar_rendering_and_layout() {
         &default_theme,
     );
 
-    let sidebar_bg_pixel = default_theme.sidebar_bg().to_u32_xrgb();
-    let border_pixel = default_theme.border_color().to_u32_xrgb();
-
-    assert_eq!(
-        canvas.snapshot()[50 * 1000 + SidebarRects::RAIL_W + 4],
-        sidebar_bg_pixel,
-        "El fondo de la columna de sesiones debe coincidir con sidebar_bg"
-    );
-    assert_eq!(
-        canvas.snapshot()[50 * 1000 + SidebarRects::RAIL_W - 2],
-        default_theme.background.to_u32_xrgb(),
-        "El riel usa el fondo del lienzo"
-    );
-    assert_eq!(
-        canvas.snapshot()[50 * 1000 + 189],
-        border_pixel,
-        "El borde del sidebar debe coincidir con border_color"
-    );
-
     // 3. Renderizar el área de terminal con offset
     let term = crate::terminal::TerminalState::new(
         cols_with_sidebar,
@@ -651,16 +712,6 @@ fn test_sidebar_rendering_and_layout() {
         canvas.snapshot()[50 * 1000 + 195],
         term_bg_pixel,
         "El área de terminal después del offset debe tener fondo del tema"
-    );
-
-    // 4. Probar renderizado del botón flotante expand cuando el sidebar está oculto
-    renderer.render_floating_sidebar_toggle(&mut canvas, 0, true, false, &default_theme);
-    let float_btn_bg = default_theme.surface_hover().to_u32_xrgb();
-    let float_y = 600 - 30 - 8 + 5;
-    assert_eq!(
-        canvas.snapshot()[float_y * 1000 + 10],
-        float_btn_bg,
-        "El botón flotante debe renderizarse correctamente"
     );
 
     // 5. Probar renderizado de la pestaña de Ajustes
@@ -795,7 +846,7 @@ fn test_ai_agent_detection_and_status_bar() {
         assert_eq!(label, expected, "modelo `{raw}`");
     }
 
-    // Validar que render_status_bar cubre todo el ancho inferior (0..width)
+    // Validar que render_status_bar cubre el ancho inferior desde el borde del panel de Spaces
     let config = TearminalConfig::load_or_default();
     let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
     let theme = crate::theme::Theme::default();
@@ -820,14 +871,19 @@ fn test_ai_agent_detection_and_status_bar() {
     let buffer = canvas.snapshot();
     let status_bg = theme.bar_bg().to_u32_xrgb();
     assert_eq!(
-        buffer[(600 - 28) * 1000 + 5],
+        buffer[(600 - 28) * 1000 + sidebar_offset + 5],
         status_bg,
         "El status bar debe empezar en su primera fila, sin hairline sobre el lienzo"
     );
     assert_eq!(
-        buffer[(600 - 22) * 1000 + 5],
+        buffer[(600 - 22) * 1000 + sidebar_offset - 1],
+        Color::from_u32_xrgb(0xCAFEBABE).to_u32_xrgb(),
+        "La barra de estado no invade el panel de Spaces, que ocupa todo el alto"
+    );
+    assert_eq!(
+        buffer[(600 - 22) * 1000 + sidebar_offset + 1],
         status_bg,
-        "El fondo del status bar debe dibujarse a todo lo ancho"
+        "La barra de estado empieza en el borde del panel de Spaces"
     );
     assert_eq!(
         buffer[(600 - 22) * 1000 + sidebar_offset + 5],
@@ -838,41 +894,37 @@ fn test_ai_agent_detection_and_status_bar() {
 
 #[test]
 fn test_top_tab_bar_geometry_and_layout() {
-    use crate::renderer::TopTabBarRects;
+    use crate::renderer::{SidebarRects, TopTabBarRects};
 
-    let rects = TopTabBarRects::compute(1200, 3);
+    // Con el panel de Spaces a la izquierda las pestañas arrancan en su borde más el margen de tarjeta
+    let left_x = 264;
+    let rects = TopTabBarRects::compute(1400, left_x, 3);
     assert_eq!(rects.bar_h, 38);
-    // Las pestañas empiezan tras la marca
-    let left = TopTabBarRects::BRAND_W;
-    assert_eq!(rects.tabs_start_x, left);
+    let first_x = left_x + SidebarRects::CARD_INSET;
+    assert_eq!(rects.tabs_start_x, first_x);
     assert_eq!(rects.tab_w, 177);
 
     let tab0 = rects.tab_rect(0);
-    assert_eq!(tab0, (left, 0, 177, 38));
+    assert_eq!(tab0, (first_x, 0, 177, 38));
 
     let close0 = rects.close_btn_rect(0);
-    assert_eq!(close0.0, left + 177 - 30);
+    assert_eq!(close0.0, first_x + 177 - 30);
     assert_eq!(close0.1, 7);
-    assert_eq!(close0.2, 24);
-    assert_eq!(close0.3, 24);
+    assert_eq!((close0.2, close0.3), (24, 24));
 
-    // Plus button debe situarse después de las 3 pestañas
-    assert!(rects.plus_btn.0 > tab0.0 + (3 * 177));
-    // Acciones (buscar · panel · ajustes) y controles de ventana al extremo derecho
-    assert_eq!(rects.settings_btn.0, 1200 - 178);
-    assert_eq!(rects.files_btn.0, 1200 - 212);
-    assert_eq!(rects.search_btn.0, 1200 - 246);
-    assert_eq!(rects.win_min_btn.0, 1200 - 138);
-    assert_eq!(rects.settings_btn.3, TopTabBarRects::ACTION);
-    assert!(rects.search_btn.0 + rects.search_btn.2 <= rects.files_btn.0);
-    assert_eq!(rects.win_max_btn.0, 1200 - 92);
-    assert_eq!(rects.win_close_btn.0, 1200 - 46);
+    // De derecha a izquierda: controles de ventana · Changes · Files · «+», sin solaparse
+    assert_eq!(rects.win_min_btn.0, 1400 - 138);
+    assert_eq!(rects.win_max_btn.0, 1400 - 92);
+    assert_eq!(rects.win_close_btn.0, 1400 - 46);
+    assert!(rects.changes_btn.0 + rects.changes_btn.2 <= rects.win_min_btn.0);
+    assert!(rects.files_btn.0 + rects.files_btn.2 <= rects.changes_btn.0);
+    assert!(rects.plus_btn.0 + rects.plus_btn.2 <= rects.files_btn.0);
+    assert_eq!(rects.files_btn.3, TopTabBarRects::ACTION);
 
-    // Validar que con 30 pestañas NO se desborde sobre los controles de la derecha
-    let compact_rects = TopTabBarRects::compute(1200, 30);
-    assert!(compact_rects.plus_btn.0 + compact_rects.plus_btn.2 <= compact_rects.settings_btn.0);
-    let tab29 = compact_rects.tab_rect(29);
-    assert!(tab29.0 + tab29.2 <= compact_rects.plus_btn.0);
+    // Con 30 pestañas ninguna invade el «+» ni las píldoras
+    let compact = TopTabBarRects::compute(1200, 0, 30);
+    let tab29 = compact.tab_rect(29);
+    assert!(tab29.0 + tab29.2 <= compact.plus_btn.0);
 }
 
 #[test]
@@ -1259,8 +1311,14 @@ fn test_first_tab_aligns_with_the_card_edge() {
     use crate::renderer::{SidebarRects, TopTabBarRects};
 
     for n in [1usize, 3, 12] {
-        let rects = TopTabBarRects::compute(1440, n);
+        let rects = TopTabBarRects::compute(1440, 0, n);
         assert_eq!(rects.tab_rect(0).0, SidebarRects::CARD_INSET, "n={n}");
+        let with_panel = TopTabBarRects::compute(1440, 264, n);
+        assert_eq!(
+            with_panel.tab_rect(0).0,
+            264 + SidebarRects::CARD_INSET,
+            "n={n}"
+        );
     }
 }
 
@@ -1312,8 +1370,9 @@ fn test_pane_content_keeps_clear_of_the_content_card() {
 /// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
 /// `build_scenes` las dibuja en la GPU (WARP); los tests de escenas de `gpu_scenes` leen `canvas.scene()`.
 pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Canvas)> {
-    use crate::app::SIDEBAR_WIDTH;
     use crate::renderer::{SettingsPageState, SidebarTabItem};
+    /// Ancho del panel izquierdo: las escenas lo llaman como el panel lateral anterior.
+    const SIDEBAR_WIDTH: usize = crate::renderer::SpacesPanelRects::WIDTH;
     use crate::theme::Theme;
 
     let mut cfg = TearminalConfig::default();
@@ -1321,7 +1380,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
-    let top_h = crate::renderer::TopTitleBarRects::compute(w).bar_h;
+    let top_h = crate::renderer::TopTabBarRects::HEIGHT;
 
     // Escenas deterministas: fase fija del spinner y árbol de archivos fijo en vez del directorio de trabajo.
     super::test_support::set_spinner_phase(Some(0));
@@ -1386,11 +1445,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         branch: Some("main".into()),
         path: Some("C:\\Users\\dev\\tearminal".into()),
         on_right: false,
-        list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, false),
-    };
-    let header_exp = crate::renderer::SidebarHeader {
-        list_end: crate::renderer::SidebarRects::list_end(h - status_h, 3, true),
-        ..header.clone()
+        list_end: 0,
     };
 
     let mut term = crate::terminal::TerminalState::new(110, 34, 2000, theme.clone());
@@ -1413,89 +1468,11 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     );
     term.process_bytes(script.as_bytes());
 
-    // 1. Terminal con barra lateral y título de ventana
-    let mut canvas = test_support::new_canvas(w, h);
-    canvas.clear(theme.background);
-    r.render_top_title_bar(
-        &mut canvas,
-        "tearminal",
-        Some("main"),
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        &theme,
-    );
-    r.render_sidebar(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        status_h,
-        &header,
-        &tabs,
-        0,
-        None,
-        None,
-        false,
-        false,
-        false,
-        &theme,
-    );
-    let pane_w = w - SIDEBAR_WIDTH;
-    let pane_h = h - top_h - status_h;
-    r.render_pane(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        top_h,
-        pane_w,
-        pane_h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
-    // Tarjetas del panel y del contenido, como las dibuja `redraw.rs` (vertical, panel a la izquierda: el
-    // contenido se estira bajo el margen de la tarjeta vecina).
-    let inset = crate::renderer::SidebarRects::CARD_INSET;
-    canvas.outlined_card(
-        (0, top_h, SIDEBAR_WIDTH, pane_h),
-        inset,
-        crate::renderer::SidebarRects::CARD_RADIUS,
-        theme.bar_bg(),
-        theme.card_outline(),
-    );
-    canvas.outlined_card(
-        (SIDEBAR_WIDTH - inset, top_h, pane_w + inset, pane_h),
-        inset,
-        crate::renderer::SidebarRects::CARD_RADIUS,
-        theme.bar_bg(),
-        theme.card_outline(),
-    );
-    r.render_status_bar_with_ai(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        Some("~/dev/tearminal"),
-        Some("main"),
-        None,
-        110,
-        34,
-        AiAgentStatus::Claude,
-        Some("claude-sonnet-5-5"),
-        &[],
-        false,
-        false,
-        &theme,
-    );
-    push_scene(canvas, "terminal-vertical");
-
     // 2. Pestañas superiores: marca, pestañas y panel a la derecha
     let usable_h = h - status_h;
     let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
-    let top_tabs = crate::renderer::TopTabBarRects::compute(w, tabs.len());
+    let top_tabs = crate::renderer::TopTabBarRects::compute(w, 0, tabs.len());
     r.render_top_tab_bar(
         &mut canvas,
         &tabs,
@@ -1509,6 +1486,8 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         false,
         false,
         true,
+        false,
+        0,
         &theme,
     );
     let x0 = w - SIDEBAR_WIDTH;
@@ -1587,73 +1566,6 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     );
     push_scene(canvas, "tabs-superiores");
 
-    // 3. Explorador acoplado sobre el terminal
-    let mut explorer = crate::explorer::FileExplorer::new(Some(fixture.clone()), true);
-    explorer.is_focused = true;
-    explorer.dock = Some(crate::renderer::SidebarRects::explorer_rect_after(
-        h - status_h,
-        header_exp.list_end,
-    ));
-    let explorer_w = 0;
-    let mut canvas = test_support::new_canvas(w, h);
-    canvas.clear(theme.background);
-    r.render_top_title_bar(
-        &mut canvas,
-        "tearminal",
-        Some("main"),
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        true,
-        &theme,
-    );
-    r.render_sidebar(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        status_h,
-        &header_exp,
-        &tabs,
-        0,
-        None,
-        None,
-        false,
-        false,
-        false,
-        &theme,
-    );
-    r.render_pane(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        top_h,
-        w - SIDEBAR_WIDTH - explorer_w,
-        h - top_h - status_h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
-    r.render_file_explorer(&mut canvas, top_h, status_h, &explorer, &theme);
-    r.render_status_bar_with_ai(
-        &mut canvas,
-        0,
-        Some("~/dev/tearminal"),
-        Some("main"),
-        None,
-        110,
-        34,
-        AiAgentStatus::Claude,
-        Some("claude-sonnet-5-5"),
-        &[],
-        false,
-        true,
-        &theme,
-    );
-    push_scene(canvas, "explorador-acoplado");
-
     // 4. Ajustes
     let settings = SettingsPageState {
         section: crate::renderer::SettingsSection::Appearance,
@@ -1688,20 +1600,22 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         false,
         &theme,
     );
-    r.render_settings_page(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        0,
-        top_h,
-        status_h,
-        &cfg,
-        &settings,
-        true,
-        &theme,
+    // Igual que `redraw.rs`: velo translúcido sobre toda la ventana y el modal en su propio `with_offset`,
+    // desplazado para ejercitar el recorte anidado del contenido.
+    canvas.rounded_fill(0, 0, w, h, 0, crate::theme::Color::from_rgba(0, 0, 0, 120));
+    let (mx0, my0, mw, mh) = crate::renderer::SettingsPageRects::modal_region(w, h, SIDEBAR_WIDTH);
+    let mut modal_state = settings.clone();
+    modal_state.scroll_y = 120;
+    canvas.with_offset(
+        mx0 as i32,
+        my0 as i32,
+        (mw, mh),
+        (mx0, my0, mx0 + mw, my0 + mh),
+        |c| r.render_settings_page(c, 0, 0, 0, 0, &cfg, &modal_state, true, &theme),
     );
     r.render_status_bar_with_ai(
         &mut canvas,
-        0,
+        SIDEBAR_WIDTH,
         Some("Ajustes"),
         None,
         None,
@@ -1715,6 +1629,59 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         &theme,
     );
     push_scene(canvas, "ajustes");
+
+    // 4b. Modal «Añadir máquina» sobre la terminal
+    let mut canvas = test_support::new_canvas(w, h);
+    canvas.clear(theme.background);
+    r.render_top_title_bar(
+        &mut canvas,
+        "tearminal",
+        Some("main"),
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    r.render_sidebar(
+        &mut canvas,
+        SIDEBAR_WIDTH,
+        status_h,
+        &header,
+        &tabs,
+        0,
+        None,
+        None,
+        false,
+        false,
+        false,
+        &theme,
+    );
+    let hosts: Vec<(String, String)> = [
+        ("mytiluss", "ec2-user@3.95.102.141"),
+        ("192.168.31.240", "developer@192.168.31.240"),
+        ("intranet-aws-ec2", "ubuntu@3.209.161.234"),
+        ("github.com", "git@github.com"),
+        ("github-personal", "git@github.com"),
+    ]
+    .iter()
+    .map(|(a, t)| (a.to_string(), t.to_string()))
+    .collect();
+    canvas.rounded_fill(0, 0, w, h, 0, crate::theme::Color::from_rgba(0, 0, 0, 120));
+    r.render_machine_modal(
+        &mut canvas,
+        &hosts,
+        &crate::ui::TextInput::default(),
+        Some(crate::renderer::MachineHover::Row(3)),
+        Some(1),
+        None,
+        true,
+        &theme,
+    );
+    push_scene(canvas, "anadir-maquina");
 
     // 5. Visor de archivos
     let path = fixture.join("src/renderer/pane.rs");
@@ -1766,7 +1733,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     );
     r.render_status_bar_with_ai(
         &mut canvas,
-        0,
+        SIDEBAR_WIDTH,
         Some("~/dev/tearminal/src/renderer"),
         Some("main"),
         None,
@@ -1781,95 +1748,6 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     );
     push_scene(canvas, "visor");
 
-    // 6. Panel a la derecha: se dibuja en un búfer propio del ancho del panel y se copia a su sitio
-    let header_right = crate::renderer::SidebarHeader {
-        on_right: true,
-        ..header_exp.clone()
-    };
-    let mut canvas = test_support::new_canvas(w, h);
-    canvas.clear(theme.background);
-    r.render_top_title_bar(
-        &mut canvas,
-        "tearminal",
-        Some("main"),
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        true,
-        &theme,
-    );
-    let x0 = w - SIDEBAR_WIDTH;
-    let sb_top = crate::renderer::SidebarRects::TOP;
-    canvas.fill_rect(
-        (0, 0, w, h),
-        x0,
-        sb_top,
-        SIDEBAR_WIDTH,
-        h - status_h - sb_top,
-        theme.background,
-    );
-    canvas.with_offset(
-        x0 as i32,
-        0,
-        (SIDEBAR_WIDTH, h),
-        (x0, sb_top, w, h - status_h),
-        |c| {
-            r.render_sidebar(
-                c,
-                SIDEBAR_WIDTH,
-                status_h,
-                &header_right,
-                &tabs,
-                0,
-                None,
-                None,
-                false,
-                false,
-                false,
-                &theme,
-            )
-        },
-    );
-    explorer.dock = Some((
-        x0 + crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).1,
-        SIDEBAR_WIDTH - crate::renderer::SidebarRects::RAIL_W,
-        crate::renderer::SidebarRects::explorer_rect_after(h - status_h, header_exp.list_end).3,
-    ));
-    r.render_pane(
-        &mut canvas,
-        0,
-        top_h,
-        w - SIDEBAR_WIDTH,
-        h - top_h - status_h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
-    r.render_file_explorer(&mut canvas, top_h, status_h, &explorer, &theme);
-    r.render_status_bar_with_ai(
-        &mut canvas,
-        0,
-        Some("~/dev/tearminal"),
-        Some("main"),
-        None,
-        110,
-        34,
-        AiAgentStatus::Claude,
-        Some("claude-sonnet-5-5"),
-        &[],
-        false,
-        true,
-        &theme,
-    );
-    push_scene(canvas, "panel-derecha");
-
-    // 7. WP1 · modo vertical: marca, píldora centrada y barra de estado del bosquejo
     let wp1_meters = [
         crate::renderer::StatusMeter {
             label: "5 h".into(),
@@ -1880,63 +1758,6 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             percent: 18.0,
         },
     ];
-    let mut canvas = test_support::new_canvas(w, h);
-    canvas.clear(theme.background);
-    r.render_top_title_bar(
-        &mut canvas,
-        "tearminal",
-        Some("main"),
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        false,
-        &theme,
-    );
-    r.render_sidebar(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        status_h,
-        &header,
-        &tabs,
-        0,
-        None,
-        None,
-        false,
-        false,
-        false,
-        &theme,
-    );
-    r.render_pane(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        top_h,
-        w - SIDEBAR_WIDTH,
-        h - top_h - status_h,
-        &term,
-        &theme,
-        true,
-        true,
-        false,
-    );
-    r.render_status_bar_with_ai(
-        &mut canvas,
-        SIDEBAR_WIDTH,
-        Some("C:\\Users\\dev\\tearminal"),
-        Some("main"),
-        None,
-        110,
-        34,
-        AiAgentStatus::Claude,
-        Some("claude-sonnet-5-5"),
-        &wp1_meters,
-        false,
-        false,
-        &theme,
-    );
-    push_scene(canvas, "wp1-vertical");
 
     // 8. WP1 · modo superior: pestañas con icono de tipo, spinner en la que corre y acciones a la derecha
     let wp1_tabs = vec![
@@ -1979,7 +1800,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     ];
     let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
-    let wp1_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
+    let wp1_rects = crate::renderer::TopTabBarRects::compute(w, SIDEBAR_WIDTH, wp1_tabs.len());
     r.render_top_tab_bar(
         &mut canvas,
         &wp1_tabs,
@@ -1993,6 +1814,8 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
         false,
         false,
         true,
+        false,
+        SIDEBAR_WIDTH,
         &theme,
     );
     r.render_sidebar(
@@ -2187,6 +2010,8 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
                 icon_color,
                 focused,
                 false,
+                true,
+                focused,
                 None,
                 &theme,
             );
@@ -2215,7 +2040,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
         r.render_status_bar_with_ai(
             &mut canvas,
-            0,
+            SIDEBAR_WIDTH,
             Some("C:\\Users\\dev\\tearminal"),
             Some("main"),
             None,
@@ -2277,7 +2102,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
 
         let mut canvas = test_support::new_canvas(w, h);
         canvas.clear(theme.background);
-        let wp4_rects = crate::renderer::TopTabBarRects::compute(w, wp1_tabs.len());
+        let wp4_rects = crate::renderer::TopTabBarRects::compute(w, SIDEBAR_WIDTH, wp1_tabs.len());
         r.render_top_tab_bar(
             &mut canvas,
             &wp1_tabs,
@@ -2291,6 +2116,8 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             false,
             false,
             true,
+            false,
+            SIDEBAR_WIDTH,
             &theme,
         );
         r.render_sidebar(
@@ -2319,6 +2146,8 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
             LucideIcon::Terminal,
             theme.text_secondary(),
             true,
+            false,
+            false,
             false,
             None,
             &theme,
@@ -2546,7 +2375,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
         canvas.clear(theme.background);
         r.render_status_bar_with_ai(
             &mut canvas,
-            0,
+            crate::renderer::SpacesPanelRects::WIDTH,
             Some("~/dev"),
             Some("main"),
             None,
@@ -2579,7 +2408,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     for (canvas, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
         r.render_status_bar_with_ai(
             canvas,
-            0,
+            crate::renderer::SpacesPanelRects::WIDTH,
             Some("~/dev"),
             Some("main"),
             None,
@@ -2644,7 +2473,6 @@ fn preview_panel_card() {
         &theme,
     );
     explorer.toggle_changes_only();
-    explorer.hovered_tab = Some(true);
     let mut canvas_1 = test_support::new_canvas(w, h);
     canvas_1.clear(theme.background);
     r.render_files_panel(&mut canvas_1, SIDEBAR_WIDTH, status_h, false, &theme);
@@ -2867,12 +2695,12 @@ fn test_tab_chip_stays_inside_tab_rect() {
                 is_preview: false,
             })
             .collect();
-        let rects = TopTabBarRects::compute(w, n);
+        let rects = TopTabBarRects::compute(w, 0, n);
         let h = TopTabBarRects::HEIGHT;
         let buf = test_support::with_canvas(w, h, |c| {
             r.render_top_tab_bar(
                 c, &tabs, None, None, false, false, false, false, false, false, false, false,
-                &theme,
+                false, 0, &theme,
             )
         });
         let t = rects.tab_rect(0);
@@ -2904,69 +2732,6 @@ fn test_tab_chip_stays_inside_tab_rect() {
     }
 }
 
-/// Las filas de sesión comparten el radio de fila (6): la esquina queda redondeada, pero el píxel a (2, 2) de ella ya
-/// pertenece al relleno (con el radio 10 anterior quedaba fuera).
-#[test]
-fn test_sidebar_hovered_row_uses_row_radius() {
-    use crate::renderer::{SidebarHeader, SidebarRects, SidebarTabItem, StatusBarRects};
-    use crate::theme::Theme;
-
-    let theme = Theme::default();
-    let (w, h) = (crate::app::SIDEBAR_WIDTH, 600usize);
-    let status_h = StatusBarRects::BAR_H;
-    let tabs: Vec<SidebarTabItem> = (0..3)
-        .map(|i| SidebarTabItem {
-            index: i,
-            status: None,
-            title: format!("Sesión {i}"),
-            detail: None,
-            is_active: i == 0,
-            has_unread: false,
-            pane_count: 1,
-            is_settings: false,
-            file_path: None,
-            is_preview: false,
-        })
-        .collect();
-    let header = SidebarHeader {
-        title: "Sesiones".into(),
-        branch: None,
-        path: None,
-        on_right: false,
-        list_end: SidebarRects::list_end(h - status_h, 3, false),
-    };
-    let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
-    let buf = test_support::with_canvas(w, h, |c| {
-        c.clear(theme.background);
-        r.render_sidebar(
-            c,
-            w,
-            status_h,
-            &header,
-            &tabs,
-            0,
-            Some(1),
-            None,
-            false,
-            false,
-            false,
-            &theme,
-        );
-    });
-    let row = (
-        SidebarRects::PAD_X,
-        SidebarRects::row_y(1),
-        w - (SidebarRects::PAD_X + 8),
-        SidebarRects::TAB_ITEM_H,
-    );
-    let at = |x: usize, y: usize| buf[y * w + x];
-    let hover = theme.surface_hover().to_u32_xrgb();
-    assert_ne!(at(row.0, row.1), hover, "esquina redondeada");
-    assert_eq!(at(row.0 + 2, row.1 + 2), hover, "radio de fila (6)");
-    assert_eq!(at(row.0 + 2, row.1 + row.3 / 2), hover, "borde izquierdo");
-}
-
-/// Entre la carpeta y la rama hay un separador `›`; sin rama no hay nada a la derecha de la carpeta.
 #[test]
 fn test_status_bar_separator_between_cwd_and_branch() {
     use crate::renderer::StatusBarRects;
@@ -5335,5 +5100,41 @@ mod gpu_scenes {
             canvas.scene().ops.len() > ops_before,
             "el overlay debe grabar operaciones de dibujo para el elemento expandido"
         );
+    }
+}
+
+#[test]
+fn test_spaces_panel_slots_group_local_and_remote_without_overlap() {
+    use crate::renderer::{SpacesPanelRects, SpacesSlot};
+
+    for collapsed in [false, true] {
+        let r = SpacesPanelRects::compute(collapsed, 900);
+        let flags = [false, false, true, true];
+        let slots = r.visible_slots(&flags, 0);
+        let spaces = slots
+            .iter()
+            .filter(|(s, _)| matches!(s, SpacesSlot::Space(_)))
+            .count();
+        assert_eq!(spaces, 4, "collapsed={collapsed}");
+        let headers = slots
+            .iter()
+            .filter(|(s, _)| matches!(s, SpacesSlot::Header { .. }))
+            .count();
+        assert_eq!(headers, if collapsed { 1 } else { 2 });
+        // Sin solapes y dentro de la lista
+        let mut last_bottom = r.list_top;
+        for (_, rect) in &slots {
+            assert!(rect.1 >= last_bottom, "solape en {rect:?}");
+            assert!(rect.1 + rect.3 <= r.list_bottom);
+            last_bottom = rect.1 + rect.3;
+        }
+        // Sin remotos no hay segundo grupo
+        let only_local = r.visible_slots(&[false, false], 0);
+        assert!(!only_local
+            .iter()
+            .any(|(s, _)| matches!(s, SpacesSlot::Header { remote: true })));
+        // El desplazamiento salta elementos
+        assert_eq!(r.slot_count(&flags), if collapsed { 5 } else { 6 });
+        assert!(r.visible_slots(&flags, 2).len() < slots.len());
     }
 }

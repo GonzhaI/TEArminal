@@ -13,15 +13,11 @@ impl TearminalApp {
 
         self.last_terminal_tab_index = self.active_tab_index;
 
-        if !self.is_horizontal_tabs() && !self.sidebar_visible {
-            self.sidebar_visible = true;
-        }
-
         if let Some(pos) = self.tabs.iter().position(|t| t.is_settings) {
             self.switch_to_tab(pos);
         } else {
             let tab_id = self.alloc_tab_id();
-            self.tabs.push(TerminalTab::new_settings(tab_id));
+            self.push_tab(TerminalTab::new_settings(tab_id));
             self.switch_to_tab(self.tabs.len() - 1);
         }
         self.settings_page_state.theme_slot_light =
@@ -156,11 +152,13 @@ impl TearminalApp {
     /// tiene cambios) en su misma posición; una fija se añade al final.
     pub(super) fn install_viewer_tab(&mut self, mut tab: TerminalTab, pin: bool) {
         tab.is_preview = !pin;
+        let space = self.active_space();
         let old_preview = if pin {
             None
         } else {
             self.tabs.iter().position(|t| {
-                t.is_preview
+                t.space == space
+                    && t.is_preview
                     && t.file_viewer
                         .as_ref()
                         .is_some_and(|v| !v.is_dirty && v.is_read_only)
@@ -170,6 +168,7 @@ impl TearminalApp {
             Some(pos) => {
                 let old_id = self.tabs[pos].id;
                 let new_id = tab.id;
+                tab.space = space;
                 self.tabs[pos] = tab;
                 self.tab_history.retain(|&id| id != old_id);
                 self.record_tab_active(new_id);
@@ -180,7 +179,7 @@ impl TearminalApp {
                 }
             }
             None => {
-                self.tabs.push(tab);
+                self.push_tab(tab);
                 self.switch_to_tab(self.tabs.len() - 1);
                 self.update_window_title();
             }
@@ -192,10 +191,34 @@ impl TearminalApp {
 
     /// Con pestañas superiores el explorador vive en el panel y se muestra u oculta con él.
     pub(crate) fn toggle_file_explorer(&mut self) {
-        if self.is_horizontal_tabs() {
-            self.toggle_sidebar();
-        } else {
-            self.flip_file_explorer();
+        self.toggle_sidebar();
+    }
+
+    /// Píldoras Files / Changes de la barra superior: muestran la tarjeta del explorador en esa vista;
+    /// pulsar la que ya está a la vista la oculta.
+    pub(crate) fn show_explorer_view(&mut self, changes: bool) {
+        if self.file_explorer.visible && self.file_explorer.changes_only == changes {
+            self.toggle_file_explorer();
+            return;
+        }
+        if !self.file_explorer.visible {
+            self.toggle_file_explorer();
+        }
+        if self.file_explorer.changes_only != changes {
+            self.file_explorer.toggle_changes_only();
+        }
+        self.request_redraw();
+    }
+
+    /// Abre y enfoca el filtro rápido en el árbol del explorador (`Ctrl + P` / `Ctrl + F`)
+    pub(crate) fn open_explorer_filter(&mut self) {
+        if !self.file_explorer.visible {
+            self.toggle_file_explorer();
+        }
+        self.file_explorer.is_focused = true;
+        self.file_explorer.open_filter();
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 
@@ -226,6 +249,12 @@ impl TearminalApp {
 
     /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).
     pub(super) fn create_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
+        let space = self.active_space();
+        self.create_tab_in_space(cwd, space);
+    }
+
+    /// Sesión nueva con un shell en `cwd`, dentro del Space `space`.
+    pub(super) fn create_tab_in_space(&mut self, cwd: Option<std::path::PathBuf>, space: SpaceId) {
         let tab_id = self.alloc_tab_id();
         let pane_id = alloc_pane_id();
 
@@ -268,7 +297,7 @@ impl TearminalApp {
         terminal.current_dir = cwd;
         let pane = TerminalPane::new(pane_id, pty, terminal, (cols, rows));
 
-        self.tabs.push(TerminalTab::new(tab_id, title, pane));
+        self.push_tab_in(TerminalTab::new(tab_id, title, pane), space);
 
         self.active_tab_index = self.tabs.len() - 1;
         self.record_tab_active(tab_id);
@@ -296,10 +325,12 @@ impl TearminalApp {
         }
 
         let closed_id = self.tabs[index].id;
+        let closed_space = self.tabs[index].space;
         let was_active = index == self.active_tab_index;
 
         self.tabs.remove(index);
         self.tab_history.retain(|&id| id != closed_id);
+        self.prune_spaces();
         self.prune_pending_remote();
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando la ventana");
@@ -308,12 +339,7 @@ impl TearminalApp {
         }
 
         if was_active {
-            let next_idx = self
-                .tab_history
-                .iter()
-                .rev()
-                .find_map(|&id| self.tabs.iter().position(|t| t.id == id))
-                .unwrap_or_else(|| index.min(self.tabs.len() - 1));
+            let next_idx = self.tab_to_activate_after_close(closed_space, index);
             self.active_tab_index = next_idx;
         } else if index < self.active_tab_index {
             self.active_tab_index -= 1;
@@ -337,7 +363,7 @@ impl TearminalApp {
 
         self.tabs[self.active_tab_index].has_unread = false;
         self.sync_file_explorer_root();
-        self.clamp_sidebar_scroll();
+        self.clamp_spaces_scroll();
         self.update_window_title();
         self.recompute_grid_for_all_tabs();
         self.save_session();
@@ -359,19 +385,16 @@ impl TearminalApp {
         }
 
         let closed_id = self.tabs[index].id;
+        let closed_space = self.tabs[index].space;
         let was_active = index == self.active_tab_index;
 
         let tab = self.tabs.remove(index);
         self.tab_history.retain(|&id| id != closed_id);
+        self.prune_spaces();
         self.prune_pending_remote();
 
         if was_active {
-            let next_idx = self
-                .tab_history
-                .iter()
-                .rev()
-                .find_map(|&id| self.tabs.iter().position(|t| t.id == id))
-                .unwrap_or_else(|| index.min(self.tabs.len() - 1));
+            let next_idx = self.tab_to_activate_after_close(closed_space, index);
             self.active_tab_index = next_idx;
         } else if index < self.active_tab_index {
             self.active_tab_index -= 1;
@@ -395,7 +418,7 @@ impl TearminalApp {
 
         self.tabs[self.active_tab_index].has_unread = false;
         self.sync_file_explorer_root();
-        self.clamp_sidebar_scroll();
+        self.clamp_spaces_scroll();
         self.update_window_title();
         self.recompute_grid_for_all_tabs();
         self.save_session();
@@ -415,7 +438,7 @@ impl TearminalApp {
         tab.id = self.alloc_tab_id();
         let tab_id = tab.id;
         let new_idx = self.tabs.len();
-        self.tabs.push(tab);
+        self.push_tab(tab);
         self.active_tab_index = new_idx;
         self.record_tab_active(tab_id);
         if !self.tabs[new_idx].is_settings {
@@ -424,7 +447,7 @@ impl TearminalApp {
         self.recompute_grid_for_all_tabs();
         self.tabs[new_idx].has_unread = false;
         self.sync_file_explorer_root();
-        self.clamp_sidebar_scroll();
+        self.clamp_spaces_scroll();
         self.update_window_title();
         self.save_session();
         if let Some(w) = &self.window {
@@ -447,13 +470,14 @@ impl TearminalApp {
         }
         self.tabs.retain(|t| t.id == id);
         self.tab_history.retain(|&tid| tid == id);
+        self.prune_spaces();
         self.prune_pending_remote();
         self.active_tab_index = 0;
         self.last_terminal_tab_index = 0;
         self.record_tab_active(id);
         self.tabs[0].has_unread = false;
         self.sync_file_explorer_root();
-        self.clamp_sidebar_scroll();
+        self.clamp_spaces_scroll();
         self.update_window_title();
         self.save_session();
         if let Some(w) = &self.window {
@@ -763,19 +787,15 @@ impl TearminalApp {
 
     /// Posición de pestaña bajo el ratón mientras se arrastra una (solo cuenta la coordenada a lo largo de la lista)
     pub(super) fn tab_slot_at(&self, mx: usize, my: usize) -> Option<usize> {
-        let slot = if self.is_horizontal_tabs() {
-            let width = self.window.as_ref()?.inner_size().width as usize;
-            let rects = TopTabBarRects::compute(width, self.tabs.len());
-            self.tabs.iter().enumerate().position(|(idx, _)| {
-                let r = rects.tab_rect(idx);
-                mx >= r.0 && mx < r.0 + r.2
-            })?
-        } else {
-            let height = self.window.as_ref()?.inner_size().height as usize;
-            let usable_h = height.saturating_sub(self.status_bar_height());
-            self.panel_tab_at(my, usable_h)?
-        };
-        (slot < self.tabs.len()).then_some(slot)
+        let _ = my;
+        let width = self.window.as_ref()?.inner_size().width as usize;
+        let visible = self.visible_tab_indices();
+        let rects = TopTabBarRects::compute(width, self.spaces_w(), visible.len());
+        let pos = (0..visible.len()).find(|&pos| {
+            let r = rects.tab_rect(pos);
+            mx >= r.0 && mx < r.0 + r.2
+        })?;
+        visible.get(pos).copied()
     }
 
     /// Mueve la pestaña `from` a la posición `to`; la activa sigue siendo la misma pestaña
@@ -797,27 +817,34 @@ impl TearminalApp {
         }
     }
 
-    pub(crate) fn next_tab(&mut self) {
-        if self.tabs.len() > 1 {
-            let next = (self.active_tab_index + 1) % self.tabs.len();
-            self.switch_to_tab(next);
+    /// Pestaña vecina dentro del Space activo (circular).
+    fn step_tab(&mut self, forward: bool) {
+        let visible = self.visible_tab_indices();
+        let Some(pos) = visible.iter().position(|&i| i == self.active_tab_index) else {
+            return;
+        };
+        let n = visible.len();
+        if n > 1 {
+            let next = if forward {
+                (pos + 1) % n
+            } else {
+                (pos + n - 1) % n
+            };
+            self.switch_to_tab(visible[next]);
         }
     }
 
+    pub(crate) fn next_tab(&mut self) {
+        self.step_tab(true);
+    }
+
     pub(crate) fn prev_tab(&mut self) {
-        if self.tabs.len() > 1 {
-            let prev = if self.active_tab_index == 0 {
-                self.tabs.len() - 1
-            } else {
-                self.active_tab_index - 1
-            };
-            self.switch_to_tab(prev);
-        }
+        self.step_tab(false);
     }
 
     pub(crate) fn toggle_sidebar(&mut self) {
         self.sidebar_visible = !self.sidebar_visible;
-        if self.is_horizontal_tabs() && self.file_explorer.visible != self.sidebar_visible {
+        if self.file_explorer.visible != self.sidebar_visible {
             self.flip_file_explorer();
         }
         self.recompute_grid_for_all_tabs();
@@ -827,16 +854,17 @@ impl TearminalApp {
         }
     }
 
-    pub(crate) fn clamp_sidebar_scroll(&mut self) {
-        let win_h = if let Some(w) = &self.window {
-            w.inner_size().height as usize
-        } else {
-            800
-        };
-        let usable_h = win_h.saturating_sub(self.status_bar_height());
-        let (total, visible) = self.panel_scroll_extent(usable_h);
-        let max_offset = total.saturating_sub(visible);
-        self.sidebar_scroll_offset = self.sidebar_scroll_offset.min(max_offset);
+    /// Mantiene el desplazamiento de la lista de Spaces dentro de su rango.
+    pub(crate) fn clamp_spaces_scroll(&mut self) {
+        let win_h = self
+            .window
+            .as_ref()
+            .map_or(800, |w| w.inner_size().height as usize);
+        let rects = self.spaces_rects(win_h);
+        let total = rects.slot_count(&self.space_remote_flags());
+        self.spaces_scroll = self
+            .spaces_scroll
+            .min(total.saturating_sub(rects.capacity()));
     }
 
     /// Navega el explorador remoto escribiendo `cd` en el shell remoto de la terminal activa

@@ -1311,14 +1311,184 @@ impl TerminalState {
         }
     }
 
-    /// Extrae la URL del hipervínculo explícito OSC 8 bajo (col, global_line), si existe.
-    pub(crate) fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
+    /// Extrae la URL y el rango de columnas `(url, start_col, end_col)` de un hipervínculo
+    /// (explícito OSC 8 o reconocido por patrón de texto plano) bajo (col, global_line).
+    pub(crate) fn url_and_span_at(
+        &self,
+        col: usize,
+        global_line: usize,
+    ) -> Option<(String, usize, usize)> {
         let row = self.get_buffer_line(global_line)?;
         if row.is_empty() || col >= row.len() {
             return None;
         }
 
-        self.hyperlink_of(&row[col]).map(|s| s.to_string())
+        // 1. Enlace explícito OSC 8 en la celda
+        let link_id = row[col].raw_hyperlink_id();
+        if link_id > 0 {
+            if let Some(url) = self.hyperlink_of(&row[col]) {
+                let mut start_col = col;
+                while start_col > 0 && row[start_col - 1].raw_hyperlink_id() == link_id {
+                    start_col -= 1;
+                }
+                let mut end_col = col;
+                while end_col + 1 < row.len() && row[end_col + 1].raw_hyperlink_id() == link_id {
+                    end_col += 1;
+                }
+                return Some((url.to_string(), start_col, end_col));
+            }
+        }
+
+        // 2. Reconocimiento de URLs en texto plano (http://, https://, localhost:PORT, 127.0.0.1:PORT)
+        Self::find_plain_url_in_row(row, col)
+    }
+
+    fn find_plain_url_in_row(row: &[Cell], col: usize) -> Option<(String, usize, usize)> {
+        let mut chars = Vec::with_capacity(row.len());
+        let mut char_to_col = Vec::with_capacity(row.len());
+
+        for (c_idx, cell) in row.iter().enumerate() {
+            if cell.width == 0 {
+                continue;
+            }
+            chars.push(cell.c);
+            char_to_col.push(c_idx);
+        }
+
+        if chars.is_empty() {
+            return None;
+        }
+
+        let n = chars.len();
+        let mut i = 0;
+        while i < n {
+            // Un enlace solo puede empezar si es el inicio o el carácter anterior no es alfanumérico ni delimitador interno
+            if i > 0 {
+                let prev = chars[i - 1];
+                if prev.is_alphanumeric() || prev == '/' || prev == '.' || prev == '@' {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            let mut prefix_len = 0;
+            let mut is_local = false;
+
+            if Self::chars_match(&chars[i..], "https://") {
+                prefix_len = 8;
+            } else if Self::chars_match(&chars[i..], "http://") {
+                prefix_len = 7;
+            } else if Self::chars_match(&chars[i..], "localhost:") {
+                let rest = &chars[i + 10..];
+                if rest.first().is_some_and(|c| c.is_ascii_digit()) {
+                    prefix_len = 10;
+                    is_local = true;
+                }
+            } else if Self::chars_match(&chars[i..], "127.0.0.1:") {
+                let rest = &chars[i + 10..];
+                if rest.first().is_some_and(|c| c.is_ascii_digit()) {
+                    prefix_len = 10;
+                    is_local = true;
+                }
+            }
+
+            if prefix_len == 0 {
+                i += 1;
+                continue;
+            }
+
+            // Extender hasta el final de la URL
+            let mut j = i + prefix_len;
+            while j < n {
+                let c = chars[j];
+                if c.is_whitespace()
+                    || (c as u32) <= 32
+                    || c == '"'
+                    || c == '\''
+                    || c == '`'
+                    || c == '<'
+                    || c == '>'
+                {
+                    break;
+                }
+                j += 1;
+            }
+
+            // Recortar signos de puntuación finales si no están balanceados
+            while j > i + prefix_len {
+                let last = chars[j - 1];
+                if last == '.'
+                    || last == ','
+                    || last == ';'
+                    || last == ':'
+                    || last == '!'
+                    || last == '?'
+                {
+                    j -= 1;
+                } else if last == ')' {
+                    let open_count = chars[i..j].iter().filter(|&&c| c == '(').count();
+                    let close_count = chars[i..j].iter().filter(|&&c| c == ')').count();
+                    if close_count > open_count {
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                } else if last == ']' {
+                    let open_count = chars[i..j].iter().filter(|&&c| c == '[').count();
+                    let close_count = chars[i..j].iter().filter(|&&c| c == ']').count();
+                    if close_count > open_count {
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                } else if last == '}' {
+                    let open_count = chars[i..j].iter().filter(|&&c| c == '{').count();
+                    let close_count = chars[i..j].iter().filter(|&&c| c == '}').count();
+                    if close_count > open_count {
+                        j -= 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            if j > i + prefix_len {
+                let start_col = char_to_col[i];
+                let end_col = char_to_col[j - 1];
+                if col >= start_col && col <= end_col {
+                    let matched_str: String = chars[i..j].iter().collect();
+                    let url = if is_local {
+                        format!("http://{matched_str}")
+                    } else {
+                        matched_str
+                    };
+                    return Some((url, start_col, end_col));
+                }
+                i = j;
+            } else {
+                i += prefix_len;
+            }
+        }
+
+        None
+    }
+
+    #[inline]
+    fn chars_match(slice: &[char], prefix: &str) -> bool {
+        if slice.len() < prefix.len() {
+            return false;
+        }
+        prefix
+            .chars()
+            .zip(slice)
+            .all(|(p, &c)| p.to_ascii_lowercase() == c.to_ascii_lowercase())
+    }
+
+    /// Extrae la URL del hipervínculo (OSC 8 o regex de texto plano) bajo (col, global_line), si existe.
+    pub(crate) fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
+        self.url_and_span_at(col, global_line).map(|(s, _, _)| s)
     }
 
     /// Selecciona la palabra o bloque delimitado bajo la columna `col` en `global_line`.

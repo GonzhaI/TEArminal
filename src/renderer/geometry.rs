@@ -40,89 +40,83 @@ pub(crate) fn pane_scroll_to_bottom_btn_rect(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TopTabBarRects {
     pub bar_h: usize,
+    /// Borde izquierdo de la barra: el panel de Spaces ocupa lo que hay a su izquierda.
+    pub left_x: usize,
     pub tabs_start_x: usize,
     pub tab_w: usize,
     pub tab_gap: usize,
     pub plus_btn: (usize, usize, usize, usize),
+    /// Píldora «Files»: muestra u oculta la tarjeta del explorador.
     pub files_btn: (usize, usize, usize, usize),
-    pub settings_btn: (usize, usize, usize, usize),
+    /// Píldora «Changes»: la tarjeta en su vista de cambios de git.
+    pub changes_btn: (usize, usize, usize, usize),
     pub win_min_btn: (usize, usize, usize, usize),
     pub win_max_btn: (usize, usize, usize, usize),
     pub win_close_btn: (usize, usize, usize, usize),
-    /// Buscar (paleta Ctrl K, WP5): solo se dibuja; el clic no hace nada todavía.
-    pub search_btn: (usize, usize, usize, usize),
 }
 
 impl TopTabBarRects {
     pub(crate) const HEIGHT: usize = 38;
-    /// Las pestañas empiezan alineadas con el borde izquierdo de las tarjetas (no hay marca).
-    pub(crate) const BRAND_W: usize = SidebarRects::CARD_INSET;
     pub(crate) const TAB_GAP: usize = 3;
     pub(crate) const CLOSE_W: usize = 24;
     pub(crate) const PLUS_W: usize = 28;
-    /// Lado de los botones de acción del chrome (buscar, panel, ajustes).
-    pub(crate) const ACTION: usize = 32;
+    /// Ancho de las píldoras Files y Changes (icono + etiqueta).
+    pub(crate) const FILES_W: usize = 124;
+    pub(crate) const CHANGES_W: usize = 124;
+    /// Alto de las píldoras y de los botones de acción del chrome.
+    pub(crate) const ACTION: usize = 30;
 
+    /// `width` es el ancho de la ventana y `left_x` el borde izquierdo de la barra (ancho del panel de
+    /// Spaces); las pestañas empiezan alineadas con la tarjeta de contenido.
     #[allow(dead_code)]
-    pub(crate) fn compute(width: usize, tabs_count: usize) -> Self {
+    pub(crate) fn compute(width: usize, left_x: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
         let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
 
-        // Acciones a la izquierda de los controles de ventana: buscar · panel · ajustes.
-        let actions_right = width.saturating_sub(ctrl_w * 3 + 8);
+        // De derecha a izquierda: Changes · Files · «+», junto a los controles de ventana.
         let action_y = (bar_h.saturating_sub(Self::ACTION)) / 2;
-        let settings_btn = (
-            actions_right.saturating_sub(Self::ACTION),
+        let changes_btn = (
+            win_min_btn.0.saturating_sub(8 + Self::CHANGES_W),
             action_y,
-            Self::ACTION,
+            Self::CHANGES_W,
             Self::ACTION,
         );
         let files_btn = (
-            settings_btn.0.saturating_sub(Self::ACTION + 2),
+            changes_btn.0.saturating_sub(4 + Self::FILES_W),
             action_y,
-            Self::ACTION,
+            Self::FILES_W,
             Self::ACTION,
         );
-        let search_btn = (
-            files_btn.0.saturating_sub(Self::ACTION + 2),
-            action_y,
-            Self::ACTION,
-            Self::ACTION,
+        let plus_btn = (
+            files_btn.0.saturating_sub(8 + Self::PLUS_W),
+            (bar_h - Self::PLUS_W) / 2,
+            Self::PLUS_W,
+            Self::PLUS_W,
         );
 
-        let left_reserved = Self::BRAND_W;
-        let right_reserved = ctrl_w * 3 + 112;
-        let available_space = width.saturating_sub(left_reserved + right_reserved);
-
-        let plus_w = Self::PLUS_W;
+        let tabs_start_x = left_x + SidebarRects::CARD_INSET;
+        let available = plus_btn.0.saturating_sub(tabs_start_x + 12);
         let gap = Self::TAB_GAP;
-        let usable = available_space
-            .saturating_sub(plus_w + 8)
-            .saturating_sub(tabs_count.saturating_mul(gap));
+        let usable = available.saturating_sub(tabs_count.saturating_mul(gap));
         let tab_w = usable
             .checked_div(tabs_count)
             .map_or(177, |w| w.clamp(20, 177));
 
-        let tabs_start_x = left_reserved;
-        let plus_x = (tabs_start_x + tabs_count * (tab_w + gap))
-            .min(left_reserved + available_space.saturating_sub(plus_w));
-        let plus_btn = (plus_x, 5, plus_w, plus_w);
-
         Self {
             bar_h,
+            left_x,
             tabs_start_x,
             tab_w,
             tab_gap: gap,
             plus_btn,
             files_btn,
-            settings_btn,
+            changes_btn,
             win_min_btn,
             win_max_btn,
             win_close_btn,
-            search_btn,
         }
     }
 
@@ -163,56 +157,6 @@ impl TopTabBarRects {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct TopTitleBarRects {
-    pub bar_h: usize,
-    pub files_btn: (usize, usize, usize, usize),
-    pub settings_btn: (usize, usize, usize, usize),
-    pub win_min_btn: (usize, usize, usize, usize),
-    pub win_max_btn: (usize, usize, usize, usize),
-    pub win_close_btn: (usize, usize, usize, usize),
-    /// Píldora de búsqueda centrada del modo vertical (paleta Ctrl K, WP5).
-    pub search_box: (usize, usize, usize, usize),
-}
-
-impl TopTitleBarRects {
-    pub(crate) const HEIGHT: usize = 38;
-    pub(crate) const SEARCH_W: usize = 420;
-    pub(crate) const SEARCH_H: usize = 30;
-
-    #[allow(dead_code)]
-    pub(crate) fn compute(width: usize) -> Self {
-        let bar_h = Self::HEIGHT;
-        let ctrl_w = 46;
-        let win_close_btn = (width.saturating_sub(ctrl_w), 0, ctrl_w, bar_h);
-        let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
-        let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
-        // En vertical los accesos de archivos y ajustes viven en el panel (riel); la barra solo lleva
-        // la marca, la búsqueda y los controles de ventana.
-        let search_w =
-            Self::SEARCH_W.min(width.saturating_sub(TopTabBarRects::BRAND_W + ctrl_w * 3 + 80));
-        let search_box = if search_w >= 200 {
-            (
-                (width.saturating_sub(search_w)) / 2,
-                (bar_h.saturating_sub(Self::SEARCH_H)) / 2,
-                search_w,
-                Self::SEARCH_H,
-            )
-        } else {
-            (0, 0, 0, 0)
-        };
-        Self {
-            bar_h,
-            files_btn: (0, 0, 0, 0),
-            settings_btn: (0, 0, 0, 0),
-            win_min_btn,
-            win_max_btn,
-            win_close_btn,
-            search_box,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SettingsPageRects {
     pub nav_appearance: (usize, usize, usize, usize),
     pub nav_terminal: (usize, usize, usize, usize),
@@ -226,11 +170,6 @@ pub(crate) struct SettingsPageRects {
     pub theme_mode_system_btn: (usize, usize, usize, usize),
     pub theme_mode_dark_btn: (usize, usize, usize, usize),
     pub theme_mode_light_btn: (usize, usize, usize, usize),
-
-    pub tab_layout_vertical_btn: (usize, usize, usize, usize),
-    pub tab_layout_horizontal_btn: (usize, usize, usize, usize),
-    pub panel_side_left_btn: (usize, usize, usize, usize),
-    pub panel_side_right_btn: (usize, usize, usize, usize),
 
     pub font_minus_btn: (usize, usize, usize, usize),
     pub font_plus_btn: (usize, usize, usize, usize),
@@ -284,12 +223,12 @@ pub(crate) struct SettingsPageRects {
 
 impl SettingsPageRects {
     /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
-    pub(crate) const CONTENT_TOP: usize = 144;
+    pub(crate) const CONTENT_TOP: usize = 100;
     /// Filas visibles de la lista de temas, alto de cada una y alto de su tarjeta
     pub(crate) const THEME_ROWS: usize = 7;
     pub(crate) const THEME_ROW_H: usize = 30;
     pub(crate) const THEME_CARD_H: usize = 428;
-    pub(crate) const INTERFACE_CARD_H: usize = 270;
+    pub(crate) const INTERFACE_CARD_H: usize = 170;
     pub(crate) const TYPOGRAPHY_CARD_H: usize = 278;
     /// Alto de la tarjeta «Comportamiento del terminal»
     pub(crate) const TERMINAL_CARD_H: usize = 738;
@@ -333,6 +272,43 @@ impl SettingsPageRects {
     }
 
     #[allow(dead_code)]
+    /// Ancho de la columna de navegación lateral del modal.
+    pub(crate) const NAV_W: usize = 184;
+    pub(crate) const MODAL_MAX_W: usize = 980;
+    pub(crate) const MODAL_MAX_H: usize = 680;
+
+    /// Región `(x, y, w, h)` del modal de Ajustes: centrado en el área a la derecha de `left` (el panel de
+    /// Spaces, que el modal no tapa), con margen a los bordes.
+    pub(crate) fn modal_region(win_w: usize, win_h: usize, left: usize) -> Rect {
+        let area_w = win_w.saturating_sub(left);
+        let w = Self::MODAL_MAX_W.min(area_w.saturating_sub(80));
+        let h = Self::MODAL_MAX_H.min(win_h.saturating_sub(120));
+        (left + (area_w - w) / 2, (win_h - h) / 2, w, h)
+    }
+
+    /// Geometría del modal: columna de navegación a la izquierda (`NAV_W`) y el contenido de la página
+    /// en el resto. `page_*` son la esquina y el tamaño del modal.
+    pub(crate) fn compute_modal(
+        page_x: usize,
+        page_y: usize,
+        page_w: usize,
+        page_h: usize,
+    ) -> Self {
+        let mut r = Self::compute(
+            page_x + Self::NAV_W,
+            page_y,
+            page_w.saturating_sub(Self::NAV_W),
+            page_h,
+        );
+        let (x, w) = (page_x + 12, Self::NAV_W - 24);
+        let row = |i: usize| (x, page_y + 76 + i * 38, w, 34);
+        r.nav_appearance = row(0);
+        r.nav_terminal = row(1);
+        r.nav_shortcuts = row(2);
+        r.nav_about = row(3);
+        r
+    }
+
     pub(crate) fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
         let max_card_w = 980;
         let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
@@ -395,15 +371,6 @@ impl SettingsPageRects {
         let theme_mode_dark_btn = (ctrl_x + btn3_w + 8, card2_y + 48, btn3_w, 30);
         let theme_mode_light_btn = (ctrl_x + (btn3_w + 8) * 2, card2_y + 48, btn3_w, 30);
 
-        // 2 botones para Disposición de pestañas (Vertical, Superior)
-        let btn2_w = (ctrl_w.saturating_sub(8)) / 2;
-        let tab_layout_vertical_btn = (ctrl_x, card2_y + 98, btn2_w, 30);
-        let tab_layout_horizontal_btn = (ctrl_x + btn2_w + 8, card2_y + 98, btn2_w, 30);
-
-        // 2 botones para el lado del panel de navegación (Izquierda, Derecha)
-        let panel_side_left_btn = (ctrl_x, card2_y + 148, btn2_w, 30);
-        let panel_side_right_btn = (ctrl_x + btn2_w + 8, card2_y + 148, btn2_w, 30);
-
         // Tarjeta 3: Tipografía y ventana (Font Size, UI Font Size, Spacing)
         let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
         let step_btn_w = 30;
@@ -418,8 +385,8 @@ impl SettingsPageRects {
         let spacing_plus_btn = (ctrl_x + step_span, card3_y + 134, step_btn_w, 30);
 
         // La opacidad pertenece a «Interfaz», no a tipografía.
-        let opacity_minus_btn = (ctrl_x, card2_y + 198, step_btn_w, 30);
-        let opacity_plus_btn = (ctrl_x + step_span, card2_y + 198, step_btn_w, 30);
+        let opacity_minus_btn = (ctrl_x, card2_y + 98, step_btn_w, 30);
+        let opacity_plus_btn = (ctrl_x + step_span, card2_y + 98, step_btn_w, 30);
 
         let font_value_box = (
             font_minus_btn.0 + font_minus_btn.2 + 4,
@@ -515,10 +482,6 @@ impl SettingsPageRects {
             theme_mode_system_btn,
             theme_mode_dark_btn,
             theme_mode_light_btn,
-            tab_layout_vertical_btn,
-            tab_layout_horizontal_btn,
-            panel_side_left_btn,
-            panel_side_right_btn,
             font_minus_btn,
             font_plus_btn,
             font_value_box,
@@ -814,7 +777,6 @@ impl SidebarRects {
     pub(crate) const TAB_SPACING: usize = 2;
     /// X de las filas de sesión (junto al riel).
     pub(crate) const PAD_X: usize = Self::RAIL_W + 8;
-    pub(crate) const CLOSE_SIZE: usize = 24;
     pub(crate) const PLUS_SIZE: usize = 28;
 
     #[allow(dead_code)]
@@ -832,23 +794,6 @@ impl SidebarRects {
             Self::PLUS_SIZE,
             Self::PLUS_SIZE,
         )
-    }
-
-    #[inline]
-    pub(crate) fn list_max_y(usable_h: usize) -> usize {
-        Self::content_bottom(usable_h).max(Self::LIST_START_Y)
-    }
-
-    /// Fin (y) de la lista de sesiones. Sin explorador llega hasta el pie; con él la lista cede espacio:
-    /// como mucho el 40 % libre, en filas enteras y con al menos una.
-    pub(crate) fn list_end(usable_h: usize, rows: usize, explorer_visible: bool) -> usize {
-        let max = Self::list_max_y(usable_h);
-        if !explorer_visible {
-            return max;
-        }
-        let stride = Self::TAB_ITEM_H + Self::TAB_SPACING;
-        let cap_rows = ((max - Self::LIST_START_Y) * 2 / 5 / stride).max(1);
-        Self::LIST_START_Y + rows.clamp(1, cap_rows) * stride
     }
 
     /// Rectángulo del explorador alojado bajo la lista de sesiones.
@@ -874,15 +819,6 @@ impl SidebarRects {
         )
     }
 
-    #[inline]
-    pub(crate) fn visible_items(list_end: usize) -> usize {
-        if list_end > Self::LIST_START_Y {
-            (list_end - Self::LIST_START_Y) / (Self::TAB_ITEM_H + Self::TAB_SPACING)
-        } else {
-            1
-        }
-    }
-
     /// Y absoluta de la fila `vis_idx` (índice dentro de la ventana visible).
     #[inline]
     pub(crate) fn row_y(vis_idx: usize) -> usize {
@@ -893,18 +829,6 @@ impl SidebarRects {
     #[inline]
     pub(crate) fn content_bottom(usable_h: usize) -> usize {
         usable_h.saturating_sub(8)
-    }
-
-    /// Botón de ajustes al fondo del riel (modo vertical): abre Ajustes.
-    #[inline]
-    pub(crate) fn settings_btn_rect(usable_h: usize) -> Rect {
-        let size = 30;
-        (
-            (Self::RAIL_W - size) / 2,
-            usable_h.saturating_sub(size + 16),
-            size,
-            size,
-        )
     }
 
     /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
@@ -926,35 +850,6 @@ impl SidebarRects {
     }
 
     #[inline]
-    pub(crate) fn close_btn_rect(tab: Rect) -> Rect {
-        (
-            tab.0 + tab.2.saturating_sub(Self::CLOSE_SIZE + 6),
-            tab.1 + (tab.3.saturating_sub(Self::CLOSE_SIZE)) / 2,
-            Self::CLOSE_SIZE,
-            Self::CLOSE_SIZE,
-        )
-    }
-
-    #[inline]
-    pub(crate) fn tab_at_y(
-        my: usize,
-        list_end: usize,
-        scroll_offset: usize,
-        total_tabs: usize,
-    ) -> Option<usize> {
-        if my < Self::LIST_START_Y || my >= list_end {
-            return None;
-        }
-        let rel = my - Self::LIST_START_Y;
-        let stride = Self::TAB_ITEM_H + Self::TAB_SPACING;
-        if rel % stride >= Self::TAB_ITEM_H {
-            return None;
-        }
-        let idx = rel / stride + scroll_offset;
-        (idx < total_tabs).then_some(idx)
-    }
-
-    #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect.2 > 0
             && rect.3 > 0
@@ -962,6 +857,173 @@ impl SidebarRects {
             && mx < rect.0 + rect.2
             && my >= rect.1
             && my < rect.1 + rect.3
+    }
+}
+
+/// Un elemento de la lista del panel de Spaces: la cabecera de un grupo o un Space (posición en `items`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SpacesSlot {
+    Header { remote: bool },
+    Space(usize),
+}
+
+/// Panel izquierdo de Spaces, a altura completa y anclado a x = 0 (coordenadas de ventana): cabecera con
+/// marca, búsqueda y alternar; la lista, dividida en «Este equipo» y «Equipos remotos» (cada grupo con su
+/// `+`); y el pie con Ajustes y Add machine. Colapsado es un riel de `RAIL_W` con los mismos controles solo
+/// con icono. Dibujo, clic y hover parten de `compute` y `visible_slots`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SpacesPanelRects {
+    pub width: usize,
+    pub collapsed: bool,
+    pub toggle_btn: Rect,
+    /// Lupa de la cabecera (abre la paleta); vacía en el riel.
+    pub search_btn: Rect,
+    /// «+» de Este equipo en el riel; expandido cada cabecera de grupo lleva el suyo (`header_plus`).
+    pub plus_btn: Rect,
+    pub list_top: usize,
+    pub list_bottom: usize,
+    pub settings_btn: Rect,
+    pub machine_btn: Rect,
+}
+
+impl SpacesPanelRects {
+    pub(crate) const WIDTH: usize = 264;
+    pub(crate) const RAIL_W: usize = 44;
+    /// La cabecera mide como la barra superior para que las dos filas queden alineadas.
+    pub(crate) const HEADER_H: usize = TopTabBarRects::HEIGHT;
+    pub(crate) const ROW_H: usize = 30;
+    pub(crate) const ROW_GAP: usize = 2;
+    pub(crate) const PAD_X: usize = 8;
+    pub(crate) const BTN: usize = 28;
+    /// Alto de la cabecera de un grupo y lado de su «+».
+    pub(crate) const GROUP_H: usize = 26;
+    pub(crate) const GROUP_BTN: usize = 24;
+    /// Lado de la insignia de letra de cada Space.
+    pub(crate) const BADGE: usize = 18;
+    const FOOT_H: usize = 28;
+
+    pub(crate) fn width_for(collapsed: bool) -> usize {
+        if collapsed {
+            Self::RAIL_W
+        } else {
+            Self::WIDTH
+        }
+    }
+
+    pub(crate) fn compute(collapsed: bool, win_h: usize) -> Self {
+        let width = Self::width_for(collapsed);
+        let btn = Self::BTN;
+        let head_y = (Self::HEADER_H - btn) / 2;
+        let none = (0, 0, 0, 0);
+        let foot_x = Self::PAD_X;
+        let foot_w = width - 2 * Self::PAD_X;
+        let machine_y = win_h.saturating_sub(Self::PAD_X + Self::FOOT_H);
+        let settings_y = machine_y.saturating_sub(Self::FOOT_H + 2);
+        let machine_btn = (foot_x, machine_y, foot_w, Self::FOOT_H);
+        let settings_btn = (foot_x, settings_y, foot_w, Self::FOOT_H);
+        let list_bottom = settings_y.saturating_sub(10);
+        if collapsed {
+            let plus_y = Self::HEADER_H + 6;
+            Self {
+                width,
+                collapsed,
+                toggle_btn: (Self::PAD_X, head_y, btn, btn),
+                search_btn: none,
+                plus_btn: (Self::PAD_X, plus_y, btn, btn),
+                list_top: plus_y + btn + 10,
+                list_bottom,
+                settings_btn,
+                machine_btn,
+            }
+        } else {
+            let toggle_btn = (width - Self::PAD_X - btn, head_y, btn, btn);
+            Self {
+                width,
+                collapsed,
+                toggle_btn,
+                search_btn: (toggle_btn.0 - 2 - btn, head_y, btn, btn),
+                plus_btn: none,
+                list_top: Self::HEADER_H + 8,
+                list_bottom,
+                settings_btn,
+                machine_btn,
+            }
+        }
+    }
+
+    pub(crate) fn contains(&self, mx: usize, my: usize, win_h: usize) -> bool {
+        mx < self.width && my < win_h
+    }
+
+    /// «+» de la cabecera de un grupo (solo expandido).
+    pub(crate) fn header_plus(header: Rect) -> Rect {
+        (
+            header.0 + header.2 - Self::GROUP_BTN,
+            header.1 + (header.3.saturating_sub(Self::GROUP_BTN)) / 2,
+            Self::GROUP_BTN,
+            Self::GROUP_BTN,
+        )
+    }
+
+    /// Todos los elementos de la lista con su alto, en orden: `Este equipo`, sus Spaces y, si hay remotos,
+    /// `Equipos remotos` con los suyos. `remote[i]` dice si el Space `i` es remoto; los locales van antes.
+    fn slot_heights(&self, remote: &[bool]) -> Vec<(SpacesSlot, usize)> {
+        let mut out = Vec::with_capacity(remote.len() + 2);
+        let row = Self::ROW_H + Self::ROW_GAP;
+        if !self.collapsed {
+            out.push((SpacesSlot::Header { remote: false }, Self::GROUP_H + 2));
+        }
+        let mut added_remote_header = false;
+        for (i, &is_remote) in remote.iter().enumerate() {
+            if is_remote && !added_remote_header {
+                added_remote_header = true;
+                // Expandido: aire y cabecera; en el riel solo una raya que separa los grupos
+                let h = if self.collapsed {
+                    12
+                } else {
+                    Self::GROUP_H + 12
+                };
+                out.push((SpacesSlot::Header { remote: true }, h));
+            }
+            out.push((SpacesSlot::Space(i), row));
+        }
+        out
+    }
+
+    /// Cuántos elementos tiene la lista (para acotar el desplazamiento).
+    pub(crate) fn slot_count(&self, remote: &[bool]) -> usize {
+        self.slot_heights(remote).len()
+    }
+
+    /// Elementos que caben a la vez (una fila de Space de media).
+    pub(crate) fn capacity(&self) -> usize {
+        (self.list_bottom.saturating_sub(self.list_top) / (Self::ROW_H + Self::ROW_GAP)).max(1)
+    }
+
+    /// Elementos visibles tras desplazar `scroll` elementos, con su rectángulo. La cabecera de un grupo
+    /// remoto lleva su aire por encima: el rectángulo es solo la franja de la etiqueta.
+    pub(crate) fn visible_slots(&self, remote: &[bool], scroll: usize) -> Vec<(SpacesSlot, Rect)> {
+        let mut y = self.list_top;
+        let mut out = Vec::new();
+        let (x, w) = if self.collapsed {
+            (Self::PAD_X, Self::BTN)
+        } else {
+            (Self::PAD_X, self.width - 2 * Self::PAD_X)
+        };
+        for (slot, h) in self.slot_heights(remote).into_iter().skip(scroll) {
+            if y + h > self.list_bottom {
+                break;
+            }
+            let rect = match slot {
+                SpacesSlot::Space(_) => (x, y, w, Self::ROW_H),
+                SpacesSlot::Header { remote: true } if self.collapsed => (x, y + 5, w, 1),
+                SpacesSlot::Header { remote: true } => (x, y + 12, w, Self::GROUP_H),
+                SpacesSlot::Header { remote: false } => (x, y, w, Self::GROUP_H),
+            };
+            out.push((slot, rect));
+            y += h;
+        }
+        out
     }
 }
 
@@ -1229,6 +1291,8 @@ impl StatusBarRects {
 pub(crate) enum PaneHeaderButton {
     /// Dividir el panel en dos columnas
     Split,
+    /// Dividir el panel en dos filas
+    SplitHorizontal,
     /// Maximizar el panel (ocultar el resto) o restaurar el reparto
     Zoom,
     /// Cerrar el panel
@@ -1240,7 +1304,10 @@ pub(crate) enum PaneHeaderButton {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PaneHeaderRects {
     pub(crate) header: Rect,
+    /// Dividir en columnas
     pub(crate) split_btn: Rect,
+    /// Dividir en filas
+    pub(crate) split_h_btn: Rect,
     pub(crate) zoom_btn: Rect,
     pub(crate) close_btn: Rect,
 }
@@ -1299,8 +1366,14 @@ impl PaneHeaderRects {
             Self::BTN,
             Self::BTN,
         );
-        let split_btn = (
+        let split_h_btn = (
             zoom_btn.0.saturating_sub(Self::BTN + Self::BTN_GAP),
+            by,
+            Self::BTN,
+            Self::BTN,
+        );
+        let split_btn = (
+            split_h_btn.0.saturating_sub(Self::BTN + Self::BTN_GAP),
             by,
             Self::BTN,
             Self::BTN,
@@ -1308,31 +1381,27 @@ impl PaneHeaderRects {
         Self {
             header: (x, y + pad, w, Self::HEIGHT),
             split_btn,
+            split_h_btn,
             zoom_btn,
             close_btn,
         }
     }
 
-    /// Botón bajo el ratón. Dividir y maximizar solo existen en el panel enfocado; cerrar, en todos.
-    pub(crate) fn button_at(
-        &self,
-        mx: usize,
-        my: usize,
-        focused: bool,
-    ) -> Option<PaneHeaderButton> {
+    /// Botón bajo el ratón. Todo panel tiene los cuatro (dividir en columnas · en filas · maximizar ·
+    /// cerrar); solo se ven, y por tanto solo se pueden pulsar, con el ratón sobre la cabecera.
+    pub(crate) fn button_at(&self, mx: usize, my: usize) -> Option<PaneHeaderButton> {
         if !Self::inside(mx, my, self.header) {
             return None;
         }
-        if Self::inside(mx, my, self.close_btn) {
-            return Some(PaneHeaderButton::Close);
-        }
-        if focused && Self::inside(mx, my, self.zoom_btn) {
-            return Some(PaneHeaderButton::Zoom);
-        }
-        if focused && Self::inside(mx, my, self.split_btn) {
-            return Some(PaneHeaderButton::Split);
-        }
-        None
+        [
+            (self.close_btn, PaneHeaderButton::Close),
+            (self.zoom_btn, PaneHeaderButton::Zoom),
+            (self.split_h_btn, PaneHeaderButton::SplitHorizontal),
+            (self.split_btn, PaneHeaderButton::Split),
+        ]
+        .into_iter()
+        .find(|(r, _)| Self::inside(mx, my, *r))
+        .map(|(_, b)| b)
     }
 
     #[inline]
@@ -1359,37 +1428,91 @@ impl SettingsPageRects {
     }
 }
 
-/// Pestañas «Archivos» · «Cambios» que encabezan el explorador estilo DataGrip.
-/// La comparten dibujo, clic y hover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct ExplorerTabsRects {
-    pub(crate) files: Rect,
-    pub(crate) changes: Rect,
+/// Elemento del modal «Añadir máquina» bajo el ratón.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MachineHover {
+    /// Fila de la lista de hosts de `~/.ssh/config`
+    Row(usize),
+    Input,
+    /// Botón «Añadir» del campo `usuario@host`
+    TypedAdd,
 }
 
-impl ExplorerTabsRects {
-    #[allow(dead_code)]
-    pub(crate) fn compute(panel_x: usize, panel_y: usize, panel_w: usize, header_h: usize) -> Self {
-        let inner = panel_w.saturating_sub(16);
-        let half = inner / 2;
+/// Geometría del modal «Añadir máquina», centrado en la ventana. La comparten dibujo, clic y hover.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct MachineModalRects {
+    pub card: Rect,
+    /// Filas de hosts (las `MAX_ROWS` primeras) y su botón «Añadir»
+    pub rows: Vec<Rect>,
+    pub row_buttons: Vec<Rect>,
+    pub list_label_y: usize,
+    pub typed_label_y: usize,
+    pub input: Rect,
+    pub add_btn: Rect,
+    pub error_y: usize,
+}
+
+impl MachineModalRects {
+    pub(crate) const W: usize = 560;
+    pub(crate) const PAD: usize = 20;
+    const HEAD_H: usize = 88;
+    pub(crate) const ROW_H: usize = 40;
+    pub(crate) const MAX_ROWS: usize = 5;
+
+    pub(crate) fn compute(win_w: usize, win_h: usize, host_count: usize) -> Self {
+        let w = Self::W.min(win_w.saturating_sub(32));
+        let n = host_count.min(Self::MAX_ROWS);
+        let list_block = if n > 0 { 26 + n * Self::ROW_H + 14 } else { 0 };
+        let h = Self::HEAD_H + list_block + 8 + 26 + 36 + 24 + 14;
+        let x = (win_w.saturating_sub(w)) / 2;
+        let y = (win_h.saturating_sub(h)) / 2;
+        let list_label_y = y + Self::HEAD_H;
+        let rows_y = list_label_y + 26;
+        let rows: Vec<Rect> = (0..n)
+            .map(|i| {
+                (
+                    x + Self::PAD - 8,
+                    rows_y + i * Self::ROW_H,
+                    w - 2 * Self::PAD + 16,
+                    Self::ROW_H,
+                )
+            })
+            .collect();
+        let row_buttons = rows
+            .iter()
+            .map(|r| (r.0 + r.2 - 8 - 76, r.1 + (Self::ROW_H - 28) / 2, 76, 28))
+            .collect();
+        let typed_label_y = y + Self::HEAD_H + list_block + 8;
+        let input = (
+            x + Self::PAD,
+            typed_label_y + 26,
+            w.saturating_sub(2 * Self::PAD + 100),
+            36,
+        );
+        let add_btn = (input.0 + input.2 + 8, input.1, 92, 36);
         Self {
-            files: (panel_x + 8, panel_y, half, header_h),
-            changes: (
-                panel_x + 8 + half,
-                panel_y,
-                inner.saturating_sub(half),
-                header_h,
-            ),
+            card: (x, y, w, h),
+            rows,
+            row_buttons,
+            list_label_y,
+            typed_label_y,
+            input,
+            add_btn,
+            error_y: input.1 + 36 + 6,
         }
     }
 
-    /// `Some(true)` sobre «Cambios», `Some(false)` sobre «Archivos».
-    pub(crate) fn tab_at(&self, mx: usize, my: usize) -> Option<bool> {
-        let inside = |r: Rect| mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3;
-        if inside(self.files) {
-            Some(false)
-        } else if inside(self.changes) {
-            Some(true)
+    pub(crate) fn inside(mx: usize, my: usize, r: Rect) -> bool {
+        r.2 > 0 && mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+    }
+
+    pub(crate) fn hit(&self, mx: usize, my: usize) -> Option<MachineHover> {
+        if let Some(i) = self.rows.iter().position(|r| Self::inside(mx, my, *r)) {
+            Some(MachineHover::Row(i))
+        } else if Self::inside(mx, my, self.add_btn) {
+            Some(MachineHover::TypedAdd)
+        } else if Self::inside(mx, my, self.input) {
+            Some(MachineHover::Input)
         } else {
             None
         }

@@ -83,6 +83,18 @@ impl Canvas {
         (self.ox, self.oy, self.lw, self.lh, self.clip) = saved;
     }
 
+    /// Convierte un recorte en coordenadas locales (las del `with_offset` en curso) a las reales que
+    /// espera `with_offset`: hace falta para anidar un `with_offset` dentro de otro.
+    pub(crate) fn real_clip_of(&self, clip: Clip) -> Clip {
+        let f = |v: usize, o: i32| (v as i32 + o).max(0) as usize;
+        (
+            f(clip.0, self.ox),
+            f(clip.1, self.oy),
+            f(clip.2, self.ox),
+            f(clip.3, self.oy),
+        )
+    }
+
     /// Recorte explícito local (usize) a coordenadas reales, intersecado con el efectivo.
     fn real_clip(&self, clip: Clip) -> RealClip {
         let local = (

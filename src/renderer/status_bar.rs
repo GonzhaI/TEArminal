@@ -95,7 +95,7 @@ impl TerminalRenderer {
     pub(crate) fn render_status_bar_full(
         &mut self,
         canvas: &mut Canvas,
-        _sidebar_offset: usize,
+        left_x: usize,
         cwd: Option<&str>,
         git_branch: Option<&str>,
         ssh_host: Option<&str>,
@@ -122,7 +122,14 @@ impl TerminalRenderer {
         let baseline = self.centered_baseline(center_y);
 
         // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
-        Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
+        Self::draw_rect(
+            canvas,
+            left_x,
+            bar_y,
+            width.saturating_sub(left_x),
+            bar_h,
+            theme.bar_bg(),
+        );
 
         // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones · keep-awake.
         let (_, badge_label, ai_fg) =
@@ -229,7 +236,7 @@ impl TerminalRenderer {
         let (bx, _by, bw, _bh) = rects.ai_badge;
 
         // 3. Izquierda: SSH, carpeta (solo texto) y rama. Sin separadores: el espacio en blanco ya agrupa.
-        let mut cur_x = 14;
+        let mut cur_x = left_x + 14;
         let mut room = true;
         let text_limit = rects
             .update_badge

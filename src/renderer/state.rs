@@ -36,6 +36,7 @@ pub(crate) struct StatusMeter {
 
 /// Cabecera de la columna de sesiones: título, rama y carpeta de la sesión a la vista.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg(test)]
 pub(crate) struct SidebarHeader {
     pub(crate) title: String,
     pub(crate) branch: Option<String>,
@@ -117,7 +118,6 @@ pub(crate) struct SettingsPageState {
     pub search_input: crate::ui::TextInput,
     pub hovered_theme: Option<usize>,
     pub hovered_theme_mode: Option<usize>,
-    pub hovered_tab_layout: Option<usize>,
     pub hovered_font_minus: bool,
     pub hovered_font_plus: bool,
     pub hovered_font_box: bool,
@@ -174,7 +174,6 @@ impl SettingsPageState {
         let changed = self.hovered_section.is_some()
             || self.hovered_theme.is_some()
             || self.hovered_theme_mode.is_some()
-            || self.hovered_tab_layout.is_some()
             || self.hovered_font_minus
             || self.hovered_font_plus
             || self.hovered_font_box
@@ -216,7 +215,6 @@ impl SettingsPageState {
             self.hovered_section = None;
             self.hovered_theme = None;
             self.hovered_theme_mode = None;
-            self.hovered_tab_layout = None;
             self.hovered_font_minus = false;
             self.hovered_font_plus = false;
             self.hovered_font_box = false;
@@ -268,7 +266,6 @@ impl Default for SettingsPageState {
             search_input: crate::ui::TextInput::default(),
             hovered_theme: None,
             hovered_theme_mode: None,
-            hovered_tab_layout: None,
             hovered_font_minus: false,
             hovered_font_plus: false,
             hovered_font_box: false,

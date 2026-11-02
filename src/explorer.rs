@@ -15,6 +15,67 @@ fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
         .cmp(b.chars().flat_map(char::to_lowercase))
 }
 
+/// Puntuación de coincidencia difusa entre `query` y `text`.
+/// Devuelve `None` si no coincide. Puntuaciones mayores indican mayor relevancia.
+pub(crate) fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let q = query.to_lowercase();
+    let target = text.to_lowercase();
+
+    if target == q {
+        return Some(1000);
+    }
+    if target.starts_with(&q) {
+        return Some(800 - (target.len() as i32).min(100));
+    }
+    if let Some(pos) = target.find(&q) {
+        return Some(600 - (pos as i32 * 10).min(200));
+    }
+    // Coincidencia de subsecuencia difusa: cada carácter de `q` aparece en orden en `target`
+    let mut target_chars = target.chars();
+    let mut score = 400;
+    let mut last_idx = 0;
+    for (qi, qc) in q.chars().enumerate() {
+        let mut found = false;
+        let mut idx = last_idx;
+        for tc in target_chars.by_ref() {
+            idx += 1;
+            if tc == qc {
+                found = true;
+                if qi > 0 {
+                    score -= (idx - last_idx).min(15) as i32;
+                }
+                last_idx = idx;
+                break;
+            }
+        }
+        if !found {
+            return None;
+        }
+    }
+    Some(score.max(50))
+}
+
+fn score_item(query: &str, item: &ExplorerItem, root: &Path) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    // 1. Coincidencia en el nombre del archivo o carpeta
+    if let Some(name_score) = fuzzy_score(query, &item.name) {
+        return Some(name_score + 200);
+    }
+    // 2. Coincidencia en la ruta relativa respecto a la raíz
+    if let Ok(rel) = item.path.strip_prefix(root) {
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
+        if let Some(path_score) = fuzzy_score(query, &rel_str) {
+            return Some(path_score);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GitFileStatus {
     Modified,
@@ -211,8 +272,6 @@ pub(crate) struct FileExplorer {
     pub git_root: Option<PathBuf>,
     /// Vista «Cambios»: lista plana solo con los archivos modificados según git
     pub changes_only: bool,
-    /// Pestaña bajo el ratón: `Some(true)` «Cambios», `Some(false)` «Archivos».
-    pub hovered_tab: Option<bool>,
     /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
     pub is_pinned: bool,
     pub hovered_pin_btn: bool,
@@ -220,6 +279,14 @@ pub(crate) struct FileExplorer {
     pub error_message: Option<String>,
     /// Nombre en edición (nuevo archivo/carpeta o renombrar): ver `explorer/edit.rs`
     pub edit: Option<ExplorerEdit>,
+    /// Entrada de texto para filtrado rápido en el árbol (`Ctrl + P` / `Ctrl + F`)
+    pub filter: Option<crate::ui::TextInput>,
+    /// Índices de `items` que coinciden con el filtro activo (en orden de relevancia o jerárquico)
+    pub filtered_indices: Option<Vec<usize>>,
+    /// Botón de cerrar/limpiar el filtro bajo el ratón
+    pub hovered_filter_close: bool,
+    /// Carpetas que estaban expandidas antes de activar el filtro (para restaurar al salir con Esc)
+    filter_saved_expansion: Option<FxHashSet<PathBuf>>,
     /// Última sesión remota pedida con `set_remote_session` (la raíz canónica de `remote_session` puede diferir)
     remote_requested: Option<RemoteSshSession>,
     /// Generación de la vista remota por SSH lento: las respuestas de una anterior se ignoran
@@ -246,9 +313,85 @@ impl FileExplorer {
     pub(crate) const HEADER_HEIGHT: usize = 38;
     /// Aire entre la cabecera de sección y la lista (sin barra de herramientas).
     pub(crate) const SUBHEADER_HEIGHT: usize = 0;
+    /// Alto de la barra de filtro rápido de archivos (`Ctrl + P` / `Ctrl + F`)
+    pub(crate) const FILTER_BAR_HEIGHT: usize = 32;
     pub(crate) const ITEM_HEIGHT: usize = 26;
     /// Aire entre el sub-encabezado y la primera fila de la lista
     pub(crate) const LIST_TOP_PAD: usize = 4;
+
+    /// Alto dinámico del subencabezado según si el filtro está abierto o no
+    #[inline]
+    pub(crate) fn subheader_height(&self) -> usize {
+        if self.filter.is_some() {
+            Self::FILTER_BAR_HEIGHT
+        } else {
+            0
+        }
+    }
+
+    /// Rectángulo del cajón de búsqueda del filtro rápido
+    #[inline]
+    pub(crate) fn filter_bar_rect(
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+    ) -> (usize, usize, usize, usize) {
+        let bx = panel_x + 8;
+        let by = panel_y + Self::HEADER_HEIGHT + 2;
+        let bw = panel_w.saturating_sub(16);
+        let bh = Self::FILTER_BAR_HEIGHT.saturating_sub(4);
+        (bx, by, bw, bh)
+    }
+
+    /// Rectángulo del botón de cerrar/limpiar (X) del filtro
+    #[inline]
+    pub(crate) fn filter_close_btn_rect(
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+    ) -> (usize, usize, usize, usize) {
+        let (bx, by, bw, bh) = Self::filter_bar_rect(panel_x, panel_y, panel_w);
+        let btn_w = 20;
+        let btn_h = bh;
+        let btn_x = bx + bw.saturating_sub(btn_w + 2);
+        (btn_x, by, btn_w, btn_h)
+    }
+
+    /// Indica si el filtro rápido del árbol está activo
+    #[inline]
+    pub(crate) fn is_filtering(&self) -> bool {
+        self.filter.is_some()
+    }
+
+    /// Total de elementos visibles teniendo en cuenta el filtro
+    #[inline]
+    pub(crate) fn visible_item_count(&self) -> usize {
+        if let Some(indices) = &self.filtered_indices {
+            indices.len()
+        } else {
+            self.items.len()
+        }
+    }
+
+    /// Referencia al elemento en la posición visible `visible_idx`
+    #[inline]
+    pub(crate) fn visible_item(&self, visible_idx: usize) -> Option<&ExplorerItem> {
+        if let Some(indices) = &self.filtered_indices {
+            indices.get(visible_idx).and_then(|&i| self.items.get(i))
+        } else {
+            self.items.get(visible_idx)
+        }
+    }
+
+    /// Índice real en `self.items` correspondiente a la fila visible `visible_idx`
+    #[inline]
+    pub(crate) fn actual_index_for_visible(&self, visible_idx: usize) -> Option<usize> {
+        if let Some(indices) = &self.filtered_indices {
+            indices.get(visible_idx).copied()
+        } else {
+            Some(visible_idx)
+        }
+    }
 
     /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
     #[allow(dead_code)]
@@ -358,12 +501,15 @@ impl FileExplorer {
             dock: None,
             git_root: None,
             changes_only: false,
-            hovered_tab: None,
             is_pinned: false,
             hovered_pin_btn: false,
             remote_session: None,
             error_message: None,
             edit: None,
+            filter: None,
+            filtered_indices: None,
+            hovered_filter_close: false,
+            filter_saved_expansion: None,
         };
 
         if visible {
@@ -470,6 +616,116 @@ impl FileExplorer {
                 break;
             };
             self.toggle_expand(idx);
+        }
+    }
+
+    /// Abre el filtro rápido del árbol expandiendo carpetas para búsqueda profunda
+    pub(crate) fn open_filter(&mut self) {
+        if self.filter.is_some() {
+            if let Some(ref mut input) = self.filter {
+                input.select_all();
+            }
+            return;
+        }
+        let expanded: FxHashSet<PathBuf> = self
+            .items
+            .iter()
+            .filter(|it| it.is_dir && it.is_expanded)
+            .map(|it| it.path.clone())
+            .collect();
+        self.filter_saved_expansion = Some(expanded);
+        if self.remote_session.is_none() && !self.changes_only {
+            self.expand_all();
+        }
+        self.filter = Some(crate::ui::TextInput::new(""));
+        self.update_filter();
+    }
+
+    /// Cierra el filtro rápido y restaura el estado previo del árbol
+    pub(crate) fn close_filter(&mut self) {
+        self.filter = None;
+        self.filtered_indices = None;
+        self.hovered_filter_close = false;
+        if let Some(saved) = self.filter_saved_expansion.take() {
+            if self.remote_session.is_none() && !self.changes_only {
+                self.populate_directory_with_expanded(&saved);
+            }
+        }
+        self.scroll_offset = 0;
+        self.selected_index = if self.items.is_empty() { None } else { Some(0) };
+        self.selected_path = self.items.first().map(|i| i.path.clone());
+    }
+
+    /// Actualiza los índices filtrados en memoria según el texto de búsqueda
+    pub(crate) fn update_filter(&mut self) {
+        let Some(input) = &self.filter else {
+            self.filtered_indices = None;
+            return;
+        };
+        let query = input.text.trim();
+        if query.is_empty() {
+            self.filtered_indices = Some((0..self.items.len()).collect());
+            self.scroll_offset = 0;
+            self.selected_index = if self.items.is_empty() { None } else { Some(0) };
+            self.selected_path = self.items.first().map(|i| i.path.clone());
+            return;
+        }
+
+        let mut keep = vec![false; self.items.len()];
+        let mut best_score = i32::MIN;
+        let mut best_file_idx = None;
+
+        for (idx, item) in self.items.iter().enumerate() {
+            if let Some(score) = score_item(query, item, &self.root_dir) {
+                keep[idx] = true;
+                if !item.is_dir && score > best_score {
+                    best_score = score;
+                    best_file_idx = Some(idx);
+                } else if item.is_dir && best_file_idx.is_none() && score > best_score {
+                    best_score = score;
+                    best_file_idx = Some(idx);
+                }
+            }
+        }
+
+        // Mantener visibles las carpetas ancestras de cualquier elemento coincidente
+        for idx in 0..self.items.len() {
+            if keep[idx] {
+                let mut cur_depth = self.items[idx].depth;
+                if cur_depth > 0 {
+                    for p in (0..idx).rev() {
+                        if self.items[p].is_dir && self.items[p].depth < cur_depth {
+                            keep[p] = true;
+                            self.items[p].is_expanded = true;
+                            cur_depth = self.items[p].depth;
+                            if cur_depth == 0 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let indices: Vec<usize> = (0..self.items.len()).filter(|&i| keep[i]).collect();
+
+        let selected_pos = if let Some(best_real) = best_file_idx {
+            indices.iter().position(|&i| i == best_real).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let count = indices.len();
+        self.filtered_indices = Some(indices);
+        self.scroll_offset = 0;
+        if count > 0 {
+            self.selected_index = Some(selected_pos.min(count - 1));
+            self.selected_path = self
+                .visible_item(selected_pos.min(count - 1))
+                .map(|i| i.path.clone());
+        } else {
+            self.selected_index = None;
+            self.selected_path = None;
         }
     }
 
@@ -883,11 +1139,22 @@ impl FileExplorer {
             .map(|it| it.path.clone())
             .collect();
 
+        self.populate_directory_with_expanded(&expanded_paths);
+        if self.is_filtering() {
+            self.update_filter();
+        }
+    }
+
+    /// Rellena `self.items` leyendo el directorio con las carpetas de `expanded` abiertas
+    pub(crate) fn populate_directory_with_expanded(&mut self, expanded: &FxHashSet<PathBuf>) {
+        if self.remote_session.is_some() {
+            return;
+        }
         self.items.clear();
         Self::read_directory(
             &self.root_dir,
             0,
-            &expanded_paths,
+            expanded,
             &self.git_statuses,
             &mut self.items,
         );
@@ -1051,7 +1318,7 @@ impl FileExplorer {
 
     /// Desplaza la lista verticalmente con la rueda del ratón
     pub(crate) fn scroll(&mut self, delta: isize, max_visible_lines: usize) {
-        let max_offset = self.items.len().saturating_sub(max_visible_lines);
+        let max_offset = self.visible_item_count().saturating_sub(max_visible_lines);
         if delta < 0 {
             self.scroll_offset = (self.scroll_offset + delta.unsigned_abs()).min(max_offset);
         } else {
@@ -1070,13 +1337,13 @@ impl FileExplorer {
     /// Obtiene el índice del elemento en la posición Y considerando el desplazamiento superior
     pub(crate) fn item_at_y(&self, my: usize, top_offset: usize) -> Option<usize> {
         let list_top =
-            top_offset + Self::HEADER_HEIGHT + Self::SUBHEADER_HEIGHT + Self::LIST_TOP_PAD;
+            top_offset + Self::HEADER_HEIGHT + self.subheader_height() + Self::LIST_TOP_PAD;
         if my < list_top {
             return None;
         }
         let rel_y = my - list_top;
         let item_idx = self.scroll_offset + (rel_y / Self::ITEM_HEIGHT);
-        if item_idx < self.items.len() {
+        if item_idx < self.visible_item_count() {
             Some(item_idx)
         } else {
             None
@@ -1085,17 +1352,18 @@ impl FileExplorer {
 
     /// Mueve la selección hacia arriba o hacia abajo y ajusta el scroll si es necesario
     pub(crate) fn navigate_selection(&mut self, delta: isize, max_visible: usize) {
-        if self.items.is_empty() {
+        let count = self.visible_item_count();
+        if count == 0 {
             return;
         }
         let current = self.selected_index.unwrap_or(0);
         let next = if delta > 0 {
-            (current + delta as usize).min(self.items.len() - 1)
+            (current + delta as usize).min(count - 1)
         } else {
             current.saturating_sub(delta.unsigned_abs())
         };
         self.selected_index = Some(next);
-        self.selected_path = Some(self.items[next].path.clone());
+        self.selected_path = self.visible_item(next).map(|i| i.path.clone());
         self.ensure_visible(next, max_visible);
     }
 
@@ -1113,33 +1381,53 @@ impl FileExplorer {
 
     /// Maneja la pulsación de Flecha Izquierda: colapsa carpeta, sube al directorio padre o a nivel raíz
     pub(crate) fn handle_arrow_left(&mut self, max_visible: usize) {
-        if self.items.is_empty() {
+        let count = self.visible_item_count();
+        if count == 0 {
             return;
         }
         let Some(idx) = self.selected_index else {
             self.selected_index = Some(0);
-            self.selected_path = Some(self.items[0].path.clone());
+            self.selected_path = self.visible_item(0).map(|i| i.path.clone());
             return;
         };
-        if idx >= self.items.len() {
+        if idx >= count {
             return;
         }
 
-        if self.items[idx].is_dir && self.items[idx].is_expanded {
+        let Some(item) = self.visible_item(idx) else {
+            return;
+        };
+
+        let is_dir = item.is_dir;
+        let is_expanded = item.is_expanded;
+        let depth = item.depth;
+
+        if is_dir && is_expanded {
             // Colapsar carpeta
-            self.toggle_expand(idx);
-        } else if self.items[idx].depth > 0 {
-            // Seleccionar directorio padre de este elemento
-            let target_depth = self.items[idx].depth - 1;
-            for p_idx in (0..idx).rev() {
-                if self.items[p_idx].is_dir && self.items[p_idx].depth == target_depth {
-                    self.selected_index = Some(p_idx);
-                    self.selected_path = Some(self.items[p_idx].path.clone());
-                    self.ensure_visible(p_idx, max_visible);
-                    break;
+            if let Some(real_idx) = self.actual_index_for_visible(idx) {
+                self.toggle_expand(real_idx);
+                if self.is_filtering() {
+                    self.update_filter();
                 }
             }
-        } else {
+        } else if depth > 0 {
+            // Seleccionar directorio padre de este elemento
+            let target_depth = depth - 1;
+            let mut found_parent = None;
+            for p_idx in (0..idx).rev() {
+                if let Some(p_item) = self.visible_item(p_idx) {
+                    if p_item.is_dir && p_item.depth == target_depth {
+                        found_parent = Some((p_idx, p_item.path.clone()));
+                        break;
+                    }
+                }
+            }
+            if let Some((p_idx, path)) = found_parent {
+                self.selected_index = Some(p_idx);
+                self.selected_path = Some(path);
+                self.ensure_visible(p_idx, max_visible);
+            }
+        } else if !self.is_filtering() {
             // En nivel raíz: subir de directorio (..)
             self.navigate_up();
             self.selected_index = if self.items.is_empty() { None } else { Some(0) };
@@ -1149,54 +1437,83 @@ impl FileExplorer {
 
     /// Maneja la pulsación de Flecha Derecha: expande carpeta, entra al primer hijo, o devuelve archivo para abrir
     pub(crate) fn handle_arrow_right(&mut self, max_visible: usize) -> Option<PathBuf> {
-        if self.items.is_empty() {
+        let count = self.visible_item_count();
+        if count == 0 {
             return None;
         }
         let Some(idx) = self.selected_index else {
             self.selected_index = Some(0);
-            self.selected_path = Some(self.items[0].path.clone());
+            self.selected_path = self.visible_item(0).map(|i| i.path.clone());
             return None;
         };
-        if idx >= self.items.len() {
+        if idx >= count {
             return None;
         }
 
-        if self.items[idx].is_dir {
-            if !self.items[idx].is_expanded {
-                self.toggle_expand(idx);
-            } else if idx + 1 < self.items.len()
-                && self.items[idx + 1].depth > self.items[idx].depth
-            {
-                // Ya expandido: entrar al primer hijo
-                self.selected_index = Some(idx + 1);
-                self.selected_path = Some(self.items[idx + 1].path.clone());
-                self.ensure_visible(idx + 1, max_visible);
+        let (is_dir, is_expanded, depth, item_path) = {
+            let Some(item) = self.visible_item(idx) else {
+                return None;
+            };
+            (item.is_dir, item.is_expanded, item.depth, item.path.clone())
+        };
+
+        if is_dir {
+            if !is_expanded {
+                if let Some(real_idx) = self.actual_index_for_visible(idx) {
+                    self.toggle_expand(real_idx);
+                    if self.is_filtering() {
+                        self.update_filter();
+                    }
+                }
+            } else if idx + 1 < count {
+                let next_child = self.visible_item(idx + 1).and_then(|next_item| {
+                    if next_item.depth > depth {
+                        Some((idx + 1, next_item.path.clone()))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((next_idx, path)) = next_child {
+                    self.selected_index = Some(next_idx);
+                    self.selected_path = Some(path);
+                    self.ensure_visible(next_idx, max_visible);
+                }
             }
             None
         } else {
-            Some(self.items[idx].path.clone())
+            Some(item_path)
         }
     }
 
     /// Maneja la pulsación de Enter: alterna carpeta o devuelve archivo para abrir en visor
     pub(crate) fn handle_enter(&mut self, _max_visible: usize) -> Option<PathBuf> {
-        if self.items.is_empty() {
+        let count = self.visible_item_count();
+        if count == 0 {
             return None;
         }
         let Some(idx) = self.selected_index else {
             self.selected_index = Some(0);
-            self.selected_path = Some(self.items[0].path.clone());
+            self.selected_path = self.visible_item(0).map(|i| i.path.clone());
             return None;
         };
-        if idx >= self.items.len() {
+        if idx >= count {
             return None;
         }
 
-        if self.items[idx].is_dir {
-            self.toggle_expand(idx);
+        let Some(item) = self.visible_item(idx) else {
+            return None;
+        };
+
+        if item.is_dir {
+            if let Some(real_idx) = self.actual_index_for_visible(idx) {
+                self.toggle_expand(real_idx);
+                if self.is_filtering() {
+                    self.update_filter();
+                }
+            }
             None
         } else {
-            Some(self.items[idx].path.clone())
+            Some(item.path.clone())
         }
     }
 }
@@ -1416,5 +1733,70 @@ mod tests {
         assert_eq!(ph, 24);
         assert_eq!(py, 57);
         assert_eq!(px, 100 + 260 - 66);
+    }
+
+    #[test]
+    fn test_fuzzy_score() {
+        assert_eq!(fuzzy_score("", "anything"), Some(0));
+        assert_eq!(fuzzy_score("main", "main"), Some(1000));
+        assert!(fuzzy_score("main", "main.rs").unwrap() > fuzzy_score("ain", "main.rs").unwrap());
+        assert!(fuzzy_score("geo", "geometry.rs").is_some());
+        assert!(fuzzy_score("crg", "Cargo.toml").is_some());
+        assert_eq!(fuzzy_score("xyz123", "main.rs"), None);
+    }
+
+    #[test]
+    fn test_file_explorer_filter_lifecycle() {
+        let tmp =
+            std::env::temp_dir().join(format!("tearminal_filter_test_{}", std::process::id()));
+        let sub = tmp.join("sub");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(tmp.join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(tmp.join("lib.rs"), "pub fn lib() {}").unwrap();
+        std::fs::write(sub.join("inner.rs"), "pub fn inner() {}").unwrap();
+
+        let mut explorer = FileExplorer::new(Some(tmp.clone()), false);
+        explorer.refresh();
+        assert!(!explorer.is_filtering());
+        assert_eq!(explorer.subheader_height(), 0);
+
+        // Abrir filtro
+        explorer.open_filter();
+        assert!(explorer.is_filtering());
+        assert_eq!(explorer.subheader_height(), FileExplorer::FILTER_BAR_HEIGHT);
+
+        // Filtrar por 'inner'
+        explorer.filter.as_mut().unwrap().set_text("inner");
+        explorer.update_filter();
+
+        // Debe mantener visible la carpeta 'sub' y el archivo 'inner.rs'
+        assert!(explorer.visible_item_count() >= 2);
+        let matching_names: Vec<String> = (0..explorer.visible_item_count())
+            .filter_map(|i| explorer.visible_item(i).map(|it| it.name.clone()))
+            .collect();
+        assert!(matching_names.contains(&"sub".to_string()));
+        assert!(matching_names.contains(&"inner.rs".to_string()));
+
+        // El archivo seleccionado debe ser 'inner.rs'
+        let sel_idx = explorer
+            .selected_index
+            .expect("debe haber elemento seleccionado");
+        let sel_item = explorer
+            .visible_item(sel_idx)
+            .expect("item seleccionado debe existir");
+        assert_eq!(sel_item.name, "inner.rs");
+
+        // Enter devuelve la ruta del archivo
+        let opened = explorer.handle_enter(10);
+        assert!(opened.is_some());
+        assert!(opened.unwrap().ends_with("inner.rs"));
+
+        // Cerrar filtro restaura el estado
+        explorer.close_filter();
+        assert!(!explorer.is_filtering());
+        assert_eq!(explorer.subheader_height(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

@@ -339,11 +339,13 @@ impl TerminalRenderer {
         canvas: &mut Canvas,
         slot: (usize, usize, usize),
         title: &str,
-        _subtitle: Option<&str>,
-        _icon: crate::ui::LucideIcon,
-        _icon_color: Color,
+        subtitle: Option<&str>,
+        icon: crate::ui::LucideIcon,
+        icon_color: Color,
         focused: bool,
         zoomed: bool,
+        multi_pane: bool,
+        show_buttons: bool,
         hovered: Option<PaneHeaderButton>,
         theme: &Theme,
     ) {
@@ -366,58 +368,85 @@ impl TerminalRenderer {
             PaneHeaderRects::BORDER,
             theme.chrome_line(),
         );
-        if focused {
+        // El panel enfocado se distingue solo cuando hay varios (con uno no hay nada que distinguir)
+        if focused && multi_pane {
             canvas.fill_rect(clip, x, y + total_h - 2, w, 2, theme.accent_color());
         }
 
         let cy = rects.header.1 + PaneHeaderRects::HEIGHT / 2;
 
         // El texto no invade los botones que se dibujan en este panel
-        let buttons_left = if focused {
+        let buttons_left = if show_buttons {
             rects.split_btn.0
         } else {
-            rects.close_btn.0
+            x + w
         };
         let text_max = buttons_left.saturating_sub(12);
         let baseline = self.centered_baseline(cy);
-        self.draw_ui_text(
+        self.draw_lucide_icon(
+            canvas,
+            icon,
+            x + PaneHeaderRects::TEXT_X + 6,
+            cy,
+            13.0,
+            icon_color,
+        );
+        let title_x = x + PaneHeaderRects::TEXT_X + 22;
+        let title_end = self.draw_ui_text(
             canvas,
             title,
-            x + PaneHeaderRects::TEXT_X,
+            title_x,
             baseline,
             text_max,
             theme.foreground,
             tokens::TITLE,
             true,
         );
-
-        if focused {
-            self.draw_pane_header_button(
+        if let Some(sub) = subtitle {
+            self.draw_ui_text(
                 canvas,
+                sub,
+                title_end + 10,
+                baseline,
+                text_max,
+                theme.text_muted(),
+                tokens::DETAIL,
+                false,
+            );
+        }
+
+        // Los botones aparecen solo con el ratón sobre la cabecera
+        if !show_buttons {
+            return;
+        }
+        for (rect, icon, button) in [
+            (
                 rects.split_btn,
                 crate::ui::LucideIcon::Columns2,
-                hovered == Some(PaneHeaderButton::Split),
-                theme,
-            );
-            self.draw_pane_header_button(
-                canvas,
+                PaneHeaderButton::Split,
+            ),
+            (
+                rects.split_h_btn,
+                crate::ui::LucideIcon::Rows2,
+                PaneHeaderButton::SplitHorizontal,
+            ),
+            (
                 rects.zoom_btn,
                 if zoomed {
                     crate::ui::LucideIcon::Minimize2
                 } else {
                     crate::ui::LucideIcon::Maximize2
                 },
-                hovered == Some(PaneHeaderButton::Zoom),
-                theme,
-            );
+                PaneHeaderButton::Zoom,
+            ),
+            (
+                rects.close_btn,
+                crate::ui::LucideIcon::X,
+                PaneHeaderButton::Close,
+            ),
+        ] {
+            self.draw_pane_header_button(canvas, rect, icon, hovered == Some(button), theme);
         }
-        self.draw_pane_header_button(
-            canvas,
-            rects.close_btn,
-            crate::ui::LucideIcon::X,
-            hovered == Some(PaneHeaderButton::Close),
-            theme,
-        );
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -581,8 +610,12 @@ impl TerminalRenderer {
             while col_idx < cols_in_row {
                 let cell = &row_slice[col_idx];
 
+                let is_hovered_url = self
+                    .hovered_url_span
+                    .is_some_and(|(hl, sc, ec)| global_row == hl && col_idx >= sc && col_idx <= ec);
+
                 // Espaciador de carácter ancho o espacio sin decoración: nada más que pintar
-                let decorated = cell.underline() || cell.strikethrough();
+                let decorated = cell.underline() || cell.strikethrough() || is_hovered_url;
                 if cell.width == 0 || (cell.c == ' ' && !decorated) {
                     col_idx += 1;
                     continue;
@@ -595,10 +628,14 @@ impl TerminalRenderer {
                     compute_cell_fg(cell, theme)
                 };
 
-                // Subrayado (SGR 4 / SGR 58) y tachado (SGR 9)
-                if cell.underline() {
+                // Subrayado (SGR 4 / SGR 58 / hipervínculo hover) y tachado (SGR 9)
+                if cell.underline() || is_hovered_url {
                     let line_y = cell_y + self.row_height - 2;
-                    let ul_color = terminal.underline_color_of(cell).unwrap_or(fg_color);
+                    let ul_color = if is_hovered_url {
+                        theme.accent_color()
+                    } else {
+                        terminal.underline_color_of(cell).unwrap_or(fg_color)
+                    };
                     canvas.fill_rect(clip, cell_x, line_y, self.char_width, 1, ul_color);
                 }
                 if cell.strikethrough() {
@@ -671,10 +708,17 @@ impl TerminalRenderer {
                             let cur_cell_x = base_x + (cur_col * self.char_width);
 
                             if k > 0 {
-                                if cur_cell.underline() {
+                                let is_cur_url =
+                                    self.hovered_url_span.is_some_and(|(hl, sc, ec)| {
+                                        global_row == hl && cur_col >= sc && cur_col <= ec
+                                    });
+                                if cur_cell.underline() || is_cur_url {
                                     let line_y = cell_y + self.row_height - 2;
-                                    let ul_color =
-                                        terminal.underline_color_of(cur_cell).unwrap_or(fg_color);
+                                    let ul_color = if is_cur_url {
+                                        theme.accent_color()
+                                    } else {
+                                        terminal.underline_color_of(cur_cell).unwrap_or(fg_color)
+                                    };
                                     canvas.fill_rect(
                                         clip,
                                         cur_cell_x,

@@ -180,6 +180,8 @@ fn test_settings_reset_to_defaults() {
 
 #[test]
 fn test_app_tab_switching_and_toggle() {
+    use crate::renderer::SpacesPanelRects;
+
     let config = TearminalConfig::load_or_default();
     let mut app = TearminalApp::new(config, None);
 
@@ -188,20 +190,20 @@ fn test_app_tab_switching_and_toggle() {
         "Debe inicializar con al menos 1 pestaña"
     );
 
-    // Forzar estado conocido para validar transición y cálculo de offset
-    app.config.appearance.tab_layout = "vertical".to_string();
+    // El panel de Spaces resta su ancho por la izquierda; Ctrl+B solo oculta la tarjeta del explorador
     app.sidebar_visible = true;
-    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
-
-    // Conmutar visibilidad de la barra lateral (ocultar)
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
     app.toggle_sidebar();
     assert!(!app.sidebar_visible);
-    assert_eq!(app.sidebar_offset(), 0);
-
-    // Conmutar nuevamente (mostrar)
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
     app.toggle_sidebar();
     assert!(app.sidebar_visible);
-    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
+
+    // Colapsado a riel el panel de Spaces resta 44 px
+    app.toggle_spaces_panel();
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::RAIL_W);
+    app.toggle_spaces_panel();
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
 }
 
 #[test]
@@ -245,9 +247,12 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(rects.len(), 1);
     assert_eq!(rects[0].pane_id, PaneId(1));
     assert_eq!(rects[0].x, 0);
-    assert_eq!(rects[0].y, 0);
+    // Un solo panel también lleva cabecera (shell y carpeta), sin botones
+    let header = crate::renderer::PaneHeaderRects::content_offset_for(0);
+    assert!(rects[0].has_header && !rects[0].has_buttons);
+    assert_eq!(rects[0].y, header);
     assert_eq!(rects[0].width, 1000);
-    assert_eq!(rects[0].height, 600);
+    assert_eq!(rects[0].height, 600 - header);
 
     // 2. División horizontal (Ctrl + Alt + D)
     let pty2 =
@@ -290,23 +295,22 @@ fn test_split_panes_layout_and_tree() {
     assert!(tab.toggle_pane_zoom(PaneId(2)));
     assert_eq!(tab.compute_pane_rects(0, 0, 1000, 600).len(), 2);
 
-    // 2c. Botones de la cabecera: dividir/maximizar solo en el panel enfocado
+    // 2c. Botones de la cabecera: todo panel tiene los cuatro (columnas · filas · maximizar · cerrar)
     let header = PaneHeaderRects::compute(0, 0, 600);
     let center = |r: (usize, usize, usize, usize)| (r.0 + r.2 / 2, r.1 + r.3 / 2);
     let (sx, sy) = center(header.split_btn);
+    let (hx, hy) = center(header.split_h_btn);
     let (zx, zy) = center(header.zoom_btn);
     let (cx, cy) = center(header.close_btn);
+    assert_eq!(header.button_at(sx, sy), Some(PaneHeaderButton::Split));
     assert_eq!(
-        header.button_at(sx, sy, true),
-        Some(PaneHeaderButton::Split)
+        header.button_at(hx, hy),
+        Some(PaneHeaderButton::SplitHorizontal)
     );
-    assert_eq!(header.button_at(zx, zy, true), Some(PaneHeaderButton::Zoom));
-    assert_eq!(header.button_at(sx, sy, false), None);
-    assert_eq!(
-        header.button_at(cx, cy, false),
-        Some(PaneHeaderButton::Close)
-    );
-    assert_eq!(header.button_at(10, 300, true), None);
+    assert_eq!(header.button_at(zx, zy), Some(PaneHeaderButton::Zoom));
+    assert_eq!(header.button_at(cx, cy), Some(PaneHeaderButton::Close));
+    assert!(header.split_btn.0 + header.split_btn.2 <= header.split_h_btn.0);
+    assert_eq!(header.button_at(10, 300), None);
 
     // 3. Cerrar un panel (Ctrl + Alt + W) y validar que el árbol colapsa limpiamente
     tab.close_pane(PaneId(1));
@@ -317,7 +321,9 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(collapsed_rects.len(), 1);
     assert_eq!(collapsed_rects[0].pane_id, PaneId(2));
     assert_eq!(collapsed_rects[0].width, 1000);
-    assert_eq!(collapsed_rects[0].height, 600);
+    // Con un solo panel la cabecera sigue (sin botones)
+    assert_eq!(collapsed_rects[0].height, 600 - hdr0);
+    assert!(!collapsed_rects[0].has_buttons);
 }
 
 #[test]
@@ -1801,10 +1807,13 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
         sidebar_visible: true,
         file_explorer_visible: false,
         file_explorer_width: 300,
+        spaces: Vec::new(),
+        spaces_collapsed: false,
         tabs: vec![TabSession {
             title: "T".into(),
             layout: gone,
             active_pane: 9,
+            space: 5, // fuera de rango
         }],
     };
     let app = TearminalApp::from_session(TearminalConfig::default(), None, Some(session));
@@ -1812,12 +1821,20 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
     assert_eq!(app.active_tab_index, 0);
     assert!(app.tabs[0].active_pane().is_some());
     assert_eq!(app.file_explorer.width, 300);
+    assert_eq!(
+        app.spaces.len(),
+        1,
+        "una sesión antigua cae en un solo Space"
+    );
+    assert_eq!(app.tabs[0].space, app.spaces[0].id);
 
     let empty = WindowSession {
         active_tab_index: 0,
         sidebar_visible: true,
         file_explorer_visible: false,
         file_explorer_width: 240,
+        spaces: Vec::new(),
+        spaces_collapsed: false,
         tabs: Vec::new(),
     };
     let app = TearminalApp::from_session(TearminalConfig::default(), None, Some(empty));
@@ -2577,62 +2594,34 @@ fn test_encode_kitty_key_various_combinations() {
 }
 
 #[test]
-fn test_panel_side_reserves_space_and_hosts_the_explorer() {
-    use crate::renderer::SidebarRects;
+fn test_explorer_docks_right_and_spaces_panel_reserves_the_left() {
+    use crate::renderer::{SidebarRects, SpacesPanelRects};
 
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.config.appearance.tab_layout = "vertical".to_string();
     app.sidebar_visible = true;
-    app.config.appearance.panel_side = "left".to_string();
-    assert_eq!(
-        (app.sidebar_offset(), app.file_explorer_offset()),
-        (SIDEBAR_WIDTH, 0)
-    );
-    assert_eq!(app.panel_local_x(10, 100, 1200), Some(10));
-    assert_eq!(app.panel_local_x(SIDEBAR_WIDTH, 100, 1200), None);
-
-    // A la derecha el espacio se reserva por ese lado y los clics se miden desde el borde del panel
-    app.config.appearance.panel_side = "right".to_string();
-    assert_eq!(
-        (app.sidebar_offset(), app.file_explorer_offset()),
-        (0, SIDEBAR_WIDTH)
-    );
-    assert_eq!(app.panel_local_x(10, 100, 1200), None);
-    assert_eq!(
-        app.panel_local_x(1200 - SIDEBAR_WIDTH + 5, 100, 1200),
-        Some(5)
-    );
-
-    // El explorador va alojado en la columna de sesiones del panel y no resta ancho al contenido
     app.file_explorer.visible = true;
-    app.sync_explorer_dock(1200, 800);
-    let (x, _, w, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
-    assert_eq!(x, 1200 - SIDEBAR_WIDTH + SidebarRects::RAIL_W);
-    // Termina en el borde interior de la tarjeta del panel.
+    let pw = app.panel_width();
     assert_eq!(
-        w,
-        SIDEBAR_WIDTH - SidebarRects::RAIL_W - SidebarRects::CARD_INSET
+        (app.sidebar_offset(), app.file_explorer_offset()),
+        (SpacesPanelRects::WIDTH, pw)
     );
-    assert_eq!(app.file_explorer_offset(), SIDEBAR_WIDTH);
 
-    // Sin panel (oculto) vuelve a acoplarse al borde derecho
-    app.sidebar_visible = false;
-    app.sync_explorer_dock(1200, 800);
-    assert!(app.file_explorer.dock.is_none());
-    assert_eq!(app.file_explorer_offset(), app.file_explorer.width);
-
-    // Con pestañas superiores el panel también aloja el explorador y el ratón sobre él no es del panel
-    app.sidebar_visible = true;
-    app.config.appearance.tab_layout = "horizontal".to_string();
+    // El explorador ocupa el interior de la tarjeta derecha (sin su margen de CARD_INSET)
     app.sync_explorer_dock(1200, 800);
     let (x, y, _, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
-    // El explorador ocupa el interior de la tarjeta del panel (sin su margen de CARD_INSET).
-    assert_eq!(x, 1200 - SIDEBAR_WIDTH + SidebarRects::CARD_INSET);
+    assert_eq!(x, 1200 - pw + SidebarRects::CARD_INSET);
     assert_eq!(
         app.panel_local_x(x + 5, 40, 1200),
         Some(5 + SidebarRects::CARD_INSET)
     );
+    // El ratón dentro del explorador no es del panel; el panel de Spaces tampoco es «panel»
     assert_eq!(app.panel_local_x(x + 5, y + 5, 1200), None);
+    assert_eq!(app.panel_local_x(10, 100, 1200), None);
+
+    // Con la tarjeta oculta el contenido recupera el ancho
+    app.sidebar_visible = false;
+    app.file_explorer.visible = false;
+    assert_eq!(app.file_explorer_offset(), 0);
 }
 
 #[test]
@@ -2678,21 +2667,33 @@ fn test_clean_block_command_and_path_helpers() {
 }
 
 #[test]
-fn test_settings_hides_the_side_panels_with_top_tabs() {
+fn test_settings_modal_keeps_the_layout_underneath() {
+    use crate::renderer::SpacesPanelRects;
+
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.config.appearance.tab_layout = "horizontal".to_string();
-    app.config.appearance.panel_side = "left".to_string();
     app.sidebar_visible = true;
     app.file_explorer.visible = true;
-    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
 
-    // Ajustes es una pantalla aparte: ni panel ni explorador restan espacio, y al volver siguen igual
+    // Ajustes es un modal sobre todo el contenido: el explorador y el panel de Spaces siguen donde estaban
+    // (se ven atenuados debajo) y al cerrarlo todo sigue igual
     app.open_or_switch_settings_tab();
     assert!(app.tabs[app.active_tab_index].is_settings);
-    assert_eq!((app.sidebar_offset(), app.file_explorer_offset()), (0, 0));
+    assert_eq!(
+        (app.sidebar_offset(), app.file_explorer_offset()),
+        (SpacesPanelRects::WIDTH, app.panel_width())
+    );
     assert!(app.sidebar_visible && app.file_explorer.visible);
-    app.switch_to_tab(0);
-    assert_eq!(app.sidebar_offset(), SIDEBAR_WIDTH);
+    assert!(
+        app.visible_tab_indices()
+            .iter()
+            .all(|&i| !app.tabs[i].is_settings),
+        "el modal de Ajustes no es un chip de la barra superior"
+    );
+    app.close_settings();
+    assert!(!app.tabs.iter().any(|t| t.is_settings));
+    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
+    assert_eq!(app.file_explorer_offset(), app.panel_width());
 }
 
 #[test]
@@ -2732,42 +2733,38 @@ fn test_gpu_error_message_mentions_warp_and_requirements() {
 
 #[test]
 fn test_terminal_area_offsets_not_corrupted_by_settings_tab() {
+    use crate::renderer::SpacesPanelRects;
+
     let mut config = TearminalConfig::load_or_default();
-    config.appearance.tab_layout = "horizontal".to_string();
-    config.appearance.panel_side = "left".to_string();
     config.appearance.show_status_bar = true;
     let mut app = TearminalApp::new(config, None);
     app.sidebar_visible = true;
+    let pw = app.panel_width();
 
-    // Con la terminal activa, el área de terminal descuenta la barra lateral izquierda y la de estado
+    // Con la terminal activa, el área descuenta el panel de Spaces, la tarjeta derecha y la barra de estado
     let (left, right, top, status_h) = app.terminal_area_offsets();
-    assert_eq!(left, SIDEBAR_WIDTH);
-    assert_eq!(right, 0);
+    assert_eq!(left, SpacesPanelRects::WIDTH);
+    assert_eq!(right, pw);
     assert_eq!(top, crate::renderer::TopTabBarRects::HEIGHT);
     assert_eq!(status_h, 26);
 
-    // Al abrir Ajustes (que en horizontal es fullscreen y no dibuja barra lateral ni de estado),
-    // terminal_area_offsets DEBE seguir devolviendo las dimensiones reales de las terminales
-    // para no corromper el cálculo de columnas (PTY/VT) de las pestañas en segundo plano.
+    // Con Ajustes abierto (un modal sobre el contenido, que sigue dibujándose debajo) las dimensiones de
+    // las terminales no cambian: no se recalcula el PTY/VT al abrirlo ni al cerrarlo.
     app.open_or_switch_settings_tab();
-    assert!(app.settings_fullscreen());
-    assert!(!app.panel_shown());
-
-    let (left_s, right_s, top_s, status_hs) = app.terminal_area_offsets();
-    assert_eq!(left_s, SIDEBAR_WIDTH);
-    assert_eq!(right_s, 0);
-    assert_eq!(top_s, crate::renderer::TopTabBarRects::HEIGHT);
-    assert_eq!(status_hs, 26);
-
-    // Al volver a la pestaña de terminal, todo se mantiene intacto
-    app.switch_to_tab(0);
-    assert!(!app.settings_fullscreen());
     assert!(app.panel_shown());
-    let (left_t, right_t, top_t, status_ht) = app.terminal_area_offsets();
-    assert_eq!(left_t, SIDEBAR_WIDTH);
-    assert_eq!(right_t, 0);
-    assert_eq!(top_t, crate::renderer::TopTabBarRects::HEIGHT);
-    assert_eq!(status_ht, 26);
+    assert_eq!(app.status_bar_height(), 26);
+    assert_eq!(
+        app.terminal_area_offsets(),
+        (SpacesPanelRects::WIDTH, pw, top, 26)
+    );
+
+    // Al cerrar el modal, todo se mantiene intacto
+    app.close_settings();
+    assert!(app.panel_shown());
+    assert_eq!(
+        app.terminal_area_offsets(),
+        (SpacesPanelRects::WIDTH, pw, top, 26)
+    );
 }
 
 #[test]
@@ -2869,160 +2866,60 @@ fn test_cache_alignment_and_enum_size_regressions() {
     assert!(flag.load(std::sync::atomic::Ordering::SeqCst));
 }
 
-/// El panel lateral es una tarjeta con cualquier disposición de pestañas (vertical u horizontal), a cualquier
-/// lado, y la tarjeta del contenido se estira bajo su margen para dejar un solo margen entre las dos.
 #[test]
-fn test_card_regions_panel_is_a_card_in_every_layout() {
+fn test_card_regions_stretch_content_under_the_right_card() {
     use super::redraw::card_regions;
-    use crate::renderer::SidebarRects;
+    use crate::renderer::{SidebarRects, SpacesPanelRects};
 
     let (w, h, status, top) = (1440usize, 900usize, 28usize, 38usize);
     let inset = SidebarRects::CARD_INSET;
     let usable = h - status;
+    let left = SpacesPanelRects::WIDTH;
 
-    // Panel a la izquierda (offset = SIDEBAR_WIDTH).
-    let r = card_regions(w, h, status, SIDEBAR_WIDTH, 0, top, true, false);
-    assert_eq!(r.panel, Some((0, top, SIDEBAR_WIDTH, usable - top)));
-    assert_eq!(
-        r.content,
-        (
-            SIDEBAR_WIDTH - inset,
-            top,
-            w - (SIDEBAR_WIDTH - inset),
-            usable - top
-        )
-    );
-
-    // Panel a la derecha (right_offset = SIDEBAR_WIDTH).
-    let r = card_regions(w, h, status, 0, SIDEBAR_WIDTH, top, true, true);
+    // Con el explorador a la vista (right_offset = SIDEBAR_WIDTH): el contenido se estira bajo su margen.
+    let r = card_regions(w, h, status, left, SIDEBAR_WIDTH, top, true, true);
     assert_eq!(
         r.panel,
         Some((w - SIDEBAR_WIDTH, top, SIDEBAR_WIDTH, usable - top))
     );
-    assert_eq!(r.content, (0, top, w - SIDEBAR_WIDTH + inset, usable - top));
+    assert_eq!(
+        r.content,
+        (left, top, w - SIDEBAR_WIDTH + inset - left, usable - top)
+    );
 
-    // Sin panel: solo la tarjeta del contenido, sin estirar.
-    let r = card_regions(w, h, status, 0, 0, top, false, false);
+    // Sin explorador: solo la tarjeta del contenido, sin estirar.
+    let r = card_regions(w, h, status, left, 0, top, false, true);
     assert_eq!(r.panel, None);
-    assert_eq!(r.content, (0, top, w, usable - top));
+    assert_eq!(r.content, (left, top, w - left, usable - top));
 }
 
 #[test]
-fn test_panel_resize_edge_detection_and_mouse_drag_on_both_sides() {
+fn test_panel_resize_edge_detection_and_mouse_drag() {
     use crate::explorer::FILE_EXPLORER_MIN_WIDTH;
 
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     app.sidebar_visible = true;
+    app.file_explorer.visible = true;
     let (win_w, win_h) = (1200, 800);
 
-    // 1. Panel a la izquierda (por defecto)
-    app.config.appearance.panel_side = "left".to_string();
-    let initial_w = app.panel_width();
-    assert_eq!(initial_w, SIDEBAR_WIDTH);
-
-    // Detección del borde de redimensionado en x = panel_width (±5 px)
-    assert!(app.on_panel_resize_edge(initial_w, 200, win_w, win_h));
-    assert!(app.on_panel_resize_edge(initial_w - 3, 200, win_w, win_h));
-    assert!(app.on_panel_resize_edge(initial_w + 3, 200, win_w, win_h));
-    assert!(!app.on_panel_resize_edge(initial_w + 30, 200, win_w, win_h));
-    assert!(!app.on_panel_resize_edge(initial_w - 30, 200, win_w, win_h));
-
-    // Arrastrar el borde hacia la derecha ensancha el panel
-    app.resize_panel_from_mouse(400, win_w);
-    assert_eq!(app.panel_width(), 400);
-    assert_eq!(app.sidebar_offset(), 400);
-
-    // Geometría dinámica del panel para dibujo y clics
-    let plus_btn = crate::renderer::SidebarRects::plus_btn_with_width(400);
-    assert_eq!(
-        plus_btn.0,
-        400 - crate::renderer::SidebarRects::PLUS_SIZE - 10
-    );
-    let tab_rect = crate::renderer::SidebarRects::tab_rect_with_width(0, 0, 400);
-    assert_eq!(
-        tab_rect.2,
-        400 - crate::renderer::SidebarRects::PAD_X - crate::renderer::SidebarRects::ROW_PAD_R
-    );
-
-    // Límites de acotado
-    app.resize_panel_from_mouse(50, win_w);
-    assert_eq!(app.panel_width(), FILE_EXPLORER_MIN_WIDTH);
-
-    app.resize_panel_from_mouse(1000, win_w);
-    assert_eq!(app.panel_width(), win_w / 2);
-
-    // 2. Panel a la derecha
-    app.config.appearance.panel_side = "right".to_string();
+    // El explorador va a la derecha: su borde de redimensionado está en x = win_w - ancho (±5 px)
     app.file_explorer.width = 300;
     let edge_x = win_w - 300;
-
     assert!(app.on_panel_resize_edge(edge_x, 200, win_w, win_h));
     assert!(app.on_panel_resize_edge(edge_x - 3, 200, win_w, win_h));
     assert!(app.on_panel_resize_edge(edge_x + 3, 200, win_w, win_h));
     assert!(!app.on_panel_resize_edge(edge_x - 30, 200, win_w, win_h));
 
-    // Arrastrar a la izquierda ensancha el panel derecho (win_w - mx)
+    // Arrastrar a la izquierda ensancha el panel (win_w - mx)
     app.resize_panel_from_mouse(win_w - 450, win_w);
     assert_eq!(app.panel_width(), 450);
     assert_eq!(app.file_explorer_offset(), 450);
 
-    // 3. Inicio del redimensionado mediante clic (on_mouse_input) en ambos lados del borde
-    // Usamos el tamaño reportado por window_size() de la app (800x600 sin ventana física)
-    let (win_w, win_h) = app.window_size();
-
-    // En modo pestañas superiores (horizontal):
-    app.config.appearance.tab_layout = "top".to_string();
-    app.file_explorer.width = 300;
-    app.sync_explorer_dock(win_w, win_h);
-    let edge_x = win_w - 300;
-
-    // Clic en el lado exterior (terminal, edge_x - 3)
-    app.explorer_resizing = false;
-    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x - 3) as f64, 200.0);
-    app.on_mouse_input(
-        winit::event::ElementState::Pressed,
-        winit::event::MouseButton::Left,
-    );
-    assert!(
-        app.explorer_resizing,
-        "clic en lado terminal del borde debe iniciar resize"
-    );
-
-    // Soltar cancela explorer_resizing
-    app.on_mouse_input(
-        winit::event::ElementState::Released,
-        winit::event::MouseButton::Left,
-    );
-    assert!(!app.explorer_resizing);
-
-    // Clic en el lado interior (margen del panel, edge_x + 3)
-    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x + 3) as f64, 200.0);
-    app.on_mouse_input(
-        winit::event::ElementState::Pressed,
-        winit::event::MouseButton::Left,
-    );
-    assert!(
-        app.explorer_resizing,
-        "clic en lado panel del borde debe iniciar resize"
-    );
-
-    app.on_mouse_input(
-        winit::event::ElementState::Released,
-        winit::event::MouseButton::Left,
-    );
-    assert!(!app.explorer_resizing);
-
-    // En modo pestañas verticales:
-    app.config.appearance.tab_layout = "left".to_string();
-    app.mouse_pos = winit::dpi::PhysicalPosition::new((edge_x + 3) as f64, 200.0);
-    app.on_mouse_input(
-        winit::event::ElementState::Pressed,
-        winit::event::MouseButton::Left,
-    );
-    assert!(
-        app.explorer_resizing,
-        "clic en lado panel en pestañas verticales debe iniciar resize"
-    );
+    // Límites de acotado
+    app.resize_panel_from_mouse(win_w - 50, win_w);
+    assert_eq!(app.panel_width(), FILE_EXPLORER_MIN_WIDTH);
+    app.resize_panel_from_mouse(0, win_w);
+    assert_eq!(app.panel_width(), win_w / 2);
 }
 
 #[test]
@@ -3036,4 +2933,119 @@ fn test_panel_width_config_and_session() {
 
     let app = TearminalApp::new(loaded, None);
     assert_eq!(app.panel_width(), 360);
+}
+
+#[test]
+fn test_spaces_group_tabs_and_follow_the_active_tab() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let first = app.active_space();
+    app.create_new_tab();
+    assert_eq!(
+        app.visible_tab_indices(),
+        vec![0, 1],
+        "la pestaña nueva va al Space activo"
+    );
+
+    app.create_space(None);
+    assert_eq!(app.spaces.len(), 2);
+    let second = app.active_space();
+    assert_ne!(first, second);
+    assert_eq!(
+        app.visible_tab_indices(),
+        vec![2],
+        "la barra superior solo ve el Space activo"
+    );
+
+    app.select_space(first);
+    assert_eq!(app.active_space(), first);
+    assert_eq!(
+        app.active_tab_index, 1,
+        "vuelve a la pestaña más reciente de ese Space"
+    );
+    app.next_tab();
+    assert_eq!(
+        app.active_tab_index, 0,
+        "Ctrl+Tab circula solo dentro del Space"
+    );
+
+    // Cerrar la última pestaña de un Space lo elimina y el foco pasa a otro
+    app.select_space(second);
+    app.close_tab(2);
+    assert_eq!(app.spaces.len(), 1);
+    assert_eq!(app.active_space(), first);
+}
+
+#[test]
+fn test_session_round_trips_spaces() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    app.create_new_tab();
+    app.create_space(None);
+    let snap = app.session_snapshot();
+    assert_eq!(snap.spaces.len(), 2);
+    assert_eq!(
+        snap.tabs.iter().map(|t| t.space).collect::<Vec<_>>(),
+        vec![0, 0, 1]
+    );
+
+    let restored = TearminalApp::from_session(TearminalConfig::default(), None, Some(snap));
+    assert_eq!(restored.spaces.len(), 2);
+    assert_eq!(
+        restored.tabs.iter().map(|t| t.space.0).collect::<Vec<_>>(),
+        vec![0, 0, 1]
+    );
+}
+
+#[test]
+fn test_spaces_are_split_between_this_computer_and_remote_machines() {
+    use crate::renderer::{SpacesHover, SpacesPanelRects};
+
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    app.create_space(None);
+    app.create_space(None);
+    assert_eq!(app.spaces.len(), 3);
+    // El segundo Space es remoto: el panel lo lista aparte, tras los de este equipo
+    app.spaces[1].remote = true;
+    assert_eq!(app.space_order(), vec![0, 2, 1]);
+    let items = app.space_items();
+    assert_eq!(
+        items
+            .iter()
+            .map(|i| (i.index, i.remote))
+            .collect::<Vec<_>>(),
+        vec![(0, false), (2, false), (1, true)]
+    );
+
+    // El clic sobre cada fila devuelve el Space correcto (posición en `spaces`), no la de pantalla
+    let win_h = 800;
+    let rects = app.spaces_rects(win_h);
+    let slots = rects.visible_slots(&app.space_remote_flags(), 0);
+    let rows: Vec<_> = slots
+        .iter()
+        .filter_map(|(s, r)| matches!(s, crate::renderer::SpacesSlot::Space(_)).then_some(*r))
+        .collect();
+    assert_eq!(rows.len(), 3);
+    for (row, expect) in rows.iter().zip([0, 2, 1]) {
+        assert_eq!(
+            app.spaces_hit(row.0 + 20, row.1 + 5, win_h),
+            SpacesHover::Row(expect)
+        );
+    }
+    // Los «+» de cada grupo: nuevo Space (este equipo) y añadir máquina (remotos)
+    let headers: Vec<_> = slots
+        .iter()
+        .filter_map(|(s, r)| match s {
+            crate::renderer::SpacesSlot::Header { remote } => Some((*remote, *r)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(headers.len(), 2);
+    for (remote, r) in headers {
+        let p = SpacesPanelRects::header_plus(r);
+        let expect = if remote {
+            SpacesHover::MachinePlus
+        } else {
+            SpacesHover::Plus
+        };
+        assert_eq!(app.spaces_hit(p.0 + 4, p.1 + 4, win_h), expect);
+    }
 }

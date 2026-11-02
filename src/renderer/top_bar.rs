@@ -3,49 +3,8 @@
 use super::*;
 
 impl TerminalRenderer {
-    /// Píldora de búsqueda centrada del modo vertical: icono, invitación y atajo Ctrl K.
-    fn draw_search_pill(&mut self, canvas: &mut Canvas, rect: Rect, theme: &Theme) {
-        let (x, y, w, h) = rect;
-        if w < 40 || h == 0 {
-            return;
-        }
-        canvas.rounded_fill(
-            x,
-            y,
-            w,
-            h,
-            tokens::RADIUS_CONTROL,
-            theme.mix(theme.bar_bg(), theme.background, 0.4),
-        );
-        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.chrome_bg());
-        self.draw_lucide_icon(
-            canvas,
-            crate::ui::LucideIcon::Search,
-            x + 16,
-            y + h / 2,
-            13.0,
-            theme.text_muted(),
-        );
-        let keycap = "Ctrl K";
-        let keycap_w = self.measure_mono_text(keycap, tokens::MICRO, false) + 12;
-        let keycap_x = x + w - 8 - keycap_w;
-        let keycap_y = y + (h.saturating_sub(tokens::KEYCAP_H)) / 2;
-        self.draw_keycap(canvas, keycap_x, keycap_y, keycap, theme);
-        let baseline = self.centered_baseline(y + h / 2);
-        self.draw_ui_text(
-            canvas,
-            "Buscar sesiones, archivos y comandos",
-            x + 30,
-            baseline,
-            keycap_x.saturating_sub(8),
-            theme.text_secondary(),
-            tokens::BODY,
-            false,
-        );
-    }
-
     /// Botón de icono del chrome: 32×32, radio 8, relleno solo con hover o estado activo.
-    fn draw_chrome_action(
+    pub(super) fn draw_chrome_action(
         &mut self,
         canvas: &mut Canvas,
         rect: Rect,
@@ -77,6 +36,45 @@ impl TerminalRenderer {
         self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, icon_size, fg);
     }
 
+    /// Píldora de la barra superior: icono y etiqueta; la activa lleva relleno, el hover un tono más suave.
+    fn draw_top_pill(
+        &mut self,
+        canvas: &mut Canvas,
+        rect: Rect,
+        icon: crate::ui::LucideIcon,
+        label: &str,
+        active: bool,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = rect;
+        if w == 0 || h == 0 {
+            return;
+        }
+        if active {
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_bg());
+        } else if hovered {
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_hover());
+        }
+        let fg = if active || hovered {
+            theme.foreground
+        } else {
+            theme.text_secondary()
+        };
+        self.draw_lucide_icon(canvas, icon, x + 15, y + h / 2, 14.0, fg);
+        let baseline = self.centered_baseline(y + h / 2);
+        self.draw_ui_text(
+            canvas,
+            label,
+            x + 29,
+            baseline,
+            x + w - 6,
+            fg,
+            tokens::BODY,
+            active,
+        );
+    }
+
     /// Chip de pestaña dentro de su `tab_rect`, recortado 4 px por arriba y por abajo: la activa lleva el
     /// color de la tarjeta de contenido (con el que se funde y sobre el que el texto ya tiene el contraste
     /// del propio tema) y contorno; una inactiva solo relleno al pasar el ratón.
@@ -100,12 +98,14 @@ impl TerminalRenderer {
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
         hovered_files: bool,
-        hovered_settings: bool,
+        hovered_changes: bool,
         hovered_win_min: bool,
         hovered_win_max: bool,
         hovered_win_close: bool,
         is_maximized: bool,
         explorer_visible: bool,
+        changes_active: bool,
+        left_x: usize,
         theme: &Theme,
     ) {
         let (width, height) = canvas.size();
@@ -113,11 +113,18 @@ impl TerminalRenderer {
             return;
         }
 
-        let rects = TopTabBarRects::compute(width, tabs.len());
+        let rects = TopTabBarRects::compute(width, left_x, tabs.len());
         let bar_h = rects.bar_h;
 
-        // 1. Franja superior
-        Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
+        // 1. Franja superior: a la derecha del panel de Spaces, que ocupa todo el alto.
+        Self::draw_rect(
+            canvas,
+            left_x,
+            0,
+            width.saturating_sub(left_x),
+            bar_h,
+            theme.bar_bg(),
+        );
 
         // 2. Pestañas
         for (pos, tab) in tabs.iter().enumerate() {
@@ -232,36 +239,23 @@ impl TerminalRenderer {
             theme,
         );
 
-        // 5. Acciones de la derecha: buscar · panel · ajustes, separadas de las pestañas por una línea fina.
-        let sep_x = rects.search_btn.0.saturating_sub(8);
-        if sep_x >= rects.plus_btn.0 + rects.plus_btn.2 + 8 {
-            Self::draw_rect(canvas, sep_x, (bar_h - 16) / 2, 1, 16, theme.chrome_line());
-        }
-        self.draw_chrome_action(
-            canvas,
-            rects.search_btn,
-            crate::ui::LucideIcon::Search,
-            false,
-            false,
-            16.0,
-            theme,
-        );
-        self.draw_chrome_action(
+        // 5. Píldoras de la tarjeta derecha: Files y Changes (la activa, con relleno).
+        self.draw_top_pill(
             canvas,
             rects.files_btn,
-            crate::ui::LucideIcon::PanelLeft,
-            explorer_visible,
+            crate::ui::LucideIcon::File,
+            "Archivos",
+            explorer_visible && !changes_active,
             hovered_files,
-            16.0,
             theme,
         );
-        self.draw_chrome_action(
+        self.draw_top_pill(
             canvas,
-            rects.settings_btn,
-            crate::ui::LucideIcon::Sliders,
-            false,
-            hovered_settings,
-            16.0,
+            rects.changes_btn,
+            crate::ui::LucideIcon::GitBranch,
+            "Cambios",
+            explorer_visible && changes_active,
+            hovered_changes,
             theme,
         );
 
@@ -351,45 +345,6 @@ impl TerminalRenderer {
             } else {
                 fg
             },
-        );
-    }
-
-    /// Renderiza la barra superior de título cuando las pestañas son verticales (Sidebar): marca,
-    /// píldora de búsqueda centrada y controles de ventana. El título y la rama viven en la barra de estado.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn render_top_title_bar(
-        &mut self,
-        canvas: &mut Canvas,
-        _title: &str,
-        _git_branch: Option<&str>,
-        _hovered_files: bool,
-        _hovered_settings: bool,
-        hovered_win_min: bool,
-        hovered_win_max: bool,
-        hovered_win_close: bool,
-        is_maximized: bool,
-        _explorer_visible: bool,
-        theme: &Theme,
-    ) {
-        let (width, height) = canvas.size();
-        if width == 0 || height == 0 {
-            return;
-        }
-        let rects = TopTitleBarRects::compute(width);
-        let bar_h = rects.bar_h;
-
-        Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
-        self.draw_search_pill(canvas, rects.search_box, theme);
-        self.draw_window_controls(
-            canvas,
-            rects.win_min_btn,
-            rects.win_max_btn,
-            rects.win_close_btn,
-            hovered_win_min,
-            hovered_win_max,
-            hovered_win_close,
-            is_maximized,
-            theme,
         );
     }
 }

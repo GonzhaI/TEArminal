@@ -686,24 +686,24 @@ mod tests {
                 );
             }
 
-            // 3. Subcomandos de agentes (`agy update`, `--version`…) no deben limpiar la pantalla ni borrar su estado
+            // 3. Los agentes (`agy`, `agy update`…) no deben limpiar la pantalla ni alterar el flujo normal
             pty.write_input(
-                b"$script:TearminalApps['agy'] = (Join-Path $PWD 'fake-agy.cmd'); agy update; Write-Output ('AGY_DONE_' + (6*7))\r\n",
+                b"$script:TearminalApps['agy'] = (Join-Path $PWD 'fake-agy.cmd'); agy; agy update; Write-Output ('AGY_DONE_' + (6*7))\r\n",
             );
             let (ok, agy_out) = read_until(&pty, "AGY_DONE_42", 20_000);
-            assert!(ok, "{shell}: `agy update` no terminó. Salida: {agy_out:?}");
+            assert!(ok, "{shell}: `agy` no terminó. Salida: {agy_out:?}");
             assert!(
-                agy_out.contains("AGY_STATUS_update_OK"),
-                "{shell}: falta la salida de `agy update`: {agy_out:?}"
+                agy_out.contains("AGY_STATUS__OK") && agy_out.contains("AGY_STATUS_update_OK"),
+                "{shell}: falta la salida de `agy`: {agy_out:?}"
             );
             assert!(
                 !agy_out.contains("\x1b[2J") && !agy_out.contains("\x1b[3J"),
-                "{shell}: `agy update` limpió la pantalla: {agy_out:?}"
+                "{shell}: `agy` limpió la pantalla: {agy_out:?}"
             );
             for e in ERRORS {
                 assert!(
                     !agy_out.contains(e),
-                    "{shell}: error al ejecutar `agy update`: {agy_out:?}"
+                    "{shell}: error al ejecutar `agy`: {agy_out:?}"
                 );
             }
             println!("[OK] {shell}: script de inicio verificado");
@@ -986,5 +986,49 @@ mod tests {
         let repaired = std::fs::read_to_string(&path2).unwrap();
         assert_eq!(repaired, INIT_SCRIPT);
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_init_script_ssh_wrapper_injects_keepalive() {
+        let tmp =
+            std::env::temp_dir().join(format!("tearminal_test_init_ssh_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let script_path = ensure_init_script_on_disk_in(&tmp).expect("init.ps1");
+
+        // Mock de `ssh` que imprime los argumentos recibidos
+        let mock_ssh = tmp.join("mock-ssh.cmd");
+        std::fs::write(&mock_ssh, "@echo off\r\necho ARGS:%*\r\n").unwrap();
+
+        let ps_code = format!(
+            ". '{}'; $script:TearminalApps['ssh'] = '{}'; ssh user@example.com; ssh -o ServerAliveInterval=60 user@example.com",
+            script_path.display(),
+            mock_ssh.display().to_string().replace('\\', "/")
+        );
+
+        let mut cmd = std::process::Command::new("powershell.exe");
+        crate::app::platform::hide_console(&mut cmd);
+        let out = cmd.args(["-NoProfile", "-Command", &ps_code]).output();
+        let _ = std::fs::remove_dir_all(&tmp);
+
+        let Ok(out) = out else { return };
+        if !out.status.success() {
+            return;
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+
+        // La primera llamada debe inyectar ServerAliveInterval=30 y ServerAliveCountMax=3
+        assert!(
+            stdout.contains("ServerAliveInterval=30"),
+            "Debe inyectar ServerAliveInterval=30 por defecto. Salida: {stdout}"
+        );
+        assert!(
+            stdout.contains("ServerAliveCountMax=3"),
+            "Debe inyectar ServerAliveCountMax=3 por defecto. Salida: {stdout}"
+        );
+        // La segunda llamada con ServerAliveInterval=60 explícito debe respetarlo
+        assert!(
+            stdout.contains("ServerAliveInterval=60"),
+            "Debe respetar ServerAliveInterval configurado por el usuario. Salida: {stdout}"
+        );
     }
 }

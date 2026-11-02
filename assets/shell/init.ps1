@@ -127,55 +127,26 @@ if (Find-TearminalApp 'rg') { Set-Alias -Name grep -Value rg -Option AllScope -E
 if (Find-TearminalApp 'fd') { Set-Alias -Name find -Value fd -Option AllScope -ErrorAction SilentlyContinue }
 if (Find-TearminalApp 'zoxide') { Invoke-Expression (& zoxide init powershell --cmd cd | Out-String) -ErrorAction SilentlyContinue }
 
-# Agentes de IA en CLI. Mode: Anchor = limpia y ancla el prompt a la última línea (entrada inferior);
-# Clear = solo limpia; None = solo título. Subcomandos y flags no interactivos (update, --help, -v, -p…)
-# pasan a None para conservar la pantalla; al salir no se llama a Clear-Host ni a ESC[r (lleva el cursor a 1;1).
-function Invoke-TearminalAgent([string]$Name, [string]$Mode, [object[]]$ArgumentList) {
+# Agentes de IA en CLI. Señaliza inicio/fin (OSC 1337 TearminalAgent) para TEArminal
+# y restaura el estado del terminal al salir, permitiendo que el agente siga su flujo normal
+# sin limpiar la pantalla ni alterar la posición del cursor.
+function Invoke-TearminalAgent([string]$Name, [object[]]$ArgumentList) {
     $cmd = Find-TearminalApp $Name
     if (-not $cmd) { Write-Error "El comando '$Name' no se encuentra en PATH."; return }
-    if ($Mode -ne 'None' -and $ArgumentList -and $ArgumentList.Count -gt 0) {
-        $first = [string]$ArgumentList[0]
-        $subcommands = @(
-            'update', 'upgrade', 'uninstall', 'install', 'help', 'version', 'doctor', 'mcp',
-            'plugin', 'plugins', 'auth', 'login', 'logout', 'config', 'models', 'agent', 'agents',
-            'changelog', 'logs', 'stop', 'kill', 'rm', 'purge', 'respawn', 'setup-token',
-            'auto-mode', 'gateway', 'import', 'ultrareview', 'remote-control', 'mic-serve',
-            'extensions', 'extension', 'skills', 'skill', 'hooks', 'hook', 'gemma', 'acp', 'api',
-            'debug', 'stats', 'run', 'session', 'service', 'reload', 'pair', 'serve'
-        )
-        if ($first -in $subcommands -or ($Name -eq 'agy' -and -not $first.StartsWith('-'))) {
-            $Mode = 'None'
-        } else {
-            foreach ($a in $ArgumentList) {
-                $s = [string]$a
-                if ($s -in @('-h', '--help', '-?', '/?', '-v', '--version', '-V', '-p', '--print', '--prompt', '-l', '--list-extensions', '--list-sessions', '--delete-session', '--bg', '--background', '--desktop', '--completions') -or
-                    $s.StartsWith('--print=') -or $s.StartsWith('--prompt=') -or $s.StartsWith('--delete-session=') -or $s.StartsWith('--completions=')) {
-                    $Mode = 'None'
-                    break
-                }
-            }
-        }
-    }
     $esc = [char]27; $bel = [char]7
     [Console]::Write($esc + ']0;' + $Name + $bel)
-    if ($Mode -ne 'None') { Clear-Host; [Console]::Write($esc + '[2J' + $esc + '[3J' + $esc + '[H') }
-    if ($Mode -eq 'Anchor') {
-        $h = $Host.UI.RawUI.WindowSize.Height
-        for ($i = 0; $i -lt $h; $i++) { [Console]::WriteLine('') }
-        [Console]::Write($esc + '[' + $h + ';1H')
-    }
     # OSC 1337 TearminalAgent: si la consola muere con el agente (opencode lo hace al salir), TEArminal reabre el shell
     [Console]::Write($esc + ']1337;TearminalAgent=start;name=' + $Name + $bel)
     try { & $cmd @ArgumentList }
     finally {
-        [Console]::Write($esc + ']1337;TearminalAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h' + $esc + '[J')
+        [Console]::Write($esc + ']1337;TearminalAgent=end' + $bel + $esc + ']0;powershell' + $bel + $esc + '[0m' + $esc + '[?25h')
     }
 }
-function agy      { Invoke-TearminalAgent 'agy' 'Anchor' $args }
-function claude   { Invoke-TearminalAgent 'claude' 'Anchor' $args }
-function gemini   { Invoke-TearminalAgent 'gemini' 'Anchor' $args }
-function opencode { Invoke-TearminalAgent 'opencode' 'Clear' $args }
-function aider    { Invoke-TearminalAgent 'aider' 'None' $args }
+function agy      { Invoke-TearminalAgent 'agy' $args }
+function claude   { Invoke-TearminalAgent 'claude' $args }
+function gemini   { Invoke-TearminalAgent 'gemini' $args }
+function opencode { Invoke-TearminalAgent 'opencode' $args }
+function aider    { Invoke-TearminalAgent 'aider' $args }
 Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction SilentlyContinue
 
 # ssh: señaliza inicio/fin de sesión a TEArminal (OSC 1337) para clonar paneles y detectar el host remoto
@@ -200,18 +171,27 @@ function ssh {
         $posCount++
     }
     if (-not $dest) { $dest = 'remote' }
+    # Mantener viva la sesión SSH: si el usuario no especificó ServerAliveInterval, enviar
+    # paquetes keep-alive cada 30 s para evitar desconexiones por inactividad de routers/firewalls (NAT drop)
+    $hasAlive = $false
+    foreach ($a in $rawArgs) {
+        if ([string]$a -like '*ServerAliveInterval*') { $hasAlive = $true; break }
+    }
+    if (-not $hasAlive -and $dest -ne 'remote') {
+        $rawArgs = @('-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=3') + $rawArgs
+    }
     # Integración (config terminal.ssh_integration): un bash remoto informa en cada prompt de la rama git,
     # la carpeta (OSC 7) y su listado (OSC 1337), y atiende peticiones de TEArminal (leer/guardar archivo, listar
     # carpeta) por la misma sesión, sin segunda conexión: funciona también con contraseña. Solo en sesiones
     # interactivas sin comando remoto. Texto plano, sin ofuscar (los antivirus desconfían de lo contrario).
     $integrate = ($env:TEARMINAL_SSH_INTEGRATION -eq '1') -and ($dest -ne 'remote') -and ($posCount -eq 1)
-    foreach ($a in $rawArgs) { if ($a -in @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
+    foreach ($a in $rawArgs) { if ($a -cin @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'
 __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};if [[ $__axd != $PWD ]];then __axd=$PWD;printf '\033]1337;TearminalLs=%s\007' $(ls -1Ap 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);fi;if [[ -z $__axb ]];then __axb=1;__tearminal_req(){ local l=$READLINE_LINE p r id op a f c d st n t;p=${l%%#AXR#*};r=${l#*#AXR#};READLINE_LINE=$p;READLINE_POINT=${#p};id=${r%% *};r=${r#* };op=${r%% *};a=${r#* };st=err;d=;case $op in get)f=$(printf %b "${a//\%/\\x}");if [[ -f $f && -r $f && $(wc -c <"$f") -le 10485760 ]];then d=$(od -An -v -tx1 <"$f"|tr -d \\040\\012);st=ok;fi;;ls)f=$(printf %b "${a//\%/\\x}");if [[ -d $f ]];then d=$(ls -1Ap -- "$f" 2>/dev/null|head -2000|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;put)f=${a%% *};f=$(printf %b "${f//\%/\\x}");c=${a#* };if [[ -n $f ]]&&printf %b "${c//\%/\\x}" >"$f" 2>/dev/null;then d=$(cksum <"$f" 2>/dev/null|od -An -v -tx1|tr -d \\040\\012);st=ok;fi;;esac;t=$(( (${#d}+32767)/32768 ));[[ $t -lt 1 ]]&&t=1;for((n=0;n<t;n++));do printf '\033]1337;TearminalFile=%s;%s;%s;%s;%s\007' $id $st $n $t ${d:$((n*32768)):32768};done;};bind -x '"\e[1337~":__tearminal_req';fi
 '@
         $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
-        $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;exec ${SHELL:-/bin/sh} -l'
+        $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;case $SHELL in */bash|*/zsh) exec "$SHELL" -l;; *) exec ${SHELL:-/bin/sh};; esac'
         $remoteCmd = 'sh -c ' + (& $q $script)
         # Windows PowerShell 5.1 (y 7.0-7.2) no escapa las comillas dobles al llamar a un .exe
         if ($PSVersionTable.PSVersion -lt [version]'7.3') { $remoteCmd = $remoteCmd.Replace('"', '\"') }

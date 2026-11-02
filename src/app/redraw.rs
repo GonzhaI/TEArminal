@@ -5,7 +5,12 @@ use crate::renderer::{Canvas, Presented, SidebarRects};
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
-    is_horizontal: bool,
+    spaces_collapsed: bool,
+    spaces_hover: crate::renderer::SpacesHover,
+    spaces_scroll: usize,
+    space_items: &'a [crate::renderer::SpaceItem],
+    hovered_changes_btn: bool,
+    changes_active: bool,
     offset: usize,
     right_offset: usize,
     top_offset: usize,
@@ -17,9 +22,9 @@ struct SceneParams<'a> {
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
     hovered_files_btn: bool,
-    hovered_settings_btn: bool,
-    hovered_toggle_btn: bool,
     hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
+    hovered_pane_header: Option<PaneId>,
+    hovered_url_span: Option<(PaneId, usize, usize, usize)>,
     hovered_win_min: bool,
     hovered_win_max: bool,
     hovered_win_close: bool,
@@ -29,12 +34,11 @@ struct SceneParams<'a> {
     hovered_keep_awake_option: Option<usize>,
     keep_awake: KeepAwakeMode,
     keep_awake_working: bool,
-    sidebar_scroll_offset: usize,
-    sidebar_scrollbar_hovered: bool,
     palette_scrollbar_hovered: bool,
     active_idx: usize,
+    /// Pestaña cuyo contenido se dibuja: la activa, o con Ajustes abierto la terminal de detrás
+    content_idx: usize,
     tab_items: &'a [SidebarTabItem],
-    header: &'a SidebarHeader,
     panel_right: bool,
     panel_width: usize,
 }
@@ -59,7 +63,6 @@ impl TearminalApp {
         if !self.file_explorer.is_focused {
             self.file_explorer.cancel_edit();
         }
-        let is_horizontal = self.is_horizontal_tabs();
         let offset = self.sidebar_offset();
         let right_offset = self.file_explorer_offset();
         let explorer_visible = self.file_explorer.visible;
@@ -67,12 +70,25 @@ impl TearminalApp {
         let status_bar_h = self.status_bar_height();
         let sidebar_visible = self.panel_shown();
         let active_idx = self.active_tab_index;
+        let content_idx = if self.tabs[active_idx].is_settings {
+            let ok = |i: usize| self.tabs.get(i).is_some_and(|t| !t.is_settings);
+            if ok(self.last_terminal_tab_index) {
+                self.last_terminal_tab_index
+            } else {
+                self.tabs
+                    .iter()
+                    .position(|t| !t.is_settings)
+                    .unwrap_or(active_idx)
+            }
+        } else {
+            active_idx
+        };
         let hovered_tab = self.hovered_tab;
         let hovered_close = self.hovered_close;
         let hovered_new_tab = self.hovered_new_tab;
         let hovered_files_btn = self.hovered_files_btn;
-        let hovered_settings_btn = self.hovered_settings_btn;
-        let hovered_toggle_btn = self.hovered_toggle_btn;
+        let space_items = self.space_items();
+        let visible_tabs = self.visible_tab_indices();
         let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
         let panel_right = self.panel_on_right();
         let panel_width = self.panel_width();
@@ -93,21 +109,15 @@ impl TearminalApp {
             (size.width as usize, size.height as usize)
         });
         self.sync_explorer_dock(win_w, win_h);
-        let header = if !sidebar_visible {
-            SidebarHeader::default()
-        } else {
-            self.sidebar_header(win_h.saturating_sub(status_bar_h))
-        };
-        let tab_items: Vec<SidebarTabItem> = self
-            .tabs
+        let tab_items: Vec<SidebarTabItem> = visible_tabs
             .iter()
-            .enumerate()
+            .map(|&idx| (idx, &self.tabs[idx]))
             .map(|(idx, t)| SidebarTabItem {
                 index: idx,
                 status: super::panel::session_status(t),
                 title: t.display_title(),
-                detail: self.session_detail(t),
-                is_active: idx == active_idx,
+                detail: None,
+                is_active: idx == content_idx,
                 has_unread: t.has_unread,
                 pane_count: t.panes.len(),
                 is_settings: t.is_settings,
@@ -149,7 +159,12 @@ impl TearminalApp {
         });
 
         let params = SceneParams {
-            is_horizontal,
+            spaces_collapsed: self.spaces_collapsed,
+            spaces_hover: self.spaces_hover,
+            spaces_scroll: self.spaces_scroll,
+            space_items: &space_items,
+            hovered_changes_btn: self.hovered_changes_btn,
+            changes_active: self.file_explorer.changes_only,
             offset,
             right_offset,
             top_offset,
@@ -161,9 +176,9 @@ impl TearminalApp {
             hovered_close,
             hovered_new_tab,
             hovered_files_btn,
-            hovered_settings_btn,
-            hovered_toggle_btn,
             hovered_pane_btn: self.hovered_pane_btn,
+            hovered_pane_header: self.hovered_pane_header,
+            hovered_url_span: self.hovered_url_span,
             hovered_win_min: self.hovered_win_min,
             hovered_win_max: self.hovered_win_max,
             hovered_win_close: self.hovered_win_close,
@@ -173,12 +188,10 @@ impl TearminalApp {
             hovered_keep_awake_option: self.hovered_keep_awake_option,
             keep_awake: self.config.terminal.keep_awake,
             keep_awake_working,
-            sidebar_scroll_offset: self.sidebar_scroll_offset,
-            sidebar_scrollbar_hovered: self.sidebar_scrollbar_hovered,
             palette_scrollbar_hovered,
             active_idx,
+            content_idx,
             tab_items: &tab_items,
-            header: &header,
             panel_right,
             panel_width,
         };
@@ -195,6 +208,7 @@ impl TearminalApp {
             &self.ai_usage.snapshot,
             &self.context_menu,
             &self.palette,
+            &self.machine_modal,
             &params,
             size.width as usize,
             size.height as usize,
@@ -237,6 +251,7 @@ fn draw_full_scene(
     ai_snapshot: &ai_usage::AiUsageSnapshot,
     context_menu: &Option<ContextMenu>,
     palette: &Option<PaletteState>,
+    machine: &Option<MachineModal>,
     p: &SceneParams,
     width: usize,
     height: usize,
@@ -244,63 +259,40 @@ fn draw_full_scene(
 ) {
     canvas.clear(theme.background);
 
-    let active_tab = &mut tabs[p.active_idx];
+    let settings_open = tabs[p.active_idx].is_settings;
+    let active_tab = &mut tabs[p.content_idx];
 
-    if p.is_horizontal {
-        renderer.render_top_tab_bar(
-            canvas,
-            p.tab_items,
-            p.hovered_tab,
-            p.hovered_close,
-            p.hovered_new_tab,
-            p.hovered_files_btn,
-            p.hovered_settings_btn,
-            p.hovered_win_min,
-            p.hovered_win_max,
-            p.hovered_win_close,
-            is_maximized,
-            p.explorer_visible,
-            theme,
-        );
-    } else {
-        let active_title = active_tab.display_title();
-        let git_branch = active_tab.get_git_branch();
-        renderer.render_top_title_bar(
-            canvas,
-            &active_title,
-            git_branch.as_deref(),
-            p.hovered_files_btn,
-            p.hovered_settings_btn,
-            p.hovered_win_min,
-            p.hovered_win_max,
-            p.hovered_win_close,
-            is_maximized,
-            p.explorer_visible,
-            theme,
-        );
-    }
+    renderer.render_top_tab_bar(
+        canvas,
+        p.tab_items,
+        p.hovered_tab,
+        p.hovered_close,
+        p.hovered_new_tab,
+        p.hovered_files_btn,
+        p.hovered_changes_btn,
+        p.hovered_win_min,
+        p.hovered_win_max,
+        p.hovered_win_close,
+        is_maximized,
+        p.explorer_visible,
+        p.changes_active,
+        p.offset,
+        theme,
+    );
+    renderer.render_spaces_panel(
+        canvas,
+        p.space_items,
+        p.spaces_collapsed,
+        p.spaces_hover,
+        p.spaces_scroll,
+        theme,
+    );
 
     if p.sidebar_visible {
         draw_panel(canvas, renderer, theme, p, width, height);
     }
 
-    if active_tab.is_settings {
-        renderer.render_settings_page(
-            canvas,
-            p.offset,
-            if p.panel_right && p.sidebar_visible {
-                p.panel_width
-            } else {
-                0
-            },
-            p.top_offset,
-            p.status_bar_h,
-            config,
-            settings_page_state,
-            p.cursor_visible,
-            theme,
-        );
-    } else if let Some(ref mut viewer) = active_tab.file_viewer {
+    if let Some(ref mut viewer) = active_tab.file_viewer {
         let term_area_w = width.saturating_sub(p.offset + p.right_offset);
         let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
         viewer.word_wrap = config.terminal.word_wrap;
@@ -377,10 +369,16 @@ fn draw_full_scene(
                         icon_color,
                         is_active,
                         zoomed == Some(rect.pane_id),
+                        rect.has_buttons,
+                        p.hovered_pane_header == Some(rect.pane_id),
                         hovered,
                         theme,
                     );
                 }
+                renderer.hovered_url_span = p
+                    .hovered_url_span
+                    .filter(|(pane_id, _, _, _)| *pane_id == rect.pane_id)
+                    .map(|(_, line, sc, ec)| (line, sc, ec));
                 renderer.render_pane(
                     canvas,
                     rect.x,
@@ -393,6 +391,7 @@ fn draw_full_scene(
                     is_active,
                     has_multiple,
                 );
+                renderer.hovered_url_span = None;
             }
         }
 
@@ -428,15 +427,25 @@ fn draw_full_scene(
         p.sidebar_visible,
         p.panel_right,
     );
-    for region in cards.panel.into_iter().chain(Some(cards.content)) {
+    let terminal_focused =
+        !file_explorer.is_focused && !active_tab.is_settings && active_tab.file_viewer.is_none();
+    let outline = |_focused: bool| theme.card_outline();
+    if let Some(region) = cards.panel {
         canvas.outlined_card(
             region,
             SidebarRects::CARD_INSET,
             SidebarRects::CARD_RADIUS,
             theme.bar_bg(),
-            theme.card_outline(),
+            outline(file_explorer.is_focused),
         );
     }
+    canvas.outlined_card(
+        cards.content,
+        SidebarRects::CARD_INSET,
+        SidebarRects::CARD_RADIUS,
+        theme.bar_bg(),
+        outline(terminal_focused),
+    );
 
     if file_explorer.visible {
         renderer.render_file_explorer_hover_overlay(
@@ -444,16 +453,6 @@ fn draw_full_scene(
             p.top_offset,
             p.status_bar_h,
             file_explorer,
-            theme,
-        );
-    }
-
-    if !p.is_horizontal && !p.sidebar_visible && p.hovered_toggle_btn {
-        renderer.render_floating_sidebar_toggle(
-            canvas,
-            p.status_bar_h,
-            p.hovered_toggle_btn,
-            p.panel_right,
             theme,
         );
     }
@@ -530,6 +529,58 @@ fn draw_full_scene(
         }
     }
 
+    // Modales: un velo translúcido sobre toda la ventana y la tarjeta encima
+    if settings_open || machine.is_some() {
+        canvas.rounded_fill(
+            0,
+            0,
+            width,
+            height,
+            0,
+            crate::theme::Color::from_rgba(0, 0, 0, 120),
+        );
+    }
+    if settings_open {
+        let (mx0, my0, mw, mh) =
+            crate::renderer::SettingsPageRects::modal_region(width, height, p.offset);
+        canvas.with_offset(
+            mx0 as i32,
+            my0 as i32,
+            (mw, mh),
+            (mx0, my0, mx0 + mw, my0 + mh),
+            |c| {
+                renderer.render_settings_page(
+                    c,
+                    0,
+                    0,
+                    0,
+                    0,
+                    config,
+                    settings_page_state,
+                    p.cursor_visible,
+                    theme,
+                )
+            },
+        );
+    }
+    if let Some(m) = machine {
+        let hosts: Vec<(String, String)> = m
+            .hosts
+            .iter()
+            .map(|h| (h.alias.clone(), h.target.clone()))
+            .collect();
+        renderer.render_machine_modal(
+            canvas,
+            &hosts,
+            &m.input,
+            m.hovered,
+            m.selected,
+            m.error.as_deref(),
+            p.cursor_visible,
+            theme,
+        );
+    }
+
     if let Some(menu) = context_menu {
         renderer.render_context_menu(canvas, menu, theme);
     }
@@ -581,16 +632,14 @@ pub(super) fn card_regions(
         };
         (x0, top, panel_w, usable.saturating_sub(top))
     });
+    // El panel de Spaces es marco plano (no tarjeta): el contenido arranca justo en su borde. A la derecha,
+    // con el explorador a la vista, el contenido se estira bajo el margen de su tarjeta: un solo margen.
     let stretch = if panel_visible {
         SidebarRects::CARD_INSET
     } else {
         0
     };
-    let left = if offset > 0 {
-        offset - stretch.min(offset)
-    } else {
-        0
-    };
+    let left = offset;
     let right = width.saturating_sub(right_offset) + if right_offset > 0 { stretch } else { 0 };
     CardRegions {
         panel,
@@ -612,38 +661,6 @@ fn draw_panel(
     height: usize,
 ) {
     let panel_w = p.panel_width;
-    macro_rules! render {
-        ($canvas:expr) => {
-            if p.is_horizontal {
-                renderer.render_files_panel(
-                    $canvas,
-                    panel_w,
-                    p.status_bar_h,
-                    p.header.on_right,
-                    theme,
-                )
-            } else {
-                renderer.render_sidebar(
-                    $canvas,
-                    panel_w,
-                    p.status_bar_h,
-                    p.header,
-                    p.tab_items,
-                    p.sidebar_scroll_offset,
-                    p.hovered_tab,
-                    p.hovered_close,
-                    p.hovered_new_tab,
-                    p.hovered_toggle_btn,
-                    p.sidebar_scrollbar_hovered,
-                    theme,
-                )
-            }
-        };
-    }
-    if !p.panel_right {
-        render!(canvas);
-        return;
-    }
     let x0 = width.saturating_sub(panel_w);
     let usable = height.saturating_sub(p.status_bar_h);
     let top = SidebarRects::TOP;
@@ -660,6 +677,6 @@ fn draw_panel(
         0,
         (panel_w, height),
         (x0, top, x0 + panel_w, usable),
-        |c| render!(c),
+        |c| renderer.render_files_panel(c, panel_w, p.status_bar_h, true, theme),
     );
 }

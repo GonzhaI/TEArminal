@@ -14,6 +14,7 @@ mod host;
 mod keyboard;
 mod keys;
 mod layout;
+mod machine;
 mod palette;
 mod panel;
 pub(crate) mod platform;
@@ -21,6 +22,7 @@ mod redraw;
 mod remote_files;
 mod settings;
 mod shell_context;
+mod spaces;
 mod ssh_jobs;
 mod tabs;
 mod viewer;
@@ -33,8 +35,10 @@ pub(crate) use context_menu::*;
 pub(crate) use host::TearminalHost;
 pub(crate) use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub(crate) use layout::*;
+pub(crate) use machine::*;
 pub(crate) use palette::*;
 pub(crate) use shell_context::detect_ai_agent;
+pub(crate) use spaces::*;
 pub(crate) use viewer::*;
 
 use platform::{
@@ -46,8 +50,8 @@ use crate::config::{PaneSession, TabSession, TearminalConfig, WindowSession};
 use crate::pty::PtyManager;
 use crate::renderer::{
     AiAgentStatus, EditingSettingField, PaneHeaderButton, PaneHeaderRects, SessionStatus,
-    SettingsPageRects, SettingsPageState, SettingsSection, SidebarHeader, SidebarTabItem,
-    StatusBarRects, TerminalRenderer, TopTabBarRects, TopTitleBarRects,
+    SettingsPageRects, SettingsPageState, SettingsSection, SidebarTabItem, StatusBarRects,
+    TerminalRenderer, TopTabBarRects,
 };
 use crate::terminal::{SelectionRange, TerminalState};
 use crate::theme::Theme;
@@ -85,6 +89,16 @@ pub(crate) struct TearminalApp {
     pub theme: Theme,
     proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
     pub tabs: Vec<TerminalTab>,
+    /// Spaces de la ventana (cada pestaña pertenece a uno); ver `spaces.rs`.
+    pub(crate) spaces: Vec<Space>,
+    /// Panel de Spaces colapsado a riel (44 px)
+    pub(crate) spaces_collapsed: bool,
+    /// Modal «Añadir máquina» abierto
+    pub(crate) machine_modal: Option<MachineModal>,
+    spaces_hover: crate::renderer::SpacesHover,
+    /// Primera fila visible de la lista de Spaces
+    spaces_scroll: usize,
+    hovered_changes_btn: bool,
     pub active_tab_index: usize,
     /// Historial de activación de pestañas (MRU) para volver a la última abierta al cerrar una
     pub tab_history: Vec<TabId>,
@@ -96,10 +110,12 @@ pub(crate) struct TearminalApp {
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
-    hovered_settings_btn: bool,
-    hovered_toggle_btn: bool,
     /// Botón de la cabecera de un panel dividido bajo el ratón
     hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
+    /// Panel cuya cabecera tiene el ratón encima (muestra sus botones)
+    hovered_pane_header: Option<PaneId>,
+    /// Rango de hipervínculo bajo el ratón con Ctrl pulsado `(pane_id, global_line, start_col, end_col)`
+    pub(crate) hovered_url_span: Option<(PaneId, usize, usize, usize)>,
     pub settings_page_state: SettingsPageState,
     pub context_menu: Option<ContextMenu>,
     pub palette: Option<PaletteState>,
@@ -139,9 +155,6 @@ pub(crate) struct TearminalApp {
     scrollbar_dragging: bool,
     scrollbar_drag_pane_id: Option<PaneId>,
     scrollbar_drag_offset_y: f32,
-    sidebar_scrollbar_dragging: bool,
-    sidebar_scrollbar_drag_offset_y: f32,
-    pub sidebar_scrollbar_hovered: bool,
     explorer_scrollbar_dragging: bool,
     /// Arrastrando el borde izquierdo del explorador para cambiar su ancho
     explorer_resizing: bool,
@@ -184,7 +197,6 @@ pub(crate) struct TearminalApp {
     scroll_hide_armed: bool,
     last_window_title: std::cell::RefCell<String>,
     pub last_focus_gained: Instant,
-    pub sidebar_scroll_offset: usize,
     /// Identificador de esta ventana en `session.toml`
     session_id: u32,
     /// La ventana debe cerrarse: el anfitrión (`TearminalHost`) la retira tras el evento
@@ -410,6 +422,9 @@ impl TearminalApp {
         if let Some(p) = &mut self.palette {
             p.input.mouse_up();
         }
+        if let Some(ref mut filter) = self.file_explorer.filter {
+            filter.mouse_up();
+        }
         for tab in &mut self.tabs {
             if let Some(ref mut viewer) = tab.file_viewer {
                 viewer.search_input.mouse_up();
@@ -434,18 +449,6 @@ impl TearminalApp {
         } else {
             (800, 600)
         }
-    }
-
-    /// Obtiene el ancho interno de la ventana en píxeles.
-    #[inline]
-    pub(crate) fn window_width(&self) -> usize {
-        self.window_size().0
-    }
-
-    /// Obtiene el alto interno de la ventana en píxeles.
-    #[inline]
-    pub(crate) fn window_height(&self) -> usize {
-        self.window_size().1
     }
 
     /// Fija el cursor del ratón en la ventana si está abierta.
@@ -517,16 +520,47 @@ impl TearminalApp {
             proxy: &proxy,
             theme: &theme,
         };
-        let tabs: Vec<TerminalTab> = match &session {
-            Some(s) => s
-                .tabs
-                .iter()
-                .enumerate()
-                .map(|(id, t)| spawn.restore_tab(TabId(id), t))
-                .collect(),
+        let (spaces, tabs): (Vec<Space>, Vec<TerminalTab>) = match &session {
+            Some(s) => {
+                let names = if s.spaces.is_empty() {
+                    let first = s.tabs.first().and_then(|t| first_leaf_cwd(&t.layout));
+                    vec![space_name(first.as_deref(), 1)]
+                } else {
+                    s.spaces.clone()
+                };
+                let last = names.len() - 1;
+                let spaces = names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, name)| Space {
+                        id: SpaceId(i),
+                        name,
+                        remote: false,
+                    })
+                    .collect();
+                let tabs = s
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(id, t)| {
+                        let mut tab = spawn.restore_tab(TabId(id), t);
+                        tab.space = SpaceId(t.space.min(last));
+                        tab
+                    })
+                    .collect();
+                (spaces, tabs)
+            }
             None => {
                 let pane = spawn.pane(None);
-                vec![TerminalTab::new(TabId(0), "Terminal 1".to_string(), pane)]
+                let name = space_name(std::env::current_dir().ok().as_deref(), 1);
+                (
+                    vec![Space {
+                        id: SpaceId(0),
+                        name,
+                        remote: false,
+                    }],
+                    vec![TerminalTab::new(TabId(0), "Terminal 1".to_string(), pane)],
+                )
             }
         };
         let active_tab_index = active_tab_index.min(tabs.len() - 1);
@@ -536,12 +570,15 @@ impl TearminalApp {
             proxy,
             theme,
             system_light,
+            spaces,
             tabs,
             active_tab_index,
             sidebar_visible,
             explorer_visible,
         );
+        app.prune_spaces();
         if let Some(s) = &session {
+            app.spaces_collapsed = s.spaces_collapsed;
             // Sin tamaño de ventana aún: solo el mínimo; `set_width_from_edge` acota el máximo al arrastrar
             app.file_explorer.width = s
                 .file_explorer_width
@@ -559,6 +596,17 @@ impl TearminalApp {
         mut tab: TerminalTab,
     ) -> Self {
         tab.id = TabId(0);
+        tab.space = SpaceId(0);
+        let name = space_name(
+            tab.active_pane()
+                .and_then(|p| p.terminal.current_dir.as_deref()),
+            1,
+        );
+        let spaces = vec![Space {
+            id: SpaceId(0),
+            name,
+            remote: false,
+        }];
         let system_light = crate::theme::is_windows_system_light_mode();
         let theme = config.appearance.resolve_theme(system_light);
         let explorer_visible = config.appearance.show_file_explorer;
@@ -567,6 +615,7 @@ impl TearminalApp {
             proxy,
             theme,
             system_light,
+            spaces,
             vec![tab],
             0,
             true,
@@ -581,6 +630,7 @@ impl TearminalApp {
         proxy: Option<winit::event_loop::EventLoopProxy<TearminalEvent>>,
         theme: Theme,
         system_light: bool,
+        spaces: Vec<Space>,
         tabs: Vec<TerminalTab>,
         active_tab_index: usize,
         sidebar_visible: bool,
@@ -615,6 +665,12 @@ impl TearminalApp {
             theme,
             proxy,
             tabs,
+            spaces,
+            spaces_collapsed: false,
+            machine_modal: None,
+            spaces_hover: crate::renderer::SpacesHover::None,
+            spaces_scroll: 0,
+            hovered_changes_btn: false,
             active_tab_index,
             tab_history,
             next_tab_id,
@@ -622,9 +678,9 @@ impl TearminalApp {
             hovered_tab: None,
             hovered_close: None,
             hovered_new_tab: false,
-            hovered_settings_btn: false,
-            hovered_toggle_btn: false,
             hovered_pane_btn: None,
+            hovered_pane_header: None,
+            hovered_url_span: None,
             settings_page_state: SettingsPageState::default(),
             context_menu: None,
             palette: None,
@@ -656,9 +712,6 @@ impl TearminalApp {
             scrollbar_dragging: false,
             scrollbar_drag_pane_id: None,
             scrollbar_drag_offset_y: 0.0,
-            sidebar_scrollbar_dragging: false,
-            sidebar_scrollbar_drag_offset_y: 0.0,
-            sidebar_scrollbar_hovered: false,
             explorer_scrollbar_dragging: false,
             explorer_resizing: false,
             explorer_scrollbar_drag_offset_y: 0.0,
@@ -697,7 +750,6 @@ impl TearminalApp {
             scroll_hide_armed: false,
             last_window_title: Default::default(),
             last_focus_gained: Instant::now(),
-            sidebar_scroll_offset: 0,
             session_id: NEXT_WINDOW_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             closing: false,
             new_window_request: false,
@@ -729,11 +781,18 @@ impl TearminalApp {
             dir.filter(|_| p.terminal.ssh_session.is_none())
                 .map(|d| d.to_string_lossy().to_string())
         };
+        // Solo se guardan los Spaces con alguna terminal; `TabSession::space` indexa esa lista.
+        let spaces: Vec<&Space> = self
+            .spaces
+            .iter()
+            .filter(|s| self.tabs.iter().any(|t| t.space == s.id && is_terminal(t)))
+            .collect();
         let tabs: Vec<TabSession> = self
             .tabs
             .iter()
             .filter(|t| is_terminal(t))
             .map(|t| TabSession {
+                space: spaces.iter().position(|s| s.id == t.space).unwrap_or(0),
                 title: t.title.clone(),
                 layout: t.session_layout(&cwd_of),
                 active_pane: t
@@ -764,6 +823,8 @@ impl TearminalApp {
             sidebar_visible: self.sidebar_visible,
             file_explorer_visible: self.file_explorer.visible,
             file_explorer_width: self.file_explorer.width,
+            spaces: spaces.into_iter().map(|s| s.name.clone()).collect(),
+            spaces_collapsed: self.spaces_collapsed,
             tabs,
         }
     }
@@ -779,7 +840,10 @@ impl TearminalApp {
             sidebar_visible: self.sidebar_visible,
             file_explorer_visible: self.file_explorer.visible,
             file_explorer_width: self.file_explorer.width,
+            spaces: vec![space_name(self.active_cwd().as_deref(), 1)],
+            spaces_collapsed: self.spaces_collapsed,
             tabs: vec![TabSession {
+                space: 0,
                 title: "Terminal 1".to_string(),
                 layout: PaneSession::Leaf {
                     cwd: self.active_cwd().map(|d| d.to_string_lossy().to_string()),
@@ -813,13 +877,6 @@ impl TearminalApp {
         dir.filter(|d| pane.terminal.ssh_session.is_none() && d.is_dir())
     }
 
-    pub(crate) fn is_horizontal_tabs(&self) -> bool {
-        self.config
-            .appearance
-            .tab_layout
-            .eq_ignore_ascii_case("horizontal")
-    }
-
     /// Offsets `(left_offset, right_offset, top_offset, status_bar_h)` para los paneles de terminal.
     /// No dependen de si la pestaña activa en este momento es Ajustes: las terminales siempre
     /// usan su propia disposición según `sidebar_visible`, `panel_on_right` y `show_status_bar`.
@@ -830,44 +887,27 @@ impl TearminalApp {
         } else {
             0
         };
-        let (left, right) = if self.sidebar_visible {
-            if self.panel_on_right() {
-                (0, self.panel_width())
-            } else {
-                (self.panel_width(), 0)
-            }
+        let right = if self.sidebar_visible {
+            self.panel_width()
         } else if self.file_explorer.visible {
-            (0, self.file_explorer.width)
+            self.file_explorer.width
         } else {
-            (0, 0)
+            0
         };
-        (left, right, top, status_h)
+        (self.spaces_w(), right, top, status_h)
     }
 
     /// Espacio que el panel lateral quita al contenido por la izquierda.
     pub(crate) fn sidebar_offset(&self) -> usize {
-        if self.panel_shown() && !self.panel_on_right() {
-            self.panel_width()
-        } else {
-            0
-        }
+        self.spaces_w()
     }
 
     pub(crate) fn top_offset(&self) -> usize {
-        if self.is_horizontal_tabs() {
-            TopTabBarRects::HEIGHT
-        } else {
-            TopTitleBarRects::HEIGHT
-        }
+        TopTabBarRects::HEIGHT
     }
 
     pub(crate) fn status_bar_height(&self) -> usize {
-        if self.config.appearance.show_status_bar
-            && self
-                .tabs
-                .get(self.active_tab_index)
-                .is_none_or(|t| !t.is_settings)
-        {
+        if self.config.appearance.show_status_bar {
             26
         } else {
             0
@@ -877,9 +917,6 @@ impl TearminalApp {
     /// Espacio que quitan al contenido por la derecha el explorador acoplado y el panel si va a ese lado.
     /// Con el panel a la vista el explorador va dentro de él y no resta ancho.
     pub(crate) fn file_explorer_offset(&self) -> usize {
-        if self.settings_fullscreen() {
-            return 0;
-        }
         if self.panel_shown() {
             return if self.panel_on_right() {
                 self.panel_width()

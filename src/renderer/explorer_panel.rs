@@ -32,17 +32,12 @@ impl TerminalRenderer {
             panel_h,
             theme.chrome_bg(),
         );
-        let edge_color = if explorer.is_focused {
-            theme.accent_color()
-        } else {
-            theme.chrome_line()
-        };
+        let edge_color = theme.chrome_line();
         Self::draw_rect(canvas, panel_x, panel_y, 1, panel_h, edge_color);
 
-        // 2. Pestañas «Archivos» · «Cambios»: la activa lleva el acento y una línea de 2 px bajo ella,
-        //    sobre un filete que cruza las dos mitades.
+        // 2. Encabezado: título de la vista (Archivos o Cambios, con su contador) a la izquierda y el
+        //    nombre de la carpeta o del host remoto a la derecha. La vista se elige en la barra superior.
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
-        let tabs = ExplorerTabsRects::compute(panel_x, panel_y, panel_w, header_h);
         Self::draw_rect(
             canvas,
             panel_x + 8,
@@ -51,81 +46,65 @@ impl TerminalRenderer {
             1,
             theme.chrome_line(),
         );
+        let title = if explorer.changes_only {
+            "Cambios"
+        } else {
+            "Archivos"
+        };
+        let baseline = self.centered_baseline(panel_y + (header_h - 1) / 2);
+        let right = panel_x + panel_w - 16;
+        let title_x = panel_x + 16;
+        let cursor_x = self.draw_ui_text(
+            canvas,
+            title,
+            title_x,
+            baseline,
+            right,
+            theme.foreground,
+            tokens::TITLE,
+            true,
+        );
         let change_count = explorer.change_count();
-        for (rect, label, active, hovered) in [
-            (
-                tabs.files,
-                "Archivos",
-                !explorer.changes_only,
-                explorer.hovered_tab == Some(false),
-            ),
-            (
-                tabs.changes,
-                "Cambios",
-                explorer.changes_only,
-                explorer.hovered_tab == Some(true),
-            ),
-        ] {
-            let color = if active {
-                theme.accent_color()
-            } else if hovered {
-                theme.foreground
-            } else {
-                theme.text_secondary()
-            };
-            let count = (label == "Cambios" && change_count > 0).then(|| change_count.to_string());
-            let label_w = self.measure_ui_text(label, tokens::TITLE, active);
-            let count_w = count
-                .as_ref()
-                .map_or(0, |c| 6 + self.measure_mono_text(c, tokens::MICRO, false));
-            let x = rect.0 + rect.2.saturating_sub(label_w + count_w) / 2;
-            let baseline = self.centered_baseline(rect.1 + (rect.3 - 1) / 2);
-            self.draw_ui_text(
-                canvas,
-                label,
-                x,
-                baseline,
-                rect.0 + rect.2,
-                color,
-                tokens::TITLE,
-                active,
+        if explorer.changes_only && change_count > 0 {
+            let count = change_count.to_string();
+            let cw = self.measure_mono_text(&count, tokens::MICRO, false);
+            canvas.rounded_fill(
+                cursor_x + 8,
+                panel_y + (header_h - 1 - 18) / 2,
+                cw + 12,
+                18,
+                tokens::RADIUS_ROW,
+                theme.surface_bg(),
             );
-            if let Some(count) = count {
-                self.draw_mono_text(
-                    canvas,
-                    &count,
-                    x + label_w + 6,
-                    baseline,
-                    rect.0 + rect.2,
-                    if active { color } else { theme.text_muted() },
-                    tokens::MICRO,
-                    false,
-                );
-            }
-            if active {
-                Self::draw_rect(
-                    canvas,
-                    rect.0,
-                    rect.1 + rect.3 - 2,
-                    rect.2,
-                    2,
-                    theme.accent_color(),
-                );
-            }
+            self.draw_mono_text(
+                canvas,
+                &count,
+                cursor_x + 14,
+                baseline,
+                right,
+                theme.text_secondary(),
+                tokens::MICRO,
+                false,
+            );
         }
 
-        // 3. Lista de elementos (archivos y carpetas), justo bajo la cabecera.
+        // 2b. Barra de filtro rápido (`Ctrl + P` / `Ctrl + F`) si está activa
+        self.draw_explorer_filter_bar(canvas, explorer, panel_x, panel_y, panel_w, theme);
+
+        // 3. Lista de elementos (archivos y carpetas), justo bajo la cabecera y el filtro.
         let list_y = panel_y
             + header_h
-            + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+            + explorer.subheader_height()
             + crate::explorer::FileExplorer::LIST_TOP_PAD;
         let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
         let list_max_y = panel_y + panel_h.saturating_sub(8);
 
-        if explorer.items.is_empty() {
+        if explorer.visible_item_count() == 0 {
             let empty_base = list_y + 14;
             let (msg, color) = if let Some(ref err) = explorer.error_message {
                 (err.as_str(), theme.ansi[3])
+            } else if explorer.is_filtering() {
+                ("No se encontraron coincidencias", theme.text_muted())
             } else if explorer.remote_session.is_some() {
                 ("Cargando archivos remotos...", theme.ansi[8])
             } else if explorer.changes_only {
@@ -148,13 +127,12 @@ impl TerminalRenderer {
             return;
         }
 
-        for (rel_idx, item) in explorer
-            .items
-            .iter()
-            .skip(explorer.scroll_offset)
-            .enumerate()
-        {
+        let visible_count = explorer.visible_item_count();
+        for rel_idx in 0..visible_count.saturating_sub(explorer.scroll_offset) {
             let actual_idx = explorer.scroll_offset + rel_idx;
+            let Some(item) = explorer.visible_item(actual_idx) else {
+                break;
+            };
             let item_y = list_y + rel_idx * item_h;
             if item_y + item_h > list_max_y {
                 break;
@@ -326,6 +304,72 @@ impl TerminalRenderer {
         self.draw_explorer_edit_bar(canvas, explorer, panel_x, panel_y, panel_w, theme);
     }
 
+    /// Barra de filtro rápido (`Ctrl + P` / `Ctrl + F`), con icono de lupa, input y botón de cerrar.
+    fn draw_explorer_filter_bar(
+        &mut self,
+        canvas: &mut Canvas,
+        explorer: &crate::explorer::FileExplorer,
+        panel_x: usize,
+        panel_y: usize,
+        panel_w: usize,
+        theme: &Theme,
+    ) {
+        let Some(filter_input) = explorer.filter.as_ref() else {
+            return;
+        };
+        let (bx, by, bw, bh) =
+            crate::explorer::FileExplorer::filter_bar_rect(panel_x, panel_y, panel_w);
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.surface_bg());
+        let outline = if explorer.is_focused {
+            theme.accent_color()
+        } else {
+            theme.chrome_line()
+        };
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_CONTROL, outline);
+
+        // Icono de lupa a la izquierda
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Search,
+            bx + 14,
+            by + bh / 2,
+            11.0,
+            theme.text_muted(),
+        );
+
+        // Botón de cerrar/limpiar (X) a la derecha
+        let (cx, cy, cw, ch) =
+            crate::explorer::FileExplorer::filter_close_btn_rect(panel_x, panel_y, panel_w);
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::X,
+            cx + cw / 2,
+            cy + ch / 2,
+            11.0,
+            if explorer.hovered_filter_close {
+                theme.foreground
+            } else {
+                theme.text_muted()
+            },
+        );
+
+        // Input de texto
+        let base = self.centered_baseline(by + bh / 2);
+        self.render_text_input_content(
+            canvas,
+            filter_input,
+            bx + 26,
+            base,
+            cx.saturating_sub(4),
+            by,
+            bh,
+            explorer.is_focused,
+            "Filtrar... (Esc)",
+            true,
+            theme,
+        );
+    }
+
     /// Barra de edición de nombre (nuevo archivo/carpeta o renombrar), sobre las primeras filas de la lista.
     /// El motivo del último rechazo (nombre repetido o no válido) va en una tira bajo ella.
     fn draw_explorer_edit_bar(
@@ -413,7 +457,7 @@ impl TerminalRenderer {
         let (panel_x, panel_y, panel_w, panel_h) =
             explorer.panel_geometry(width, height, top_offset, status_bar_h);
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
-        let sub_h = crate::explorer::FileExplorer::SUBHEADER_HEIGHT;
+        let sub_h = explorer.subheader_height();
         let list_y = panel_y + header_h + sub_h + crate::explorer::FileExplorer::LIST_TOP_PAD;
         let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
         let list_max_y = panel_y + panel_h.saturating_sub(8);
@@ -422,7 +466,7 @@ impl TerminalRenderer {
             panel_x + panel_w,
             list_y,
             list_max_y.saturating_sub(list_y),
-            explorer.items.len(),
+            explorer.visible_item_count(),
             (list_max_y.saturating_sub(list_y)) / item_h,
             explorer.scroll_offset,
         )
@@ -442,7 +486,7 @@ impl TerminalRenderer {
             return None;
         }
         let hovered_idx = explorer.hovered_index?;
-        if hovered_idx < explorer.scroll_offset || hovered_idx >= explorer.items.len() {
+        if hovered_idx < explorer.scroll_offset || hovered_idx >= explorer.visible_item_count() {
             return None;
         }
         let (panel_x, panel_y, panel_w, panel_h) =
@@ -455,7 +499,7 @@ impl TerminalRenderer {
         let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
         let list_y = panel_y
             + header_h
-            + crate::explorer::FileExplorer::SUBHEADER_HEIGHT
+            + explorer.subheader_height()
             + crate::explorer::FileExplorer::LIST_TOP_PAD;
         let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
         let list_max_y = panel_y + panel_h.saturating_sub(8);
@@ -464,7 +508,7 @@ impl TerminalRenderer {
             return None;
         }
 
-        let item = &explorer.items[hovered_idx];
+        let item = explorer.visible_item(hovered_idx)?;
         let is_selected = explorer.selected_index == Some(hovered_idx)
             || explorer.selected_path.as_ref() == Some(&item.path);
 
