@@ -495,11 +495,7 @@ impl TearminalApp {
         self.split_active_pane_with_shell(direction, &shell);
     }
 
-    pub(crate) fn split_active_pane_with_shell(
-        &mut self,
-        direction: SplitDirection,
-        shell: &str,
-    ) {
+    pub(crate) fn split_active_pane_with_shell(&mut self, direction: SplitDirection, shell: &str) {
         if self.tabs[self.active_tab_index].is_settings
             || self.tabs[self.active_tab_index].file_viewer.is_some()
         {

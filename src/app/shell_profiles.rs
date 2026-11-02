@@ -122,8 +122,13 @@ mod tests {
     #[test]
     fn test_available_shell_profiles_contains_builtin_shells() {
         let profiles = available_shell_profiles();
-        assert!(!profiles.is_empty(), "debe haber al menos un shell en Windows");
-        let has_ps = profiles.iter().any(|p| p.id == "powershell" || p.id == "pwsh");
+        assert!(
+            !profiles.is_empty(),
+            "debe haber al menos un shell en Windows"
+        );
+        let has_ps = profiles
+            .iter()
+            .any(|p| p.id == "powershell" || p.id == "pwsh");
         assert!(has_ps, "debe incluir PowerShell");
         let has_cmd = profiles.iter().any(|p| p.id == "cmd");
         assert!(has_cmd, "debe incluir CMD");

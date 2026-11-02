@@ -162,7 +162,11 @@ impl TearminalApp {
                     let r = self.spaces_rects(win_h);
                     let (win_w, win_h_curr) = self.window_size();
                     let items = self.shell_profiles_menu();
-                    self.show_menu(items, (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4), (win_w, win_h_curr));
+                    self.show_menu(
+                        items,
+                        (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4),
+                        (win_w, win_h_curr),
+                    );
                     return true;
                 }
                 let cwd = self.active_cwd();

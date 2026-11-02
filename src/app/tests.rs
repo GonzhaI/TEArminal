@@ -815,7 +815,8 @@ fn test_terminal_pane_git_branch_updates_when_head_changes_in_same_dir() {
     let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
     let mut pane = TerminalPane::new(PaneId(2), pty, term, (80, 24));
 
-    let temp_repo = std::env::temp_dir().join(format!("tearminal_test_repo_{}", std::process::id()));
+    let temp_repo =
+        std::env::temp_dir().join(format!("tearminal_test_repo_{}", std::process::id()));
     let git_dir = temp_repo.join(".git");
     let head_file = git_dir.join("HEAD");
     let _ = std::fs::create_dir_all(&git_dir);
@@ -866,14 +867,16 @@ fn test_pane_grid_size_accounts_for_header_offset() {
         "Test".into(),
         TerminalPane::new(
             PaneId(1),
-            crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).unwrap(),
+            crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None)
+                .unwrap(),
             crate::terminal::TerminalState::new(80, 24, 100, crate::theme::Theme::default()),
             (80, 24),
         ),
     );
     let pane_rects = tab.compute_pane_rects(0, top_offset, total_w, total_h);
     assert_eq!(pane_rects.len(), 1);
-    let (_, expected_rows) = renderer.compute_pane_grid_size(pane_rects[0].width, pane_rects[0].height);
+    let (_, expected_rows) =
+        renderer.compute_pane_grid_size(pane_rects[0].width, pane_rects[0].height);
     assert_eq!(
         rows_with_header, expected_rows,
         "Las filas calculadas al crear un tab deben coincidir con compute_pane_rects para que no se corten el prompt ni el cursor"
@@ -1673,10 +1676,7 @@ c
     assert_eq!(viewer.get_line_git_diff_status(2), None);
     assert!(viewer.has_git_changes());
     viewer.save_to_disk().unwrap();
-    assert_eq!(
-        std::fs::read_to_string(&path).unwrap(),
-        "a\nc\n"
-    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nc\n");
     viewer.toggle_unified_diff();
     assert!(!viewer.is_diff());
     assert_eq!(viewer.lines, ["a", "c"]);

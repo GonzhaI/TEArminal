@@ -973,7 +973,11 @@ impl TerminalRenderer {
                 } else if search.matches.is_empty() {
                     "0/0".to_string()
                 } else {
-                    format!("{}/{}", search.active.map_or(0, |i| i + 1), search.matches.len())
+                    format!(
+                        "{}/{}",
+                        search.active.map_or(0, |i| i + 1),
+                        search.matches.len()
+                    )
                 };
                 let counter_w = 56;
                 let (ix, iy, ih) = (bx + 28, by + 4, bh - 8);

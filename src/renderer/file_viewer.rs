@@ -1274,23 +1274,9 @@ impl TerminalRenderer {
             content_h,
             gutter_bg,
         );
-        canvas.fill_rect(
-            clip,
-            lay.left_sep_x,
-            content_y,
-            1,
-            content_h,
-            chrome_line,
-        );
+        canvas.fill_rect(clip, lay.left_sep_x, content_y, 1, content_h, chrome_line);
 
-        canvas.fill_rect(
-            clip,
-            lay.divider_x,
-            content_y,
-            1,
-            content_h,
-            chrome_line,
-        );
+        canvas.fill_rect(clip, lay.divider_x, content_y, 1, content_h, chrome_line);
 
         canvas.fill_rect(
             clip,
@@ -1300,14 +1286,7 @@ impl TerminalRenderer {
             content_h,
             gutter_bg,
         );
-        canvas.fill_rect(
-            clip,
-            lay.right_sep_x,
-            content_y,
-            1,
-            content_h,
-            chrome_line,
-        );
+        canvas.fill_rect(clip, lay.right_sep_x, content_y, 1, content_h, chrome_line);
 
         let left_gutter_clip: Clip = (lay.left_x, content_y, lay.left_sep_x, content_y + content_h);
         let left_text_clip: Clip = (
@@ -1316,7 +1295,12 @@ impl TerminalRenderer {
             lay.left_text_max_x,
             content_y + content_h,
         );
-        let right_gutter_clip: Clip = (lay.right_x, content_y, lay.right_sep_x, content_y + content_h);
+        let right_gutter_clip: Clip = (
+            lay.right_x,
+            content_y,
+            lay.right_sep_x,
+            content_y + content_h,
+        );
         let right_text_clip: Clip = (
             lay.right_sep_x + 1,
             content_y,
@@ -1329,10 +1313,14 @@ impl TerminalRenderer {
         let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
         let end_row = (start_row + visible_rows + 1).min(total_rows);
 
-        let del_tint = Color::from_rgba(theme.ansi[1].r(), theme.ansi[1].g(), theme.ansi[1].b(), 32);
-        let add_tint = Color::from_rgba(theme.ansi[2].r(), theme.ansi[2].g(), theme.ansi[2].b(), 32);
-        let mod_left_tint = Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
-        let mod_right_tint = Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
+        let del_tint =
+            Color::from_rgba(theme.ansi[1].r(), theme.ansi[1].g(), theme.ansi[1].b(), 32);
+        let add_tint =
+            Color::from_rgba(theme.ansi[2].r(), theme.ansi[2].g(), theme.ansi[2].b(), 32);
+        let mod_left_tint =
+            Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
+        let mod_right_tint =
+            Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
         let empty_tint = theme.mix(theme.background, theme.foreground, 0.02);
 
         // 3. Dibujo de filas sincronizadas
@@ -1389,7 +1377,8 @@ impl TerminalRenderer {
                         empty_tint,
                     );
                 }
-                crate::app::viewer::DiffCellKind::Normal | crate::app::viewer::DiffCellKind::Added => {}
+                crate::app::viewer::DiffCellKind::Normal
+                | crate::app::viewer::DiffCellKind::Added => {}
             }
 
             if let Some(line_num) = r.left.line_num {
@@ -1474,7 +1463,8 @@ impl TerminalRenderer {
                         empty_tint,
                     );
                 }
-                crate::app::viewer::DiffCellKind::Normal | crate::app::viewer::DiffCellKind::Deleted => {}
+                crate::app::viewer::DiffCellKind::Normal
+                | crate::app::viewer::DiffCellKind::Deleted => {}
             }
 
             if let Some(line_num) = r.right.line_num {

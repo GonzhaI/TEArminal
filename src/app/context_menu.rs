@@ -212,7 +212,11 @@ impl TearminalApp {
                 crate::renderer::SpacesHover::Plus => {
                     let r = self.spaces_rects(win_h);
                     let items = self.shell_profiles_menu();
-                    self.show_menu(items, (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4), (win_w, win_h));
+                    self.show_menu(
+                        items,
+                        (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4),
+                        (win_w, win_h),
+                    );
                     return true;
                 }
                 crate::renderer::SpacesHover::Row(i) => match self.space_menu(i) {

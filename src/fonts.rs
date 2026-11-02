@@ -81,7 +81,8 @@ mod tests {
 
     #[test]
     fn test_monospace_detection_on_system_fonts() {
-        let fonts = std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Fonts");
+        let fonts =
+            std::path::Path::new(&std::env::var("WINDIR").unwrap_or_default()).join("Fonts");
         // Las fuentes embebidas están reducidas (sin tabla de nombres): se prueba con las del sistema.
         if let Ok(mono) = std::fs::read(fonts.join("consola.ttf")) {
             assert_eq!(monospace_family(&mono).as_deref(), Some("Consolas"));

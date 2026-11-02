@@ -464,8 +464,7 @@ impl TearminalApp {
             return;
         }
         if term_tab
-            && self
-                .tabs[self.active_tab_index]
+            && self.tabs[self.active_tab_index]
                 .active_pane()
                 .is_some_and(|p| p.terminal.search.is_some())
         {
@@ -489,8 +488,7 @@ impl TearminalApp {
                 self.request_redraw();
                 return;
             }
-            let mut input = self
-                .tabs[self.active_tab_index]
+            let mut input = self.tabs[self.active_tab_index]
                 .active_pane_mut()
                 .and_then(|p| p.terminal.search.as_mut())
                 .map(|s| std::mem::take(&mut s.input))
@@ -1127,10 +1125,12 @@ impl TearminalApp {
                             }
                         }
                         Key::Named(NamedKey::PageUp) => {
-                            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(visible_lines);
+                            viewer.scroll_offset =
+                                viewer.scroll_offset.saturating_sub(visible_lines);
                         }
                         Key::Named(NamedKey::PageDown) => {
-                            viewer.scroll_offset = (viewer.scroll_offset + visible_lines).min(max_offset);
+                            viewer.scroll_offset =
+                                (viewer.scroll_offset + visible_lines).min(max_offset);
                         }
                         Key::Named(NamedKey::Home) => {
                             viewer.scroll_offset = 0;

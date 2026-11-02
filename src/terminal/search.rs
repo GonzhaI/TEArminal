@@ -75,7 +75,11 @@ impl TerminalState {
             None
         } else {
             let i = matches.partition_point(|&(l, _, _)| l < start);
-            Some(if i < matches.len() { i } else { matches.len() - 1 })
+            Some(if i < matches.len() {
+                i
+            } else {
+                matches.len() - 1
+            })
         };
         if let Some(s) = &mut self.search {
             s.matches = matches;
@@ -136,7 +140,10 @@ mod tests {
     #[test]
     fn test_search_finds_matches_in_scrollback_and_grid_ignoring_case() {
         let mut t = term_with(&["Hola", "mundo", "HOLA otra", "x", "hola"]);
-        assert!(!t.scrollback.is_empty(), "las primeras líneas pasaron al historial");
+        assert!(
+            !t.scrollback.is_empty(),
+            "las primeras líneas pasaron al historial"
+        );
         t.open_search();
         t.search.as_mut().unwrap().input = TextInput::new("hola");
         t.update_search_matches();
@@ -151,10 +158,17 @@ mod tests {
         t.open_search();
         t.search.as_mut().unwrap().input = TextInput::new("uno");
         t.update_search_matches();
-        assert_eq!(t.search.as_ref().unwrap().active, Some(1), "empieza en la vista actual");
+        assert_eq!(
+            t.search.as_ref().unwrap().active,
+            Some(1),
+            "empieza en la vista actual"
+        );
         t.search_step(true);
         assert_eq!(t.search.as_ref().unwrap().active, Some(0), "da la vuelta");
-        assert!(t.scroll_offset > 0, "la primera coincidencia está en el historial");
+        assert!(
+            t.scroll_offset > 0,
+            "la primera coincidencia está en el historial"
+        );
         t.close_search();
         assert!(t.search.is_none());
     }

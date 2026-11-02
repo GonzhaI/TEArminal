@@ -609,7 +609,12 @@ impl FileViewerHeaderRects {
         let diff_mode_btn = if is_diff && has_diff {
             diff_btn.map(|d_btn| {
                 let diff_mode_w = 118;
-                (d_btn.0.saturating_sub(8 + diff_mode_w), btn_y, diff_mode_w, 24)
+                (
+                    d_btn.0.saturating_sub(8 + diff_mode_w),
+                    btn_y,
+                    diff_mode_w,
+                    24,
+                )
             })
         } else {
             None

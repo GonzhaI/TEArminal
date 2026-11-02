@@ -364,7 +364,10 @@ impl TearminalApp {
                         let items = self.shell_profiles_menu();
                         self.show_menu(
                             items,
-                            (top_rects.plus_btn.0, top_rects.plus_btn.1 + top_rects.plus_btn.3 + 4),
+                            (
+                                top_rects.plus_btn.0,
+                                top_rects.plus_btn.1 + top_rects.plus_btn.3 + 4,
+                            ),
                             (win_w, win_h),
                         );
                         return;

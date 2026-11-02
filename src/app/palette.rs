@@ -371,7 +371,9 @@ impl TearminalApp {
                 subtitle: String::new(),
                 icon: LucideIcon::Columns2,
                 file: None,
-                action: PaletteAction::Execute(MenuAction::SplitVerticalWithShell(p.command.clone())),
+                action: PaletteAction::Execute(MenuAction::SplitVerticalWithShell(
+                    p.command.clone(),
+                )),
             });
             items.push(PaletteItem {
                 category: PaletteCategory::Command,
@@ -379,7 +381,9 @@ impl TearminalApp {
                 subtitle: String::new(),
                 icon: LucideIcon::Rows2,
                 file: None,
-                action: PaletteAction::Execute(MenuAction::SplitHorizontalWithShell(p.command.clone())),
+                action: PaletteAction::Execute(MenuAction::SplitHorizontalWithShell(
+                    p.command.clone(),
+                )),
             });
         }
         items.push(PaletteItem {
