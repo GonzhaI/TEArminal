@@ -45,7 +45,7 @@ pub(crate) fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
             if tc == qc {
                 found = true;
                 if qi > 0 {
-                    score -= (idx - last_idx).min(15) as i32;
+                    score -= (idx - last_idx).min(15);
                 }
                 last_idx = idx;
                 break;
@@ -678,10 +678,13 @@ impl FileExplorer {
         for (idx, item) in self.items.iter().enumerate() {
             if let Some(score) = score_item(query, item, &self.root_dir) {
                 keep[idx] = true;
-                if !item.is_dir && score > best_score {
-                    best_score = score;
-                    best_file_idx = Some(idx);
-                } else if item.is_dir && best_file_idx.is_none() && score > best_score {
+                // Un archivo gana a cualquier carpeta; una carpeta solo si aún no hay archivo
+                let better = if item.is_dir {
+                    best_file_idx.is_none()
+                } else {
+                    true
+                };
+                if better && score > best_score {
                     best_score = score;
                     best_file_idx = Some(idx);
                 }
@@ -1451,9 +1454,7 @@ impl FileExplorer {
         }
 
         let (is_dir, is_expanded, depth, item_path) = {
-            let Some(item) = self.visible_item(idx) else {
-                return None;
-            };
+            let item = self.visible_item(idx)?;
             (item.is_dir, item.is_expanded, item.depth, item.path.clone())
         };
 
@@ -1500,9 +1501,7 @@ impl FileExplorer {
             return None;
         }
 
-        let Some(item) = self.visible_item(idx) else {
-            return None;
-        };
+        let item = self.visible_item(idx)?;
 
         if item.is_dir {
             if let Some(real_idx) = self.actual_index_for_visible(idx) {

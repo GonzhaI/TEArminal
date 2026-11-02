@@ -1483,7 +1483,7 @@ impl TerminalState {
         prefix
             .chars()
             .zip(slice)
-            .all(|(p, &c)| p.to_ascii_lowercase() == c.to_ascii_lowercase())
+            .all(|(p, &c)| p.eq_ignore_ascii_case(&c))
     }
 
     /// Extrae la URL del hipervínculo (OSC 8 o regex de texto plano) bajo (col, global_line), si existe.
