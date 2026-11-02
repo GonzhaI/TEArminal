@@ -5,6 +5,7 @@
 mod cell;
 pub(crate) mod kitty;
 pub(crate) mod performer;
+pub(crate) mod search;
 pub(crate) use performer::clean_listing;
 
 pub(crate) use cell::*;
@@ -20,21 +21,6 @@ use vte::{Params, Parser, Perform};
 /// los listados remotos (`TearminalLs`), los trozos de `TearminalFile` (32 KB) y OSC 52 (hasta 100 KB).
 pub(crate) const OSC_BUF_SIZE: usize = 128 * 1024;
 type OscParser = Parser<OSC_BUF_SIZE>;
-
-/// Respuesta a una petición en banda al bash remoto (leer/escribir archivo, listar carpeta)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RemoteFileResult {
-    pub(crate) id: u32,
-    pub(crate) ok: bool,
-    pub(crate) data: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-struct RemoteFileAsm {
-    id: u32,
-    ok: bool,
-    parts: Vec<Option<String>>,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum CursorShape {
@@ -95,15 +81,10 @@ pub(crate) struct TerminalState {
     pub agent_running: bool,
     pub ai_agent: crate::renderer::AiAgentStatus,
     pub window_title: Option<String>,
-    /// El bash remoto lanzado por el wrapper `ssh` de TEArminal informa de rama git (OSC 1337 TearminalGit) y listado
+    /// El bash remoto lanzado por el wrapper `ssh` de TEArminal informa de rama git (OSC 1337 TearminalGit)
     pub remote_integration: bool,
-    /// Entradas de la carpeta remota actual (`ls -1Ap`, las carpetas acaban en `/`), no confiables
-    pub remote_listing: Option<Vec<String>>,
     /// El prompt remoto está esperando entrada (llega `TearminalGit` en cada prompt; Enter lo apaga)
     pub remote_at_prompt: bool,
-    /// Respuestas completas a peticiones en banda (`TearminalFile`), pendientes de que la app las recoja
-    pub remote_file_results: Vec<RemoteFileResult>,
-    remote_file_parts: Vec<RemoteFileAsm>,
 
     // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
     pub bracketed_paste_mode: bool,
@@ -138,6 +119,8 @@ pub(crate) struct TerminalState {
 
     // Selección de texto
     pub selection: Option<SelectionRange>,
+    /// Barra de búsqueda en el historial (`Ctrl + Shift + F`), si está abierta
+    pub(crate) search: Option<search::TermSearch>,
 
     // Hover del scrollbar del panel y botón de ir al fondo
     pub scrollbar_hovered: bool,
@@ -204,10 +187,7 @@ impl TerminalState {
             ai_agent: crate::renderer::AiAgentStatus::None,
             window_title: None,
             remote_integration: false,
-            remote_listing: None,
             remote_at_prompt: false,
-            remote_file_results: Vec::new(),
-            remote_file_parts: Vec::new(),
             bracketed_paste_mode: false,
             cursor_key_mode: false,
             mouse_reporting_normal: false,
@@ -228,6 +208,7 @@ impl TerminalState {
             current_bg: Color::TRANSPARENT,
             current_flags: 0,
             selection: None,
+            search: None,
             scrollbar_hovered: false,
             scroll_to_bottom_hovered: false,
             parser: Some(Box::default()),
@@ -383,25 +364,6 @@ impl TerminalState {
         !a.is_empty()
             && a.len() == b.len()
             && a.iter().zip(b).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
-    }
-
-    /// Bytes que TEArminal escribe en el bash remoto para pedir algo sin abrir otra conexión: escribe la
-    /// petición tras `#AXR#` en la línea de edición y pulsa una combinación que el gancho de TEArminal
-    /// tiene enlazada (`bind -x`); el gancho borra la petición y responde con `OSC 1337 TearminalFile`.
-    /// Solo con integración activa y el prompt esperando entrada (si no, los bytes irían a otro programa).
-    pub(crate) fn remote_request_bytes(&self, op: &str, id: u32, payload: &str) -> Option<Vec<u8>> {
-        let safe = |s: &str, extra: &[char]| {
-            s.chars()
-                .all(|c| c.is_ascii_alphanumeric() || extra.contains(&c))
-        };
-        if !self.remote_integration
-            || !self.remote_at_prompt
-            || !matches!(op, "get" | "put" | "ls")
-            || !safe(payload, &['%', '-', '_', '.', '~', '/', ' '])
-        {
-            return None;
-        }
-        Some(format!("\x05#AXR#{id} {op} {payload}\x1b[1337~").into_bytes())
     }
 
     /// El usuario pulsó Enter: lo que se escriba ya no llega a un prompt sino a un programa

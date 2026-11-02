@@ -19,13 +19,13 @@ mod palette;
 mod panel;
 pub(crate) mod platform;
 mod redraw;
-mod remote_files;
 mod settings;
 mod shell_context;
+mod shell_profiles;
 mod spaces;
 mod ssh_jobs;
 mod tabs;
-mod viewer;
+pub(crate) mod viewer;
 mod wheel;
 
 pub(crate) use crate::config::KeepAwakeMode;
@@ -117,6 +117,9 @@ pub(crate) struct TearminalApp {
     /// Rango de hipervínculo bajo el ratón con Ctrl pulsado `(pane_id, global_line, start_col, end_col)`
     pub(crate) hovered_url_span: Option<(PaneId, usize, usize, usize)>,
     pub settings_page_state: SettingsPageState,
+    /// Fuentes monoespaciadas instaladas (se leen en un hilo al abrir Ajustes) y su escaneo en curso
+    installed_fonts: Option<Vec<crate::fonts::InstalledFont>>,
+    font_scan: Option<std::sync::mpsc::Receiver<Vec<crate::fonts::InstalledFont>>>,
     pub context_menu: Option<ContextMenu>,
     pub palette: Option<PaletteState>,
     pub file_explorer: crate::explorer::FileExplorer,
@@ -142,12 +145,9 @@ pub(crate) struct TearminalApp {
     spinner_timer: Instant,
     /// Fase actual del parpadeo del cursor (true = visible)
     cursor_on: bool,
-    /// Peticiones en banda al bash remoto aún sin respuesta
-    pending_remote: Vec<remote_files::PendingRemote>,
     /// Resultados de los hilos SSH (`ssh_jobs`); cada hilo envía el suyo y avisa con `TearminalEvent::SshDone`
     ssh_tx: std::sync::mpsc::Sender<ssh_jobs::SshDone>,
     ssh_rx: std::sync::mpsc::Receiver<ssh_jobs::SshDone>,
-    next_remote_id: u32,
     /// Instante a partir del cual se aplica el tamaño final de rejilla al PTY (antirrebote)
     resize_deadline: Option<Instant>,
     is_focused: bool,
@@ -682,6 +682,8 @@ impl TearminalApp {
             hovered_pane_header: None,
             hovered_url_span: None,
             settings_page_state: SettingsPageState::default(),
+            installed_fonts: None,
+            font_scan: None,
             context_menu: None,
             palette: None,
             file_explorer,
@@ -702,11 +704,8 @@ impl TearminalApp {
             cursor_timer: Instant::now(),
             spinner_timer: Instant::now(),
             cursor_on: true,
-            pending_remote: Vec::new(),
             ssh_tx,
             ssh_rx,
-            // Aleatorio: los ids no son adivinables por un servidor que quiera responder por otro panel
-            next_remote_id: crate::pty::random_id(),
             resize_deadline: None,
             is_focused: true,
             scrollbar_dragging: false,

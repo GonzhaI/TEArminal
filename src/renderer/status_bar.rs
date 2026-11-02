@@ -662,19 +662,7 @@ impl TerminalRenderer {
         } else {
             18
         };
-        let note = if Self::ai_limits_note(usage.kind).is_some() {
-            18
-        } else {
-            0
-        };
-        20 + note + limits * Self::LIMIT_ROW_H + tokens + 10
-    }
-
-    /// Aviso de los agentes sin fuente legítima de límites: AGY no guarda su cuota en disco y su servidor
-    /// local exige un token CSRF interno, así que no se inventa un porcentaje.
-    #[allow(dead_code)]
-    fn ai_limits_note(kind: AiAgentStatus) -> Option<&'static str> {
-        (kind == AiAgentStatus::Agy).then_some("Límites no disponibles para AGY")
+        20 + limits * Self::LIMIT_ROW_H + tokens + 10
     }
 
     /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
@@ -843,20 +831,6 @@ impl TerminalRenderer {
                 );
             }
             cur_y += 20;
-
-            if let Some(note) = Self::ai_limits_note(u.kind) {
-                self.draw_ui_text(
-                    canvas,
-                    note,
-                    pad_x + 10,
-                    cur_y + 10,
-                    max_x,
-                    theme.text_secondary(),
-                    10.5,
-                    false,
-                );
-                cur_y += 18;
-            }
 
             // Límites reales de la cuenta: porcentaje, barra y reinicio
             for lim in snapshot.limits_for(u.kind) {

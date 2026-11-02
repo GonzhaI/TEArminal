@@ -356,6 +356,32 @@ impl TearminalApp {
             file: None,
             action: PaletteAction::Execute(MenuAction::NewTab),
         });
+        for p in crate::app::shell_profiles::available_shell_profiles() {
+            items.push(PaletteItem {
+                category: PaletteCategory::Command,
+                title: format!("Nueva pestaña: {}", p.title),
+                subtitle: String::new(),
+                icon: p.icon,
+                file: None,
+                action: PaletteAction::Execute(MenuAction::NewTabWithShell(p.command.clone())),
+            });
+            items.push(PaletteItem {
+                category: PaletteCategory::Command,
+                title: format!("Dividir en columnas: {}", p.title),
+                subtitle: String::new(),
+                icon: LucideIcon::Columns2,
+                file: None,
+                action: PaletteAction::Execute(MenuAction::SplitVerticalWithShell(p.command.clone())),
+            });
+            items.push(PaletteItem {
+                category: PaletteCategory::Command,
+                title: format!("Dividir en filas: {}", p.title),
+                subtitle: String::new(),
+                icon: LucideIcon::Rows2,
+                file: None,
+                action: PaletteAction::Execute(MenuAction::SplitHorizontalWithShell(p.command.clone())),
+            });
+        }
         items.push(PaletteItem {
             category: PaletteCategory::Command,
             title: "Dividir panel horizontalmente".to_string(),

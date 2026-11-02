@@ -102,18 +102,20 @@ impl TearminalApp {
         });
     }
 
-    /// Lee un archivo remoto con una segunda conexión SSH (solo con clave); la pestaña se abre al llegar
+    /// Lee un archivo remoto mediante SshConnection; la pestaña se abre al llegar
     pub(super) fn ssh_open_file(&self, dest: &str, path: &Path, pin: bool) {
         let (dest, path) = (dest.to_string(), path.to_path_buf());
         self.spawn_ssh(move || {
-            let cmd = ssh::read_file_cmd(&remote_path_string(&path));
-            let data = ssh::run(&dest, &cmd, 5, None, ssh::MAX_FILE_BYTES + 1).and_then(|o| {
-                if o.ok {
-                    Ok(o.stdout)
-                } else {
-                    Err(o.stderr)
+            let data = match ssh::SafeSshDestination::parse(&dest) {
+                Ok(safe_dest) => {
+                    let conn = ssh::SshConnection::new(safe_dest).with_timeout(5);
+                    match conn.authenticate(None) {
+                        Ok(auth_conn) => auth_conn.read_file(&remote_path_string(&path)),
+                        Err(e) => Err(e),
+                    }
                 }
-            });
+                Err(e) => Err(format!("destino SSH no válido: {e}")),
+            };
             SshDone::Open(Box::new(SshOpenDone {
                 dest,
                 path,
@@ -123,7 +125,7 @@ impl TearminalApp {
         });
     }
 
-    /// Guarda el visor remoto (`dest`, `path`) con una segunda conexión SSH; se marca guardado al confirmarse
+    /// Guarda el visor remoto (`dest`, `path`) mediante SshConnection; se marca guardado al confirmarse
     pub(super) fn ssh_save_viewer(&mut self, dest: &str, path: &Path) {
         let Some(viewer) = self
             .tabs
@@ -137,21 +139,18 @@ impl TearminalApp {
         let edit_gen = viewer.edit_gen;
         let (dest, path) = (dest.to_string(), path.to_path_buf());
         self.spawn_ssh(move || {
-            let cmd = ssh::write_file_cmd(&remote_path_string(&path), content.len());
-            let result = ssh::run(&dest, &cmd, 5, Some(content.as_bytes()), 4096).and_then(|o| {
-                if o.ok && !o.truncated {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "Error al guardar archivo remoto vía SSH: {}",
-                        if o.truncated {
-                            "la salida del comando remoto excedió el límite"
-                        } else {
-                            &o.stderr
+            let result = match ssh::SafeSshDestination::parse(&dest) {
+                Ok(safe_dest) => {
+                    let conn = ssh::SshConnection::new(safe_dest).with_timeout(5);
+                    match conn.authenticate(None) {
+                        Ok(auth_conn) => {
+                            auth_conn.write_file(&remote_path_string(&path), content.as_bytes())
                         }
-                    ))
+                        Err(e) => Err(format!("Error al autenticar conexión SSH: {e}")),
+                    }
                 }
-            });
+                Err(e) => Err(format!("destino SSH no válido: {e}")),
+            };
             SshDone::Save(Box::new(SshSaveDone {
                 dest,
                 path,
@@ -178,11 +177,19 @@ impl TearminalApp {
     pub(super) fn pump_explorer_ssh(&mut self) {
         for req in self.file_explorer.take_ssh_requests() {
             self.spawn_ssh(move || {
-                let cmd = match req.expand {
-                    None => ssh::root_listing_cmd(&req.dir),
-                    Some(_) => ssh::dir_listing_cmd(&req.dir),
+                let result = match ssh::SafeSshDestination::parse(&req.dest) {
+                    Ok(safe_dest) => {
+                        let conn = ssh::SshConnection::new(safe_dest).with_timeout(4);
+                        match conn.authenticate(None) {
+                            Ok(auth_conn) => match req.expand {
+                                None => auth_conn.list_root(&req.dir),
+                                Some(_) => auth_conn.list_dir(&req.dir),
+                            },
+                            Err(e) => Err(e),
+                        }
+                    }
+                    Err(e) => Err(format!("destino SSH no válido: {e}")),
                 };
-                let result = ssh::run(&req.dest, &cmd, 4, None, ssh::MAX_LISTING_BYTES);
                 SshDone::Listing(Box::new(SshListingDone { req, result }))
             });
         }
@@ -313,5 +320,29 @@ impl TearminalApp {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    /// Abre (o enfoca) la pestaña de visor de un archivo remoto con el contenido ya leído
+    pub(super) fn push_remote_viewer(
+        &mut self,
+        dest: &str,
+        path: &Path,
+        data: Result<Vec<u8>, String>,
+        pin: bool,
+    ) {
+        let branch = self
+            .tabs
+            .get_mut(self.active_tab_index)
+            .and_then(|t| t.active_pane_mut())
+            .and_then(|p| p.get_git_branch());
+        let tab_id = self.alloc_tab_id();
+        let tab = TerminalTab::new_remote_file_viewer_from(
+            tab_id,
+            dest.to_string(),
+            path.to_path_buf(),
+            branch,
+            data,
+        );
+        self.install_viewer_tab(tab, pin);
     }
 }

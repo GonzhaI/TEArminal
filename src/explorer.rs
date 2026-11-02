@@ -531,6 +531,7 @@ impl FileExplorer {
     }
 
     /// Siguiente carpeta remota sin abrir para «Expandir todo» (3 niveles, 1 000 entradas como máximo)
+    #[allow(dead_code)]
     pub(crate) fn next_remote_dir_to_expand(&self) -> Option<usize> {
         const MAX_ITEMS: usize = 1000;
         const MAX_DEPTH: usize = 3;
@@ -733,11 +734,11 @@ impl FileExplorer {
     }
 
     pub(crate) fn can_go_back(&self) -> bool {
-        !self.inband_remote && self.history_index > 0
+        self.history_index > 0
     }
 
     pub(crate) fn can_go_forward(&self) -> bool {
-        !self.inband_remote && self.history_index + 1 < self.history.len()
+        self.history_index + 1 < self.history.len()
     }
 
     /// Carpeta padre de la carpeta remota actual
@@ -757,6 +758,7 @@ impl FileExplorer {
 
     /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 TearminalLs).
     /// No hace nada si ya está aplicado, así que puede llamarse tras cada ráfaga de salida.
+    #[allow(dead_code)]
     pub(crate) fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
         let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);
         if same && self.listing_names_match(names) {
@@ -776,6 +778,7 @@ impl FileExplorer {
         self.items = Self::remote_items(&base, 0, names);
     }
 
+    #[allow(dead_code)]
     fn listing_names_match(&self, names: &[String]) -> bool {
         // Solo cuenta la raíz: las carpetas expandidas (profundidad > 0) no deben invalidar el listado
         let roots: Vec<&ExplorerItem> = self.items.iter().filter(|i| i.depth == 0).collect();
@@ -858,12 +861,11 @@ impl FileExplorer {
         }
         // La raíz canónica que devuelve el servidor cambia `remote_session`: sin esta comparación cada ráfaga
         // de salida volvería a pedir el mismo listado
-        if session.is_some() && !self.inband_remote && self.remote_requested == session {
+        if session.is_some() && self.remote_requested == session {
             return;
         }
         self.remote_requested = session.clone();
         self.remote_session = session;
-        self.inband_remote = false;
         self.scroll_offset = 0;
         self.selected_index = None;
         self.selected_path = None;
@@ -882,9 +884,6 @@ impl FileExplorer {
 
     /// Pide el listado de la raíz remota por SSH (sin bloquear: lo lanza la app en un hilo)
     pub(crate) fn refresh_remote(&mut self) {
-        if self.inband_remote {
-            return;
-        }
         let Some(sess) = &self.remote_session else {
             return;
         };
@@ -912,7 +911,7 @@ impl FileExplorer {
         result: Result<crate::ssh::Output, String>,
     ) -> Option<String> {
         let current = self.remote_session.as_ref().map(|s| s.destination.as_str());
-        if req.gen != self.remote_gen || self.inband_remote || current != Some(req.dest.as_str()) {
+        if req.gen != self.remote_gen || current != Some(req.dest.as_str()) {
             return None;
         }
         match &req.expand {

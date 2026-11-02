@@ -1054,19 +1054,6 @@ mod tests {
             "cada límite añade una fila al popup"
         );
 
-        // AGY avisa de que no hay límites reales (fila extra) y Gemini, con los mismos datos, no
-        let height_of = |kind| {
-            let snap = AiUsageSnapshot {
-                usages: vec![usage(kind, "m", None, 120)],
-                ..Default::default()
-            };
-            TerminalRenderer::ai_usage_popup_height(&snap)
-        };
-        assert_eq!(
-            height_of(AiAgentStatus::Agy),
-            height_of(AiAgentStatus::Gemini) + 18
-        );
-
         let mut canvas = crate::renderer::Canvas::new();
         canvas.begin(w as u32, h as u32);
         canvas.clear(theme.background);

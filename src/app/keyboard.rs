@@ -449,6 +449,68 @@ impl TearminalApp {
             return;
         }
 
+        // Búsqueda en el historial de la terminal activa (Ctrl + Shift + F) y su barra abierta
+        let term_tab = self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(|t| t.file_viewer.is_none() && !t.is_settings);
+        if term_tab && ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'f') {
+            if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
+                pane.terminal.open_search();
+            }
+            self.cursor_on = true;
+            self.cursor_timer = Instant::now();
+            self.request_redraw();
+            return;
+        }
+        if term_tab
+            && self
+                .tabs[self.active_tab_index]
+                .active_pane()
+                .is_some_and(|p| p.terminal.search.is_some())
+        {
+            let step = match &logical_key {
+                Key::Named(NamedKey::Enter | NamedKey::F3) => Some(!shift),
+                Key::Named(NamedKey::ArrowDown) => Some(true),
+                Key::Named(NamedKey::ArrowUp) => Some(false),
+                _ => None,
+            };
+            if matches!(&logical_key, Key::Named(NamedKey::Escape)) {
+                if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
+                    pane.terminal.close_search();
+                }
+                self.request_redraw();
+                return;
+            }
+            if let Some(forward) = step {
+                if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
+                    pane.terminal.search_step(forward);
+                }
+                self.request_redraw();
+                return;
+            }
+            let mut input = self
+                .tabs[self.active_tab_index]
+                .active_pane_mut()
+                .and_then(|p| p.terminal.search.as_mut())
+                .map(|s| std::mem::take(&mut s.input))
+                .unwrap_or_default();
+            let (consumed, changed) =
+                self.handle_text_input_key(&mut input, &logical_key, physical_key, text.as_deref());
+            if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
+                if let Some(s) = pane.terminal.search.as_mut() {
+                    s.input = input;
+                }
+                if changed {
+                    pane.terminal.update_search_matches();
+                }
+            }
+            if consumed {
+                self.request_redraw();
+                return;
+            }
+        }
+
         // --- ATAJOS DE PANELES DIVIDIDOS (SPLIT PANES) CANÓNICOS (Alt+Shift o Ctrl+Alt) ---
         let is_d = key_is_char(&logical_key, physical_key, 'd');
         let is_v = key_is_char(&logical_key, physical_key, 'v');
@@ -739,7 +801,7 @@ impl TearminalApp {
                     return;
                 }
                 Key::Named(NamedKey::Backspace) => {
-                    let remote_parent = if self.file_explorer.inband_remote {
+                    let remote_parent = if self.file_explorer.remote_session.is_some() {
                         self.file_explorer.remote_parent()
                     } else {
                         None
@@ -1047,6 +1109,43 @@ impl TearminalApp {
             // 3. Edición de texto y navegación de cursor
             let global_auto_save = self.config.terminal.auto_save;
             if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
+                if viewer.is_side_by_side() {
+                    let max_offset = viewer.total_display_rows().saturating_sub(visible_lines);
+                    match logical_key {
+                        Key::Named(NamedKey::ArrowUp) => {
+                            if ctrl {
+                                viewer.scroll_offset = 0;
+                            } else {
+                                viewer.scroll_offset = viewer.scroll_offset.saturating_sub(1);
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowDown) => {
+                            if ctrl {
+                                viewer.scroll_offset = max_offset;
+                            } else {
+                                viewer.scroll_offset = (viewer.scroll_offset + 1).min(max_offset);
+                            }
+                        }
+                        Key::Named(NamedKey::PageUp) => {
+                            viewer.scroll_offset = viewer.scroll_offset.saturating_sub(visible_lines);
+                        }
+                        Key::Named(NamedKey::PageDown) => {
+                            viewer.scroll_offset = (viewer.scroll_offset + visible_lines).min(max_offset);
+                        }
+                        Key::Named(NamedKey::Home) => {
+                            viewer.scroll_offset = 0;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            viewer.scroll_offset = max_offset;
+                        }
+                        _ => {}
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+
                 if !viewer.is_binary {
                     let prev_pos = (viewer.cursor_line, viewer.cursor_col);
                     let is_shift_nav = shift && !alt;

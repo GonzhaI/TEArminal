@@ -551,6 +551,25 @@ impl TerminalRenderer {
                 }
             });
 
+            // Coincidencias de la búsqueda en el historial que caen en esta fila
+            let (first_match, row_matches): (usize, &[(usize, usize, usize)]) =
+                match &terminal.search {
+                    Some(s) if !s.matches.is_empty() => {
+                        let a = s.matches.partition_point(|m| m.0 < global_row);
+                        let n = s.matches[a..].partition_point(|m| m.0 <= global_row);
+                        (a, &s.matches[a..a + n])
+                    }
+                    _ => (0, &[]),
+                };
+            let active_match = terminal.search.as_ref().and_then(|s| s.active);
+            // `Some(true)` si la celda está en la coincidencia activa, `Some(false)` en otra
+            let match_at = |col: usize| {
+                row_matches
+                    .iter()
+                    .position(|m| col >= m.1 && col < m.2)
+                    .map(|k| Some(first_match + k) == active_match)
+            };
+
             // PASADA 1: Dibujar fondos de celda y selecciones fusionando tramos horizontales idénticos
             let mut run_start = 0usize;
             let mut run_color: Option<u32> = None;
@@ -559,6 +578,12 @@ impl TerminalRenderer {
 
                 let effective_bg = if is_selected {
                     theme.selection
+                } else if let Some(active) = match_at(col_idx) {
+                    if active {
+                        theme.accent_color()
+                    } else {
+                        theme.mix(theme.background, theme.accent_color(), 0.35)
+                    }
                 } else if cell.inverse() {
                     if cell.fg != Color::TRANSPARENT {
                         cell.fg
@@ -624,6 +649,8 @@ impl TerminalRenderer {
                 let cell_x = base_x + (col_idx * self.char_width);
                 let fg_color = if row_sel.is_some_and(|(sc, ec)| col_idx >= sc && col_idx <= ec) {
                     theme.selection_fg
+                } else if match_at(col_idx) == Some(true) {
+                    theme.background
                 } else {
                     compute_cell_fg(cell, theme)
                 };
@@ -926,6 +953,64 @@ impl TerminalRenderer {
 
         // 7. Foco: la cabecera de cada panel (arriba) marca el panel activo con su línea de acento.
         //    El contenido no lleva marco para no competir con la rejilla del terminal.
+
+        // 7b. Barra de búsqueda en el historial (`Ctrl + Shift + F`)
+        if let Some(search) = &terminal.search {
+            let (bx, by, bw, bh) = crate::renderer::pane_search_bar_rect(rect_x, rect_y, rect_w);
+            if bw > 80 && bx + bw <= width && by + bh <= height {
+                canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.chrome_bg());
+                canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_CONTROL, theme.card_outline());
+                self.draw_lucide_icon(
+                    canvas,
+                    crate::ui::LucideIcon::Search,
+                    bx + 14,
+                    by + bh / 2,
+                    13.0,
+                    theme.text_muted(),
+                );
+                let counter = if search.input.text().is_empty() {
+                    String::new()
+                } else if search.matches.is_empty() {
+                    "0/0".to_string()
+                } else {
+                    format!("{}/{}", search.active.map_or(0, |i| i + 1), search.matches.len())
+                };
+                let counter_w = 56;
+                let (ix, iy, ih) = (bx + 28, by + 4, bh - 8);
+                let iw = bw.saturating_sub(28 + counter_w + 6);
+                canvas.rounded_fill(ix, iy, iw, ih, tokens::RADIUS_ROW, theme.surface_bg());
+                canvas.rounded_stroke(ix, iy, iw, ih, tokens::RADIUS_ROW, theme.chrome_line());
+                let text_y = self.centered_baseline(iy + ih / 2);
+                self.render_text_input_content(
+                    canvas,
+                    &search.input,
+                    ix + 8,
+                    text_y,
+                    ix + iw - 4,
+                    iy,
+                    ih,
+                    cursor_visible,
+                    "Buscar en el historial...",
+                    true,
+                    theme,
+                );
+                let color = if search.matches.is_empty() && !counter.is_empty() {
+                    theme.ansi[1]
+                } else {
+                    theme.text_muted()
+                };
+                self.draw_ui_text(
+                    canvas,
+                    &counter,
+                    ix + iw + 8,
+                    self.centered_baseline(by + bh / 2),
+                    bx + bw - 6,
+                    color,
+                    tokens::DETAIL,
+                    false,
+                );
+            }
+        }
 
         // 8. Botón "ir hasta abajo" mientras la vista está desplazada.
         if terminal.scroll_offset > 0 && !terminal.is_alt_screen {

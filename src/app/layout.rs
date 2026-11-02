@@ -188,6 +188,7 @@ pub(crate) struct TerminalPane {
     pub(crate) last_grid_size: (usize, usize),
     pub(crate) cached_git_branch: Option<String>,
     pub(crate) cached_git_dir: Option<std::path::PathBuf>,
+    pub(crate) cached_git_check: Option<Instant>,
 }
 
 impl TerminalPane {
@@ -205,6 +206,7 @@ impl TerminalPane {
             last_grid_size,
             cached_git_branch: None,
             cached_git_dir: None,
+            cached_git_check: None,
         }
     }
 
@@ -301,9 +303,16 @@ impl TerminalPane {
             return detected_branch;
         }
 
-        if self.terminal.current_dir != self.cached_git_dir {
+        let now = Instant::now();
+        let should_check = self.terminal.current_dir != self.cached_git_dir
+            || self
+                .cached_git_check
+                .is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_millis(500));
+
+        if should_check {
             self.cached_git_branch = get_git_branch(self.terminal.current_dir.as_deref());
             self.cached_git_dir = self.terminal.current_dir.clone();
+            self.cached_git_check = Some(now);
         }
         self.cached_git_branch.clone()
     }
@@ -550,8 +559,11 @@ impl TerminalTab {
             redo_stack: Vec::new(),
             original_lines,
             git_base,
+            diff_mode: crate::app::viewer::DiffMode::None,
             diff_stash: None,
             hovered_diff_btn: false,
+            hovered_diff_mode_btn: false,
+            side_by_side_cache: Default::default(),
             git_marks: Default::default(),
             selection: None,
             remote_destination: None,
@@ -687,8 +699,11 @@ impl TerminalTab {
             redo_stack: Vec::new(),
             original_lines,
             git_base: None,
+            diff_mode: crate::app::viewer::DiffMode::None,
             diff_stash: None,
             hovered_diff_btn: false,
+            hovered_diff_mode_btn: false,
+            side_by_side_cache: Default::default(),
             git_marks: Default::default(),
             selection: None,
             remote_destination: Some(dest),

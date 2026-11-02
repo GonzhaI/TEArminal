@@ -1,10 +1,12 @@
 <div align="center">
   <img src="assets/logo.png" width="120" height="120" alt="TEArminal" />
   <h1>TEArminal</h1>
-  <p><em>Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI</em></p>
+  <p><em>Workspace y terminal nativa para Windows, ultraligera y veloz, hecha para PowerShell, agentes de IA en la CLI y sesiones SSH</em></p>
 </div>
 
-**TEArminal** es un emulador de terminal en Rust solo para Windows (ConPTY) y optimizado para **PowerShell**. Sin Electron ni WebView: ventana nativa (`winit`), dibujo con Direct3D 11 (la GPU, o el rasterizador por software WARP si no hay), texto con `rustybuzz` + `fontdue` y emulación VT propia sobre `vte`. Pensada para agentes de CLI (*Claude Code, Gemini CLI, Aider, OpenCode…*) y sesiones SSH.
+**TEArminal** es un espacio de trabajo y emulador de terminal nativo en Rust solo para Windows (ConPTY), optimizado para **PowerShell** y el desarrollo asistido por **agentes de IA en la CLI** (*Claude Code, Gemini CLI, AGY, Aider, OpenCode…*). Sin Electron ni WebView: ventana nativa (`winit`), dibujo acelerado por GPU con Direct3D 11 (DirectFlip; rasterizador por software WARP como respaldo), tipografía con `rustybuzz` + `fontdue` y emulación VT propia sobre `vte`.
+
+Reúne en una sola ventana ultraligera: emulador de terminal multi-panel, gestor de proyectos (*Spaces*) locales y remotos, explorador de archivos con vista plana de cambios Git, visor/editor interactivo con Markdown y diffs, y telemetría de agentes de IA en tiempo real.
 
 | | |
 | :--- | :--- |
@@ -17,35 +19,40 @@
 
 ## Características
 
-* **Para agentes de IA:** pegado de imágenes (`Ctrl+V` guarda el PNG y pega su ruta; `Alt+V` para Claude Code), marcas OSC 133 (`Ctrl+Shift+↑/↓` entre prompts, `Ctrl+Shift+O` copia la última salida), entrada anclada al fondo para `claude`/`gemini`/`agy` e indicador del agente activo.
-* **SSH:** los paneles divididos reconectan al mismo host; con bash en el servidor, la rama git, la carpeta y los archivos aparecen solos en el explorador, también con contraseña (se desactiva en Ajustes); portapapeles remoto por OSC 52 (Neovim, tmux).
-* **Visor y editor de archivos** en pestaña: un clic abre una vista previa, doble clic la fija; resaltado de sintaxis, Markdown renderizado, plegado de bloques, ajuste de línea (`Alt+Z`), diff git en el margen y edición local o remota.
-* **Menú contextual** (clic derecho) según el elemento: visor, terminal, pestaña, explorador.
+* **Para agentes de IA:** telemetría en la barra de estado con detección automática de agentes (`claude`, `gemini`, `agy`, `opencode`, `aider`), desglose de modelos activos, ventanas de contexto, contadores de tokens y consulta en vivo de cuotas de Claude via API OAuth; pegado inteligente de imágenes (`Ctrl+V` guarda el PNG en disco y pega su ruta relativa; `Alt+V` adaptado a Claude Code); marcas semánticas OSC 133 (`Ctrl+Shift+↑/↓` entre prompts, `Ctrl+Shift+O` copia la última salida); y entrada anclada al fondo.
+* **Espacios de trabajo (Spaces):** panel lateral a altura completa para organizar flujos por proyectos locales («Este equipo») y máquinas remotas («Equipos remotos»). Cambio rápido con `Ctrl+Alt+↑/↓`, persistencia en sesión, aislamiento de pestañas y atajo `Ctrl+Shift+B` para colapsar en riel compacto de 44 px.
+* **Sesiones SSH y «Añadir máquina»:** modal interactivo que lee automáticamente hosts de `~/.ssh/config` o admite `usuario@host`; paneles divididos que reconectan al mismo servidor; exploración de archivos y ramas git remotas por canal SSH in-band (sin requerir SFTP externo); y portapapeles bidireccional por OSC 52 (Neovim, tmux).
+* **Explorador y control de versiones:** panel derecho sincronizado con la terminal enfocada; alterna entre el árbol de **Archivos** y la vista plana de **Cambios** de Git con contador en tiempo real; gestión local de archivos (crear, renombrar con F2, borrar a la papelera sin diálogo vía `SHFileOperationW`).
+* **Visor y editor de archivos:** pestañas dedicadas para inspeccionar código (un clic abre vista previa, doble clic la fija); resaltado de sintaxis, renderizado interactivo de Markdown, diff git en el margen, ajuste de línea (`Alt+Z`), plegado de bloques y guardado seguro que detecta ediciones externas de agentes en disco (`disk_mtime`).
+* **Diseño unificado y renderizado Direct3D 11:** interfaz basada en tarjetas con contorno adaptativo (`Theme::card_outline`), 817 temas de iTerm2 incluidos, coloreado integral del marco y del prompt, ligaduras tipográficas y DirectFlip en Windows 11 sin tearing ni sobrecoste de DWM.
 * **Motor VT completo:** TrueColor, pantalla alterna, ratón SGR, *bracketed paste*, imágenes inline (Kitty Graphics Protocol e iTerm2), doble ancho (CJK, emoji) y *grapheme clustering* (UAX #29).
 * **Multi-ventana y desprendimiento de pestañas:** abre nuevas ventanas con `Ctrl+Shift+N` o mueve pestañas a una nueva ventana mediante clic derecho (*«Mover a nueva ventana»*) o arrastrándolas fuera de la barra (*tab tear-off*).
-* **Auto-actualización automática:** comprueba en segundo plano nuevas versiones desde GitHub Releases, avisa en la barra de estado e instala la actualización con 1 clic (solo si el SHA-256 del instalador coincide con el de `SHA256SUMS.txt` de la misma release; si no, abre la página de la versión).
-* **Interfaz y renderizado:** pestañas horizontales o laterales, paneles divididos, explorador de archivos, 817 temas de iTerm2 (por defecto `Catppuccin Frappe` y `Catppuccin Latte`) (los `.itermcolors` originales de iterm2-color-schemes, sin retoques), toda la interfaz y el prompt coloreados con el tema elegido, dibujo por GPU con Direct3D 11 (DirectFlip; WARP de respaldo), ligaduras tipográficas y restauración de sesión.
-* **Teclado correcto en Windows:** `AltGr` sin Ctrl atascado, `Ctrl+Backspace` borra palabra y `Alt+Tab` sin tabuladores fantasma.
+* **Auto-actualización segura:** comprueba en segundo plano nuevas versiones desde GitHub Releases con verificación de firma SHA-256 e instala en 1 clic.
+* **Teclado físico estricto en Windows:** `AltGr` sin Ctrl atascado, `Ctrl+Backspace` por palabra (`0x17`), `Shift+Enter` / `Alt+Enter` (`ESC CR` para agentes CLI y PSReadLine) y `Alt+Tab` sin tabuladores fantasma.
 
 ## Atajos
 
 | Atajo | Acción |
 | :--- | :--- |
-| `Ctrl+,` | Ajustes |
+| `Ctrl+,` | Ajustes (modal interactivo) |
 | `Ctrl+T` / `Ctrl+W` | Nueva pestaña / cerrar |
+| `Ctrl+Shift+T` | Nuevo Space |
+| `Ctrl+Alt+↑/↓` | Space anterior / siguiente |
+| `Ctrl+Shift+B` | Alternar / colapsar panel de Spaces |
+| `Ctrl+Tab`, `Ctrl+1…9` | Siguiente pestaña / ir a la N del Space activo |
 | `Ctrl+Shift+N` | Nueva ventana |
-| `Ctrl+Tab`, `Ctrl+1…9` | Siguiente pestaña / ir a la N |
-| `Ctrl+B` / `Ctrl+Shift+E` | Barra lateral / explorador |
+| `Ctrl+B` / `Ctrl+Shift+E` | Alternar explorador lateral (Archivos / Cambios) |
 | `Ctrl+Alt+D` / `Ctrl+Alt+V` / `Ctrl+Alt+W` | Dividir horizontal / vertical / cerrar panel |
-| `Ctrl+Alt+←↑↓→` | Moverse entre paneles |
-| `Ctrl+Shift+C` / `Ctrl+V` | Copiar / pegar (texto o imagen) |
+| `Ctrl+Alt+←↑↓→` | Moverse entre paneles divididos |
+| `Ctrl+Shift+C` / `Ctrl+V` | Copiar / pegar (texto o imagen convertida a archivo) |
+| `Alt+V` | Pegar imagen formateada para Claude Code |
 | `Ctrl+Shift+K` | Limpiar pantalla y scrollback |
-| `Ctrl+Shift+O` / `Ctrl+Shift+↑↓` | Copiar última salida / saltar entre prompts |
+| `Ctrl+Shift+O` / `Ctrl+Shift+↑↓` | Copiar última salida / saltar entre prompts (OSC 133) |
 | `Ctrl++` `Ctrl+-` `Ctrl+0` | Tamaño de fuente |
 | `Ctrl+Shift+,` | Recargar `tearminal.toml` |
-| `Shift+PageUp/PageDown` | Historial |
+| `Shift+PageUp/PageDown` | Historial de scrollback |
 
-En el visor: `Ctrl+S` guardar, `Ctrl+E` lectura/edición, `Ctrl+Z/Y` deshacer/rehacer, `Alt+Z` ajuste de línea, `Esc` cerrar.
+En el visor: `Ctrl+S` guardar, `Ctrl+E` alternar lectura/edición, `Ctrl+Z/Y` deshacer/rehacer, `Alt+Z` ajuste de línea, `Esc` cerrar.
 
 ## Instalación
 

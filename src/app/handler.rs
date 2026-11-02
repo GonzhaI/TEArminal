@@ -81,9 +81,6 @@ impl TearminalApp {
                 if should_update_title {
                     self.update_window_title();
                 }
-                if redraw {
-                    self.process_remote_results();
-                }
                 if redraw && !self.occluded {
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -592,11 +589,8 @@ impl TearminalApp {
             }
         }
 
-        if got_bytes {
-            self.process_remote_results();
-            if self.config.terminal.keep_awake == KeepAwakeMode::Agent {
-                self.update_keep_awake();
-            }
+        if got_bytes && self.config.terminal.keep_awake == KeepAwakeMode::Agent {
+            self.update_keep_awake();
         }
 
         // 2. Revisar si algún panel tiene su proceso terminado (tras haber consumido toda su salida)
@@ -636,11 +630,6 @@ impl TearminalApp {
         let mut wake: Option<Instant> = None;
         let now = Instant::now();
 
-        // Peticiones en banda al servidor SSH sin respuesta: vía lenta al vencer el plazo
-        if let Some(t) = self.expire_remote_requests() {
-            earliest(&mut wake, t);
-        }
-
         // Tamaño final tras un redimensionado: una sola orden de resize al PTY cuando la ventana se estabiliza
         if let Some(deadline) = self.resize_deadline {
             if now >= deadline {
@@ -665,6 +654,24 @@ impl TearminalApp {
                 }
             }
             earliest(&mut wake, self.cursor_timer + BLINK);
+        } else if !self.config.terminal.cursor_blink && self.is_focused && !self.occluded {
+            // Sin parpadeo de cursor, comprobar cambios de rama Git cada segundo si la ventana está activa
+            if let Some(active_pane) = self
+                .tabs
+                .get_mut(self.active_tab_index)
+                .and_then(|t| t.active_pane_mut())
+            {
+                if active_pane.terminal.ssh_session.is_none() {
+                    let old_branch = active_pane.cached_git_branch.clone();
+                    let new_branch = active_pane.get_git_branch();
+                    if old_branch != new_branch {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                }
+            }
+            earliest(&mut wake, now + std::time::Duration::from_secs(1));
         }
 
         // Spinner de la pestaña que ejecuta: solo con foco y a la vista. 110 ms por paso, el mismo

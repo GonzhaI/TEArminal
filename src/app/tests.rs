@@ -808,6 +808,79 @@ fn test_terminal_pane_git_branch_ssh_isolation() {
 }
 
 #[test]
+fn test_terminal_pane_git_branch_updates_when_head_changes_in_same_dir() {
+    let theme = crate::theme::Theme::default();
+    let pty = crate::pty::PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None)
+        .expect("pty");
+    let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
+    let mut pane = TerminalPane::new(PaneId(2), pty, term, (80, 24));
+
+    let temp_repo = std::env::temp_dir().join(format!("tearminal_test_repo_{}", std::process::id()));
+    let git_dir = temp_repo.join(".git");
+    let head_file = git_dir.join("HEAD");
+    let _ = std::fs::create_dir_all(&git_dir);
+    std::fs::write(&head_file, "ref: refs/heads/main\n").expect("write head");
+
+    pane.terminal.current_dir = Some(temp_repo.clone());
+
+    // Primera lectura: detecta "main"
+    assert_eq!(pane.get_git_branch().as_deref(), Some("main"));
+
+    // Cambiar la rama en .git/HEAD sin cambiar de directorio
+    std::fs::write(&head_file, "ref: refs/heads/feat/aacc-calidad\n").expect("update head");
+
+    // Si aún no transcurre el intervalo de throttle (500 ms), mantiene el valor en caché
+    assert_eq!(pane.get_git_branch().as_deref(), Some("main"));
+
+    // Simulando que pasaron más de 500 ms: debe actualizarse automáticamente
+    pane.cached_git_check = Some(Instant::now() - std::time::Duration::from_millis(501));
+    assert_eq!(pane.get_git_branch().as_deref(), Some("feat/aacc-calidad"));
+
+    // Limpieza
+    let _ = std::fs::remove_dir_all(&temp_repo);
+}
+
+#[test]
+fn test_pane_grid_size_accounts_for_header_offset() {
+    let config = TearminalConfig::load_or_default();
+    let renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+    let total_w = 1200;
+    let total_h = 800;
+    let top_offset = crate::renderer::TopTabBarRects::HEIGHT;
+    let header_offset = crate::renderer::PaneHeaderRects::content_offset_for(top_offset);
+
+    // Sin descontar la cabecera del panel: las filas calculadas son excesivas
+    let (_, rows_without_header) = renderer.compute_pane_grid_size(total_w, total_h);
+
+    // Con la cabecera descontada: las filas se ajustan al área real de dibujo
+    let (_, rows_with_header) = renderer.compute_pane_grid_size(total_w, total_h - header_offset);
+
+    assert!(
+        rows_with_header < rows_without_header,
+        "El tamaño con cabecera ({rows_with_header}) debe tener menos filas que sin cabecera ({rows_without_header})"
+    );
+
+    // Simular geometría de un tab con 1 panel: debe coincidir exactamente con `rows_with_header`
+    let tab = TerminalTab::new(
+        TabId(1),
+        "Test".into(),
+        TerminalPane::new(
+            PaneId(1),
+            crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).unwrap(),
+            crate::terminal::TerminalState::new(80, 24, 100, crate::theme::Theme::default()),
+            (80, 24),
+        ),
+    );
+    let pane_rects = tab.compute_pane_rects(0, top_offset, total_w, total_h);
+    assert_eq!(pane_rects.len(), 1);
+    let (_, expected_rows) = renderer.compute_pane_grid_size(pane_rects[0].width, pane_rects[0].height);
+    assert_eq!(
+        rows_with_header, expected_rows,
+        "Las filas calculadas al crear un tab deben coincidir con compute_pane_rects para que no se corten el prompt ni el cursor"
+    );
+}
+
+#[test]
 fn test_file_explorer_remote_session_state() {
     let mut explorer = crate::explorer::FileExplorer::new(None, true);
     assert!(explorer.remote_session.is_none());
@@ -1594,7 +1667,7 @@ c
     viewer.is_read_only = false;
     viewer.cursor_line = 1;
     viewer.scroll_offset = 1;
-    viewer.toggle_diff();
+    viewer.toggle_unified_diff();
     assert!(viewer.is_diff() && !viewer.is_editable() && !viewer.is_dirty);
     assert_eq!(viewer.lines, ["@@ -1,2 +1,2 @@", " a", "-b", "+c"]);
     assert_eq!(viewer.get_line_git_diff_status(2), None);
@@ -1602,14 +1675,83 @@ c
     viewer.save_to_disk().unwrap();
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
-        "a
-c
-"
+        "a\nc\n"
     );
-    viewer.toggle_diff();
+    viewer.toggle_unified_diff();
     assert!(!viewer.is_diff());
     assert_eq!(viewer.lines, ["a", "c"]);
     assert_eq!((viewer.cursor_line, viewer.scroll_offset), (1, 1));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_side_by_side_diff_and_toggle() {
+    use crate::app::viewer::{DiffCellKind, DiffMode};
+
+    let v = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+    let base = v("a x c d");
+    let cur = v("a b c");
+
+    let rows = crate::app::viewer::compute_side_by_side(&base, &cur);
+    assert_eq!(rows.len(), 4);
+    assert_eq!(rows[0].left.kind, DiffCellKind::Normal);
+    assert_eq!(rows[0].right.kind, DiffCellKind::Normal);
+    assert_eq!(rows[0].left.text, "a");
+    assert_eq!(rows[0].right.text, "a");
+
+    assert_eq!(rows[1].left.kind, DiffCellKind::Modified);
+    assert_eq!(rows[1].right.kind, DiffCellKind::Modified);
+    assert_eq!(rows[1].left.text, "x");
+    assert_eq!(rows[1].right.text, "b");
+
+    assert_eq!(rows[2].left.kind, DiffCellKind::Normal);
+    assert_eq!(rows[2].right.kind, DiffCellKind::Normal);
+    assert_eq!(rows[2].left.text, "c");
+    assert_eq!(rows[2].right.text, "c");
+
+    assert_eq!(rows[3].left.kind, DiffCellKind::Deleted);
+    assert_eq!(rows[3].right.kind, DiffCellKind::Empty);
+    assert_eq!(rows[3].left.text, "d");
+    assert_eq!(rows[3].right.text, "");
+
+    let path = std::env::temp_dir().join(format!("tearminal_test_sbs_{}.txt", std::process::id()));
+    std::fs::write(&path, "a\nb\nc\n").unwrap();
+    let mut tab = TerminalTab::new_file_viewer(TabId(109), path.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.git_base = Some(base);
+    viewer.is_read_only = false;
+
+    // Abrir diff en modo Lado a lado por defecto
+    viewer.toggle_diff();
+    assert!(viewer.is_diff());
+    assert!(viewer.is_side_by_side());
+    assert!(!viewer.is_editable());
+    assert_eq!(viewer.lines, ["a", "b", "c"]);
+    assert_eq!(viewer.side_by_side_rows().len(), 4);
+
+    let (dels, adds) = viewer.side_by_side_stats();
+    assert_eq!(dels, 2); // 'x' modificado + 'd' borrado
+    assert_eq!(adds, 1); // 'b' modificado
+
+    // Alternar a modo unificado
+    viewer.toggle_diff_mode();
+    assert!(viewer.is_diff());
+    assert!(viewer.is_unified_diff());
+    assert_eq!(viewer.diff_mode, DiffMode::Unified);
+
+    // Alternar de regreso a lado a lado
+    viewer.toggle_diff_mode();
+    assert!(viewer.is_diff());
+    assert!(viewer.is_side_by_side());
+    assert_eq!(viewer.diff_mode, DiffMode::SideBySide);
+    assert_eq!(viewer.lines, ["a", "b", "c"]);
+
+    // Cerrar diff
+    viewer.toggle_diff();
+    assert!(!viewer.is_diff());
+    assert_eq!(viewer.diff_mode, DiffMode::None);
+    assert!(viewer.is_editable());
+    assert_eq!(viewer.lines, ["a", "b", "c"]);
     let _ = std::fs::remove_file(path);
 }
 
@@ -2835,10 +2977,6 @@ fn test_cache_alignment_and_enum_size_regressions() {
     assert_eq!(std::mem::size_of::<crate::terminal::Cell>(), 16);
     assert_eq!(std::mem::size_of::<TearminalEvent>(), 16);
     assert_eq!(std::mem::size_of::<crate::app::ssh_jobs::SshDone>(), 64);
-    assert_eq!(
-        std::mem::size_of::<crate::app::remote_files::RemoteJob>(),
-        64
-    );
     assert_eq!(std::mem::size_of::<PaneNode>(), 24);
     assert!(std::mem::size_of::<crate::app::context_menu::MenuAction>() <= 32);
 

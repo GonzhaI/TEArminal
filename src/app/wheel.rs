@@ -135,7 +135,7 @@ impl TearminalApp {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_sub(dy.unsigned_abs());
                 } else if dy < 0 {
                     viewer.scroll_offset = (viewer.scroll_offset + dy.unsigned_abs())
-                        .min(viewer.rows().len().saturating_sub(1));
+                        .min(viewer.total_display_rows().saturating_sub(1));
                 }
             }
             self.request_redraw();

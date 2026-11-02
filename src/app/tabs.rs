@@ -4,6 +4,7 @@ use super::*;
 
 impl TearminalApp {
     pub(crate) fn open_or_switch_settings_tab(&mut self) {
+        self.start_font_scan();
         if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
             if active_tab.is_settings {
                 // Si la pestaña de ajustes ya está abierta y activa, permanecer en ella
@@ -34,21 +35,6 @@ impl TearminalApp {
         if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
             if let Some(pane) = active.active_pane_mut() {
                 if let Some(ref ssh) = pane.terminal.ssh_session {
-                    if ssh.is_active && pane.terminal.remote_integration {
-                        // El shell remoto envía carpeta y listado: sin segunda conexión SSH (que exigiría clave)
-                        if let (Some(rdir), Some(names)) = (
-                            ssh.remote_dir.clone(),
-                            pane.terminal.remote_listing.as_ref(),
-                        ) {
-                            let sess = crate::explorer::RemoteSshSession {
-                                destination: ssh.destination.clone(),
-                                remote_dir: rdir,
-                            };
-                            self.file_explorer.set_remote_listing(sess, names);
-                        }
-                        self.sync_fs_watcher();
-                        return;
-                    }
                     if ssh.is_active {
                         let dest = ssh.destination.clone();
                         let rdir = ssh.remote_dir.clone().unwrap_or_else(|| ".".to_string());
@@ -88,15 +74,7 @@ impl TearminalApp {
                 return;
             }
 
-            // Ya pedido por la sesión (primer clic de un doble clic): solo se fija al llegar
-            if self.pin_pending_remote_open(&rem.destination, path, pin) {
-                return;
-            }
-            // Primero por la propia sesión (sirve con contraseña); la pestaña se abre al llegar el contenido
-            if self.remote_open(&rem.destination, path, pin) {
-                return;
-            }
-            // Sin integración (o si falla): segunda conexión SSH en un hilo; la pestaña se abre al llegar
+            // Lectura remota consolidada fuera de banda mediante SshConnection
             self.ssh_open_file(&rem.destination, path, pin);
             return;
         }
@@ -113,12 +91,22 @@ impl TearminalApp {
                 .unwrap_or(false)
         }) {
             self.tabs[pos].is_preview &= !pin;
+            if self.file_explorer.changes_only {
+                if let Some(v) = self.tabs[pos].file_viewer.as_mut() {
+                    v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
+                }
+            }
             self.switch_to_tab(pos);
             return;
         }
 
         let tab_id = self.alloc_tab_id();
-        let tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
+        let mut tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
+        if self.file_explorer.changes_only {
+            if let Some(v) = tab.file_viewer.as_mut() {
+                v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
+            }
+        }
         let fetch_git_base = !cfg!(test)
             && tab
                 .file_viewer
@@ -247,6 +235,12 @@ impl TearminalApp {
         self.create_tab_in(None);
     }
 
+    /// Sesión nueva con un shell específico.
+    pub(crate) fn create_new_tab_with_shell(&mut self, shell: &str) {
+        let space = self.active_space();
+        self.create_tab_in_space_with_shell(None, space, shell);
+    }
+
     /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).
     pub(super) fn create_tab_in(&mut self, cwd: Option<std::path::PathBuf>) {
         let space = self.active_space();
@@ -255,6 +249,17 @@ impl TearminalApp {
 
     /// Sesión nueva con un shell en `cwd`, dentro del Space `space`.
     pub(super) fn create_tab_in_space(&mut self, cwd: Option<std::path::PathBuf>, space: SpaceId) {
+        let shell = self.config.terminal.default_shell.clone();
+        self.create_tab_in_space_with_shell(cwd, space, &shell);
+    }
+
+    /// Sesión nueva con un shell específico en `cwd`, dentro del Space `space`.
+    pub(super) fn create_tab_in_space_with_shell(
+        &mut self,
+        cwd: Option<std::path::PathBuf>,
+        space: SpaceId,
+        shell: &str,
+    ) {
         let tab_id = self.alloc_tab_id();
         let pane_id = alloc_pane_id();
 
@@ -263,14 +268,16 @@ impl TearminalApp {
             let (offset, right_offset, top_offset, status_bar_h) = self.terminal_area_offsets();
             let avail_w = (size.width as usize).saturating_sub(offset + right_offset);
             let avail_h = (size.height as usize).saturating_sub(top_offset + status_bar_h);
-            renderer.compute_pane_grid_size(avail_w, avail_h)
+            let header_offset = crate::renderer::PaneHeaderRects::content_offset_for(top_offset);
+            let pane_h = avail_h.saturating_sub(header_offset);
+            renderer.compute_pane_grid_size(avail_w, pane_h)
         } else {
             (100, 30)
         };
 
         let pty = match PtyManager::new(
             pane_id,
-            &self.config.terminal.default_shell,
+            shell,
             self.config.terminal.shell_integration,
             cols as u16,
             rows as u16,
@@ -279,7 +286,7 @@ impl TearminalApp {
         ) {
             Ok(p) => p,
             Err(e) => {
-                crate::pty::report_spawn_error(&self.config.terminal.default_shell, &e);
+                crate::pty::report_spawn_error(shell, &e);
                 return;
             }
         };
@@ -301,6 +308,7 @@ impl TearminalApp {
 
         self.active_tab_index = self.tabs.len() - 1;
         self.record_tab_active(tab_id);
+        self.recompute_grid_for_all_tabs();
         self.update_window_title();
         self.save_session();
         if let Some(w) = &self.window {
@@ -331,7 +339,6 @@ impl TearminalApp {
         self.tabs.remove(index);
         self.tab_history.retain(|&id| id != closed_id);
         self.prune_spaces();
-        self.prune_pending_remote();
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando la ventana");
             self.request_close();
@@ -391,7 +398,6 @@ impl TearminalApp {
         let tab = self.tabs.remove(index);
         self.tab_history.retain(|&id| id != closed_id);
         self.prune_spaces();
-        self.prune_pending_remote();
 
         if was_active {
             let next_idx = self.tab_to_activate_after_close(closed_space, index);
@@ -471,7 +477,6 @@ impl TearminalApp {
         self.tabs.retain(|t| t.id == id);
         self.tab_history.retain(|&tid| tid == id);
         self.prune_spaces();
-        self.prune_pending_remote();
         self.active_tab_index = 0;
         self.last_terminal_tab_index = 0;
         self.record_tab_active(id);
@@ -486,6 +491,15 @@ impl TearminalApp {
     }
 
     pub(crate) fn split_active_pane(&mut self, direction: SplitDirection) {
+        let shell = self.config.terminal.default_shell.clone();
+        self.split_active_pane_with_shell(direction, &shell);
+    }
+
+    pub(crate) fn split_active_pane_with_shell(
+        &mut self,
+        direction: SplitDirection,
+        shell: &str,
+    ) {
         if self.tabs[self.active_tab_index].is_settings
             || self.tabs[self.active_tab_index].file_viewer.is_some()
         {
@@ -536,7 +550,7 @@ impl TearminalApp {
             Some(p) => (p, ssh_session),
             None => match PtyManager::new(
                 new_pane_id,
-                &self.config.terminal.default_shell,
+                shell,
                 self.config.terminal.shell_integration,
                 cols as u16,
                 rows as u16,
@@ -545,7 +559,7 @@ impl TearminalApp {
             ) {
                 Ok(p) => (p, None),
                 Err(e) => {
-                    crate::pty::report_spawn_error(&self.config.terminal.default_shell, &e);
+                    crate::pty::report_spawn_error(shell, &e);
                     return;
                 }
             },
@@ -643,7 +657,6 @@ impl TearminalApp {
                     tab_to_close = Some(idx);
                 } else {
                     tab.close_pane(pane_id);
-                    self.prune_pending_remote();
                     self.recompute_grid_for_all_tabs();
                     self.update_window_title();
                     self.save_session();

@@ -943,8 +943,43 @@ impl TerminalRenderer {
             self.draw_button(canvas, plus, "+", h_plus, false, theme);
         }
 
+        // Familia tipográfica: ◀ nombre ▶ entre las fuentes monoespaciadas instaladas
+        {
+            let (prev, next) = (rects.font_family_prev_btn, rects.font_family_next_btn);
+            self.draw_label(
+                canvas,
+                content_x + 20,
+                prev.1,
+                prev.0.saturating_sub(12),
+                "Familia tipográfica",
+                theme,
+            );
+            self.draw_button(
+                canvas,
+                prev,
+                "‹",
+                state.hovered_font_family_prev,
+                false,
+                theme,
+            );
+            let name = if config.appearance.font_path.is_some() {
+                config.appearance.font_family.as_str()
+            } else {
+                "Predeterminada (JetBrains Mono)"
+            };
+            self.draw_stepper_value(canvas, prev, next, name, false, false, theme);
+            self.draw_button(
+                canvas,
+                next,
+                "›",
+                state.hovered_font_family_next,
+                false,
+                theme,
+            );
+        }
+
         // Muestra: valores de máquina en mono con el tamaño de fuente configurado.
-        let preview = (content_x + 20, card3_y + 182, card_w.saturating_sub(40), 66);
+        let preview = (content_x + 20, card3_y + 224, card_w.saturating_sub(40), 66);
         canvas.rounded_fill(
             preview.0,
             preview.1,
@@ -978,7 +1013,7 @@ impl TerminalRenderer {
             &format!(
                 "{} · {:.1} pt",
                 if config.appearance.font_path.is_some() {
-                    "Fuente personalizada"
+                    config.appearance.font_family.as_str()
                 } else {
                     "JetBrains Mono"
                 },

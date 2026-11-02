@@ -69,6 +69,7 @@ impl TerminalRenderer {
             h,
             is_markdown,
             viewer.git_base.is_some(),
+            viewer.is_diff(),
         );
         let accent = theme.accent_color();
         let chip_bg = theme.chrome_bg();
@@ -115,6 +116,28 @@ impl TerminalRenderer {
                     theme.surface_hover()
                 } else {
                     tint(color, if showing || changed { 20 } else { 8 })
+                },
+                header_base,
+            );
+        }
+
+        if let Some(rect) = header_rects.diff_mode_btn {
+            let hov = viewer.hovered_diff_mode_btn;
+            let (icon, label) = if viewer.is_side_by_side() {
+                (crate::ui::LucideIcon::Columns2, "Lado a lado")
+            } else {
+                (crate::ui::LucideIcon::FileDiff, "Unificado")
+            };
+            self.draw_header_button(
+                canvas,
+                rect,
+                icon,
+                label,
+                if hov { accent } else { theme.ansi[7] },
+                if hov {
+                    theme.surface_hover()
+                } else {
+                    tint(accent, 20)
                 },
                 header_base,
             );
@@ -204,9 +227,13 @@ impl TerminalRenderer {
         let name_end_x =
             name_start_x + self.measure_ui_text(&viewer.file_name, tokens::SECTION, true);
         let mut right_x = header_rects.mode_btn.0;
-        for r in [header_rects.md_btn, header_rects.diff_btn]
-            .into_iter()
-            .flatten()
+        for r in [
+            header_rects.md_btn,
+            header_rects.diff_btn,
+            header_rects.diff_mode_btn,
+        ]
+        .into_iter()
+        .flatten()
         {
             right_x = right_x.min(r.0);
         }
@@ -249,6 +276,24 @@ impl TerminalRenderer {
         let content_y = y + header_h;
         let content_h = h.saturating_sub(header_h);
         if content_h == 0 {
+            return;
+        }
+
+        // Modo Diff Lado a Lado: dos columnas sincronizadas (HEAD vs Disco)
+        if viewer.is_side_by_side() {
+            self.render_side_by_side(
+                canvas,
+                x,
+                y,
+                full_w,
+                w,
+                h,
+                right_inset,
+                clip,
+                viewer,
+                theme,
+                &ext,
+            );
             return;
         }
 
@@ -1039,11 +1084,16 @@ impl TerminalRenderer {
         row_height: usize,
     ) -> Option<(Rect, Rect)> {
         let header_h = crate::renderer::geometry::FileViewerLayout::HEADER_H;
-        let content_y = y + header_h;
-        let content_h = h.saturating_sub(header_h);
+        let col_header_h = if viewer.is_side_by_side() {
+            crate::renderer::geometry::SideBySideLayout::COL_HEADER_H
+        } else {
+            0
+        };
+        let content_y = y + header_h + col_header_h;
+        let content_h = h.saturating_sub(header_h + col_header_h);
         let row_h = row_height.max(16);
         let visible_lines = content_h / row_h;
-        let total_lines = viewer.rows().len();
+        let total_lines = viewer.total_display_rows();
 
         ScrollbarRects::vertical(
             x + w,
@@ -1053,6 +1103,427 @@ impl TerminalRenderer {
             visible_lines,
             viewer.scroll_offset,
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_side_by_side(
+        &mut self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        full_w: usize,
+        w: usize,
+        h: usize,
+        _right_inset: usize,
+        clip: Clip,
+        viewer: &FileViewerState,
+        theme: &Theme,
+        ext: &str,
+    ) {
+        let rows = viewer.side_by_side_rows();
+        let total_rows = rows.len();
+        let lay = crate::renderer::geometry::SideBySideLayout::compute(
+            x,
+            y,
+            w,
+            h,
+            self.row_height,
+            self.char_width,
+            total_rows,
+        );
+        let (row_h, char_w) = (lay.row_h, lay.char_w);
+        let content_y = lay.content_y;
+        let content_h = lay.content_h;
+        if content_h == 0 {
+            return;
+        }
+
+        // 1. Barra de encabezado de columnas (HEAD vs Disco)
+        let col_header_bg = theme.chrome_bg_elevated();
+        canvas.fill_rect(
+            clip,
+            x,
+            lay.col_header_y,
+            full_w,
+            lay.col_header_h,
+            col_header_bg,
+        );
+        canvas.fill_rect(
+            clip,
+            x,
+            lay.col_header_y + lay.col_header_h - 1,
+            full_w,
+            1,
+            theme.chrome_line(),
+        );
+
+        let col_base = self.centered_baseline(lay.col_header_y + lay.col_header_h / 2);
+        let (dels, adds) = viewer.side_by_side_stats();
+
+        // Encabezado columna izquierda (HEAD / Base)
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::GitBranch,
+            lay.left_x + 16,
+            lay.col_header_y + lay.col_header_h / 2,
+            tokens::MICRO,
+            theme.ansi[3],
+        );
+        let left_title = "HEAD (versión base)";
+        self.draw_ui_text(
+            canvas,
+            left_title,
+            lay.left_x + 36,
+            col_base,
+            lay.divider_x.saturating_sub(60),
+            theme.foreground,
+            tokens::SECTION,
+            true,
+        );
+        if dels > 0 {
+            let del_badge = format!("–{}", dels);
+            let badge_w = self.measure_mono_text(&del_badge, tokens::MICRO, true) + 12;
+            let badge_x = lay.divider_x.saturating_sub(badge_w + 12);
+            if badge_x > lay.left_x + 180 {
+                canvas.rounded_fill(
+                    badge_x,
+                    lay.col_header_y + 4,
+                    badge_w,
+                    lay.col_header_h.saturating_sub(8),
+                    tokens::RADIUS_ROW,
+                    Color::from_rgba(theme.ansi[1].r(), theme.ansi[1].g(), theme.ansi[1].b(), 35),
+                );
+                self.draw_mono_text(
+                    canvas,
+                    &del_badge,
+                    badge_x + 6,
+                    col_base,
+                    badge_x + badge_w,
+                    theme.ansi[1],
+                    tokens::MICRO,
+                    true,
+                );
+            }
+        }
+
+        // Separador vertical entre columnas en el encabezado
+        canvas.fill_rect(
+            clip,
+            lay.divider_x,
+            lay.col_header_y,
+            1,
+            lay.col_header_h,
+            theme.chrome_line(),
+        );
+
+        // Encabezado columna derecha (Disco / Actual)
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::FileDiff,
+            lay.right_x + 16,
+            lay.col_header_y + lay.col_header_h / 2,
+            tokens::MICRO,
+            theme.ansi[2],
+        );
+        let right_title = "Disco (cambios locales)";
+        self.draw_ui_text(
+            canvas,
+            right_title,
+            lay.right_x + 36,
+            col_base,
+            (x + w).saturating_sub(60),
+            theme.foreground,
+            tokens::SECTION,
+            true,
+        );
+        if adds > 0 {
+            let add_badge = format!("+{}", adds);
+            let badge_w = self.measure_mono_text(&add_badge, tokens::MICRO, true) + 12;
+            let badge_x = (x + w).saturating_sub(badge_w + 24);
+            if badge_x > lay.right_x + 180 {
+                canvas.rounded_fill(
+                    badge_x,
+                    lay.col_header_y + 4,
+                    badge_w,
+                    lay.col_header_h.saturating_sub(8),
+                    tokens::RADIUS_ROW,
+                    Color::from_rgba(theme.ansi[2].r(), theme.ansi[2].g(), theme.ansi[2].b(), 35),
+                );
+                self.draw_mono_text(
+                    canvas,
+                    &add_badge,
+                    badge_x + 6,
+                    col_base,
+                    badge_x + badge_w,
+                    theme.ansi[2],
+                    tokens::MICRO,
+                    true,
+                );
+            }
+        }
+
+        // 2. Fondos de los gutters y líneas divisorias del cuerpo
+        let gutter_bg = theme.mix(theme.background, theme.foreground, 0.03);
+        let chrome_line = theme.chrome_line();
+
+        canvas.fill_rect(
+            clip,
+            lay.left_x,
+            content_y,
+            lay.left_gutter_w,
+            content_h,
+            gutter_bg,
+        );
+        canvas.fill_rect(
+            clip,
+            lay.left_sep_x,
+            content_y,
+            1,
+            content_h,
+            chrome_line,
+        );
+
+        canvas.fill_rect(
+            clip,
+            lay.divider_x,
+            content_y,
+            1,
+            content_h,
+            chrome_line,
+        );
+
+        canvas.fill_rect(
+            clip,
+            lay.right_x,
+            content_y,
+            lay.right_gutter_w,
+            content_h,
+            gutter_bg,
+        );
+        canvas.fill_rect(
+            clip,
+            lay.right_sep_x,
+            content_y,
+            1,
+            content_h,
+            chrome_line,
+        );
+
+        let left_gutter_clip: Clip = (lay.left_x, content_y, lay.left_sep_x, content_y + content_h);
+        let left_text_clip: Clip = (
+            lay.left_sep_x + 1,
+            content_y,
+            lay.left_text_max_x,
+            content_y + content_h,
+        );
+        let right_gutter_clip: Clip = (lay.right_x, content_y, lay.right_sep_x, content_y + content_h);
+        let right_text_clip: Clip = (
+            lay.right_sep_x + 1,
+            content_y,
+            lay.right_text_max_x,
+            content_y + content_h,
+        );
+
+        let baseline_offset = ((row_h as f32 * 0.76) as usize).max(char_w);
+        let visible_rows = content_h / row_h;
+        let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
+        let end_row = (start_row + visible_rows + 1).min(total_rows);
+
+        let del_tint = Color::from_rgba(theme.ansi[1].r(), theme.ansi[1].g(), theme.ansi[1].b(), 32);
+        let add_tint = Color::from_rgba(theme.ansi[2].r(), theme.ansi[2].g(), theme.ansi[2].b(), 32);
+        let mod_left_tint = Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
+        let mod_right_tint = Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
+        let empty_tint = theme.mix(theme.background, theme.foreground, 0.02);
+
+        // 3. Dibujo de filas sincronizadas
+        for (idx, r) in rows[start_row..end_row].iter().enumerate() {
+            let row_y = content_y + idx * row_h;
+            let baseline_y = row_y + baseline_offset;
+
+            // --- COLUMNA IZQUIERDA ---
+            let left_row_clip: Clip = (lay.left_x, row_y, lay.divider_x, row_y + row_h);
+            match r.left.kind {
+                crate::app::viewer::DiffCellKind::Deleted => {
+                    canvas.fill_rect(
+                        left_row_clip,
+                        lay.left_sep_x + 1,
+                        row_y,
+                        lay.divider_x.saturating_sub(lay.left_sep_x + 1),
+                        row_h,
+                        del_tint,
+                    );
+                    canvas.fill_rect(
+                        left_gutter_clip,
+                        lay.left_sep_x.saturating_sub(3),
+                        row_y,
+                        3,
+                        row_h,
+                        theme.ansi[1],
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Modified => {
+                    canvas.fill_rect(
+                        left_row_clip,
+                        lay.left_sep_x + 1,
+                        row_y,
+                        lay.divider_x.saturating_sub(lay.left_sep_x + 1),
+                        row_h,
+                        mod_left_tint,
+                    );
+                    canvas.fill_rect(
+                        left_gutter_clip,
+                        lay.left_sep_x.saturating_sub(3),
+                        row_y,
+                        3,
+                        row_h,
+                        theme.ansi[3],
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Empty => {
+                    canvas.fill_rect(
+                        left_row_clip,
+                        lay.left_sep_x + 1,
+                        row_y,
+                        lay.divider_x.saturating_sub(lay.left_sep_x + 1),
+                        row_h,
+                        empty_tint,
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Normal | crate::app::viewer::DiffCellKind::Added => {}
+            }
+
+            if let Some(line_num) = r.left.line_num {
+                let num_str = line_num.to_string();
+                let num_w = num_str.len() * char_w;
+                let num_x = lay.left_sep_x.saturating_sub(num_w + 8);
+                let num_color = match r.left.kind {
+                    crate::app::viewer::DiffCellKind::Deleted => theme.ansi[1],
+                    crate::app::viewer::DiffCellKind::Modified => theme.ansi[3],
+                    _ => theme.ansi[8],
+                };
+                self.draw_mono_text(
+                    canvas,
+                    &num_str,
+                    num_x,
+                    baseline_y,
+                    lay.left_sep_x,
+                    num_color,
+                    tokens::BODY,
+                    false,
+                );
+
+                self.render_highlighted_line(
+                    canvas,
+                    left_text_clip,
+                    &r.left.text,
+                    lay.left_text_x as i32,
+                    baseline_y,
+                    lay.left_text_max_x,
+                    char_w,
+                    theme,
+                    ext,
+                );
+            }
+
+            // --- COLUMNA DERECHA ---
+            let right_row_clip: Clip = (lay.right_x, row_y, x + w, row_y + row_h);
+            match r.right.kind {
+                crate::app::viewer::DiffCellKind::Added => {
+                    canvas.fill_rect(
+                        right_row_clip,
+                        lay.right_sep_x + 1,
+                        row_y,
+                        (x + w).saturating_sub(lay.right_sep_x + 1),
+                        row_h,
+                        add_tint,
+                    );
+                    canvas.fill_rect(
+                        right_gutter_clip,
+                        lay.right_sep_x.saturating_sub(3),
+                        row_y,
+                        3,
+                        row_h,
+                        theme.ansi[2],
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Modified => {
+                    canvas.fill_rect(
+                        right_row_clip,
+                        lay.right_sep_x + 1,
+                        row_y,
+                        (x + w).saturating_sub(lay.right_sep_x + 1),
+                        row_h,
+                        mod_right_tint,
+                    );
+                    canvas.fill_rect(
+                        right_gutter_clip,
+                        lay.right_sep_x.saturating_sub(3),
+                        row_y,
+                        3,
+                        row_h,
+                        theme.ansi[3],
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Empty => {
+                    canvas.fill_rect(
+                        right_row_clip,
+                        lay.right_sep_x + 1,
+                        row_y,
+                        (x + w).saturating_sub(lay.right_sep_x + 1),
+                        row_h,
+                        empty_tint,
+                    );
+                }
+                crate::app::viewer::DiffCellKind::Normal | crate::app::viewer::DiffCellKind::Deleted => {}
+            }
+
+            if let Some(line_num) = r.right.line_num {
+                let num_str = line_num.to_string();
+                let num_w = num_str.len() * char_w;
+                let num_x = lay.right_sep_x.saturating_sub(num_w + 8);
+                let num_color = match r.right.kind {
+                    crate::app::viewer::DiffCellKind::Added => theme.ansi[2],
+                    crate::app::viewer::DiffCellKind::Modified => theme.ansi[3],
+                    _ => theme.ansi[8],
+                };
+                self.draw_mono_text(
+                    canvas,
+                    &num_str,
+                    num_x,
+                    baseline_y,
+                    lay.right_sep_x,
+                    num_color,
+                    tokens::BODY,
+                    false,
+                );
+
+                self.render_highlighted_line(
+                    canvas,
+                    right_text_clip,
+                    &r.right.text,
+                    lay.right_text_x as i32,
+                    baseline_y,
+                    lay.right_text_max_x,
+                    char_w,
+                    theme,
+                    ext,
+                );
+            }
+        }
+
+        // 4. Barra de desplazamiento vertical sincronizada
+        if let Some((track, thumb)) =
+            Self::file_viewer_scrollbar_geometry(x, y, w, h, viewer, self.row_height)
+        {
+            Self::draw_scrollbar_rects(
+                canvas,
+                track,
+                thumb,
+                viewer.hovered_scrollbar,
+                self.scrollbars_awake,
+                theme,
+            );
+        }
     }
 
     /// Resaltado sintáctico multilenguaje de tokens ligero y de alto rendimiento

@@ -37,6 +37,15 @@ pub(crate) fn pane_scroll_to_bottom_btn_rect(
     (x, y, size, size)
 }
 
+/// Rectángulo de la barra de búsqueda del historial (`Ctrl + Shift + F`), arriba a la derecha del panel
+#[inline]
+pub(crate) fn pane_search_bar_rect(rect_x: usize, rect_y: usize, rect_width: usize) -> Rect {
+    let w = 280.min(rect_width.saturating_sub(40));
+    let h = 32;
+    let x = (rect_x + rect_width).saturating_sub(w + 20);
+    (x, rect_y + 10, w, h)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TopTabBarRects {
     pub bar_h: usize,
@@ -174,6 +183,9 @@ pub(crate) struct SettingsPageRects {
     pub font_minus_btn: (usize, usize, usize, usize),
     pub font_plus_btn: (usize, usize, usize, usize),
     pub font_value_box: (usize, usize, usize, usize),
+    /// Selector de la familia tipográfica instalada: anterior, siguiente y el nombre entre ambos
+    pub font_family_prev_btn: (usize, usize, usize, usize),
+    pub font_family_next_btn: (usize, usize, usize, usize),
     pub ui_font_minus_btn: (usize, usize, usize, usize),
     pub ui_font_plus_btn: (usize, usize, usize, usize),
     pub ui_font_value_box: (usize, usize, usize, usize),
@@ -229,7 +241,7 @@ impl SettingsPageRects {
     pub(crate) const THEME_ROW_H: usize = 30;
     pub(crate) const THEME_CARD_H: usize = 428;
     pub(crate) const INTERFACE_CARD_H: usize = 170;
-    pub(crate) const TYPOGRAPHY_CARD_H: usize = 278;
+    pub(crate) const TYPOGRAPHY_CARD_H: usize = 320;
     /// Alto de la tarjeta «Comportamiento del terminal»
     pub(crate) const TERMINAL_CARD_H: usize = 738;
     pub(crate) const TERMINAL_ROW_H: usize = 28;
@@ -375,14 +387,21 @@ impl SettingsPageRects {
         let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
         let step_btn_w = 30;
         let step_span = 150;
-        let font_minus_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
-        let font_plus_btn = (ctrl_x + step_span, card3_y + 50, step_btn_w, 30);
+        let font_family_prev_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
+        let font_family_next_btn = (
+            (ctrl_x + step_span).max((content_x + card_w).saturating_sub(20 + step_btn_w)),
+            card3_y + 50,
+            step_btn_w,
+            30,
+        );
+        let font_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
+        let font_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
 
-        let ui_font_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
-        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
+        let ui_font_minus_btn = (ctrl_x, card3_y + 134, step_btn_w, 30);
+        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 134, step_btn_w, 30);
 
-        let spacing_minus_btn = (ctrl_x, card3_y + 134, step_btn_w, 30);
-        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 134, step_btn_w, 30);
+        let spacing_minus_btn = (ctrl_x, card3_y + 176, step_btn_w, 30);
+        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 176, step_btn_w, 30);
 
         // La opacidad pertenece a «Interfaz», no a tipografía.
         let opacity_minus_btn = (ctrl_x, card2_y + 98, step_btn_w, 30);
@@ -485,6 +504,8 @@ impl SettingsPageRects {
             font_minus_btn,
             font_plus_btn,
             font_value_box,
+            font_family_prev_btn,
+            font_family_next_btn,
             ui_font_minus_btn,
             ui_font_plus_btn,
             ui_font_value_box,
@@ -543,6 +564,8 @@ pub(crate) struct FileViewerHeaderRects {
     pub md_btn: Option<(usize, usize, usize, usize)>,
     /// «Cambios»: abre el diff contra HEAD (solo si el archivo está en un repo)
     pub diff_btn: Option<(usize, usize, usize, usize)>,
+    /// Selector de modo de diff (Lado a lado / Unificado), visible mientras el diff está activo
+    pub diff_mode_btn: Option<(usize, usize, usize, usize)>,
 }
 
 impl FileViewerHeaderRects {
@@ -554,6 +577,7 @@ impl FileViewerHeaderRects {
         _h: usize,
         is_markdown: bool,
         has_diff: bool,
+        is_diff: bool,
     ) -> Self {
         let mut right_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 12);
         let btn_y = y
@@ -581,10 +605,21 @@ impl FileViewerHeaderRects {
             (mode_x.saturating_sub(8 + diff_w), btn_y, diff_w, 24)
         });
 
+        // 4. Selector de modo (Lado a lado / Unificado), solo cuando el diff está abierto
+        let diff_mode_btn = if is_diff && has_diff {
+            diff_btn.map(|d_btn| {
+                let diff_mode_w = 118;
+                (d_btn.0.saturating_sub(8 + diff_mode_w), btn_y, diff_mode_w, 24)
+            })
+        } else {
+            None
+        };
+
         Self {
             mode_btn,
             md_btn,
             diff_btn,
+            diff_mode_btn,
         }
     }
 
@@ -684,6 +719,100 @@ impl FileViewerLayout {
             (track_x, track_y, track_w, track_h),
             (thumb_x, track_y, thumb_w, track_h),
         ))
+    }
+}
+
+/// Geometría para el visor de diff lado a lado (dos columnas sincronizadas: base HEAD vs disco).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SideBySideLayout {
+    pub col_header_y: usize,
+    pub col_header_h: usize,
+    pub content_y: usize,
+    pub content_h: usize,
+    pub row_h: usize,
+    pub char_w: usize,
+    // Columna izquierda (HEAD / Base)
+    pub left_x: usize,
+    pub left_w: usize,
+    pub left_gutter_w: usize,
+    pub left_sep_x: usize,
+    pub left_text_x: usize,
+    pub left_text_max_x: usize,
+    // Separador central
+    pub divider_x: usize,
+    // Columna derecha (Disco / Actual)
+    pub right_x: usize,
+    pub right_w: usize,
+    pub right_gutter_w: usize,
+    pub right_sep_x: usize,
+    pub right_text_x: usize,
+    pub right_text_max_x: usize,
+    pub visible_cols: usize,
+}
+
+impl SideBySideLayout {
+    pub(crate) const COL_HEADER_H: usize = 28;
+
+    pub(crate) fn compute(
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        row_height: usize,
+        char_width: usize,
+        total_rows: usize,
+    ) -> Self {
+        let row_h = row_height.max(16);
+        let char_w = char_width.max(7);
+        let col_header_y = y + FileViewerLayout::HEADER_H;
+        let col_header_h = Self::COL_HEADER_H;
+        let content_y = col_header_y + col_header_h;
+        let content_h = h.saturating_sub(FileViewerLayout::HEADER_H + col_header_h);
+
+        let half_w = w.saturating_sub(1) / 2;
+        let left_x = x;
+        let left_w = half_w;
+        let divider_x = x + half_w;
+        let right_x = divider_x + 1;
+        let right_w = (x + w).saturating_sub(right_x);
+
+        let digits = total_rows.to_string().len().max(3);
+        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 16;
+
+        let left_gutter_w = gutter_w.min(left_w / 3);
+        let left_sep_x = left_x + left_gutter_w;
+        let left_text_x = left_sep_x + 8;
+        let left_text_max_x = divider_x.saturating_sub(4);
+
+        let right_gutter_w = gutter_w.min(right_w / 3);
+        let right_sep_x = right_x + right_gutter_w;
+        let right_text_x = right_sep_x + 8;
+        let right_text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
+
+        let visible_cols = (left_text_max_x.saturating_sub(left_text_x) / char_w).max(1);
+
+        Self {
+            col_header_y,
+            col_header_h,
+            content_y,
+            content_h,
+            row_h,
+            char_w,
+            left_x,
+            left_w,
+            left_gutter_w,
+            left_sep_x,
+            left_text_x,
+            left_text_max_x,
+            divider_x,
+            right_x,
+            right_w,
+            right_gutter_w,
+            right_sep_x,
+            right_text_x,
+            right_text_max_x,
+            visible_cols,
+        }
     }
 }
 

@@ -118,7 +118,7 @@ impl TearminalApp {
                     ) {
                         let content_h = ch.saturating_sub(38);
                         let visible_lines = (content_h / row_h.max(16)).max(1);
-                        let max_offset = viewer.rows().len().saturating_sub(visible_lines);
+                        let max_offset = viewer.total_display_rows().saturating_sub(visible_lines);
 
                         if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
                             track,
@@ -453,6 +453,8 @@ impl TearminalApp {
             let mut h_theme = None;
             let mut h_ts = None;
             let mut h_tm = None;
+            let mut h_ff_prev = false;
+            let mut h_ff_next = false;
             let mut h_fm = false;
             let mut h_fp = false;
             let mut h_fb = false;
@@ -530,6 +532,8 @@ impl TearminalApp {
                         h_tm = Some(2);
                     }
 
+                    h_ff_prev = SettingsPageRects::inside(mx, my, rects.font_family_prev_btn);
+                    h_ff_next = SettingsPageRects::inside(mx, my, rects.font_family_next_btn);
                     h_fm = SettingsPageRects::inside(mx, my, rects.font_minus_btn);
                     h_fp = SettingsPageRects::inside(mx, my, rects.font_plus_btn);
                     h_fb = SettingsPageRects::inside(mx, my, rects.font_value_box);
@@ -595,6 +599,8 @@ impl TearminalApp {
             if h_theme.is_some()
                 || h_ts.is_some()
                 || h_tm.is_some()
+                || h_ff_prev
+                || h_ff_next
                 || h_fm
                 || h_fp
                 || h_fb
@@ -638,6 +644,8 @@ impl TearminalApp {
                 || st.hovered_theme != h_theme
                 || st.hovered_theme_slot != h_ts
                 || st.hovered_theme_mode != h_tm
+                || st.hovered_font_family_prev != h_ff_prev
+                || st.hovered_font_family_next != h_ff_next
                 || st.hovered_font_minus != h_fm
                 || st.hovered_font_plus != h_fp
                 || st.hovered_font_box != h_fb
@@ -678,6 +686,8 @@ impl TearminalApp {
                 st.hovered_theme = h_theme;
                 st.hovered_theme_slot = h_ts;
                 st.hovered_theme_mode = h_tm;
+                st.hovered_font_family_prev = h_ff_prev;
+                st.hovered_font_family_next = h_ff_next;
                 st.hovered_font_minus = h_fm;
                 st.hovered_font_plus = h_fp;
                 st.hovered_font_box = h_fb;
@@ -1085,8 +1095,17 @@ impl TearminalApp {
                     viewer_h,
                     is_markdown,
                     viewer.git_base.is_some(),
+                    viewer.is_diff(),
                 );
 
+                let is_hover_diff_mode = header_rects
+                    .diff_mode_btn
+                    .map(|r| crate::renderer::FileViewerHeaderRects::inside(mx, my, r))
+                    .unwrap_or(false);
+                if viewer.hovered_diff_mode_btn != is_hover_diff_mode {
+                    viewer.hovered_diff_mode_btn = is_hover_diff_mode;
+                    needs_redraw = true;
+                }
                 let is_hover_diff = header_rects
                     .diff_btn
                     .map(|r| crate::renderer::FileViewerHeaderRects::inside(mx, my, r))
@@ -1102,7 +1121,7 @@ impl TearminalApp {
                     .map(|r| crate::renderer::FileViewerHeaderRects::inside(mx, my, r))
                     .unwrap_or(false);
 
-                if is_hover_mode || is_hover_md || is_hover_diff {
+                if is_hover_mode || is_hover_md || is_hover_diff || is_hover_diff_mode {
                     is_pointer = true;
                 }
                 if viewer.hovered_mode_btn != is_hover_mode {

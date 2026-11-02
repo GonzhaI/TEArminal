@@ -1,9 +1,9 @@
 [package]
 name = "tearminal"
-version = "0.25.0"
+version = "0.26.0"
 edition = "2021"
 license = "MIT"
-description = "TEArminal: Terminal nativa veloz para Windows optimizada para agentes CLI"
+description = "TEArminal: Workspace y terminal nativa veloz para Windows optimizada para agentes CLI y PowerShell"
 authors = ["TEArminal Team"]
 repository = "https://github.com/GonzhaI/TEArminal"
 readme = "README.md"

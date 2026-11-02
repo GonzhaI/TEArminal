@@ -71,6 +71,57 @@ impl TearminalApp {
         }
     }
 
+    /// Lanza (una sola vez) la lectura de las fuentes monoespaciadas instaladas, en un hilo.
+    pub(super) fn start_font_scan(&mut self) {
+        if self.installed_fonts.is_none() && self.font_scan.is_none() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(crate::fonts::scan_installed_monospace());
+            });
+            self.font_scan = Some(rx);
+        }
+    }
+
+    /// Pasa a la fuente instalada anterior (`delta` < 0) o siguiente; la posición 0 es la embebida.
+    /// No hace nada mientras el escaneo no haya terminado.
+    pub(super) fn step_font_family(&mut self, delta: isize) {
+        if let Some(rx) = &self.font_scan {
+            if let Ok(list) = rx.try_recv() {
+                self.installed_fonts = Some(list);
+                self.font_scan = None;
+            }
+        }
+        let Some(list) = &self.installed_fonts else {
+            return;
+        };
+        let current = self
+            .config
+            .appearance
+            .font_path
+            .as_deref()
+            .and_then(|p| list.iter().position(|f| f.path.to_string_lossy() == p))
+            .map_or(0, |i| i as isize + 1);
+        let next = (current + delta).rem_euclid(list.len() as isize + 1);
+        let chosen = (next > 0).then(|| list[next as usize - 1].clone());
+        let appearance = &mut self.config.appearance;
+        match chosen {
+            Some(f) => {
+                appearance.font_path = Some(f.path.to_string_lossy().into_owned());
+                appearance.font_family = f.family;
+            }
+            None => {
+                appearance.font_path = None;
+                appearance.font_family = TearminalConfig::default().appearance.font_family;
+            }
+        }
+        let _ = self.config.save();
+        if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {
+            renderer.set_font(&self.config, window.scale_factor());
+        }
+        self.recompute_grid_for_all_tabs();
+        self.request_redraw();
+    }
+
     pub(super) fn adjust_font_size(&mut self, delta: f32) {
         let new_size = (self.config.appearance.font_size + delta).clamp(8.0, 32.0);
         let rounded = (new_size * 10.0).round() / 10.0;

@@ -150,6 +150,20 @@ impl TerminalRenderer {
         renderer
     }
 
+    /// Cambia la fuente del terminal (`appearance.font_path`) y recalcula métricas y cachés.
+    pub(crate) fn set_font(&mut self, config: &TearminalConfig, scale_factor: f64) {
+        let (font, custom) = Self::load_regular_font(config);
+        self.regular_font = font;
+        self.custom_font = custom;
+        self.regular_face = if custom {
+            None
+        } else {
+            rustybuzz::Face::from_slice(EMBEDDED_JETBRAINS_REGULAR, 0)
+        };
+        self.shaped_ligatures.clear();
+        self.update_scale(config, scale_factor);
+    }
+
     pub(crate) fn update_scale(&mut self, config: &TearminalConfig, scale_factor: f64) {
         self.scale_factor = scale_factor;
         self.show_dimensions = config.appearance.show_dimensions;

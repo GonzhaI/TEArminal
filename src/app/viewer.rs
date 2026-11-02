@@ -312,9 +312,14 @@ pub(crate) struct FileViewerState {
     pub original_lines: Vec<String>,
     /// Contenido en `HEAD` (base del diff del margen). `None` fuera de un repo: se compara con el texto al abrir/guardar.
     pub git_base: Option<Vec<String>>,
-    /// Con el diff «HEAD vs ahora» a la vista: guarda el estado real del visor para volver a él
+    /// Modo de diff activo (Lado a lado, Unificado, o ninguno)
+    pub diff_mode: DiffMode,
+    /// Con el diff unificado «HEAD vs ahora» a la vista: guarda el estado real del visor para volver a él
     pub diff_stash: Option<Box<DiffStash>>,
     pub hovered_diff_btn: bool,
+    pub hovered_diff_mode_btn: bool,
+    /// Filas sincronizadas de diff lado a lado en caché por `edit_gen`
+    pub side_by_side_cache: RefCell<Option<(u64, Rc<[SideBySideRow]>)>>,
     /// Marca de cada línea frente a la base y si existen cambios, en caché por `edit_gen`
     pub git_marks: RefCell<Option<(u64, bool, GitMarks)>>,
     pub selection: Option<((usize, usize), (usize, usize))>,
@@ -1479,7 +1484,68 @@ impl FileViewerState {
     }
 
     pub(crate) fn is_diff(&self) -> bool {
-        self.diff_stash.is_some()
+        self.diff_mode != DiffMode::None || self.diff_stash.is_some()
+    }
+
+    pub(crate) fn is_side_by_side(&self) -> bool {
+        self.diff_mode == DiffMode::SideBySide
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn is_unified_diff(&self) -> bool {
+        self.diff_mode == DiffMode::Unified || self.diff_stash.is_some()
+    }
+
+    pub(crate) fn side_by_side_rows(&self) -> Rc<[SideBySideRow]> {
+        if let Some((gen, ref rows)) = *self.side_by_side_cache.borrow() {
+            if gen == self.edit_gen {
+                return Rc::clone(rows);
+            }
+        }
+        let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+        let rows: Rc<[SideBySideRow]> = Rc::from(compute_side_by_side(base, &self.lines));
+        *self.side_by_side_cache.borrow_mut() = Some((self.edit_gen, Rc::clone(&rows)));
+        rows
+    }
+
+    pub(crate) fn side_by_side_stats(&self) -> (usize, usize) {
+        let rows = self.side_by_side_rows();
+        let mut dels = 0;
+        let mut adds = 0;
+        for r in rows.iter() {
+            match r.left.kind {
+                DiffCellKind::Deleted | DiffCellKind::Modified => dels += 1,
+                _ => {}
+            }
+            match r.right.kind {
+                DiffCellKind::Added | DiffCellKind::Modified => adds += 1,
+                _ => {}
+            }
+        }
+        (dels, adds)
+    }
+
+    pub(crate) fn total_display_rows(&self) -> usize {
+        if self.is_side_by_side() {
+            self.side_by_side_rows().len()
+        } else {
+            self.rows().len()
+        }
+    }
+
+    /// Alterna el modo de visualización del diff (Lado a lado <-> Unificado)
+    pub(crate) fn toggle_diff_mode(&mut self) {
+        if self.diff_mode == DiffMode::SideBySide {
+            self.apply_unified_diff();
+            self.diff_mode = DiffMode::Unified;
+        } else if self.diff_mode == DiffMode::Unified || self.diff_stash.is_some() {
+            self.restore_unified_diff();
+            self.diff_mode = DiffMode::SideBySide;
+        } else {
+            self.diff_mode = DiffMode::SideBySide;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
     }
 
     fn ensure_git_marks(&self) {
@@ -1504,8 +1570,61 @@ impl FileViewerState {
         self.git_marks.borrow().as_ref().is_some_and(|c| c.1)
     }
 
-    /// Alterna entre el archivo y su diff unificado contra `HEAD` (la vista de cambios es de solo lectura)
+    /// Alterna entre el archivo y su visor de cambios (por defecto modo Lado a lado)
     pub(crate) fn toggle_diff(&mut self) {
+        if self.is_diff() {
+            if self.diff_stash.is_some() {
+                self.restore_unified_diff();
+            }
+            self.diff_mode = DiffMode::None;
+        } else {
+            self.diff_mode = DiffMode::SideBySide;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
+    }
+
+    /// Alterna directamente el diff unificado (mantiene retrocompatibilidad y pruebas)
+    #[allow(dead_code)]
+    pub(crate) fn toggle_unified_diff(&mut self) {
+        if self.diff_stash.is_some() {
+            self.restore_unified_diff();
+            self.diff_mode = DiffMode::None;
+        } else {
+            self.apply_unified_diff();
+            self.diff_mode = DiffMode::Unified;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
+    }
+
+    fn apply_unified_diff(&mut self) {
+        if self.diff_stash.is_some() {
+            return;
+        }
+        let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+        let mut diff = unified_diff(base, &self.lines, 3);
+        if diff.is_empty() {
+            diff.push("Sin cambios respecto a HEAD".to_string());
+        }
+        self.diff_stash = Some(Box::new(DiffStash {
+            lines: std::mem::replace(&mut self.lines, diff),
+            original_lines: Vec::new(),
+            cursor_line: std::mem::take(&mut self.cursor_line),
+            cursor_col: std::mem::take(&mut self.cursor_col),
+            scroll_offset: std::mem::take(&mut self.scroll_offset),
+            scroll_offset_x: std::mem::take(&mut self.scroll_offset_x),
+            selection: self.selection.take(),
+            folded: std::mem::take(&mut self.folded),
+            render_markdown: std::mem::replace(&mut self.render_markdown, false),
+        }));
+        let shown = self.lines.clone();
+        if let Some(st) = self.diff_stash.as_mut() {
+            st.original_lines = std::mem::replace(&mut self.original_lines, shown);
+        }
+    }
+
+    fn restore_unified_diff(&mut self) {
         if let Some(st) = self.diff_stash.take() {
             let st = *st;
             self.lines = st.lines;
@@ -1517,32 +1636,7 @@ impl FileViewerState {
             self.selection = st.selection;
             self.folded = st.folded;
             self.render_markdown = st.render_markdown;
-        } else if let Some(base) = &self.git_base {
-            let mut diff = unified_diff(base, &self.lines, 3);
-            if diff.is_empty() {
-                diff.push("Sin cambios respecto a HEAD".to_string());
-            }
-            self.diff_stash = Some(Box::new(DiffStash {
-                lines: std::mem::replace(&mut self.lines, diff),
-                original_lines: Vec::new(),
-                cursor_line: std::mem::take(&mut self.cursor_line),
-                cursor_col: std::mem::take(&mut self.cursor_col),
-                scroll_offset: std::mem::take(&mut self.scroll_offset),
-                scroll_offset_x: std::mem::take(&mut self.scroll_offset_x),
-                selection: self.selection.take(),
-                folded: std::mem::take(&mut self.folded),
-                render_markdown: std::mem::replace(&mut self.render_markdown, false),
-            }));
-            // Sin cambios propios: así `is_dirty` y el margen no ven el diff como una edición
-            let shown = self.lines.clone();
-            if let Some(st) = self.diff_stash.as_mut() {
-                st.original_lines = std::mem::replace(&mut self.original_lines, shown);
-            }
-        } else {
-            return;
         }
-        self.edit_gen += 1;
-        self.fold_gen += 1;
     }
 
     pub(crate) fn get_line_git_diff_status(&self, line_idx: usize) -> Option<GitLineStatus> {
@@ -1732,6 +1826,40 @@ pub(crate) enum GitLineStatus {
     Deleted,
 }
 
+/// Modo de visualización del diff de git.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum DiffMode {
+    #[default]
+    None,
+    SideBySide,
+    Unified,
+}
+
+/// Tipo de cambio en una celda de diff lado a lado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffCellKind {
+    Normal,
+    Added,
+    Deleted,
+    Modified,
+    Empty,
+}
+
+/// Celda de una línea en una columna del diff lado a lado.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SideBySideCell {
+    pub(crate) line_num: Option<usize>,
+    pub(crate) text: String,
+    pub(crate) kind: DiffCellKind,
+}
+
+/// Fila sincronizada del diff lado a lado (columna izquierda = HEAD, columna derecha = disco).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SideBySideRow {
+    pub(crate) left: SideBySideCell,
+    pub(crate) right: SideBySideCell,
+}
+
 /// Estado del visor mientras se muestra el diff (se restaura al volver al archivo)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiffStash {
@@ -1824,6 +1952,142 @@ fn diff_hunks(base: &[String], cur: &[String]) -> Vec<Hunk> {
     }
     flush(gap_b, gap_c, del, add, &mut hunks);
     hunks
+}
+
+/// Calcula las filas alineadas y sincronizadas para el visor de diff lado a lado.
+pub(crate) fn compute_side_by_side(base: &[String], cur: &[String]) -> Vec<SideBySideRow> {
+    let hunks = diff_hunks(base, cur);
+    let mut rows = Vec::new();
+    let mut base_idx = 0;
+    let mut cur_idx = 0;
+
+    for h in hunks {
+        while base_idx < h.b && cur_idx < h.c {
+            rows.push(SideBySideRow {
+                left: SideBySideCell {
+                    line_num: Some(base_idx + 1),
+                    text: base[base_idx].clone(),
+                    kind: DiffCellKind::Normal,
+                },
+                right: SideBySideCell {
+                    line_num: Some(cur_idx + 1),
+                    text: cur[cur_idx].clone(),
+                    kind: DiffCellKind::Normal,
+                },
+            });
+            base_idx += 1;
+            cur_idx += 1;
+        }
+
+        let count = h.del.max(h.add);
+        for k in 0..count {
+            let left = if k < h.del {
+                let idx = h.b + k;
+                let kind = if k < h.add {
+                    DiffCellKind::Modified
+                } else {
+                    DiffCellKind::Deleted
+                };
+                SideBySideCell {
+                    line_num: Some(idx + 1),
+                    text: base.get(idx).cloned().unwrap_or_default(),
+                    kind,
+                }
+            } else {
+                SideBySideCell {
+                    line_num: None,
+                    text: String::new(),
+                    kind: DiffCellKind::Empty,
+                }
+            };
+
+            let right = if k < h.add {
+                let idx = h.c + k;
+                let kind = if k < h.del {
+                    DiffCellKind::Modified
+                } else {
+                    DiffCellKind::Added
+                };
+                SideBySideCell {
+                    line_num: Some(idx + 1),
+                    text: cur.get(idx).cloned().unwrap_or_default(),
+                    kind,
+                }
+            } else {
+                SideBySideCell {
+                    line_num: None,
+                    text: String::new(),
+                    kind: DiffCellKind::Empty,
+                }
+            };
+
+            rows.push(SideBySideRow { left, right });
+        }
+
+        base_idx = h.b + h.del;
+        cur_idx = h.c + h.add;
+    }
+
+    while base_idx < base.len() || cur_idx < cur.len() {
+        let left_text = base.get(base_idx).cloned().unwrap_or_default();
+        let right_text = cur.get(cur_idx).cloned().unwrap_or_default();
+        let has_left = base_idx < base.len();
+        let has_right = cur_idx < cur.len();
+
+        let (left_kind, right_kind) = if has_left && has_right && left_text == right_text {
+            (DiffCellKind::Normal, DiffCellKind::Normal)
+        } else {
+            (
+                if has_left {
+                    DiffCellKind::Deleted
+                } else {
+                    DiffCellKind::Empty
+                },
+                if has_right {
+                    DiffCellKind::Added
+                } else {
+                    DiffCellKind::Empty
+                },
+            )
+        };
+
+        rows.push(SideBySideRow {
+            left: SideBySideCell {
+                line_num: has_left.then_some(base_idx + 1),
+                text: left_text,
+                kind: left_kind,
+            },
+            right: SideBySideCell {
+                line_num: has_right.then_some(cur_idx + 1),
+                text: right_text,
+                kind: right_kind,
+            },
+        });
+
+        if has_left {
+            base_idx += 1;
+        }
+        if has_right {
+            cur_idx += 1;
+        }
+    }
+
+    if rows.is_empty() {
+        rows.push(SideBySideRow {
+            left: SideBySideCell {
+                line_num: None,
+                text: String::new(),
+                kind: DiffCellKind::Normal,
+            },
+            right: SideBySideCell {
+                line_num: None,
+                text: String::new(),
+                kind: DiffCellKind::Normal,
+            },
+        });
+    }
+
+    rows
 }
 
 /// Marca cada línea de `cur` frente a `base`: añadida, modificada o (en la línea siguiente) con borrado.

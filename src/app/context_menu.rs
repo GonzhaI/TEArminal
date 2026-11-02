@@ -41,6 +41,10 @@ pub(crate) enum MenuAction {
     CloseTab(usize),
     CloseOtherTabs(usize),
     NewTab,
+    NewTabWithShell(String),
+    SplitHorizontalWithShell(String),
+    SplitVerticalWithShell(String),
+    OpenMachineModal,
     NewWindow,
     OpenSettings,
     ToggleExplorer,
@@ -205,6 +209,12 @@ impl TearminalApp {
 
         let items = if self.spaces_rects(win_h).contains(mx, my, win_h) {
             match self.spaces_hit(mx, my, win_h) {
+                crate::renderer::SpacesHover::Plus => {
+                    let r = self.spaces_rects(win_h);
+                    let items = self.shell_profiles_menu();
+                    self.show_menu(items, (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4), (win_w, win_h));
+                    return true;
+                }
                 crate::renderer::SpacesHover::Row(i) => match self.space_menu(i) {
                     Some(items) => items,
                     None => return false,
@@ -214,6 +224,15 @@ impl TearminalApp {
         } else if my < TopTabBarRects::HEIGHT {
             let visible = self.visible_tab_indices();
             let rects = TopTabBarRects::compute(win_w, self.spaces_w(), visible.len());
+            if TopTabBarRects::inside(mx, my, rects.plus_btn) {
+                let items = self.shell_profiles_menu();
+                self.show_menu(
+                    items,
+                    (rects.plus_btn.0, rects.plus_btn.1 + rects.plus_btn.3 + 4),
+                    (win_w, win_h),
+                );
+                return true;
+            }
             let hit = (0..visible.len())
                 .find(|&pos| {
                     let r = rects.tab_rect(pos);
@@ -309,7 +328,7 @@ impl TearminalApp {
                 LucideIcon::Maximize2,
                 "",
                 MenuAction::ExplorerExpandAll,
-                self.file_explorer.remote_session.is_none() || self.file_explorer.inband_remote,
+                self.file_explorer.remote_session.is_none(),
             ));
             items.push(MenuItem::separator());
             items.push(MenuItem::new(
@@ -526,6 +545,18 @@ impl TearminalApp {
             MenuAction::NewTab,
             true,
         ));
+        if tab.is_none() {
+            let profiles = crate::app::shell_profiles::available_shell_profiles();
+            for p in &profiles {
+                items.push(MenuItem::new(
+                    format!("Nueva pestaña: {}", p.title),
+                    p.icon,
+                    "",
+                    MenuAction::NewTabWithShell(p.command.clone()),
+                    true,
+                ));
+            }
+        }
         items.push(MenuItem::new(
             "Nueva ventana",
             LucideIcon::ExternalLink,
@@ -557,6 +588,52 @@ impl TearminalApp {
                 true,
             ));
         }
+        items
+    }
+
+    /// Menú desplegable de perfiles de shell y división de paneles (asociado al botón «+»).
+    pub(super) fn shell_profiles_menu(&self) -> Vec<MenuItem> {
+        let profiles = crate::app::shell_profiles::available_shell_profiles();
+        let mut items = Vec::with_capacity(profiles.len() + 6);
+        for p in &profiles {
+            items.push(MenuItem::new(
+                p.title,
+                p.icon,
+                "",
+                MenuAction::NewTabWithShell(p.command.clone()),
+                true,
+            ));
+        }
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Dividir panel en columnas",
+            LucideIcon::Columns2,
+            "Ctrl+Shift+D",
+            MenuAction::SplitVertical,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Dividir panel en filas",
+            LucideIcon::Rows2,
+            "Alt+Shift+D",
+            MenuAction::SplitHorizontal,
+            true,
+        ));
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Añadir máquina...",
+            LucideIcon::Server,
+            "",
+            MenuAction::OpenMachineModal,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Ajustes",
+            LucideIcon::Settings,
+            "Ctrl+,",
+            MenuAction::OpenSettings,
+            true,
+        ));
         items
     }
 
@@ -870,14 +947,13 @@ impl TearminalApp {
 
     /// Ctrl+S / «Guardar»: escribe el archivo del visor activo y refresca el estado git del explorador
     pub(super) fn save_active_viewer(&mut self) {
-        // Archivo remoto: por la propia sesión SSH si es posible (la confirmación llega después)
+        // Archivo remoto: guardado asíncrono y seguro fuera de banda mediante SshConnection
         let remote = self.tabs[self.active_tab_index]
             .file_viewer
             .as_ref()
             .and_then(|v| Some((v.remote_destination.clone()?, v.path.clone(), v.is_dirty)));
         if let Some((dest, path, dirty)) = remote {
-            if dirty && !self.remote_save_active_viewer() {
-                // Sin integración o archivo grande: segunda conexión SSH en un hilo
+            if dirty {
                 self.ssh_save_viewer(&dest, &path);
             }
             return;
@@ -1025,6 +1101,14 @@ impl TearminalApp {
             MenuAction::CloseTab(i) => self.close_tab(i),
             MenuAction::CloseOtherTabs(keep) => self.close_other_tabs(keep),
             MenuAction::NewTab => self.create_new_tab(),
+            MenuAction::NewTabWithShell(shell) => self.create_new_tab_with_shell(&shell),
+            MenuAction::SplitHorizontalWithShell(shell) => {
+                self.split_active_pane_with_shell(SplitDirection::Horizontal, &shell);
+            }
+            MenuAction::SplitVerticalWithShell(shell) => {
+                self.split_active_pane_with_shell(SplitDirection::Vertical, &shell);
+            }
+            MenuAction::OpenMachineModal => self.open_machine_modal(),
             MenuAction::NewWindow => self.new_window_request = true,
             MenuAction::OpenSettings => self.open_or_switch_settings_tab(),
             MenuAction::ToggleExplorer => self.toggle_file_explorer(),
@@ -1080,14 +1164,7 @@ impl TearminalApp {
             }
             MenuAction::ExplorerDelete => self.delete_explorer_selection(),
             MenuAction::ExplorerCollapseAll => self.file_explorer.collapse_all(),
-            MenuAction::ExplorerExpandAll => {
-                if self.file_explorer.inband_remote {
-                    self.file_explorer.remote_expand_all = true;
-                    self.remote_expand_next();
-                } else {
-                    self.file_explorer.expand_all();
-                }
-            }
+            MenuAction::ExplorerExpandAll => self.file_explorer.expand_all(),
             MenuAction::ExplorerRefresh => {
                 self.file_explorer.refresh();
                 self.pump_explorer_ssh();

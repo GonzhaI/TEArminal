@@ -1210,7 +1210,6 @@ fn test_untrusted_escape_sequences_cannot_set_unsafe_ssh_session() {
 
 #[test]
 fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
-    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
     let theme = crate::theme::Theme::default();
     let mut term = TerminalState::new(80, 24, 100, theme);
     term.pane_token = "t0k3n".into();
@@ -1247,119 +1246,8 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
         "'-' = sin rama"
     );
 
-    // Listado: se descartan nombres peligrosos (rutas, control, . y ..)
-    let raw = "src/\nREADME.md\n../\n./\na/b\nmalo\u{1b}[31m\n.env\n";
-    let osc = format!("\x1b]1337;TearminalLs={}\x07", hex(raw));
-    term.process_bytes(osc.as_bytes());
-    assert_eq!(
-        term.remote_listing.as_deref(),
-        Some(
-            &[
-                "src/".to_string(),
-                "README.md".to_string(),
-                ".env".to_string()
-            ][..]
-        )
-    );
-
-    // Un directorio grande conserva los archivos ocultos que quedan al final (p. ej. `.env`)
-    let many: String = (0..1000)
-        .map(|i| {
-            format!(
-                "f{i}
-"
-            )
-        })
-        .chain([".env
-"
-        .into()])
-        .collect();
-    let osc = format!("]1337;TearminalLs={}", hex(&many));
-    term.process_bytes(osc.as_bytes());
-    let listed = term.remote_listing.as_deref().unwrap();
-    assert_eq!(listed.len(), 1001);
-    assert_eq!(listed.last().map(String::as_str), Some(".env"));
-
-    // Un listado desmesurado se ignora y al terminar la sesión todo se reinicia
-    let huge = format!("\x1b]1337;TearminalLs={}\x07", "ab".repeat(300 * 1024));
-    term.remote_listing = None;
-    term.process_bytes(huge.as_bytes());
-    // El búfer OSC acota la secuencia: lo que queda no es un nombre válido
-    assert!(term
-        .remote_listing
-        .as_deref()
-        .is_none_or(<[String]>::is_empty));
     term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=t0k3n\x07");
-    assert!(!term.remote_integration && term.remote_listing.is_none());
-
-    // Sin sesión SSH nadie puede inyectar listado ni rama
-    term.process_bytes(osc.as_bytes());
-    assert_eq!(term.remote_listing, None);
-}
-
-#[test]
-fn test_remote_file_responses_are_reassembled_and_bounded() {
-    let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
-    let theme = crate::theme::Theme::default();
-    let mut term = TerminalState::new(80, 24, 100, theme);
-
-    // Sin integración no se puede pedir nada (los bytes irían a otro programa)
-    assert!(term.remote_request_bytes("get", 1, "abc").is_none());
-    term.pane_token = "t0k3n".into();
-    term.process_bytes(b"\x1b]1337;TearminalSSH=start;dest=user@host;token=t0k3n\x07");
-    term.process_bytes(b"\x1b]1337;TearminalGit=\x07");
-    assert!(term.remote_at_prompt);
-    let req = term
-        .remote_request_bytes("get", 7, "%2Fetc%2Fhosts")
-        .expect("petición");
-    assert_eq!(req, b"\x05#AXR#7 get %2Fetc%2Fhosts\x1b[1337~".to_vec());
-    assert!(
-        term.remote_request_bytes("rm", 7, "x").is_none(),
-        "solo operaciones conocidas"
-    );
-    assert!(
-        term.remote_request_bytes("get", 7, "a;b").is_none(),
-        "carga no segura"
-    );
-    term.note_enter_sent();
-    assert!(
-        term.remote_request_bytes("get", 7, "abc").is_none(),
-        "tras Enter ya no hay prompt libre"
-    );
-
-    // Respuesta en dos trozos, llegando desordenados
-    let data = hex("hola mundo");
-    let (a, b) = data.split_at(8);
-    term.process_bytes(format!("\x1b]1337;TearminalFile=7;ok;1;2;{b}\x07").as_bytes());
-    assert!(term.remote_file_results.is_empty());
-    term.process_bytes(format!("\x1b]1337;TearminalFile=7;ok;0;2;{a}\x07").as_bytes());
-    assert_eq!(
-        term.remote_file_results,
-        vec![RemoteFileResult {
-            id: 7,
-            ok: true,
-            data: b"hola mundo".to_vec()
-        }]
-    );
-
-    // Error del servidor y datos corruptos
-    term.remote_file_results.clear();
-    term.process_bytes(b"\x1b]1337;TearminalFile=8;err;0;1;\x07");
-    term.process_bytes(b"\x1b]1337;TearminalFile=9;ok;0;1;zz\x07");
-    assert_eq!(term.remote_file_results.len(), 2);
-    assert!(term
-        .remote_file_results
-        .iter()
-        .all(|r| !r.ok && r.data.is_empty()));
-
-    // Límites: demasiados trozos, índice fuera de rango, sin sesión
-    term.remote_file_results.clear();
-    term.process_bytes(b"\x1b]1337;TearminalFile=10;ok;0;9999;ab\x07");
-    term.process_bytes(b"\x1b]1337;TearminalFile=10;ok;5;2;ab\x07");
-    assert!(term.remote_file_results.is_empty());
-    term.process_bytes(b"\x1b]1337;TearminalSSH=end;token=t0k3n\x07");
-    term.process_bytes(b"\x1b]1337;TearminalFile=11;ok;0;1;6162\x07");
-    assert!(term.remote_file_results.is_empty());
+    assert!(!term.remote_integration && term.ssh_session.is_none());
 }
 
 /// agy y Claude Code envían `CSI > 4 ; 2 m` (modifyOtherKeys) al arrancar: no es SGR y no debe

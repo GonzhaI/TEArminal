@@ -658,7 +658,6 @@ impl<'a> Perform for Performer<'a> {
                             is_active: true,
                         });
                         self.state.remote_integration = false;
-                        self.state.remote_listing = None;
                     }
                 } else if p1.starts_with(b"TearminalSSH=end") {
                     let mut token = String::new();
@@ -676,7 +675,6 @@ impl<'a> Perform for Performer<'a> {
                         }
                         self.state.ssh_session = None;
                         self.state.remote_integration = false;
-                        self.state.remote_listing = None;
                         self.state.current_dir = None;
                     }
                 } else if p1.starts_with(b"TearminalAgent=start") {
@@ -730,16 +728,6 @@ impl<'a> Perform for Performer<'a> {
                         .then(|| branch.to_string());
                         self.state.remote_integration = true;
                         self.state.remote_at_prompt = true;
-                    }
-                } else if let Some(id) = p1.strip_prefix(b"TearminalFile=") {
-                    if self.state.ssh_session.is_some() {
-                        self.state.remote_integration = true;
-                        self.handle_remote_file(id, &params[2..]);
-                    }
-                } else if let Some(b64) = p1.strip_prefix(b"TearminalLs=") {
-                    if self.state.ssh_session.is_some() {
-                        self.state.remote_listing = parse_remote_listing(b64);
-                        self.state.remote_integration = true;
                     }
                 } else {
                     self.handle_iterm2_image(&params[1..]);
@@ -1201,26 +1189,6 @@ impl<'a> Performer<'a> {
     }
 }
 
-/// Decodifica texto hexadecimal (`od -An -tx1` sin espacios) que llega del servidor
-pub(crate) fn hex_decode(hex: &[u8]) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-    hex.chunks(2)
-        .map(|p| u8::from_str_radix(std::str::from_utf8(p).ok()?, 16).ok())
-        .collect()
-}
-
-/// Decodifica el listado de la carpeta remota (hex de `ls -1Ap`). Es entrada no confiable: se limita
-/// el tamaño y se descartan nombres vacíos, con caracteres de control o con separadores de ruta.
-fn parse_remote_listing(hex: &[u8]) -> Option<Vec<String>> {
-    const MAX_HEX: usize = super::OSC_BUF_SIZE;
-    if hex.len() > MAX_HEX {
-        return None;
-    }
-    Some(clean_listing(&String::from_utf8_lossy(&hex_decode(hex)?)))
-}
-
 /// Nombres válidos de un `ls -1Ap` remoto (las carpetas acaban en `/`)
 pub(crate) fn clean_listing(text: &str) -> Vec<String> {
     /// Como `ssh::LISTING_ENTRIES`: un tope más bajo perdería los ocultos (`.env`) que `ls` ordena al final
@@ -1238,61 +1206,4 @@ pub(crate) fn clean_listing(text: &str) -> Vec<String> {
         .take(MAX_ENTRIES)
         .map(String::from)
         .collect()
-}
-
-impl<'a> Performer<'a> {
-    /// Un trozo de respuesta `TearminalFile=<id>;<ok|err>;<n>;<total>;<base64>`. Entrada no confiable: se
-    /// limita el número de trozos, su tamaño y las respuestas en curso.
-    fn handle_remote_file(&mut self, id: &[u8], rest: &[&[u8]]) {
-        const MAX_PARTS: usize = 64;
-        const MAX_CHUNK: usize = 40_000;
-        let num = |b: &[u8]| std::str::from_utf8(b).ok()?.parse::<usize>().ok();
-        let [status, n, total, chunk] = rest else {
-            return;
-        };
-        let (Some(id), Some(n), Some(total)) = (
-            num(id).and_then(|v| u32::try_from(v).ok()),
-            num(n),
-            num(total),
-        ) else {
-            return;
-        };
-        if !(1..=MAX_PARTS).contains(&total) || n >= total || chunk.len() > MAX_CHUNK {
-            return;
-        }
-        let state = &mut *self.state;
-        let idx = match state.remote_file_parts.iter().position(|a| a.id == id) {
-            Some(i) if state.remote_file_parts[i].parts.len() == total => i,
-            _ => {
-                state.remote_file_parts.retain(|a| a.id != id);
-                if state.remote_file_parts.len() >= 8 {
-                    state.remote_file_parts.remove(0);
-                }
-                state.remote_file_parts.push(RemoteFileAsm {
-                    id,
-                    ok: *status == b"ok",
-                    parts: vec![None; total],
-                });
-                state.remote_file_parts.len() - 1
-            }
-        };
-        state.remote_file_parts[idx].parts[n] = Some(String::from_utf8_lossy(chunk).into_owned());
-        if state.remote_file_parts[idx]
-            .parts
-            .iter()
-            .all(Option::is_some)
-        {
-            let asm = state.remote_file_parts.remove(idx);
-            let joined: String = asm.parts.into_iter().flatten().collect();
-            let (ok, data) = match hex_decode(joined.as_bytes()) {
-                Some(d) => (asm.ok, d),
-                None => (false, Vec::new()),
-            };
-            if state.remote_file_results.len() < 32 {
-                state
-                    .remote_file_results
-                    .push(RemoteFileResult { id, ok, data });
-            }
-        }
-    }
 }

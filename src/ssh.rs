@@ -286,7 +286,7 @@ impl SshConnection<Authenticated> {
 
     /// Lee un archivo remoto de forma acotada.
     pub(crate) fn read_file(&self, path: &str) -> Result<Vec<u8>, String> {
-        let out = self.run_command(&read_file_cmd(path), None, MAX_FILE_BYTES)?;
+        let out = self.run_command(&read_file_cmd(path), None, MAX_FILE_BYTES + 1)?;
         if !out.ok {
             return Err(if out.stderr.is_empty() {
                 "Error al leer archivo remoto".to_string()
@@ -300,15 +300,27 @@ impl SshConnection<Authenticated> {
     /// Guarda un archivo remoto de forma atómica y segura.
     pub(crate) fn write_file(&self, path: &str, content: &[u8]) -> Result<(), String> {
         let out = self.run_command(&write_file_cmd(path, content.len()), Some(content), 4096)?;
-        if out.ok {
+        if out.ok && !out.truncated {
             Ok(())
         } else {
-            Err(if out.stderr.is_empty() {
+            Err(if out.truncated {
+                "la salida del comando remoto excedió el límite".to_string()
+            } else if out.stderr.is_empty() {
                 "Error al escribir archivo remoto".to_string()
             } else {
                 out.stderr
             })
         }
+    }
+
+    /// Lista el directorio raíz remoto junto con pwd y rama git.
+    pub(crate) fn list_root(&self, dir: &str) -> Result<Output, String> {
+        self.run_command(&root_listing_cmd(dir), None, MAX_LISTING_BYTES)
+    }
+
+    /// Lista un subdirectorio remoto para expandirlo en el explorador.
+    pub(crate) fn list_dir(&self, dir: &str) -> Result<Output, String> {
+        self.run_command(&dir_listing_cmd(dir), None, MAX_LISTING_BYTES)
     }
 
     /// Cierra la sesión activa y devuelve la conexión al estado `Unauthenticated`.
@@ -401,6 +413,7 @@ pub(crate) fn run_safe(
 }
 
 /// Ejecuta `remote_cmd` en `dest`. Parsea y valida el destino en la frontera antes de ejecutar.
+#[allow(dead_code)]
 pub(crate) fn run(
     dest: &str,
     remote_cmd: &str,

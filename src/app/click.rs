@@ -178,7 +178,6 @@ impl TearminalApp {
                         }
 
                         let tab = self.tabs.remove(drag_idx);
-                        self.prune_pending_remote();
 
                         if self.active_tab_index >= self.tabs.len() {
                             self.active_tab_index = self.tabs.len().saturating_sub(1);
@@ -360,6 +359,16 @@ impl TearminalApp {
 
                 // Clic en [+] nueva pestaña (en el Space activo)
                 if TopTabBarRects::inside(mx, my, top_rects.plus_btn) {
+                    if self.modifiers.shift_key() || self.modifiers.alt_key() {
+                        crate::logger::log("-> Shift/Alt+Clic en [+] top bar: selector de shell");
+                        let items = self.shell_profiles_menu();
+                        self.show_menu(
+                            items,
+                            (top_rects.plus_btn.0, top_rects.plus_btn.1 + top_rects.plus_btn.3 + 4),
+                            (win_w, win_h),
+                        );
+                        return;
+                    }
                     crate::logger::log("-> Clic en [+] top bar: nueva terminal");
                     self.create_new_tab();
                     return;
@@ -584,6 +593,14 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.font_family_prev_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.step_font_family(-1);
+                            return;
+                        } else if SettingsPageRects::inside(mx, my, rects.font_family_next_btn) {
+                            self.settings_page_state.editing_setting = None;
+                            self.step_font_family(1);
                             return;
                         } else if SettingsPageRects::inside(mx, my, rects.font_minus_btn) {
                             self.settings_page_state.editing_setting = None;
@@ -968,11 +985,7 @@ impl TearminalApp {
                                         if let Some(real_idx) =
                                             self.file_explorer.actual_index_for_visible(idx)
                                         {
-                                            if self.file_explorer.inband_remote {
-                                                self.remote_toggle_dir(real_idx);
-                                            } else {
-                                                self.file_explorer.toggle_expand(real_idx);
-                                            }
+                                            self.file_explorer.toggle_expand(real_idx);
                                             if self.file_explorer.is_filtering() {
                                                 self.file_explorer.update_filter();
                                             }
@@ -1069,7 +1082,18 @@ impl TearminalApp {
                                 viewer_h,
                                 is_markdown,
                                 viewer.git_base.is_some(),
+                                viewer.is_diff(),
                             );
+
+                            if let Some(rect) = header_rects.diff_mode_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
+                                    viewer.toggle_diff_mode();
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return;
+                                }
+                            }
 
                             if let Some(rect) = header_rects.diff_btn {
                                 if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {

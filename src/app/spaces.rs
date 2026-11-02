@@ -158,6 +158,13 @@ impl TearminalApp {
             SpacesHover::Search => self.open_palette(),
             SpacesHover::MachinePlus => self.open_machine_modal(),
             SpacesHover::Plus => {
+                if self.modifiers.shift_key() || self.modifiers.alt_key() {
+                    let r = self.spaces_rects(win_h);
+                    let (win_w, win_h_curr) = self.window_size();
+                    let items = self.shell_profiles_menu();
+                    self.show_menu(items, (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4), (win_w, win_h_curr));
+                    return true;
+                }
                 let cwd = self.active_cwd();
                 self.create_space(cwd);
             }
@@ -227,6 +234,12 @@ impl TearminalApp {
 
     /// Space nuevo con una terminal en `cwd`.
     pub(crate) fn create_space(&mut self, cwd: Option<PathBuf>) {
+        let shell = self.config.terminal.default_shell.clone();
+        self.create_space_with_shell(cwd, &shell);
+    }
+
+    /// Space nuevo con un shell específico en `cwd`.
+    pub(crate) fn create_space_with_shell(&mut self, cwd: Option<PathBuf>, shell: &str) {
         let id = SpaceId(self.spaces.iter().map(|s| s.id.0 + 1).max().unwrap_or(0));
         let name = space_name(cwd.as_deref(), self.spaces.len() + 1);
         self.spaces.push(Space {
@@ -235,7 +248,7 @@ impl TearminalApp {
             remote: false,
         });
         let before = self.tabs.len();
-        self.create_tab_in_space(cwd, id);
+        self.create_tab_in_space_with_shell(cwd, id, shell);
         if self.tabs.len() == before {
             // El shell no arrancó: no deja un Space vacío.
             self.prune_spaces();

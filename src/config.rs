@@ -274,7 +274,7 @@ impl Default for TerminalConfig {
     }
 }
 
-pub(crate) fn detect_preferred_shell() -> String {
+pub(crate) fn find_pwsh_path() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // 1. Comprobar rutas estándar de instalación de PowerShell 7 en Program Files
@@ -314,7 +314,7 @@ pub(crate) fn detect_preferred_shell() -> String {
 
         for path in candidates {
             if path.is_file() {
-                return path.to_string_lossy().to_string();
+                return Some(path.to_string_lossy().to_string());
             }
         }
 
@@ -323,16 +323,19 @@ pub(crate) fn detect_preferred_shell() -> String {
         if let Some(path) = search_path_native("pwsh.exe") {
             let path_str = path.to_string_lossy();
             if !path_str.to_ascii_lowercase().contains("windowsapps") && path.is_file() {
-                return path_str.to_string();
+                return Some(path_str.to_string());
             }
         }
     }
+    None
+}
 
-    "powershell.exe".to_string()
+pub(crate) fn detect_preferred_shell() -> String {
+    find_pwsh_path().unwrap_or_else(|| "powershell.exe".to_string())
 }
 
 #[cfg(target_os = "windows")]
-fn search_path_native(file_name: &str) -> Option<PathBuf> {
+pub(crate) fn search_path_native(file_name: &str) -> Option<PathBuf> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::SearchPathW;

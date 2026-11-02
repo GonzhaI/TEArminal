@@ -112,11 +112,6 @@ fn random_token() -> String {
         .unwrap_or_default()
 }
 
-/// Identificador inicial aleatorio de las peticiones en banda (si el RNG falla, 1)
-pub(crate) fn random_id() -> u32 {
-    random_bytes().map_or(1, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-}
-
 /// Pila reducida: estos hilos solo copian bytes (el defecto de 2 MB se reserva por hilo)
 const THREAD_STACK: usize = 256 * 1024;
 
@@ -231,23 +226,25 @@ fn build_shell_command(
     cmd.env("COLORTERM", "truecolor");
     cmd.env("TEARMINAL_PANE_TOKEN", token);
     cmd.env("PATH", path_env);
-    if shell_integration {
-        let lower = shell.to_lowercase();
-        if lower.contains("powershell") || lower.contains("pwsh") {
-            if let Some(script_path) = ensure_init_script_on_disk() {
-                cmd.arg("-ExecutionPolicy");
-                cmd.arg("Bypass");
-                cmd.arg("-NoLogo");
-                cmd.arg("-NoExit");
-                cmd.arg("-File");
-                cmd.arg(script_path);
-            } else {
-                cmd.arg("-NoLogo");
-                cmd.arg("-NoExit");
-                cmd.arg("-Command");
-                cmd.arg(INIT_SCRIPT);
-            }
+    let lower = shell.to_lowercase();
+    if shell_integration && (lower.contains("powershell") || lower.contains("pwsh")) {
+        if let Some(script_path) = ensure_init_script_on_disk() {
+            cmd.arg("-ExecutionPolicy");
+            cmd.arg("Bypass");
+            cmd.arg("-NoLogo");
+            cmd.arg("-NoExit");
+            cmd.arg("-File");
+            cmd.arg(script_path);
+        } else {
+            cmd.arg("-NoLogo");
+            cmd.arg("-NoExit");
+            cmd.arg("-Command");
+            cmd.arg(INIT_SCRIPT);
         }
+    }
+    if lower.ends_with("bash.exe") || lower == "bash" {
+        cmd.arg("--login");
+        cmd.arg("-i");
     }
     cmd
 }

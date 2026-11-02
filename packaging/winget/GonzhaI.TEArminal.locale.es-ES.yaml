@@ -7,7 +7,7 @@ PublisherUrl: https://github.com/GonzhaI
 PackageName: TEArminal
 PackageUrl: https://github.com/GonzhaI/TEArminal
 License: Proprietary
-ShortDescription: Terminal nativa para Windows, pequeña y rápida, hecha para PowerShell y agentes de IA en la CLI.
+ShortDescription: Workspace y terminal nativa para Windows, ultraligera y rápida, hecha para PowerShell, agentes de IA y entornos SSH.
 Tags:
   - terminal
   - powershell
