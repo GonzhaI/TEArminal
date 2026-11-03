@@ -3383,3 +3383,66 @@ fn test_explorer_drag_to_terminal_and_click_behavior() {
     // El drag terminó y se consumió
     assert!(app.explorer_drag.is_none());
 }
+
+#[test]
+fn test_explorer_left_click_directory_expands_and_stays_expanded() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let (win_w, win_h) = app.window_size();
+    app.sidebar_visible = true;
+    app.file_explorer.visible = true;
+    app.sync_explorer_dock(win_w, win_h);
+
+    app.file_explorer.items = vec![crate::explorer::ExplorerItem {
+        name: "src".into(),
+        path: std::path::PathBuf::from("src"),
+        is_dir: true,
+        is_expanded: false,
+        depth: 0,
+        ..Default::default()
+    }];
+
+    let top_offset = app.top_offset();
+    let status_bar_h = app.status_bar_height();
+    let (panel_x, panel_y, _, _) =
+        app.file_explorer
+            .panel_geometry(win_w, win_h, top_offset, status_bar_h);
+
+    let item_y = app
+        .file_explorer
+        .item_y(0, panel_y)
+        .expect("item_y for index 0")
+        + 5;
+    app.mouse_pos = winit::dpi::PhysicalPosition::new((panel_x + 30) as f64, item_y as f64);
+
+    // Clic izquierdo: MouseDown
+    app.on_mouse_input(
+        winit::event::ElementState::Pressed,
+        winit::event::MouseButton::Left,
+    );
+    assert_eq!(app.file_explorer.selected_index, Some(0));
+    assert!(app.explorer_drag.is_some());
+    // Aún no debe haberse expandido en MouseDown
+    assert!(!app.file_explorer.items[0].is_expanded);
+
+    // Clic izquierdo: MouseUp
+    app.on_mouse_input(
+        winit::event::ElementState::Released,
+        winit::event::MouseButton::Left,
+    );
+    // Tras MouseUp, el directorio se expande y se mantiene expandido (no se cierra automáticamente)
+    assert!(app.file_explorer.items[0].is_expanded);
+    assert!(app.file_explorer.items.len() > 1);
+    assert!(app.explorer_drag.is_none());
+
+    // Segundo clic completo: colapsar y mantenerse colapsado
+    app.on_mouse_input(
+        winit::event::ElementState::Pressed,
+        winit::event::MouseButton::Left,
+    );
+    app.on_mouse_input(
+        winit::event::ElementState::Released,
+        winit::event::MouseButton::Left,
+    );
+    assert!(!app.file_explorer.items[0].is_expanded);
+    assert_eq!(app.file_explorer.items.len(), 1);
+}

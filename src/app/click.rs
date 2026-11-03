@@ -238,9 +238,13 @@ impl TearminalApp {
                         + (my as isize - drag.start_pos.1 as isize).pow(2))
                         as usize;
                     if dist_sq < 400 && drag.is_dir {
-                        if let Some(real_idx) =
-                            self.file_explorer.actual_index_for_visible(drag.idx)
-                        {
+                        let real_idx = self
+                            .file_explorer
+                            .items
+                            .iter()
+                            .position(|it| it.path == drag.path)
+                            .or_else(|| self.file_explorer.actual_index_for_visible(drag.idx));
+                        if let Some(real_idx) = real_idx {
                             self.file_explorer.toggle_expand(real_idx);
                             if self.file_explorer.is_filtering() {
                                 self.file_explorer.update_filter();
@@ -1176,14 +1180,6 @@ impl TearminalApp {
                                             item.name
                                         ));
                                         self.last_explorer_click_idx = None;
-                                        if let Some(real_idx) =
-                                            self.file_explorer.actual_index_for_visible(idx)
-                                        {
-                                            self.file_explorer.toggle_expand(real_idx);
-                                            if self.file_explorer.is_filtering() {
-                                                self.file_explorer.update_filter();
-                                            }
-                                        }
                                     } else {
                                         // Con solo un clic se abre y visualiza el archivo inmediatamente
                                         crate::logger::log(&format!(

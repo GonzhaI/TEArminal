@@ -18,6 +18,7 @@ AppPublisherURL=https://github.com/GonzhaI/TEArminal
 AppSupportURL=https://github.com/GonzhaI/TEArminal/issues
 DefaultDirName={autopf}\TEArminal
 DisableProgramGroupPage=yes
+ChangesAssociations=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
