@@ -7,11 +7,63 @@ impl TearminalApp {
     pub(super) fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
         let mx = self.mouse_pos.x as usize;
         let my = self.mouse_pos.y as usize;
-
         let (win_w, win_h) = self.window_size();
-
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
+        if self.click_overlays(state, button, mx, my, win_w, win_h, is_settings_active) {
+            return;
+        }
+
+        if self.click_drags_and_releases(state, button, mx, my, win_w, win_h) {
+            return;
+        }
+
+        if self.click_window_nav_and_borders(
+            state,
+            button,
+            mx,
+            my,
+            win_w,
+            win_h,
+            is_settings_active,
+        ) {
+            return;
+        }
+
+        if self.click_spaces_panel_area(state, button, mx, my, win_h) {
+            return;
+        }
+
+        if self.click_top_bar_area(state, button, mx, my, win_w, win_h) {
+            return;
+        }
+
+        if self.click_settings_area(state, button, mx, my, is_settings_active) {
+            return;
+        }
+
+        if self.click_explorer_area(state, button, mx, my, win_w, win_h, is_settings_active) {
+            return;
+        }
+
+        if self.click_file_viewer_area(state, button, mx, my, win_w, win_h) {
+            return;
+        }
+
+        self.click_terminal_panes_area(state, button, mx, my, win_w, win_h);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn click_overlays(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+        is_settings_active: bool,
+    ) -> bool {
         // Modal «Añadir máquina»: consume todos los clics
         if self.machine_modal.is_some() {
             if state == ElementState::Pressed && button == MouseButton::Left {
@@ -19,13 +71,13 @@ impl TearminalApp {
             } else if state == ElementState::Released {
                 self.handle_all_text_inputs_mouse_up();
             }
-            return;
+            return true;
         }
 
         // Menú contextual abierto: un clic sobre una opción la ejecuta; cualquier otro clic lo cierra
         if let Some(menu) = &self.context_menu {
             if state != ElementState::Pressed {
-                return;
+                return true;
             }
             let action = menu
                 .item_at(mx, my)
@@ -40,10 +92,10 @@ impl TearminalApp {
                 if let Some(action) = action {
                     self.run_menu_action(action);
                 }
-                return;
+                return true;
             }
             if button != MouseButton::Right {
-                return;
+                return true;
             }
         }
 
@@ -62,8 +114,10 @@ impl TearminalApp {
                         let right = rects.card.0 + rects.card.2;
                         if crate::renderer::ScrollbarRects::hit(track, right, mx, my) {
                             if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                                self.palette_scrollbar_dragging = true;
-                                self.palette_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                self.scrollbar_drag = Some(ScrollbarDragState {
+                                    target: ScrollbarTarget::Palette,
+                                    grab_offset: (my - thumb.1) as f32,
+                                });
                             } else {
                                 self.palette_scroll_to_thumb(my.saturating_sub(thumb.3 / 2));
                             }
@@ -71,7 +125,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                     }
 
@@ -82,7 +136,7 @@ impl TearminalApp {
                         if let Some(p) = &mut self.palette {
                             p.input = input;
                         }
-                        return;
+                        return true;
                     }
                     if PaletteRects::inside(mx, my, rects.card) {
                         if let Some(idx) = rects.item_at_with_offset(mx, my, palette.scroll_offset)
@@ -90,28 +144,27 @@ impl TearminalApp {
                             if let Some(item) = palette.filtered.get(idx) {
                                 let action = item.action.clone();
                                 self.execute_palette_action(action);
-                                return;
+                                return true;
                             }
                         }
-                        return;
+                        return true;
                     }
                     self.palette = None;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 } else if state == ElementState::Released {
                     palette.input.mouse_up();
-                    if self.palette_scrollbar_dragging {
-                        self.palette_scrollbar_dragging = false;
+                    if self.scrollbar_drag.take().is_some() {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
                     }
-                    return;
+                    return true;
                 }
             }
-            return;
+            return true;
         }
         // Selector de pantalla encendida abierto: un clic sobre una opción la aplica; cualquier otro clic lo cierra
         // (el clic sobre su propio botón lo alterna, así que ese no lo reabre)
@@ -129,15 +182,27 @@ impl TearminalApp {
                     ][i];
                     self.set_keep_awake_mode(mode);
                 }
-                return;
+                return true;
             }
         }
 
+        false
+    }
+
+    fn click_drags_and_releases(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
         if button == MouseButton::Right
             && state == ElementState::Pressed
             && self.open_context_menu(mx, my)
         {
-            return;
+            return true;
         }
 
         // Soltar un divisor o el borde del explorador: tamaño final de los PTY y disposición a la sesión
@@ -152,10 +217,42 @@ impl TearminalApp {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
-            return;
+            return true;
         }
         if button == MouseButton::Left && state == ElementState::Released {
             self.handle_all_text_inputs_mouse_up();
+            if let Some(drag) = self.explorer_drag.take() {
+                let panel_x = win_w.saturating_sub(self.panel_width());
+                if drag.is_dragging {
+                    self.set_cursor_icon(winit::window::CursorIcon::Default);
+                }
+                if drag.is_dragging && mx < panel_x {
+                    // Se soltó sobre el área de contenido / terminal
+                    self.on_file_dropped(drag.path);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
+                } else if !drag.is_dragging || mx >= panel_x {
+                    let dist_sq = ((mx as isize - drag.start_pos.0 as isize).pow(2)
+                        + (my as isize - drag.start_pos.1 as isize).pow(2))
+                        as usize;
+                    if dist_sq < 400 && drag.is_dir {
+                        if let Some(real_idx) =
+                            self.file_explorer.actual_index_for_visible(drag.idx)
+                        {
+                            self.file_explorer.toggle_expand(real_idx);
+                            if self.file_explorer.is_filtering() {
+                                self.file_explorer.update_filter();
+                            }
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
             if let Some(drag_idx) = self.tab_drag.take() {
                 let torn_off = my >= TopTabBarRects::HEIGHT + 15 || my >= win_h || mx >= win_w;
                 if torn_off && drag_idx < self.tabs.len() && !self.tabs[drag_idx].is_settings {
@@ -228,28 +325,29 @@ impl TearminalApp {
                     }
                 }
             }
-            let was_dragging = self.scrollbar_dragging
-                || self.explorer_scrollbar_dragging
-                || self.viewer_scrollbar_dragging
-                || self.viewer_hscrollbar_dragging
-                || self.settings_scrollbar_dragging
-                || self.palette_scrollbar_dragging;
-            if was_dragging {
-                self.scrollbar_dragging = false;
-                self.scrollbar_drag_pane_id = None;
-                self.explorer_scrollbar_dragging = false;
-                self.viewer_scrollbar_dragging = false;
-                self.viewer_hscrollbar_dragging = false;
-                self.settings_scrollbar_dragging = false;
-                self.palette_scrollbar_dragging = false;
+            if self.scrollbar_drag.take().is_some() {
                 self.last_scroll_time = Instant::now();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
-                return;
+                return true;
             }
         }
 
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn click_window_nav_and_borders(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+        is_settings_active: bool,
+    ) -> bool {
         // Botones laterales del ratón (Atrás / Adelante en explorador o navegación de pestañas)
         if state == ElementState::Pressed {
             match button {
@@ -259,7 +357,7 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if self.tabs.len() > 1 {
                         if self.active_tab_index == 0 {
@@ -267,7 +365,7 @@ impl TearminalApp {
                         } else {
                             self.switch_to_tab(self.active_tab_index - 1);
                         }
-                        return;
+                        return true;
                     }
                 }
                 MouseButton::Forward => {
@@ -276,11 +374,11 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if self.tabs.len() > 1 {
                         self.switch_to_tab((self.active_tab_index + 1) % self.tabs.len());
-                        return;
+                        return true;
                     }
                 }
                 _ => {}
@@ -296,7 +394,7 @@ impl TearminalApp {
             if let Some(dir) = self.compute_border_resize_direction(mx, my, win_w, win_h) {
                 if let Some(w) = &self.window {
                     let _ = w.drag_resize_window(dir);
-                    return;
+                    return true;
                 }
             }
         }
@@ -309,10 +407,21 @@ impl TearminalApp {
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     self.close_settings();
                 }
-                return;
+                return true;
             }
         }
 
+        false
+    }
+
+    fn click_spaces_panel_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_h: usize,
+    ) -> bool {
         // Panel de Spaces: ocupa todo el alto a la izquierda de la barra superior
         if self.spaces_rects(win_h).contains(mx, my, win_h) {
             if state == ElementState::Pressed {
@@ -324,9 +433,21 @@ impl TearminalApp {
                     _ => {}
                 }
             }
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn click_top_bar_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
         // Barra superior: pestañas del Space activo, «+», Files · Changes y controles de ventana
         if my < TopTabBarRects::HEIGHT {
             if state == ElementState::Pressed
@@ -340,7 +461,7 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.set_minimized(true);
                     }
-                    return;
+                    return true;
                 }
 
                 // Clic en [□] Maximizar / Restaurar
@@ -348,13 +469,13 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.set_maximized(!w.is_maximized());
                     }
-                    return;
+                    return true;
                 }
 
                 // Clic en [✕] Cerrar ventana
                 if TopTabBarRects::inside(mx, my, top_rects.win_close_btn) {
                     self.request_close();
-                    return;
+                    return true;
                 }
 
                 // Clic en [+] nueva pestaña (en el Space activo)
@@ -370,23 +491,23 @@ impl TearminalApp {
                             ),
                             (win_w, win_h),
                         );
-                        return;
+                        return true;
                     }
                     crate::logger::log("-> Clic en [+] top bar: nueva terminal");
                     self.create_new_tab();
-                    return;
+                    return true;
                 }
 
                 // Píldoras Files / Changes
                 if TopTabBarRects::inside(mx, my, top_rects.files_btn) {
                     crate::logger::log("-> Clic en Files (top bar)");
                     self.show_explorer_view(false);
-                    return;
+                    return true;
                 }
                 if TopTabBarRects::inside(mx, my, top_rects.changes_btn) {
                     crate::logger::log("-> Clic en Changes (top bar)");
                     self.show_explorer_view(true);
-                    return;
+                    return true;
                 }
 
                 // Clic en pestañas o en botón cerrar 'x'
@@ -398,19 +519,19 @@ impl TearminalApp {
                                 "-> Clic botón central (rueda) en pestaña {idx}"
                             ));
                             self.close_tab(idx);
-                            return;
+                            return true;
                         }
                         if button == MouseButton::Left {
                             let cr = top_rects.close_btn_rect(pos);
                             if mx >= cr.0 && mx < cr.0 + cr.2 && my >= cr.1 && my < cr.1 + cr.3 {
                                 crate::logger::log(&format!("-> Clic en [x] pestaña {idx}"));
                                 self.close_tab(idx);
-                                return;
+                                return true;
                             }
                             crate::logger::log(&format!("-> Clic en pestaña {idx}"));
                             self.click_tab(idx);
                             self.tab_drag = Some(idx);
-                            return;
+                            return true;
                         }
                     }
                 }
@@ -418,24 +539,20 @@ impl TearminalApp {
                 // Arrastrar ventana o doble clic para maximizar
                 self.drag_or_maximize_window();
             }
-            return;
+            return true;
         }
 
-        // Redimensionamiento del panel lateral / explorador de archivos (prioridad sobre el margen del panel y el sidebar)
-        if state == ElementState::Pressed
-            && button == MouseButton::Left
-            && self.on_panel_resize_edge(mx, my, win_w, win_h)
-        {
-            self.explorer_resizing = true;
-            return;
-        }
+        false
+    }
 
-        // Modalidad horizontal: lo que el panel tiene fuera del explorador (su margen) no hace nada;
-        // el explorador alojado dentro atiende su propio ratón
-        if self.panel_local_x(mx, my, win_w).is_some() {
-            return;
-        }
-
+    fn click_settings_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        is_settings_active: bool,
+    ) -> bool {
         // 2. Clics en la pestaña de Ajustes (si está activa)
         if is_settings_active {
             let (modal_x, modal_y, modal_w, modal_h) = self.settings_modal();
@@ -446,7 +563,7 @@ impl TearminalApp {
                 if state == ElementState::Pressed && button == MouseButton::Left {
                     self.close_settings();
                 }
-                return;
+                return true;
             }
             // Coordenadas locales al modal: su esquina es el origen de la página
             let (mx, my) = (mx - modal_x, my - modal_y);
@@ -460,15 +577,17 @@ impl TearminalApp {
                     let right = modal_w;
                     if crate::renderer::ScrollbarRects::hit(track, right, mx, my) {
                         if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                            self.settings_scrollbar_dragging = true;
-                            self.settings_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                            self.scrollbar_drag = Some(ScrollbarDragState {
+                                target: ScrollbarTarget::Settings,
+                                grab_offset: (my - thumb.1) as f32,
+                            });
                         } else {
                             self.settings_scroll_to_thumb(my.saturating_sub(thumb.3 / 2));
                         }
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                 }
 
@@ -483,7 +602,7 @@ impl TearminalApp {
                 if SettingsPageRects::inside(mx, my, rects.reset_defaults_btn) {
                     crate::logger::log("-> Clic en restablecer valores por defecto (Header)");
                     self.reset_to_defaults();
-                    return;
+                    return true;
                 }
 
                 // Buscador rápido de ajustes estilo JetBrains
@@ -494,7 +613,7 @@ impl TearminalApp {
                     let mut input = std::mem::take(&mut self.settings_page_state.search_input);
                     self.handle_text_input_click(&mut input, mx, text_start_x);
                     self.settings_page_state.search_input = input;
-                    return;
+                    return true;
                 } else if self.settings_page_state.editing_setting
                     == Some(crate::renderer::EditingSettingField::GeneralSearch)
                 {
@@ -508,28 +627,28 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 } else if SettingsPageRects::inside(mx, nav_my, rects.nav_terminal) {
                     self.settings_page_state.section = SettingsSection::Terminal;
                     self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 } else if SettingsPageRects::inside(mx, nav_my, rects.nav_shortcuts) {
                     self.settings_page_state.section = SettingsSection::Shortcuts;
                     self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 } else if SettingsPageRects::inside(mx, nav_my, rects.nav_about) {
                     self.settings_page_state.section = SettingsSection::About;
                     self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
 
                 // Contenido de la sección activa
@@ -545,7 +664,7 @@ impl TearminalApp {
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
                                 }
-                                return;
+                                return true;
                             }
                         }
                         let searching = SettingsPageRects::inside(mx, my, rects.theme_search_box);
@@ -557,7 +676,7 @@ impl TearminalApp {
                                 std::mem::take(&mut self.settings_page_state.theme_search_input);
                             self.handle_text_input_click(&mut input, mx, text_start_x);
                             self.settings_page_state.theme_search_input = input;
-                            return;
+                            return true;
                         } else if self.settings_page_state.editing_setting
                             == Some(crate::renderer::EditingSettingField::ThemeSearch)
                         {
@@ -572,21 +691,21 @@ impl TearminalApp {
                             if let Some(&th_name) = matches.get(first + row) {
                                 crate::logger::log(&format!("-> Clic en tema: {}", th_name));
                                 self.pick_theme(th_name);
-                                return;
+                                return true;
                             }
                         }
                         if SettingsPageRects::inside(mx, my, rects.theme_mode_system_btn) {
                             crate::logger::log("-> Clic en modo de tema: Sistema");
                             self.set_theme_mode("system");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.theme_mode_dark_btn) {
                             crate::logger::log("-> Clic en modo de tema: Oscuro");
                             self.set_theme_mode("dark");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.theme_mode_light_btn) {
                             crate::logger::log("-> Clic en modo de tema: Claro");
                             self.set_theme_mode("light");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.font_value_box) {
                             crate::logger::log("-> Clic en caja de valor: tamaño de fuente");
                             self.settings_page_state.editing_setting =
@@ -596,27 +715,27 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.font_family_prev_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.step_font_family(-1);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.font_family_next_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.step_font_family(1);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.font_minus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en fuente -");
                             self.adjust_font_size(-1.0);
                             let _ = self.config.save();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.font_plus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en fuente +");
                             self.adjust_font_size(1.0);
                             let _ = self.config.save();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ui_font_value_box) {
                             crate::logger::log("-> Clic en caja de valor: tamaño de fuente UI");
                             self.settings_page_state.editing_setting =
@@ -626,17 +745,17 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ui_font_minus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en fuente UI -");
                             self.adjust_ui_font_size(-1.0);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ui_font_plus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en fuente UI +");
                             self.adjust_ui_font_size(1.0);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.spacing_value_box) {
                             crate::logger::log("-> Clic en caja de valor: espaciado de línea");
                             self.settings_page_state.editing_setting =
@@ -646,17 +765,17 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.spacing_minus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en espaciado -");
                             self.adjust_line_spacing(-0.1);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.spacing_plus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en espaciado +");
                             self.adjust_line_spacing(0.1);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.opacity_value_box) {
                             crate::logger::log("-> Clic en caja de valor: opacidad");
                             self.settings_page_state.editing_setting =
@@ -666,17 +785,17 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.opacity_minus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en opacidad -");
                             self.adjust_opacity(-0.05);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.opacity_plus_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en opacidad +");
                             self.adjust_opacity(0.05);
-                            return;
+                            return true;
                         } else {
                             self.settings_page_state.editing_setting = None;
                         }
@@ -686,15 +805,15 @@ impl TearminalApp {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en parpadeo del cursor");
                             self.toggle_cursor_blink();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_block_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_cursor_shape("block");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.cursor_shape_beam_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_cursor_shape("beam");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(
                             mx,
                             my,
@@ -702,19 +821,19 @@ impl TearminalApp {
                         ) {
                             self.settings_page_state.editing_setting = None;
                             self.set_cursor_shape("underline");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.shell_pwsh_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_default_shell("pwsh");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.shell_powershell_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_default_shell("powershell");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.shell_cmd_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_default_shell("cmd");
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.scrollback_value_box) {
                             self.settings_page_state.editing_setting =
                                 Some(crate::renderer::EditingSettingField::ScrollbackLines);
@@ -723,34 +842,34 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.scrollback_minus_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.adjust_scrollback_lines(-1000);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.scrollback_plus_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.adjust_scrollback_lines(1000);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.shell_integration_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en integración de shell");
                             self.toggle_shell_integration();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.copy_on_select_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en copiar al seleccionar");
                             self.toggle_copy_on_select();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.status_bar_toggle_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar barra de estado");
                             self.toggle_status_bar();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.show_dimensions_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_show_dimensions();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.file_explorer_toggle_btn)
                         {
                             self.settings_page_state.editing_setting = None;
@@ -758,65 +877,65 @@ impl TearminalApp {
                                 "-> Clic en alternar explorador lateral de archivos (Settings)",
                             );
                             self.toggle_file_explorer();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.restore_session_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar restaurar pestañas al iniciar");
                             self.toggle_restore_session();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.auto_save_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en alternar auto-guardar archivos");
                             self.toggle_auto_save();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.word_wrap_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_word_wrap();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ssh_integration_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_ssh_integration();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.osc52_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_osc52();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ligatures_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_ligatures();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.ai_limits_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_ai_limits();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.auto_check_updates_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.toggle_auto_check_updates();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.keep_awake_off_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_keep_awake_mode(KeepAwakeMode::Off);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.keep_awake_agent_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_keep_awake_mode(KeepAwakeMode::Agent);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.keep_awake_active_btn) {
                             self.settings_page_state.editing_setting = None;
                             self.set_keep_awake_mode(KeepAwakeMode::Active);
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.open_file_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log("-> Clic en abrir archivo tearminal.toml");
                             self.open_config_file();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.term_reset_btn) {
                             self.settings_page_state.editing_setting = None;
                             crate::logger::log(
                                 "-> Clic en restablecer valores por defecto (Terminal)",
                             );
                             self.reset_to_defaults();
-                            return;
+                            return true;
                         } else {
                             self.settings_page_state.editing_setting = None;
                         }
@@ -825,19 +944,48 @@ impl TearminalApp {
                         if SettingsPageRects::inside(mx, my, rects.about_open_file_btn) {
                             crate::logger::log("-> Clic en abrir archivo tearminal.toml (About)");
                             self.open_config_file();
-                            return;
+                            return true;
                         } else if SettingsPageRects::inside(mx, my, rects.about_reset_btn) {
                             crate::logger::log(
                                 "-> Clic en restablecer valores por defecto (About)",
                             );
                             self.reset_to_defaults();
-                            return;
+                            return true;
                         }
                     }
                     SettingsSection::Shortcuts => {}
                 }
             }
-            return;
+            return true;
+        }
+
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn click_explorer_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+        is_settings_active: bool,
+    ) -> bool {
+        // Redimensionamiento del panel lateral / explorador de archivos (prioridad sobre el margen del panel y el sidebar)
+        if state == ElementState::Pressed
+            && button == MouseButton::Left
+            && self.on_panel_resize_edge(mx, my, win_w, win_h)
+        {
+            self.explorer_resizing = true;
+            return true;
+        }
+
+        // Modalidad horizontal: lo que el panel tiene fuera del explorador (su margen) no hace nada;
+        // el explorador alojado dentro atiende su propio ratón
+        if self.panel_local_x(mx, my, win_w).is_some() {
+            return true;
         }
 
         // Clics dentro del panel del explorador lateral de archivos / barra lateral
@@ -881,7 +1029,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         self.file_explorer.cancel_edit();
                     }
@@ -902,8 +1050,10 @@ impl TearminalApp {
                                 my,
                             ) {
                                 if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                                    self.explorer_scrollbar_dragging = true;
-                                    self.explorer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                    self.scrollbar_drag = Some(ScrollbarDragState {
+                                        target: ScrollbarTarget::Explorer,
+                                        grab_offset: (my - thumb.1) as f32,
+                                    });
                                     self.last_scroll_time = Instant::now();
                                 } else {
                                     let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
@@ -930,7 +1080,7 @@ impl TearminalApp {
                                         }
                                     }
                                 }
-                                return;
+                                return true;
                             }
                         }
                     }
@@ -951,7 +1101,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         if mx >= bx && mx < bx + bw && my >= by && my < by + bh {
                             if let Some(mut input) = self.file_explorer.filter.take() {
@@ -961,7 +1111,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                     }
 
@@ -975,9 +1125,50 @@ impl TearminalApp {
                         };
                         if let Some(idx) = clicked_idx {
                             if idx < self.file_explorer.visible_item_count() {
-                                self.file_explorer.selected_index = Some(idx);
                                 if let Some(item) = self.file_explorer.visible_item(idx).cloned() {
+                                    let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
+                                    if self.file_explorer.changes_only {
+                                        if let Some(item_y) =
+                                            self.file_explorer.item_y(idx, panel_y)
+                                        {
+                                            if let Some(action) =
+                                                crate::renderer::GitActionBtnRects::hit_test(
+                                                    panel_x,
+                                                    panel_w,
+                                                    item_y,
+                                                    item_h,
+                                                    item.is_staged,
+                                                    item.is_unstaged,
+                                                    mx,
+                                                    my,
+                                                )
+                                            {
+                                                let is_untracked = item.git_status
+                                                    == Some(
+                                                        crate::explorer::GitFileStatus::Untracked,
+                                                    );
+                                                self.execute_git_action(
+                                                    &item.path,
+                                                    action,
+                                                    is_untracked,
+                                                );
+                                                if let Some(w) = &self.window {
+                                                    w.request_redraw();
+                                                }
+                                                return true;
+                                            }
+                                        }
+                                    }
+
+                                    self.file_explorer.selected_index = Some(idx);
                                     self.file_explorer.selected_path = Some(item.path.clone());
+                                    self.explorer_drag = Some(crate::app::ExplorerDragState {
+                                        path: item.path.clone(),
+                                        start_pos: (mx, my),
+                                        is_dir: item.is_dir,
+                                        idx,
+                                        is_dragging: false,
+                                    });
 
                                     if item.is_dir {
                                         crate::logger::log(&format!(
@@ -1011,13 +1202,13 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
                         }
                     }
                 }
-                return;
+                return true;
             }
         }
 
@@ -1029,7 +1220,7 @@ impl TearminalApp {
             && button == MouseButton::Left
         {
             crate::updater::trigger_update();
-            return;
+            return true;
         }
 
         // Clic sobre el botón de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha
@@ -1042,9 +1233,21 @@ impl TearminalApp {
             self.keep_awake_popup_open = !self.keep_awake_popup_open;
             self.hovered_keep_awake_option = None;
             self.request_redraw();
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn click_file_viewer_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
         // Clics dentro del visor de archivos si la pestaña activa es un file viewer
         let is_viewer_active = self.tabs[self.active_tab_index].file_viewer.is_some();
         if is_viewer_active {
@@ -1067,7 +1270,7 @@ impl TearminalApp {
                     if button == MouseButton::Middle {
                         // Clic central: pegar contenido del portapapeles
                         self.paste_from_clipboard();
-                        return;
+                        return true;
                     }
                     if button == MouseButton::Left {
                         if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
@@ -1094,7 +1297,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1104,7 +1307,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1117,7 +1320,7 @@ impl TearminalApp {
                                 if let Some(w) = &self.window {
                                     w.request_redraw();
                                 }
-                                return;
+                                return true;
                             }
 
                             if let Some(md_rect) = header_rects.md_btn {
@@ -1126,7 +1329,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1191,7 +1394,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1206,9 +1409,10 @@ impl TearminalApp {
                                     && my < track.1 + track.3 + 4
                                 {
                                     if mx >= thumb.0 && mx < thumb.0 + thumb.2 {
-                                        self.viewer_hscrollbar_dragging = true;
-                                        self.viewer_hscrollbar_drag_offset_x =
-                                            (mx - thumb.0) as f32;
+                                        self.scrollbar_drag = Some(ScrollbarDragState {
+                                            target: ScrollbarTarget::ViewerHorizontal,
+                                            grab_offset: (mx - thumb.0) as f32,
+                                        });
                                     } else {
                                         let rel = mx.saturating_sub(track.0 + thumb.2 / 2);
                                         if let Some(x) = (rel * max_x)
@@ -1220,7 +1424,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1237,8 +1441,10 @@ impl TearminalApp {
                                     my,
                                 ) {
                                     if my >= thumb.1 && my < thumb.1 + thumb.3 {
-                                        self.viewer_scrollbar_dragging = true;
-                                        self.viewer_scrollbar_drag_offset_y = (my - thumb.1) as f32;
+                                        self.scrollbar_drag = Some(ScrollbarDragState {
+                                            target: ScrollbarTarget::ViewerVertical,
+                                            grab_offset: (my - thumb.1) as f32,
+                                        });
                                         self.last_scroll_time = Instant::now();
                                     } else {
                                         let visible_lines = lay.content_h / lay.row_h;
@@ -1259,7 +1465,7 @@ impl TearminalApp {
                                             }
                                         }
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
 
@@ -1281,14 +1487,14 @@ impl TearminalApp {
                                             if let Some(w) = &self.window {
                                                 w.request_redraw();
                                             }
-                                            return;
+                                            return true;
                                         }
                                     }
                                 }
                                 let Some((target_line, target_col)) =
                                     viewer.hit_test(clicked_row, mx, &lay)
                                 else {
-                                    return;
+                                    return true;
                                 };
 
                                 // Si es enlace externo (en modo Markdown preview o con Ctrl pulsado): abrir en navegador
@@ -1297,7 +1503,7 @@ impl TearminalApp {
                                 {
                                     if let Some(url) = viewer.link_at(target_line, target_col) {
                                         crate::app::platform::shell_open_url(&url);
-                                        return;
+                                        return true;
                                     }
                                 }
 
@@ -1345,7 +1551,7 @@ impl TearminalApp {
                         }
                     }
                 }
-                return;
+                return true;
             }
         }
 
@@ -1353,7 +1559,7 @@ impl TearminalApp {
         if button == MouseButton::Left && state == ElementState::Pressed {
             if let Some(divider) = self.divider_at(mx, my) {
                 self.divider_drag = Some(divider);
-                return;
+                return true;
             }
         }
 
@@ -1398,10 +1604,22 @@ impl TearminalApp {
                     None => {}
                 }
                 self.request_redraw();
-                return;
+                return true;
             }
         }
 
+        false
+    }
+
+    fn click_terminal_panes_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
         // 3. Clics en paneles de terminal activa
         let bypass = self.modifiers.shift_key();
         let pane_rects = self.active_tab_pane_rects(win_w, win_h);
@@ -1464,9 +1682,10 @@ impl TearminalApp {
                             && state == ElementState::Pressed
                         {
                             if my >= thumb_y && my < thumb_y + thumb_h {
-                                self.scrollbar_dragging = true;
-                                self.scrollbar_drag_pane_id = Some(pane.id);
-                                self.scrollbar_drag_offset_y = (my - thumb_y) as f32;
+                                self.scrollbar_drag = Some(ScrollbarDragState {
+                                    target: ScrollbarTarget::Terminal(pane.id),
+                                    grab_offset: (my - thumb_y) as f32,
+                                });
                                 self.last_scroll_time = Instant::now();
                                 if let Some(w) = &self.window {
                                     w.request_redraw();

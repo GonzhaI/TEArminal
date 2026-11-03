@@ -310,6 +310,11 @@ impl TearminalApp {
             WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
 
             WindowEvent::CursorLeft { .. } => {
+                if let Some(drag) = self.explorer_drag.take() {
+                    if drag.is_dragging {
+                        self.set_cursor_icon(winit::window::CursorIcon::Default);
+                    }
+                }
                 if self.hovered_pane_header.take().is_some()
                     || self.hovered_pane_btn.take().is_some()
                 {
@@ -334,16 +339,11 @@ impl TearminalApp {
                     self.drag_anchor = None;
                     self.divider_drag = None;
                     self.tab_drag = None;
-                    self.scrollbar_dragging = false;
-                    self.scrollbar_drag_pane_id = None;
-                    self.explorer_scrollbar_dragging = false;
-                    self.viewer_scrollbar_dragging = false;
-                    self.viewer_hscrollbar_dragging = false;
-                    self.settings_scrollbar_dragging = false;
-                    self.palette_scrollbar_dragging = false;
+                    self.scrollbar_drag = None;
                     self.viewer_drag_selecting = false;
                     self.viewer_drag_start = None;
                     self.explorer_resizing = false;
+                    self.explorer_drag = None;
                     if self.hovered_url_span.is_some() {
                         self.hovered_url_span = None;
                         self.request_redraw();
@@ -393,6 +393,18 @@ impl TearminalApp {
                         }
                     }
                 }
+            }
+
+            WindowEvent::DroppedFile(path) => {
+                self.on_file_dropped(path);
+            }
+
+            WindowEvent::HoveredFile(_) => {
+                self.set_cursor_icon(winit::window::CursorIcon::Copy);
+            }
+
+            WindowEvent::HoveredFileCancelled => {
+                self.set_cursor_icon(winit::window::CursorIcon::Default);
             }
 
             _ => {}
@@ -681,7 +693,7 @@ impl TearminalApp {
             let running = self
                 .tabs
                 .iter()
-                .any(|t| super::panel::session_status(t) == Some(SessionStatus::Running));
+                .any(|t| t.session_status() == Some(SessionStatus::Running));
             if running {
                 if self.spinner_timer.elapsed() >= SPINNER {
                     self.spinner_timer = Instant::now();

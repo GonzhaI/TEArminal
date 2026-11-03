@@ -3,6 +3,12 @@
 /// Rectángulo (x, y, ancho, alto) en píxeles
 pub(crate) type Rect = (usize, usize, usize, usize);
 
+/// Comprueba si las coordenadas `(x, y)` caen dentro del rectángulo `(rx, ry, rw, rh)`.
+#[inline]
+pub(crate) fn rect_contains(rect: Rect, x: usize, y: usize) -> bool {
+    x >= rect.0 && x < rect.0 + rect.2 && y >= rect.1 && y < rect.1 + rect.3
+}
+
 /// Convierte la posición Y deseada de la parte superior del pulgar (`thumb_top_y`) en un `scroll_offset`
 /// dentro de `0..=max_offset` para una barra de desplazamiento vertical `(track, thumb)`.
 #[inline]
@@ -156,12 +162,7 @@ impl TopTabBarRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        rect.2 > 0
-            && rect.3 > 0
-            && mx >= rect.0
-            && mx < rect.0 + rect.2
-            && my >= rect.1
-            && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -554,7 +555,7 @@ impl SettingsPageRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -630,7 +631,7 @@ impl FileViewerHeaderRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -878,7 +879,7 @@ impl FileViewerSearchRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        mx >= rect.0 && mx < rect.0 + rect.2 && my >= rect.1 && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -985,12 +986,7 @@ impl SidebarRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
-        rect.2 > 0
-            && rect.3 > 0
-            && mx >= rect.0
-            && mx < rect.0 + rect.2
-            && my >= rect.1
-            && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -1236,6 +1232,76 @@ impl FilesPanelRects {
     }
 }
 
+/// Acciones rápidas de Git disponibles en las filas de la pestaña «Cambios»
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitActionKind {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+/// Geometría de los botones de acción rápida de Git en la lista de cambios
+pub(crate) struct GitActionBtnRects;
+
+impl GitActionBtnRects {
+    pub(crate) const BTN_SIZE: usize = 18;
+    pub(crate) const BTN_GAP: usize = 3;
+    pub(crate) const RIGHT_PAD: usize = 10;
+
+    /// Calcula los rectángulos de cada botón de acción aplicable a una fila
+    pub(crate) fn buttons_for_item(
+        panel_x: usize,
+        panel_w: usize,
+        item_y: usize,
+        item_h: usize,
+        is_staged: bool,
+        is_unstaged: bool,
+    ) -> smallvec::SmallVec<[(GitActionKind, Rect); 3]> {
+        let mut btns = smallvec::SmallVec::<[GitActionKind; 3]>::new();
+        if is_staged {
+            btns.push(GitActionKind::Unstage);
+        }
+        if is_unstaged {
+            btns.push(GitActionKind::Stage);
+            btns.push(GitActionKind::Discard);
+        }
+        if btns.is_empty() {
+            return smallvec::SmallVec::new();
+        }
+        let total_w = btns.len() * Self::BTN_SIZE + (btns.len() - 1) * Self::BTN_GAP;
+        let start_x = panel_x + panel_w.saturating_sub(Self::RIGHT_PAD + total_w);
+        let btn_y = item_y + (item_h.saturating_sub(Self::BTN_SIZE)) / 2;
+
+        let mut res = smallvec::SmallVec::<[(GitActionKind, Rect); 3]>::new();
+        for (i, action) in btns.into_iter().enumerate() {
+            let bx = start_x + i * (Self::BTN_SIZE + Self::BTN_GAP);
+            res.push((action, (bx, btn_y, Self::BTN_SIZE, Self::BTN_SIZE)));
+        }
+        res
+    }
+
+    /// Comprueba si `(mx, my)` cae sobre alguno de los botones de acción de la fila
+    pub(crate) fn hit_test(
+        panel_x: usize,
+        panel_w: usize,
+        item_y: usize,
+        item_h: usize,
+        is_staged: bool,
+        is_unstaged: bool,
+        mx: usize,
+        my: usize,
+    ) -> Option<GitActionKind> {
+        let buttons =
+            Self::buttons_for_item(panel_x, panel_w, item_y, item_h, is_staged, is_unstaged);
+        for (action, (bx, by, bw, bh)) in buttons {
+            if mx >= bx && mx < bx + bw && my >= by && my < by + bh {
+                return Some(action);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct StatusBarRects {
     pub(crate) ai_badge: Rect,
@@ -1403,12 +1469,7 @@ impl StatusBarRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
-        rect.2 > 0
-            && rect.3 > 0
-            && mx >= rect.0
-            && mx < rect.0 + rect.2
-            && my >= rect.1
-            && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 
     /// Mantiene abierto el menú flotante si el ratón está en el badge, en la tarjeta o en el puente de 6px entre ambos.
@@ -1540,12 +1601,7 @@ impl PaneHeaderRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
-        rect.2 > 0
-            && rect.3 > 0
-            && mx >= rect.0
-            && mx < rect.0 + rect.2
-            && my >= rect.1
-            && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }
 
@@ -1637,7 +1693,7 @@ impl MachineModalRects {
     }
 
     pub(crate) fn inside(mx: usize, my: usize, r: Rect) -> bool {
-        r.2 > 0 && mx >= r.0 && mx < r.0 + r.2 && my >= r.1 && my < r.1 + r.3
+        rect_contains(r, mx, my)
     }
 
     pub(crate) fn hit(&self, mx: usize, my: usize) -> Option<MachineHover> {
@@ -1774,11 +1830,6 @@ impl PaletteRects {
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
-        rect.2 > 0
-            && rect.3 > 0
-            && mx >= rect.0
-            && mx < rect.0 + rect.2
-            && my >= rect.1
-            && my < rect.1 + rect.3
+        rect_contains(rect, mx, my)
     }
 }

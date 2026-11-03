@@ -23,300 +23,11 @@ impl TearminalApp {
 
         let is_settings_active = self.tabs[self.active_tab_index].is_settings;
 
-        // Manejo de arrastre activo del pulgar de la barra de desplazamiento en el panel seleccionado
-        if self.scrollbar_dragging {
-            if let Some(pid) = self.scrollbar_drag_pane_id {
-                let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
-                let active_tab = &mut self.tabs[self.active_tab_index];
-                let pane_rects = active_tab.compute_pane_rects(cx, cy, cw, ch);
-                if let Some(target_rect) = pane_rects.iter().find(|r| r.pane_id == pid) {
-                    if let Some(pane) = active_tab.find_pane_mut(pid) {
-                        if let Some(renderer) = &self.renderer {
-                            if !pane.terminal.scrollback.is_empty() {
-                                let track_y = target_rect.y + renderer.margin_y;
-                                let track_h =
-                                    target_rect.height.saturating_sub(renderer.margin_y * 2);
-                                let total_history =
-                                    pane.terminal.scrollback.len() + pane.terminal.rows;
-                                let thumb_h = ((pane.terminal.rows as f32 / total_history as f32)
-                                    * track_h as f32)
-                                    .max(24.0)
-                                    .min(track_h as f32)
-                                    as usize;
-                                let available_travel = track_h.saturating_sub(thumb_h);
-                                if available_travel > 0 {
-                                    let target_thumb_top =
-                                        (my as f32 - self.scrollbar_drag_offset_y - track_y as f32)
-                                            .clamp(0.0, available_travel as f32);
-                                    let ratio = target_thumb_top / available_travel as f32;
-                                    let new_offset = ((1.0 - ratio)
-                                        * pane.terminal.scrollback.len() as f32)
-                                        .round()
-                                        as usize;
-                                    pane.terminal.scroll_offset =
-                                        new_offset.min(pane.terminal.scrollback.len());
-                                    self.last_scroll_time = Instant::now();
-                                    self.request_redraw();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
+        if self.cursor_handle_active_drags(mx, my, win_w, win_h) {
             return;
         }
 
-        // Manejo de arrastre de la barra de desplazamiento del explorador de archivos
-        if self.explorer_scrollbar_dragging {
-            let top_offset = self.top_offset();
-            let status_bar_h = self.status_bar_height();
-            if let Some((track, thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
-                win_w,
-                win_h,
-                top_offset,
-                status_bar_h,
-                &self.file_explorer,
-            ) {
-                let (_panel_x, panel_y, _panel_w, panel_h) =
-                    self.file_explorer
-                        .panel_geometry(win_w, win_h, top_offset, status_bar_h);
-                let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
-                let sub_h = self.file_explorer.subheader_height();
-                let list_y = panel_y + header_h + sub_h + 4;
-                let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
-                let list_max_y = panel_y + panel_h.saturating_sub(6);
-                let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
-                let max_offset = self
-                    .file_explorer
-                    .visible_item_count()
-                    .saturating_sub(visible_items);
-                if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
-                    track,
-                    thumb,
-                    my as f32 - self.explorer_scrollbar_drag_offset_y,
-                    max_offset,
-                ) {
-                    self.file_explorer.scroll_offset = off;
-                    self.last_scroll_time = Instant::now();
-                    self.request_redraw();
-                }
-            }
-            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
-            return;
-        }
-
-        // Manejo de arrastre de la barra de desplazamiento del visor de archivos
-        if self.viewer_scrollbar_dragging {
-            let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
-            let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
-
-            if let Some(ref mut tab) = self.tabs.get_mut(self.active_tab_index) {
-                if let Some(ref mut viewer) = tab.file_viewer {
-                    if let Some((track, thumb)) = TerminalRenderer::file_viewer_scrollbar_geometry(
-                        cx, cy, cw, ch, viewer, row_h,
-                    ) {
-                        let content_h = ch.saturating_sub(38);
-                        let visible_lines = (content_h / row_h.max(16)).max(1);
-                        let max_offset = viewer.total_display_rows().saturating_sub(visible_lines);
-
-                        if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
-                            track,
-                            thumb,
-                            my as f32 - self.viewer_scrollbar_drag_offset_y,
-                            max_offset,
-                        ) {
-                            viewer.scroll_offset = off;
-                            self.last_scroll_time = Instant::now();
-                            self.request_redraw();
-                        }
-                    }
-                }
-            }
-            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
-            return;
-        }
-
-        // Arrastre de la barra de desplazamiento de Ajustes
-        if self.settings_scrollbar_dragging {
-            let modal_y = self.settings_modal().1 as f32;
-            let top =
-                (my as f32 - modal_y - self.settings_scrollbar_drag_offset_y).max(0.0) as usize;
-            self.settings_scroll_to_thumb(top);
-            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
-            self.request_redraw();
-            return;
-        }
-
-        // Arrastre de la barra de desplazamiento de la paleta de comandos
-        if self.palette_scrollbar_dragging {
-            let top = (my as f32 - self.palette_scrollbar_drag_offset_y).max(0.0) as usize;
-            self.palette_scroll_to_thumb(top);
-            self.last_scroll_time = Instant::now();
-            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
-            self.request_redraw();
-            return;
-        }
-
-        // Arrastre de la barra de desplazamiento horizontal del visor de archivos
-        if self.viewer_hscrollbar_dragging {
-            let offset = self.sidebar_offset();
-            let top_offset = self.top_offset();
-            let viewer_w = win_w.saturating_sub(offset + self.file_explorer_offset());
-            let viewer_h = win_h.saturating_sub(top_offset + self.status_bar_height());
-            let (row_h, char_w) = self
-                .renderer
-                .as_ref()
-                .map(|r| (r.row_height, r.char_width))
-                .unwrap_or((20, 8));
-            let grab = self.viewer_hscrollbar_drag_offset_x;
-            if let Some(viewer) = self
-                .tabs
-                .get_mut(self.active_tab_index)
-                .and_then(|t| t.file_viewer.as_mut())
-            {
-                let lay = crate::renderer::FileViewerLayout::compute(
-                    offset,
-                    top_offset,
-                    viewer_w,
-                    viewer_h,
-                    row_h,
-                    char_w,
-                    viewer.lines.len(),
-                );
-                let max_x = viewer.max_scroll_x();
-                if let Some((track, thumb)) = lay.hscrollbar(max_x, viewer.scroll_offset_x) {
-                    let travel = track.2.saturating_sub(thumb.2);
-                    if travel > 0 {
-                        let thumb_left =
-                            (mx as f32 - grab - track.0 as f32).clamp(0.0, travel as f32);
-                        viewer.scroll_offset_x = ((thumb_left / travel as f32 * max_x as f32)
-                            .round() as usize)
-                            .min(max_x);
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                    }
-                }
-            }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Pointer);
-            }
-            return;
-        }
-
-        // Arrastre del borde del explorador / panel: el PTY se redimensiona al soltar o al detenerse
-        if self.explorer_resizing {
-            self.resize_panel_from_mouse(mx, win_w);
-            self.schedule_pty_resize();
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::ColResize);
-                w.request_redraw();
-            }
-            return;
-        }
-
-        // Arrastre de un divisor entre paneles
-        if let Some(icon) = self.divider_drag.as_ref().map(Divider::cursor_icon) {
-            self.drag_divider(mx, my);
-            if let Some(w) = &self.window {
-                w.set_cursor(icon);
-            }
-            return;
-        }
-
-        // Reordenar pestañas: la arrastrada salta a la posición bajo el ratón solo dentro de la barra
-        if let Some(from) = self.tab_drag {
-            let in_tab_bar = my < TopTabBarRects::HEIGHT + 10 && mx < win_w;
-            if in_tab_bar {
-                if let Some(to) = self.tab_slot_at(mx, my).filter(|&to| to != from) {
-                    self.move_tab(from, to);
-                }
-            }
-        }
-
-        // Con el menú contextual abierto solo se resalta su opción bajo el ratón
-        if let Some(menu) = &mut self.context_menu {
-            let hovered = menu.item_at(mx, my);
-            if menu.hovered != hovered {
-                menu.hovered = hovered;
-                if let Some(w) = &self.window {
-                    w.request_redraw();
-                }
-            }
-            if let Some(w) = &self.window {
-                w.set_cursor(winit::window::CursorIcon::Default);
-            }
-            return;
-        }
-
-        // Con el modal «Añadir máquina» abierto solo se resalta su elemento bajo el ratón
-        if let Some(rects) = self.machine_rects() {
-            let hit = rects.hit(mx, my);
-            if let Some(m) = &mut self.machine_modal {
-                if m.hovered != hit {
-                    m.hovered = hit;
-                    needs_redraw = true;
-                }
-            }
-            if needs_redraw {
-                self.request_redraw();
-            }
-            self.set_cursor_icon(match hit {
-                Some(crate::renderer::MachineHover::Input) => winit::window::CursorIcon::Text,
-                Some(_) => winit::window::CursorIcon::Pointer,
-                None => winit::window::CursorIcon::Default,
-            });
-            return;
-        }
-
-        // Con la paleta de comandos abierta solo se resalta su opción bajo el ratón
-        if self.palette.is_some() {
-            let (is_dragging, filtered_len, scroll_offset, selected) = {
-                let p = self.palette.as_ref().unwrap();
-                (
-                    p.input.is_dragging,
-                    p.filtered.len(),
-                    p.scroll_offset,
-                    p.selected,
-                )
-            };
-            let rects =
-                PaletteRects::compute_with_scroll(win_w, win_h, filtered_len, scroll_offset);
-            if is_dragging {
-                let text_start_x = rects.input.0 + 40;
-                if let Some(p) = &mut self.palette {
-                    let mut input = std::mem::take(&mut p.input);
-                    self.handle_text_input_drag(&mut input, mx, text_start_x);
-                    if let Some(p) = &mut self.palette {
-                        p.input = input;
-                    }
-                }
-            }
-            let is_scrollbar_hovered = rects.scrollbar.is_some_and(|(track, _)| {
-                crate::renderer::ScrollbarRects::hit(track, rects.card.0 + rects.card.2, mx, my)
-            });
-            let hovered_item = rects.item_at_with_offset(mx, my, scroll_offset);
-            if let Some(idx) = hovered_item {
-                if selected != idx {
-                    if let Some(p) = &mut self.palette {
-                        p.selected = idx;
-                    }
-                    if let Some(w) = &self.window {
-                        w.request_redraw();
-                    }
-                }
-            }
-            if let Some(w) = &self.window {
-                let cursor = if hovered_item.is_some() || is_scrollbar_hovered {
-                    winit::window::CursorIcon::Pointer
-                } else if PaletteRects::inside(mx, my, rects.input) {
-                    winit::window::CursorIcon::Text
-                } else {
-                    winit::window::CursorIcon::Default
-                };
-                w.set_cursor(cursor);
-            }
+        if self.cursor_handle_overlays(mx, my, win_w, win_h) {
             return;
         }
 
@@ -791,24 +502,57 @@ impl TearminalApp {
                     self.file_explorer.item_at_y(my, panel_y)
                 };
 
-                if item_hover.is_some() {
+                let git_action_hover = if self.file_explorer.changes_only {
+                    if let Some(idx) = item_hover {
+                        if let Some(item) = self.file_explorer.visible_item(idx) {
+                            if let Some(item_y) = self.file_explorer.item_y(idx, panel_y) {
+                                let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
+                                crate::renderer::GitActionBtnRects::hit_test(
+                                    panel_x,
+                                    panel_w,
+                                    item_y,
+                                    item_h,
+                                    item.is_staged,
+                                    item.is_unstaged,
+                                    mx,
+                                    my,
+                                )
+                                .map(|act| (idx, act))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if item_hover.is_some() || git_action_hover.is_some() {
                     is_pointer = true;
                 }
 
                 if self.file_explorer.hovered_index != item_hover
                     || self.file_explorer.hovered_scrollbar != is_over_scrollbar
+                    || self.file_explorer.hovered_git_action != git_action_hover
                 {
                     self.file_explorer.hovered_index = item_hover;
                     self.file_explorer.hovered_scrollbar = is_over_scrollbar;
+                    self.file_explorer.hovered_git_action = git_action_hover;
                     needs_redraw = true;
                 }
             } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
                 || self.file_explorer.hovered_filter_close
+                || self.file_explorer.hovered_git_action.is_some()
             {
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
                 self.file_explorer.hovered_filter_close = false;
+                self.file_explorer.hovered_git_action = None;
                 needs_redraw = true;
             }
         }
@@ -1503,5 +1247,326 @@ impl TearminalApp {
         if needs_redraw {
             self.request_redraw();
         }
+    }
+
+    fn handle_scrollbar_drag(
+        &mut self,
+        drag: ScrollbarDragState,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) {
+        match drag.target {
+            ScrollbarTarget::Terminal(pid) => {
+                let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
+                let active_tab = &mut self.tabs[self.active_tab_index];
+                let pane_rects = active_tab.compute_pane_rects(cx, cy, cw, ch);
+                if let Some(target_rect) = pane_rects.iter().find(|r| r.pane_id == pid) {
+                    if let Some(pane) = active_tab.find_pane_mut(pid) {
+                        if let Some(renderer) = &self.renderer {
+                            if !pane.terminal.scrollback.is_empty() {
+                                let track_y = target_rect.y + renderer.margin_y;
+                                let track_h =
+                                    target_rect.height.saturating_sub(renderer.margin_y * 2);
+                                let total_history =
+                                    pane.terminal.scrollback.len() + pane.terminal.rows;
+                                let thumb_h = ((pane.terminal.rows as f32 / total_history as f32)
+                                    * track_h as f32)
+                                    .max(24.0)
+                                    .min(track_h as f32)
+                                    as usize;
+                                let available_travel = track_h.saturating_sub(thumb_h);
+                                if available_travel > 0 {
+                                    let target_thumb_top =
+                                        (my as f32 - drag.grab_offset - track_y as f32)
+                                            .clamp(0.0, available_travel as f32);
+                                    let ratio = target_thumb_top / available_travel as f32;
+                                    let new_offset = ((1.0 - ratio)
+                                        * pane.terminal.scrollback.len() as f32)
+                                        .round()
+                                        as usize;
+                                    pane.terminal.scroll_offset =
+                                        new_offset.min(pane.terminal.scrollback.len());
+                                    self.last_scroll_time = Instant::now();
+                                    self.request_redraw();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ScrollbarTarget::Explorer => {
+                let top_offset = self.top_offset();
+                let status_bar_h = self.status_bar_height();
+                if let Some((track, thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
+                    win_w,
+                    win_h,
+                    top_offset,
+                    status_bar_h,
+                    &self.file_explorer,
+                ) {
+                    let (_panel_x, panel_y, _panel_w, panel_h) =
+                        self.file_explorer
+                            .panel_geometry(win_w, win_h, top_offset, status_bar_h);
+                    let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
+                    let sub_h = self.file_explorer.subheader_height();
+                    let list_y = panel_y + header_h + sub_h + 4;
+                    let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
+                    let list_max_y = panel_y + panel_h.saturating_sub(6);
+                    let visible_items = (list_max_y.saturating_sub(list_y)) / item_h;
+                    let max_offset = self
+                        .file_explorer
+                        .visible_item_count()
+                        .saturating_sub(visible_items);
+                    if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                        track,
+                        thumb,
+                        my as f32 - drag.grab_offset,
+                        max_offset,
+                    ) {
+                        self.file_explorer.scroll_offset = off;
+                        self.last_scroll_time = Instant::now();
+                        self.request_redraw();
+                    }
+                }
+            }
+            ScrollbarTarget::ViewerVertical => {
+                let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
+                let row_h = self.renderer.as_ref().map(|r| r.row_height).unwrap_or(20);
+
+                if let Some(ref mut tab) = self.tabs.get_mut(self.active_tab_index) {
+                    if let Some(ref mut viewer) = tab.file_viewer {
+                        if let Some((track, thumb)) =
+                            TerminalRenderer::file_viewer_scrollbar_geometry(
+                                cx, cy, cw, ch, viewer, row_h,
+                            )
+                        {
+                            let content_h = ch.saturating_sub(38);
+                            let visible_lines = (content_h / row_h.max(16)).max(1);
+                            let max_offset =
+                                viewer.total_display_rows().saturating_sub(visible_lines);
+
+                            if let Some(off) = crate::renderer::scroll_offset_for_thumb_y(
+                                track,
+                                thumb,
+                                my as f32 - drag.grab_offset,
+                                max_offset,
+                            ) {
+                                viewer.scroll_offset = off;
+                                self.last_scroll_time = Instant::now();
+                                self.request_redraw();
+                            }
+                        }
+                    }
+                }
+            }
+            ScrollbarTarget::ViewerHorizontal => {
+                let offset = self.sidebar_offset();
+                let top_offset = self.top_offset();
+                let viewer_w = win_w.saturating_sub(offset + self.file_explorer_offset());
+                let viewer_h = win_h.saturating_sub(top_offset + self.status_bar_height());
+                let (row_h, char_w) = self
+                    .renderer
+                    .as_ref()
+                    .map(|r| (r.row_height, r.char_width))
+                    .unwrap_or((20, 8));
+                let grab = drag.grab_offset;
+                if let Some(viewer) = self
+                    .tabs
+                    .get_mut(self.active_tab_index)
+                    .and_then(|t| t.file_viewer.as_mut())
+                {
+                    let lay = crate::renderer::FileViewerLayout::compute(
+                        offset,
+                        top_offset,
+                        viewer_w,
+                        viewer_h,
+                        row_h,
+                        char_w,
+                        viewer.lines.len(),
+                    );
+                    let max_x = viewer.max_scroll_x();
+                    if let Some((track, thumb)) = lay.hscrollbar(max_x, viewer.scroll_offset_x) {
+                        let travel = track.2.saturating_sub(thumb.2);
+                        if travel > 0 {
+                            let thumb_left =
+                                (mx as f32 - grab - track.0 as f32).clamp(0.0, travel as f32);
+                            viewer.scroll_offset_x =
+                                ((thumb_left / travel as f32 * max_x as f32).round() as usize)
+                                    .min(max_x);
+                            self.request_redraw();
+                        }
+                    }
+                }
+            }
+            ScrollbarTarget::Settings => {
+                let modal_y = self.settings_modal().1 as f32;
+                let top = (my as f32 - modal_y - drag.grab_offset).max(0.0) as usize;
+                self.settings_scroll_to_thumb(top);
+                self.request_redraw();
+            }
+            ScrollbarTarget::Palette => {
+                let top = (my as f32 - drag.grab_offset).max(0.0) as usize;
+                self.palette_scroll_to_thumb(top);
+                self.last_scroll_time = Instant::now();
+                self.request_redraw();
+            }
+        }
+    }
+
+    fn cursor_handle_active_drags(
+        &mut self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
+        // Manejo de arrastre activo de la barra de desplazamiento
+        if let Some(drag) = self.scrollbar_drag {
+            self.handle_scrollbar_drag(drag, mx, my, win_w, win_h);
+            self.set_cursor_icon(winit::window::CursorIcon::Pointer);
+            return true;
+        }
+
+        // Arrastre del borde del explorador / panel: el PTY se redimensiona al soltar o al detenerse
+        if self.explorer_resizing {
+            self.resize_panel_from_mouse(mx, win_w);
+            self.schedule_pty_resize();
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::ColResize);
+                w.request_redraw();
+            }
+            return true;
+        }
+
+        // Arrastre de un divisor entre paneles
+        if let Some(icon) = self.divider_drag.as_ref().map(Divider::cursor_icon) {
+            self.drag_divider(mx, my);
+            if let Some(w) = &self.window {
+                w.set_cursor(icon);
+            }
+            return true;
+        }
+
+        // Reordenar pestañas: la arrastrada salta a la posición bajo el ratón solo dentro de la barra
+        if let Some(from) = self.tab_drag {
+            let in_tab_bar = my < TopTabBarRects::HEIGHT + 10 && mx < win_w;
+            if in_tab_bar {
+                if let Some(to) = self.tab_slot_at(mx, my).filter(|&to| to != from) {
+                    self.move_tab(from, to);
+                }
+            }
+        }
+
+        // Arrastrar archivo o carpeta desde el explorador hacia la terminal
+        if let Some(drag) = &mut self.explorer_drag {
+            let dx = (mx as isize - drag.start_pos.0 as isize).abs();
+            let dy = (my as isize - drag.start_pos.1 as isize).abs();
+            if dx > 4 || dy > 4 {
+                drag.is_dragging = true;
+            }
+            if drag.is_dragging {
+                let panel_x = win_w.saturating_sub(self.panel_width());
+                if mx < panel_x {
+                    self.set_cursor_icon(winit::window::CursorIcon::Copy);
+                } else {
+                    self.set_cursor_icon(winit::window::CursorIcon::Default);
+                }
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn cursor_handle_overlays(&mut self, mx: usize, my: usize, win_w: usize, win_h: usize) -> bool {
+        // Con el menú contextual abierto solo se resalta su opción bajo el ratón
+        if let Some(menu) = &mut self.context_menu {
+            let hovered = menu.item_at(mx, my);
+            if menu.hovered != hovered {
+                menu.hovered = hovered;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            if let Some(w) = &self.window {
+                w.set_cursor(winit::window::CursorIcon::Default);
+            }
+            return true;
+        }
+
+        // Con el modal «Añadir máquina» abierto solo se resalta su elemento bajo el ratón
+        if let Some(rects) = self.machine_rects() {
+            let hit = rects.hit(mx, my);
+            let mut needs_redraw = false;
+            if let Some(m) = &mut self.machine_modal {
+                if m.hovered != hit {
+                    m.hovered = hit;
+                    needs_redraw = true;
+                }
+            }
+            if needs_redraw {
+                self.request_redraw();
+            }
+            self.set_cursor_icon(match hit {
+                Some(crate::renderer::MachineHover::Input) => winit::window::CursorIcon::Text,
+                Some(_) => winit::window::CursorIcon::Pointer,
+                None => winit::window::CursorIcon::Default,
+            });
+            return true;
+        }
+
+        // Con la paleta de comandos abierta solo se resalta su opción bajo el ratón
+        if self.palette.is_some() {
+            let (is_dragging, filtered_len, scroll_offset, selected) = {
+                let p = self.palette.as_ref().unwrap();
+                (
+                    p.input.is_dragging,
+                    p.filtered.len(),
+                    p.scroll_offset,
+                    p.selected,
+                )
+            };
+            let rects =
+                PaletteRects::compute_with_scroll(win_w, win_h, filtered_len, scroll_offset);
+            if is_dragging {
+                let text_start_x = rects.input.0 + 40;
+                if let Some(p) = &mut self.palette {
+                    let mut input = std::mem::take(&mut p.input);
+                    self.handle_text_input_drag(&mut input, mx, text_start_x);
+                    if let Some(p) = &mut self.palette {
+                        p.input = input;
+                    }
+                }
+            }
+            let is_scrollbar_hovered = rects.scrollbar.is_some_and(|(track, _)| {
+                crate::renderer::ScrollbarRects::hit(track, rects.card.0 + rects.card.2, mx, my)
+            });
+            let hovered_item = rects.item_at_with_offset(mx, my, scroll_offset);
+            if let Some(idx) = hovered_item {
+                if selected != idx {
+                    if let Some(p) = &mut self.palette {
+                        p.selected = idx;
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            if let Some(w) = &self.window {
+                let cursor = if hovered_item.is_some() || is_scrollbar_hovered {
+                    winit::window::CursorIcon::Pointer
+                } else if PaletteRects::inside(mx, my, rects.input) {
+                    winit::window::CursorIcon::Text
+                } else {
+                    winit::window::CursorIcon::Default
+                };
+                w.set_cursor(cursor);
+            }
+            return true;
+        }
+
+        false
     }
 }

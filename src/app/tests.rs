@@ -1038,8 +1038,8 @@ fn test_file_viewer_read_only_and_modes() {
     let mut tab = TerminalTab::new_file_viewer(TabId(99), temp_md.clone());
     let viewer = tab.file_viewer.as_mut().expect("viewer");
 
-    // Todo archivo arranca en modo lectura y los .md con render_markdown activo
-    assert!(viewer.is_read_only);
+    // Los archivos con permisos de escritura arrancan en modo edición y los .md con render_markdown activo
+    assert!(!viewer.is_read_only);
     assert!(viewer.render_markdown);
 
     // Auto-guardar global en configuración
@@ -1048,8 +1048,10 @@ fn test_file_viewer_read_only_and_modes() {
     config.terminal.auto_save = true;
     assert!(config.terminal.auto_save);
 
-    // Alternar modo lectura a edición
-    viewer.is_read_only = false;
+    // Alternar modo edición a lectura y viceversa
+    viewer.toggle_read_only();
+    assert!(viewer.is_read_only);
+    viewer.toggle_read_only();
     assert!(!viewer.is_read_only);
 
     // Alternar vista previa de markdown a raw
@@ -1135,6 +1137,7 @@ segunda",
     .expect("write");
     let mut tab = TerminalTab::new_file_viewer(TabId(99), path.clone());
     let v = tab.file_viewer.as_mut().expect("viewer");
+    v.is_read_only = true;
     assert!(v.is_read_only);
 
     v.select_all();
@@ -1168,6 +1171,27 @@ segunda"
     v.is_read_only = false;
     v.insert_char('x');
     assert!(v.is_dirty);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+#[allow(clippy::permissions_set_readonly_false)]
+fn test_file_viewer_readonly_file_attribute_sets_read_only() {
+    let path =
+        std::env::temp_dir().join(format!("tearminal_test_attr_ro_{}.txt", std::process::id()));
+    std::fs::write(&path, "contenido solo lectura").expect("write");
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_readonly(true);
+    let _ = std::fs::set_permissions(&path, perms);
+
+    let mut tab = TerminalTab::new_file_viewer(TabId(99), path.clone());
+    let v = tab.file_viewer.as_mut().expect("viewer");
+    assert!(v.is_read_only);
+
+    // Restaurar permisos para poder eliminarlo en Windows
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(&path, perms);
     let _ = std::fs::remove_file(path);
 }
 
@@ -1631,6 +1655,73 @@ b
 
     explorer.toggle_changes_only();
     assert!(explorer.items.iter().any(|i| i.name == "keep.txt"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_git_quick_actions_in_changes_view() {
+    let dir = std::env::temp_dir().join(format!(
+        "tearminal-test-quick-git-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["init"]).status();
+
+    let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
+    app.file_explorer.set_root(dir.clone());
+    app.file_explorer.visible = true;
+    app.file_explorer.toggle_changes_only();
+
+    let tracked = dir.join("tracked.txt");
+    std::fs::write(&tracked, "version 1\n").unwrap();
+    let _ = crate::explorer::git_stage_file(&dir, &tracked);
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["config", "user.name", "TestUser"]).status();
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd
+        .args(["config", "user.email", "test@example.com"])
+        .status();
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["commit", "-m", "init"]).status();
+
+    // Modificar tracked.txt (quedará unstaged)
+    std::fs::write(&tracked, "version 2 modified\n").unwrap();
+    app.file_explorer.refresh_git_status();
+    assert_eq!(app.file_explorer.items.len(), 1);
+    assert!(app.file_explorer.items[0].is_unstaged);
+    assert!(!app.file_explorer.items[0].is_staged);
+
+    // Stage rápido
+    app.execute_git_action(&tracked, crate::renderer::GitActionKind::Stage, false);
+    assert_eq!(app.file_explorer.items.len(), 1);
+    assert!(app.file_explorer.items[0].is_staged);
+    assert!(!app.file_explorer.items[0].is_unstaged);
+
+    // Unstage rápido
+    app.execute_git_action(&tracked, crate::renderer::GitActionKind::Unstage, false);
+    assert_eq!(app.file_explorer.items.len(), 1);
+    assert!(app.file_explorer.items[0].is_unstaged);
+    assert!(!app.file_explorer.items[0].is_staged);
+
+    // Discard rápido
+    app.execute_git_action(&tracked, crate::renderer::GitActionKind::Discard, false);
+    assert_eq!(app.file_explorer.items.len(), 0);
+    assert_eq!(std::fs::read_to_string(&tracked).unwrap(), "version 1\n");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2431,8 +2522,11 @@ fn test_fs_changed_event_refreshes_explorer_and_git_status() {
 
     // Debe haber detectado el archivo modificado
     assert_eq!(
-        app.file_explorer.git_statuses.get(&file_path),
-        Some(&crate::explorer::GitFileStatus::Modified)
+        app.file_explorer
+            .git_statuses
+            .get(&file_path)
+            .map(|s| s.status),
+        Some(crate::explorer::GitFileStatus::Modified)
     );
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -3186,4 +3280,97 @@ fn test_spaces_are_split_between_this_computer_and_remote_machines() {
         };
         assert_eq!(app.spaces_hit(p.0 + 4, p.1 + 4, win_h), expect);
     }
+}
+
+#[test]
+fn test_drag_and_drop_file_to_terminal_pastes_quoted_path() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let sample = std::path::PathBuf::from(r"C:\Users\TEArminal\My Document.txt");
+    app.on_file_dropped(sample);
+    // Verificar que la pestaña sigue siendo de terminal válida
+    assert_eq!(app.tabs.len(), 1);
+    assert!(!app.tabs[0].is_settings);
+    assert!(app.tabs[0].file_viewer.is_none());
+}
+
+#[test]
+fn test_drag_and_drop_file_to_file_viewer_opens_file() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let cargo_toml = std::path::PathBuf::from("Cargo.toml");
+    app.open_file_in_viewer(&cargo_toml, false);
+    assert!(app.tabs[app.active_tab_index].file_viewer.is_some());
+
+    let build_rs = std::path::PathBuf::from("build.rs");
+    if build_rs.exists() {
+        app.on_file_dropped(build_rs.clone());
+        assert_eq!(
+            app.tabs[app.active_tab_index]
+                .file_viewer
+                .as_ref()
+                .unwrap()
+                .path,
+            build_rs
+        );
+    }
+}
+
+#[test]
+fn test_drag_and_drop_targeting_split_pane_under_mouse() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    app.split_active_pane(SplitDirection::Horizontal);
+    assert_eq!(app.tabs[0].panes.len(), 2);
+    let (win_w, win_h) = app.window_size();
+    let rects = app.active_tab_pane_rects(win_w, win_h);
+    assert_eq!(rects.len(), 2);
+
+    // Colocar el ratón en el segundo panel
+    let r2 = &rects[1];
+    app.mouse_pos = winit::dpi::PhysicalPosition::new((r2.x + 10) as f64, (r2.y + 10) as f64);
+
+    let test_file = std::path::PathBuf::from(r"C:\test\code.rs");
+    app.on_file_dropped(test_file);
+
+    // El panel activo debe ser el segundo panel bajo el cursor
+    assert_eq!(app.tabs[0].active_pane_id, r2.pane_id);
+}
+
+#[test]
+fn test_explorer_drag_to_terminal_and_click_behavior() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    app.file_explorer.visible = true;
+    app.file_explorer.items = vec![crate::explorer::ExplorerItem {
+        name: "Cargo.toml".into(),
+        path: std::path::PathBuf::from("Cargo.toml"),
+        is_dir: false,
+        depth: 0,
+        ..Default::default()
+    }];
+
+    let (win_w, _win_h) = app.window_size();
+    let panel_w = app.panel_width();
+    let panel_x = win_w.saturating_sub(panel_w);
+
+    // 1. Iniciar arrastre desde el explorador
+    app.explorer_drag = Some(crate::app::ExplorerDragState {
+        path: std::path::PathBuf::from("Cargo.toml"),
+        start_pos: (panel_x + 50, 100),
+        is_dir: false,
+        idx: 0,
+        is_dragging: false,
+    });
+
+    // 2. Mover ratón hacia la terminal (mx < panel_x)
+    app.on_cursor_moved(winit::dpi::PhysicalPosition::new(
+        (panel_x.saturating_sub(50)) as f64,
+        100.0,
+    ));
+    assert!(app.explorer_drag.as_ref().unwrap().is_dragging);
+
+    // 3. Soltar el ratón en la terminal
+    app.on_mouse_input(
+        winit::event::ElementState::Released,
+        winit::event::MouseButton::Left,
+    );
+    // El drag terminó y se consumió
+    assert!(app.explorer_drag.is_none());
 }

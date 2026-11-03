@@ -147,9 +147,7 @@ impl TearminalApp {
             self.tabs.iter().position(|t| {
                 t.space == space
                     && t.is_preview
-                    && t.file_viewer
-                        .as_ref()
-                        .is_some_and(|v| !v.is_dirty && v.is_read_only)
+                    && t.file_viewer.as_ref().is_some_and(|v| !v.is_dirty)
             })
         };
         match old_preview {
@@ -897,6 +895,62 @@ impl TearminalApp {
         let cmd = format!("\x15cd -- {}\r", crate::ssh::quote(dir));
         pane.pty.write_input(cmd.as_bytes());
         true
+    }
+
+    /// Ejecuta una acción rápida de Git (Stage, Unstage, Discard) sobre un archivo de la pestaña «Cambios»
+    pub(crate) fn execute_git_action(
+        &mut self,
+        path: &std::path::Path,
+        action: crate::renderer::GitActionKind,
+        is_untracked: bool,
+    ) {
+        let Some(repo_root) = self.file_explorer.git_root.clone() else {
+            return;
+        };
+        match action {
+            crate::renderer::GitActionKind::Stage => {
+                let _ = crate::explorer::git_stage_file(&repo_root, path);
+            }
+            crate::renderer::GitActionKind::Unstage => {
+                let _ = crate::explorer::git_unstage_file(&repo_root, path);
+            }
+            crate::renderer::GitActionKind::Discard => {
+                let _ = crate::explorer::git_discard_file(&repo_root, path, is_untracked);
+            }
+        }
+        self.file_explorer.refresh_git_status();
+        self.sync_viewer_on_git_action(path, action == crate::renderer::GitActionKind::Discard);
+    }
+
+    /// Sincroniza cualquier pestaña de visor abierta sobre el archivo tras una acción de Git
+    pub(crate) fn sync_viewer_on_git_action(&mut self, path: &std::path::Path, is_discard: bool) {
+        if let Some(pos) = self.tabs.iter().position(|t| {
+            t.file_viewer
+                .as_ref()
+                .map(|v| v.path == path && v.remote_destination.is_none())
+                .unwrap_or(false)
+        }) {
+            if is_discard && !path.exists() {
+                // El archivo fue descartado y eliminado (era untracked)
+                self.close_tab(pos);
+                return;
+            }
+            if let Some(v) = self.tabs[pos].file_viewer.as_mut() {
+                if is_discard {
+                    if let Ok(bytes) = std::fs::read(path) {
+                        let decoded = crate::app::viewer::DecodedText::decode(&bytes);
+                        v.lines = decoded.lines.clone();
+                        v.original_lines = decoded.lines;
+                        v.is_dirty = false;
+                        v.disk_mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
+                    }
+                }
+                v.side_by_side_cache.take();
+                v.git_marks.take();
+                v.edit_gen += 1;
+            }
+            self.spawn_git_head_lines(path.to_path_buf());
+        }
     }
 }
 

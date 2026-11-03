@@ -11,68 +11,22 @@ impl TearminalApp {
         physical_key: PhysicalKey,
         event_type: KeyEventType,
     ) {
-        // Si la terminal no tiene el foco activo, ignorar la entrada de teclado
         if !self.is_focused {
             return;
         }
 
-        // En eventos de liberación (Release), solo procesar si Kitty Keyboard Protocol tiene activo el flag 2 (report event types)
-        if event_type == KeyEventType::Release {
-            if let Some(active) = self.tabs[self.active_tab_index].active_pane() {
-                let flags = active.terminal.kitty_keyboard_flags;
-                if (flags & 2) != 0 {
-                    let (ctrl, shift, alt, _altgr, win) = self.physical_modifiers();
-                    if let Some(seq) = encode_kitty_key(
-                        &logical_key,
-                        physical_key,
-                        ctrl,
-                        shift,
-                        alt,
-                        win,
-                        event_type,
-                        flags,
-                    ) {
-                        active.pty.write_input(&seq);
-                    }
-                }
-            }
+        if self.handle_key_early_release(&logical_key, physical_key, event_type) {
             return;
         }
 
-        // Con el menú contextual abierto, Escape solo lo cierra; cualquier otra tecla lo cierra y sigue su curso
+        if self.handle_key_overlays(&logical_key, physical_key, &text) {
+            return;
+        }
+
         let is_modifier = matches!(
             logical_key,
             Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
         );
-        if !is_modifier && self.context_menu.take().is_some() {
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
-            if logical_key == Key::Named(NamedKey::Escape) {
-                return;
-            }
-        }
-
-        // Selector de pantalla encendida: Escape lo cierra
-        if self.keep_awake_popup_open && logical_key == Key::Named(NamedKey::Escape) {
-            self.keep_awake_popup_open = false;
-            self.hovered_keep_awake_option = None;
-            if let Some(w) = &self.window {
-                w.request_redraw();
-            }
-            return;
-        }
-
-        // Con el modal «Añadir máquina» abierto, interceptar teclado por completo
-        if self.machine_modal.is_some() {
-            self.handle_machine_key(&logical_key, physical_key, &text);
-            return;
-        }
-
-        // Con la paleta de comandos abierta, interceptar teclado por completo
-        if self.palette.is_some() && self.handle_palette_key(&logical_key, physical_key, &text) {
-            return;
-        }
 
         let (ctrl, shift, alt, altgr, win) = self.physical_modifiers();
 
@@ -175,6 +129,115 @@ impl TearminalApp {
             return;
         }
 
+        if self.handle_key_explorer_inputs(&logical_key, physical_key, &text) {
+            return;
+        }
+
+        if self.handle_key_settings(&logical_key, physical_key, &text, ctrl, shift) {
+            return;
+        }
+
+        if self.handle_key_app_shortcuts(&logical_key, physical_key, &text, ctrl, shift, alt) {
+            return;
+        }
+
+        if self.handle_key_file_viewer(&logical_key, physical_key, &text, ctrl, shift, alt) {
+            return;
+        }
+
+        self.handle_key_terminal(
+            &logical_key,
+            physical_key,
+            text,
+            ctrl,
+            shift,
+            alt,
+            altgr,
+            win,
+            event_type,
+        );
+    }
+
+    fn handle_key_early_release(
+        &self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        event_type: KeyEventType,
+    ) -> bool {
+        if event_type == KeyEventType::Release {
+            if let Some(active) = self.tabs[self.active_tab_index].active_pane() {
+                let flags = active.terminal.kitty_keyboard_flags;
+                if (flags & 2) != 0 {
+                    let (ctrl, shift, alt, _altgr, win) = self.physical_modifiers();
+                    if let Some(seq) = encode_kitty_key(
+                        logical_key,
+                        physical_key,
+                        ctrl,
+                        shift,
+                        alt,
+                        win,
+                        event_type,
+                        flags,
+                    ) {
+                        active.pty.write_input(&seq);
+                    }
+                }
+            }
+            return true;
+        }
+        false
+    }
+
+    fn handle_key_overlays(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+    ) -> bool {
+        // Con el menú contextual abierto, Escape solo lo cierra; cualquier otra tecla lo cierra y sigue su curso
+        let is_modifier = matches!(
+            logical_key,
+            Key::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
+        );
+        if !is_modifier && self.context_menu.take().is_some() {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            if *logical_key == Key::Named(NamedKey::Escape) {
+                return true;
+            }
+        }
+
+        // Selector de pantalla encendida: Escape lo cierra
+        if self.keep_awake_popup_open && *logical_key == Key::Named(NamedKey::Escape) {
+            self.keep_awake_popup_open = false;
+            self.hovered_keep_awake_option = None;
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return true;
+        }
+
+        // Con el modal «Añadir máquina» abierto, interceptar teclado por completo
+        if self.machine_modal.is_some() {
+            self.handle_machine_key(logical_key, physical_key, text);
+            return true;
+        }
+
+        // Con la paleta de comandos abierta, interceptar teclado por completo
+        if self.palette.is_some() && self.handle_palette_key(logical_key, physical_key, text) {
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_key_explorer_inputs(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+    ) -> bool {
         // Nombre en edición en el explorador (nuevo archivo/carpeta o renombrar): la barra absorbe todo el teclado
         if self.file_explorer.visible && self.file_explorer.edit.is_some() {
             match &logical_key {
@@ -189,7 +252,7 @@ impl TearminalApp {
                     if let Some(mut edit) = self.file_explorer.edit.take() {
                         let (_, changed) = self.handle_text_input_key(
                             &mut edit.input,
-                            &logical_key,
+                            logical_key,
                             physical_key,
                             text.as_deref(),
                         );
@@ -203,7 +266,7 @@ impl TearminalApp {
             if let Some(w) = &self.window {
                 w.request_redraw();
             }
-            return;
+            return true;
         }
 
         // Filtro rápido de archivos en el explorador: la barra absorbe el teclado mientras esté abierta
@@ -219,21 +282,21 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowUp) => {
                     self.file_explorer.navigate_selection(-1, max_visible);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowDown) => {
                     self.file_explorer.navigate_selection(1, max_visible);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::Enter) => {
                     if let Some(path) = self.file_explorer.handle_enter(max_visible) {
@@ -243,13 +306,13 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 _ => {
                     if let Some(mut filter_input) = self.file_explorer.filter.take() {
                         let (_, changed) = self.handle_text_input_key(
                             &mut filter_input,
-                            &logical_key,
+                            logical_key,
                             physical_key,
                             text.as_deref(),
                         );
@@ -261,11 +324,22 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
             }
         }
 
+        false
+    }
+
+    fn handle_key_settings(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+        ctrl: bool,
+        shift: bool,
+    ) -> bool {
         // Si estamos en la pestaña de Ajustes, capturar Escape, Ctrl+, o Ctrl+W para cerrarla/alternarla
         let active_is_settings = self
             .tabs
@@ -274,13 +348,13 @@ impl TearminalApp {
             .unwrap_or(false);
         if active_is_settings {
             if self.settings_page_state.editing_setting == Some(EditingSettingField::ThemeSearch) {
-                self.edit_theme_search(&logical_key, physical_key, text.as_deref());
-                return;
+                self.edit_theme_search(logical_key, physical_key, text.as_deref());
+                return true;
             }
             if self.settings_page_state.editing_setting == Some(EditingSettingField::GeneralSearch)
             {
-                self.edit_general_settings_search(&logical_key, physical_key, text.as_deref());
-                return;
+                self.edit_general_settings_search(logical_key, physical_key, text.as_deref());
+                return true;
             }
             // Edición inline de campo numérico
             if let Some(editing_field) = self.settings_page_state.editing_setting {
@@ -339,21 +413,21 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     Key::Named(NamedKey::Escape) => {
                         self.settings_page_state.editing_setting = None;
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     Key::Named(NamedKey::Backspace) => {
                         self.settings_page_state.setting_input_buffer.pop();
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     _ => {
                         if let Some(ref t) = text {
@@ -367,7 +441,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                     }
                 }
@@ -389,64 +463,81 @@ impl TearminalApp {
                 self.settings_page_state.section = order[next];
                 self.settings_page_state.scroll_y = 0;
                 self.request_redraw();
-                return;
+                return true;
             }
 
             if matches!(&logical_key, Key::Named(NamedKey::Escape))
-                || (ctrl && !shift && key_is_char(&logical_key, physical_key, ','))
+                || (ctrl && !shift && key_is_char(logical_key, physical_key, ','))
             {
                 crate::logger::log("-> Cerrando Ajustes");
                 self.close_settings();
-                return;
+                return true;
             }
-            if ctrl && !shift && key_is_char(&logical_key, physical_key, 'f') {
+            if ctrl && !shift && key_is_char(logical_key, physical_key, 'f') {
                 self.settings_page_state.editing_setting = Some(EditingSettingField::GeneralSearch);
                 self.cursor_on = true;
                 self.cursor_timer = Instant::now();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
-                return;
+                return true;
             }
-            if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
+            if ctrl && !shift && key_is_char(logical_key, physical_key, 'w') {
                 crate::logger::log("-> Cerrando pestaña de Ajustes con Ctrl+W");
                 self.close_tab(self.active_tab_index);
-                return;
+                return true;
             }
         }
 
+        false
+    }
+
+    fn handle_key_app_shortcuts(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
+        let active_is_settings = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|t| t.is_settings)
+            .unwrap_or(false);
         // Abrir / alternar pestaña de Ajustes (Ctrl + ,)
-        if ctrl && !shift && key_is_char(&logical_key, physical_key, ',') {
+        if ctrl && !shift && key_is_char(logical_key, physical_key, ',') {
             crate::logger::log("-> Hotkey: Abrir / alternar Ajustes (Ctrl+,)");
             self.open_or_switch_settings_tab();
-            return;
+            return true;
         }
 
         // Paleta de comandos y búsqueda central (Ctrl + K)
-        if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'k') {
+        if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'k') {
             crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+K)");
             self.toggle_palette();
-            return;
+            return true;
         }
 
         // Filtro rápido de archivos en el árbol del explorador (Ctrl + P)
-        if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'p') {
+        if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'p') {
             crate::logger::log("-> Hotkey: Filtro rápido de archivos (Ctrl+P)");
             self.open_explorer_filter();
-            return;
+            return true;
         }
 
         // Búsqueda / filtro en el explorador con Ctrl+F si tiene el foco
         if ctrl
             && !shift
             && !alt
-            && key_is_char(&logical_key, physical_key, 'f')
+            && key_is_char(logical_key, physical_key, 'f')
             && self.file_explorer.visible
             && self.file_explorer.is_focused
         {
             crate::logger::log("-> Hotkey: Filtro en explorador (Ctrl+F)");
             self.open_explorer_filter();
-            return;
+            return true;
         }
 
         // Búsqueda en el historial de la terminal activa (Ctrl + Shift + F) y su barra abierta
@@ -454,14 +545,14 @@ impl TearminalApp {
             .tabs
             .get(self.active_tab_index)
             .is_some_and(|t| t.file_viewer.is_none() && !t.is_settings);
-        if term_tab && ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'f') {
+        if term_tab && ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'f') {
             if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
                 pane.terminal.open_search();
             }
             self.cursor_on = true;
             self.cursor_timer = Instant::now();
             self.request_redraw();
-            return;
+            return true;
         }
         if term_tab
             && self.tabs[self.active_tab_index]
@@ -479,14 +570,14 @@ impl TearminalApp {
                     pane.terminal.close_search();
                 }
                 self.request_redraw();
-                return;
+                return true;
             }
             if let Some(forward) = step {
                 if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
                     pane.terminal.search_step(forward);
                 }
                 self.request_redraw();
-                return;
+                return true;
             }
             let mut input = self.tabs[self.active_tab_index]
                 .active_pane_mut()
@@ -494,7 +585,7 @@ impl TearminalApp {
                 .map(|s| std::mem::take(&mut s.input))
                 .unwrap_or_default();
             let (consumed, changed) =
-                self.handle_text_input_key(&mut input, &logical_key, physical_key, text.as_deref());
+                self.handle_text_input_key(&mut input, logical_key, physical_key, text.as_deref());
             if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
                 if let Some(s) = pane.terminal.search.as_mut() {
                     s.input = input;
@@ -505,90 +596,90 @@ impl TearminalApp {
             }
             if consumed {
                 self.request_redraw();
-                return;
+                return true;
             }
         }
 
         // --- ATAJOS DE PANELES DIVIDIDOS (SPLIT PANES) CANÓNICOS (Alt+Shift o Ctrl+Alt) ---
-        let is_d = key_is_char(&logical_key, physical_key, 'd');
-        let is_v = key_is_char(&logical_key, physical_key, 'v');
-        let is_w = key_is_char(&logical_key, physical_key, 'w');
+        let is_d = key_is_char(logical_key, physical_key, 'd');
+        let is_v = key_is_char(logical_key, physical_key, 'v');
+        let is_w = key_is_char(logical_key, physical_key, 'w');
         let is_split_mod = (alt && shift) || (ctrl && alt);
 
         // 1. División Horizontal: Alt + Shift + D (o Ctrl + Alt + D) -> Lanzar terminal debajo
         if is_split_mod && is_d {
             crate::logger::log("-> Hotkey: Split Horizontal (Alt+Shift+D)");
             self.split_active_pane(SplitDirection::Horizontal);
-            return;
+            return true;
         }
 
         // 2. División Vertical: Alt + Shift + V (o Ctrl + Alt + V) -> Lanzar terminal al lado
         if is_split_mod && is_v {
             crate::logger::log("-> Hotkey: Split Vertical (Alt+Shift+V)");
             self.split_active_pane(SplitDirection::Vertical);
-            return;
+            return true;
         }
 
         // 3. Cerrar panel activo en split: Alt + Shift + W (o Ctrl + Alt + W)
         if is_split_mod && is_w {
             crate::logger::log("-> Hotkey: Cerrar panel activo (Alt+Shift+W)");
             self.close_active_pane();
-            return;
+            return true;
         }
 
         // 4. Navegación direccional entre paneles: Alt + Shift + Flechas (o Ctrl + Alt + Flechas)
         if is_split_mod {
             let is_up = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowUp))
-                || logical_key == Key::Named(NamedKey::ArrowUp);
+                || *logical_key == Key::Named(NamedKey::ArrowUp);
             let is_down = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowDown))
-                || logical_key == Key::Named(NamedKey::ArrowDown);
+                || *logical_key == Key::Named(NamedKey::ArrowDown);
             let is_left = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
-                || logical_key == Key::Named(NamedKey::ArrowLeft);
+                || *logical_key == Key::Named(NamedKey::ArrowLeft);
             let is_right = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowRight))
-                || logical_key == Key::Named(NamedKey::ArrowRight);
+                || *logical_key == Key::Named(NamedKey::ArrowRight);
 
             if is_up {
                 self.navigate_pane(PaneDirection::Up);
-                return;
+                return true;
             }
             if is_down {
                 self.navigate_pane(PaneDirection::Down);
-                return;
+                return true;
             }
             if is_left {
                 self.navigate_pane(PaneDirection::Left);
-                return;
+                return true;
             }
             if is_right {
                 self.navigate_pane(PaneDirection::Right);
-                return;
+                return true;
             }
         }
 
         // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) CANÓNICOS ---
         // 1. Nueva pestaña / terminal: Ctrl + T
-        if ctrl && !alt && !shift && key_is_char(&logical_key, physical_key, 't') {
+        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 't') {
             crate::logger::log("-> Hotkey: Nueva terminal (Ctrl+T)");
             self.create_new_tab();
-            return;
+            return true;
         }
 
         // Nueva ventana: Ctrl + Shift + N
-        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'n') {
+        if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'n') {
             crate::logger::log("-> Hotkey: Nueva ventana (Ctrl+Shift+N)");
             self.new_window_request = true;
-            return;
+            return true;
         }
 
         // 2. Cerrar pestaña activa: Ctrl + W
-        if ctrl && !alt && !shift && key_is_char(&logical_key, physical_key, 'w') {
+        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 'w') {
             crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+W)");
             self.close_tab(self.active_tab_index);
-            return;
+            return true;
         }
 
         // 3. Conmutar pestaña siguiente / anterior: Ctrl + Tab / Ctrl + Shift + Tab
-        if ctrl && logical_key == Key::Named(NamedKey::Tab) {
+        if ctrl && *logical_key == Key::Named(NamedKey::Tab) {
             if shift {
                 crate::logger::log("-> Hotkey: Pestaña anterior");
                 self.prev_tab();
@@ -596,7 +687,7 @@ impl TearminalApp {
                 crate::logger::log("-> Hotkey: Pestaña siguiente");
                 self.next_tab();
             }
-            return;
+            return true;
         }
 
         // 4. Cambiar directamente a pestaña 1-9: Ctrl + 1..9
@@ -622,44 +713,44 @@ impl TearminalApp {
                 if let Some(&real) = self.visible_tab_indices().get(idx) {
                     crate::logger::log(&format!("-> Hotkey: Ir a pestaña {}", idx + 1));
                     self.switch_to_tab(real);
-                    return;
+                    return true;
                 }
             }
         }
 
         // Spaces: Ctrl+Shift+T nuevo, Ctrl+Alt+↑/↓ anterior / siguiente, Ctrl+Shift+B colapsa el panel
-        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 't') {
+        if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 't') {
             let cwd = self.active_cwd();
             self.create_space(cwd);
-            return;
+            return true;
         }
-        if ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'b') {
+        if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'b') {
             self.toggle_spaces_panel();
-            return;
+            return true;
         }
         if ctrl && alt && !shift {
             match &logical_key {
                 Key::Named(NamedKey::ArrowDown) => {
                     self.step_space(true);
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowUp) => {
                     self.step_space(false);
-                    return;
+                    return true;
                 }
                 _ => {}
             }
         }
 
         // 5. Alternar barra lateral (Sidebar toggle): Ctrl + B
-        if ctrl && !alt && !shift && key_is_char(&logical_key, physical_key, 'b') {
+        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 'b') {
             crate::logger::log("-> Hotkey: Alternar barra lateral (Ctrl+B)");
             self.toggle_sidebar();
-            return;
+            return true;
         }
 
         // Alternar / enfocar explorador lateral de archivos: Ctrl + Shift + E o Alt + E
-        let is_e = key_is_char(&logical_key, physical_key, 'e');
+        let is_e = key_is_char(logical_key, physical_key, 'e');
         if (ctrl && shift && !alt && is_e) || (alt && !ctrl && !shift && is_e) {
             crate::logger::log("-> Hotkey: Alternar / enfocar explorador de archivos");
             if !self.file_explorer.visible {
@@ -687,57 +778,57 @@ impl TearminalApp {
             } else {
                 self.toggle_file_explorer();
             }
-            return;
+            return true;
         }
 
         // 6. Pegar desde el portapapeles: Ctrl + V
-        if ctrl && !shift && key_is_char(&logical_key, physical_key, 'v') {
+        if ctrl && !shift && key_is_char(logical_key, physical_key, 'v') {
             self.paste_from_clipboard();
-            return;
+            return true;
         }
 
         // 7. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
         if ctrl && !shift {
-            if key_is_char(&logical_key, physical_key, '+')
-                || key_is_char(&logical_key, physical_key, '=')
+            if key_is_char(logical_key, physical_key, '+')
+                || key_is_char(logical_key, physical_key, '=')
             {
                 self.adjust_font_size(1.0);
-                return;
+                return true;
             }
-            if key_is_char(&logical_key, physical_key, '-')
-                || key_is_char(&logical_key, physical_key, '_')
+            if key_is_char(logical_key, physical_key, '-')
+                || key_is_char(logical_key, physical_key, '_')
             {
                 self.adjust_font_size(-1.0);
-                return;
+                return true;
             }
-            if key_is_char(&logical_key, physical_key, '0') {
+            if key_is_char(logical_key, physical_key, '0') {
                 self.reset_font_size();
-                return;
+                return true;
             }
         } else if ctrl && shift {
-            if key_is_char(&logical_key, physical_key, '+')
-                || key_is_char(&logical_key, physical_key, '=')
+            if key_is_char(logical_key, physical_key, '+')
+                || key_is_char(logical_key, physical_key, '=')
             {
                 self.adjust_font_size(1.0);
-                return;
+                return true;
             }
-            if key_is_char(&logical_key, physical_key, '_')
-                || key_is_char(&logical_key, physical_key, '-')
+            if key_is_char(logical_key, physical_key, '_')
+                || key_is_char(logical_key, physical_key, '-')
             {
                 self.adjust_font_size(-1.0);
-                return;
+                return true;
             }
         }
 
         // 8. Recarga dinámica de configuración (Ctrl + Shift + ,)
-        if ctrl && shift && key_is_char(&logical_key, physical_key, ',') {
+        if ctrl && shift && key_is_char(logical_key, physical_key, ',') {
             self.reload_config();
-            return;
+            return true;
         }
 
         // Si estamos en la pestaña de Ajustes, absorber el resto de teclas
         if active_is_settings {
-            return;
+            return true;
         }
 
         // Navegación con teclado en el explorador de archivos cuando tiene foco
@@ -764,21 +855,21 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowDown) => {
                     self.file_explorer.navigate_selection(1, max_visible);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowLeft) => {
                     self.file_explorer.handle_arrow_left(max_visible);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::ArrowRight) => {
                     if let Some(path) = self.file_explorer.handle_arrow_right(max_visible) {
@@ -787,7 +878,7 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::Enter) => {
                     if let Some(path) = self.file_explorer.handle_enter(max_visible) {
@@ -796,7 +887,7 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::Backspace) => {
                     let remote_parent = if self.file_explorer.remote_session.is_some() {
@@ -820,7 +911,7 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::F2) => {
                     self.file_explorer
@@ -828,26 +919,38 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::Delete) => {
                     self.delete_explorer_selection();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 Key::Named(NamedKey::Escape) => {
                     self.file_explorer.is_focused = false;
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
                 _ => {}
             }
         }
 
+        false
+    }
+
+    fn handle_key_file_viewer(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
         // Si la pestaña activa es un visor de archivos, gestionar edición, navegación y atajos
         let is_viewer_active = self
             .tabs
@@ -867,18 +970,18 @@ impl TearminalApp {
                 ((win_h.saturating_sub(top_offset + status_bar_h + 38)) / row_h.max(16)).max(1);
 
             // Ajuste de línea global: Alt + Z
-            if alt && !ctrl && !shift && key_is_char(&logical_key, physical_key, 'z') {
+            if alt && !ctrl && !shift && key_is_char(logical_key, physical_key, 'z') {
                 self.toggle_word_wrap();
-                return;
+                return true;
             }
 
             // 1. Guardar archivo: Ctrl + S
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 's') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 's') {
                 self.save_active_viewer();
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
-                return;
+                return true;
             }
 
             // 2. Cerrar visor o cancelar selección: Escape o Ctrl + W
@@ -889,37 +992,37 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if viewer.has_selection() {
                         viewer.clear_selection();
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                 }
                 self.close_tab(self.active_tab_index);
-                return;
+                return true;
             }
-            if ctrl && !shift && key_is_char(&logical_key, physical_key, 'w') {
+            if ctrl && !shift && key_is_char(logical_key, physical_key, 'w') {
                 self.close_tab(self.active_tab_index);
-                return;
+                return true;
             }
 
             // Búsqueda interna en el visor: Ctrl + F
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'f') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'f') {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.open_search(visible_lines);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
-                return;
+                return true;
             }
 
             // Ir a línea en el visor: Ctrl + G
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'g') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'g') {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     if !viewer.is_binary {
                         viewer.open_goto();
@@ -928,7 +1031,7 @@ impl TearminalApp {
                         }
                     }
                 }
-                return;
+                return true;
             }
 
             // Interceptación de entrada de teclado cuando la búsqueda interna está abierta
@@ -939,7 +1042,7 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if matches!(logical_key, Key::Named(NamedKey::Enter)) {
                         if shift {
@@ -950,7 +1053,7 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if matches!(logical_key, Key::Named(NamedKey::F3)) {
                         if shift {
@@ -961,27 +1064,27 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if matches!(logical_key, Key::Named(NamedKey::ArrowUp)) {
                         viewer.search_prev(visible_lines);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                     if matches!(logical_key, Key::Named(NamedKey::ArrowDown)) {
                         viewer.search_next(visible_lines);
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
 
                     let mut input = std::mem::take(&mut viewer.search_input);
                     let (consumed, changed) = self.handle_text_input_key(
                         &mut input,
-                        &logical_key,
+                        logical_key,
                         physical_key,
                         text.as_deref(),
                     );
@@ -996,13 +1099,13 @@ impl TearminalApp {
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
-                        return;
+                        return true;
                     }
                 }
             }
 
             // Seleccionar todo: Ctrl + A
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'a') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'a') {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.select_all();
                     viewer.ensure_cursor_visible(visible_lines);
@@ -1010,11 +1113,11 @@ impl TearminalApp {
                         w.request_redraw();
                     }
                 }
-                return;
+                return true;
             }
 
             // Deshacer: Ctrl + Z
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'z') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'z') {
                 let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.undo();
@@ -1026,12 +1129,12 @@ impl TearminalApp {
                         w.request_redraw();
                     }
                 }
-                return;
+                return true;
             }
 
             // Rehacer: Ctrl + Y o Ctrl + Shift + Z
-            if (ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'y'))
-                || (ctrl && shift && !alt && key_is_char(&logical_key, physical_key, 'z'))
+            if (ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'y'))
+                || (ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'z'))
             {
                 let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
@@ -1044,15 +1147,15 @@ impl TearminalApp {
                         w.request_redraw();
                     }
                 }
-                return;
+                return true;
             }
 
             // Cortar selección: Ctrl + X
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'x') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'x') {
                 let auto_save = self.config.terminal.auto_save;
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     if !viewer.is_editable() {
-                        return;
+                        return true;
                     }
                     if let Some(sel_text) = viewer.selected_text() {
                         super::clipboard::copy_text(&mut self.clipboard, &sel_text);
@@ -1066,11 +1169,11 @@ impl TearminalApp {
                         }
                     }
                 }
-                return;
+                return true;
             }
 
             // Copiar selección o línea actual: Ctrl + C
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'c') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'c') {
                 if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
                     let text = if let Some(sel_text) = viewer.selected_text() {
                         Some(sel_text)
@@ -1084,24 +1187,24 @@ impl TearminalApp {
                         super::clipboard::copy_text(&mut self.clipboard, &txt);
                     }
                 }
-                return;
+                return true;
             }
 
             // Alternar modo solo lectura / edición: Ctrl + E
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'e') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'e') {
                 if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                     viewer.toggle_read_only();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
             }
 
             // Pegar texto del portapapeles: Ctrl + V (el modo lectura lo bloquea el propio visor)
-            if ctrl && !shift && !alt && key_is_char(&logical_key, physical_key, 'v') {
+            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'v') {
                 self.paste_from_clipboard();
-                return;
+                return true;
             }
 
             // 3. Edición de texto y navegación de cursor
@@ -1143,7 +1246,7 @@ impl TearminalApp {
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
-                    return;
+                    return true;
                 }
 
                 if !viewer.is_binary {
@@ -1174,7 +1277,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::ArrowDown) => {
                             if ctrl {
@@ -1199,7 +1302,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::ArrowLeft) => {
                             if ctrl {
@@ -1226,7 +1329,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::ArrowRight) => {
                             let line_len = viewer.line_len(viewer.cursor_line);
@@ -1256,7 +1359,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::Home) => {
                             if ctrl {
@@ -1274,7 +1377,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::End) => {
                             if ctrl {
@@ -1293,7 +1396,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::PageUp) => {
                             let page = visible_lines.saturating_sub(2).max(1);
@@ -1302,7 +1405,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::PageDown) => {
                             let page = visible_lines.saturating_sub(2).max(1);
@@ -1312,11 +1415,11 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::Enter) => {
                             if viewer.is_read_only {
-                                return;
+                                return true;
                             }
                             viewer.insert_newline();
                             if global_auto_save {
@@ -1326,11 +1429,11 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::Backspace) => {
                             if viewer.is_read_only {
-                                return;
+                                return true;
                             }
                             if ctrl {
                                 viewer.delete_word_left();
@@ -1344,11 +1447,11 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::Delete) => {
                             if viewer.is_read_only {
-                                return;
+                                return true;
                             }
                             if ctrl {
                                 viewer.delete_word_right();
@@ -1362,11 +1465,11 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::Tab) => {
                             if viewer.is_read_only {
-                                return;
+                                return true;
                             }
                             viewer.insert_tab();
                             if global_auto_save {
@@ -1376,13 +1479,13 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         _ => {
                             // Insertar caracteres de texto imprimible
                             if !ctrl && !alt {
                                 if viewer.is_read_only {
-                                    return;
+                                    return true;
                                 }
                                 if let Some(ref t) = text {
                                     for ch in t.chars() {
@@ -1397,7 +1500,7 @@ impl TearminalApp {
                                     if let Some(w) = &self.window {
                                         w.request_redraw();
                                     }
-                                    return;
+                                    return true;
                                 }
                             }
                         }
@@ -1410,7 +1513,7 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         Key::Named(NamedKey::ArrowDown) => {
                             viewer.scroll_offset = (viewer.scroll_offset + 1)
@@ -1418,15 +1521,31 @@ impl TearminalApp {
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
-                            return;
+                            return true;
                         }
                         _ => {}
                     }
                 }
             }
-            return;
+            return true;
         }
 
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_key_terminal(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: Option<SmolStr>,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+        _altgr: bool,
+        win: bool,
+        event_type: KeyEventType,
+    ) {
         // Obtener panel activo para entrada de teclado
         let active = match self.tabs[self.active_tab_index].active_pane_mut() {
             Some(p) => p,
@@ -1462,10 +1581,10 @@ impl TearminalApp {
         }
 
         // Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
-        if (ctrl && shift && key_is_char(&logical_key, physical_key, 'c'))
+        if (ctrl && shift && key_is_char(logical_key, physical_key, 'c'))
             || (ctrl
                 && !shift
-                && key_is_char(&logical_key, physical_key, 'c')
+                && key_is_char(logical_key, physical_key, 'c')
                 && active.terminal.has_selection())
         {
             if let Some(sel_text) = active.terminal.copy_selection_text() {
@@ -1480,7 +1599,7 @@ impl TearminalApp {
         let kitty_flags = active.terminal.kitty_keyboard_flags;
         if kitty_flags != 0 {
             if let Some(seq) = encode_kitty_key(
-                &logical_key,
+                logical_key,
                 physical_key,
                 ctrl,
                 shift,
@@ -1503,17 +1622,17 @@ impl TearminalApp {
 
         // Combinaciones con Alt (Alt + V para imágenes en Claude Code, Alt + Flechas)
         if alt && !ctrl {
-            if key_is_char(&logical_key, physical_key, 'v') {
+            if key_is_char(logical_key, physical_key, 'v') {
                 active.pty.write_input(b"\x1bv");
                 return;
             }
 
             let is_alt_left = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowLeft))
-                || logical_key == Key::Named(NamedKey::ArrowLeft);
+                || *logical_key == Key::Named(NamedKey::ArrowLeft);
             let is_alt_right = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowRight))
-                || logical_key == Key::Named(NamedKey::ArrowRight);
+                || *logical_key == Key::Named(NamedKey::ArrowRight);
             let is_alt_delete = matches!(physical_key, PhysicalKey::Code(KeyCode::Delete))
-                || logical_key == Key::Named(NamedKey::Delete);
+                || *logical_key == Key::Named(NamedKey::Delete);
 
             if is_alt_left {
                 active.pty.write_input(b"\x1bb"); // Salto palabra atrás
@@ -1581,7 +1700,7 @@ impl TearminalApp {
         }
 
         // Copiar salida del último comando del agente (Ctrl + Shift + O)
-        if ctrl && shift && key_is_char(&logical_key, physical_key, 'o') {
+        if ctrl && shift && key_is_char(logical_key, physical_key, 'o') {
             if let Some(output) = active.terminal.get_last_output_text() {
                 clipboard::copy_text(&mut self.clipboard, &output);
             }
@@ -1589,7 +1708,7 @@ impl TearminalApp {
         }
 
         // Limpiar pantalla y scrollback buffer (Ctrl + Shift + K)
-        if ctrl && shift && key_is_char(&logical_key, physical_key, 'k') {
+        if ctrl && shift && key_is_char(logical_key, physical_key, 'k') {
             active.terminal.clear_scrollback();
             active.pty.write_input(b"\x0c");
             if let Some(w) = &self.window {
@@ -1698,7 +1817,7 @@ impl TearminalApp {
         }
 
         // Scroll por página directo sin Shift
-        if logical_key == Key::Named(NamedKey::PageUp) {
+        if *logical_key == Key::Named(NamedKey::PageUp) {
             let half = (active.terminal.rows / 2).max(1);
             active.terminal.scroll_up(half);
             if let Some(w) = &self.window {
@@ -1706,7 +1825,7 @@ impl TearminalApp {
             }
             return;
         }
-        if logical_key == Key::Named(NamedKey::PageDown) {
+        if *logical_key == Key::Named(NamedKey::PageDown) {
             let half = (active.terminal.rows / 2).max(1);
             active.terminal.scroll_down(half);
             if let Some(w) = &self.window {
@@ -1817,4 +1936,275 @@ impl TearminalApp {
             }
         }
     }
+}
+
+pub(crate) fn key_code_to_char(code: KeyCode) -> Option<char> {
+    match code {
+        KeyCode::KeyA => Some('a'),
+        KeyCode::KeyB => Some('b'),
+        KeyCode::KeyC => Some('c'),
+        KeyCode::KeyD => Some('d'),
+        KeyCode::KeyE => Some('e'),
+        KeyCode::KeyF => Some('f'),
+        KeyCode::KeyG => Some('g'),
+        KeyCode::KeyH => Some('h'),
+        KeyCode::KeyI => Some('i'),
+        KeyCode::KeyJ => Some('j'),
+        KeyCode::KeyK => Some('k'),
+        KeyCode::KeyL => Some('l'),
+        KeyCode::KeyM => Some('m'),
+        KeyCode::KeyN => Some('n'),
+        KeyCode::KeyO => Some('o'),
+        KeyCode::KeyP => Some('p'),
+        KeyCode::KeyQ => Some('q'),
+        KeyCode::KeyR => Some('r'),
+        KeyCode::KeyS => Some('s'),
+        KeyCode::KeyT => Some('t'),
+        KeyCode::KeyU => Some('u'),
+        KeyCode::KeyV => Some('v'),
+        KeyCode::KeyW => Some('w'),
+        KeyCode::KeyX => Some('x'),
+        KeyCode::KeyY => Some('y'),
+        KeyCode::KeyZ => Some('z'),
+        KeyCode::Digit0 | KeyCode::Numpad0 => Some('0'),
+        KeyCode::Digit1 | KeyCode::Numpad1 => Some('1'),
+        KeyCode::Digit2 | KeyCode::Numpad2 => Some('2'),
+        KeyCode::Digit3 | KeyCode::Numpad3 => Some('3'),
+        KeyCode::Digit4 | KeyCode::Numpad4 => Some('4'),
+        KeyCode::Digit5 | KeyCode::Numpad5 => Some('5'),
+        KeyCode::Digit6 | KeyCode::Numpad6 => Some('6'),
+        KeyCode::Digit7 | KeyCode::Numpad7 => Some('7'),
+        KeyCode::Digit8 | KeyCode::Numpad8 => Some('8'),
+        KeyCode::Digit9 | KeyCode::Numpad9 => Some('9'),
+        KeyCode::Minus | KeyCode::NumpadSubtract => Some('-'),
+        KeyCode::Equal => Some('='),
+        KeyCode::NumpadAdd => Some('+'),
+        KeyCode::Comma => Some(','),
+        _ => None,
+    }
+}
+
+pub(crate) fn key_is_char(key: &Key, physical: PhysicalKey, target: char) -> bool {
+    let target_lower = target.to_ascii_lowercase();
+
+    // 1. Comprobar tecla fÃ­sica (PhysicalKey) por hardware KeyCode.
+    // En Windows, cuando Alt estÃ¡ presionado (WM_SYSKEYDOWN), ToUnicodeEx no genera
+    // caracteres y winit reporta logical_key como Key::Unidentified.
+    // Por tanto, verificar physical_key garantiza que los atajos con Alt y Ctrl
+    // funcionen de manera 100% confiable independientemente de la plataforma o del estado SYSKEY.
+    if let PhysicalKey::Code(code) = physical {
+        if let Some(c) = key_code_to_char(code) {
+            if c == target_lower {
+                return true;
+            }
+        }
+    }
+
+    // 2. Comprobar logical_key (para layouts no QWERTY donde el carÃ¡cter semÃ¡ntico coincide)
+    match key {
+        Key::Character(s) => {
+            if let Some(c) = s.chars().next() {
+                if c.to_ascii_lowercase() == target_lower {
+                    return true;
+                }
+                let target_lower = target.to_ascii_lowercase();
+                if target_lower.is_ascii_lowercase() {
+                    let code = (target_lower as u8) - b'a' + 1;
+                    if c as u32 == code as u32 {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Tipo de evento de tecla para el Kitty Keyboard Protocol
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub(crate) enum KeyEventType {
+    #[default]
+    Press,
+    Repeat,
+    Release,
+}
+
+/// Resuelve el nÃºmero de tecla segÃºn la especificaciÃ³n del Kitty Keyboard Protocol
+pub(super) fn kitty_key_number(logical_key: &Key, physical_key: PhysicalKey) -> Option<u32> {
+    match logical_key {
+        Key::Named(NamedKey::Enter) => Some(13),
+        Key::Named(NamedKey::Tab) => Some(9),
+        Key::Named(NamedKey::Backspace) => Some(127),
+        Key::Named(NamedKey::Escape) => Some(27),
+        Key::Named(NamedKey::Delete) => Some(57359),
+        Key::Named(NamedKey::Insert) => Some(57358),
+        Key::Named(NamedKey::ArrowLeft) => Some(57360),
+        Key::Named(NamedKey::ArrowRight) => Some(57361),
+        Key::Named(NamedKey::ArrowUp) => Some(57362),
+        Key::Named(NamedKey::ArrowDown) => Some(57363),
+        Key::Named(NamedKey::PageUp) => Some(57364),
+        Key::Named(NamedKey::PageDown) => Some(57365),
+        Key::Named(NamedKey::Home) => Some(57366),
+        Key::Named(NamedKey::End) => Some(57367),
+        Key::Named(NamedKey::CapsLock) => Some(57368),
+        Key::Named(NamedKey::ScrollLock) => Some(57369),
+        Key::Named(NamedKey::NumLock) => Some(57370),
+        Key::Named(NamedKey::PrintScreen) => Some(57371),
+        Key::Named(NamedKey::Pause) => Some(57372),
+        Key::Named(NamedKey::ContextMenu) => Some(57373),
+        Key::Named(NamedKey::F1) => Some(57376),
+        Key::Named(NamedKey::F2) => Some(57377),
+        Key::Named(NamedKey::F3) => Some(57378),
+        Key::Named(NamedKey::F4) => Some(57379),
+        Key::Named(NamedKey::F5) => Some(57380),
+        Key::Named(NamedKey::F6) => Some(57381),
+        Key::Named(NamedKey::F7) => Some(57382),
+        Key::Named(NamedKey::F8) => Some(57383),
+        Key::Named(NamedKey::F9) => Some(57384),
+        Key::Named(NamedKey::F10) => Some(57385),
+        Key::Named(NamedKey::F11) => Some(57386),
+        Key::Named(NamedKey::F12) => Some(57387),
+        Key::Character(s) => s.chars().next().map(|c| c.to_ascii_lowercase() as u32),
+        _ => {
+            if let PhysicalKey::Code(code) = physical_key {
+                match code {
+                    KeyCode::Enter => Some(13),
+                    KeyCode::NumpadEnter => Some(57414),
+                    KeyCode::Tab => Some(9),
+                    KeyCode::Backspace => Some(127),
+                    KeyCode::Escape => Some(27),
+                    KeyCode::Delete => Some(57359),
+                    KeyCode::Insert => Some(57358),
+                    KeyCode::ArrowLeft => Some(57360),
+                    KeyCode::ArrowRight => Some(57361),
+                    KeyCode::ArrowUp => Some(57362),
+                    KeyCode::ArrowDown => Some(57363),
+                    KeyCode::PageUp => Some(57364),
+                    KeyCode::PageDown => Some(57365),
+                    KeyCode::Home => Some(57366),
+                    KeyCode::End => Some(57367),
+                    KeyCode::F1 => Some(57376),
+                    KeyCode::F2 => Some(57377),
+                    KeyCode::F3 => Some(57378),
+                    KeyCode::F4 => Some(57379),
+                    KeyCode::F5 => Some(57380),
+                    KeyCode::F6 => Some(57381),
+                    KeyCode::F7 => Some(57382),
+                    KeyCode::F8 => Some(57383),
+                    KeyCode::F9 => Some(57384),
+                    KeyCode::F10 => Some(57385),
+                    KeyCode::F11 => Some(57386),
+                    KeyCode::F12 => Some(57387),
+                    _ => key_code_to_char(code).map(|c| c.to_ascii_lowercase() as u32),
+                }
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Codifica una pulsaciÃ³n o liberaciÃ³n segÃºn las banderas activas del Kitty Keyboard Protocol (CSI u)
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn encode_kitty_key(
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    win: bool,
+    event_type: KeyEventType,
+    flags: u8,
+) -> Option<Vec<u8>> {
+    if flags == 0 {
+        return None;
+    }
+
+    // Los eventos de liberaciÃ³n solo se reportan si el flag 2 (report event types) estÃ¡ activo
+    if event_type == KeyEventType::Release && (flags & 2) == 0 {
+        return None;
+    }
+
+    let key_num = kitty_key_number(logical_key, physical_key)?;
+
+    // Flechas, Home/End y Supr conservan su forma clÃ¡sica (`CSI 1;mod D`, `CSI 3;mod ~`) en el
+    // protocolo Kitty; los cÃ³digos 573xx de la tabla no son los que esperan los clientes.
+    let legacy_nav = match key_num {
+        57360 => Some(("1", 'D')),
+        57361 => Some(("1", 'C')),
+        57362 => Some(("1", 'A')),
+        57363 => Some(("1", 'B')),
+        57366 => Some(("1", 'H')),
+        57367 => Some(("1", 'F')),
+        57359 => Some(("3", '~')),
+        _ => None,
+    };
+
+    let mut mod_mask = 0u8;
+    if shift {
+        mod_mask |= 1;
+    }
+    if alt {
+        mod_mask |= 2;
+    }
+    if ctrl {
+        mod_mask |= 4;
+    }
+    if win {
+        mod_mask |= 8;
+    }
+    let mod_val = 1 + mod_mask;
+
+    // Reglas de codificaciÃ³n de Kitty Keyboard Protocol (CSI u):
+    // 1. Si flag 8 estÃ¡ activo (report all keys as escape codes): codificar todas las teclas.
+    // 2. Si flag 2 estÃ¡ activo (report event types) y es repeticiÃ³n o liberaciÃ³n: codificar para informar del evento.
+    // 3. Si hay modificadores activos (mod_val > 1): codificar como CSI key;mod u (Shift+Enter, Ctrl+C, Ctrl+Flechas, etc.).
+    // 4. Si no hay modificadores (mod_val == 1):
+    //    - Solo Escape (27) se codifica bajo flag 1 (disambiguate) para separarlo del prefijo de escape.
+    //    - Enter, Tab, Backspace y las teclas de navegaciÃ³n (flechas, Home, End, PageUp, etc.) NO deben
+    //      enviarse como CSI u cuando se pulsan sin modificadores a menos que flag 8 estÃ© activo, para
+    //      preservar las secuencias VT clÃ¡sicas (\r, \t, \x7f, \x1b[A, \x1bOA) que esperan los agentes CLI y shells.
+    if let Some((num, fin)) = legacy_nav {
+        // Sin modificadores ni eventos extra se deja a la ruta VT clÃ¡sica (\x1b[A, \x1bOAâ€¦)
+        if mod_val == 1 && (flags & 2) == 0 {
+            return None;
+        }
+        let ev = match event_type {
+            KeyEventType::Press => 1,
+            KeyEventType::Repeat => 2,
+            KeyEventType::Release => 3,
+        };
+        // El tipo de evento solo se informa con el flag 2, igual que en CSI u
+        let suffix = if (flags & 2) != 0 {
+            format!(";{mod_val}:{ev}")
+        } else {
+            format!(";{mod_val}")
+        };
+        let seq = format!("\x1b[{num}{suffix}{fin}");
+        return Some(seq.into_bytes());
+    }
+
+    let should_encode =
+        (flags & 8) != 0 || (flags & 2) != 0 || mod_val > 1 || (key_num == 27 && (flags & 1) != 0);
+
+    if !should_encode {
+        return None;
+    }
+
+    let event_code = match event_type {
+        KeyEventType::Press => 1,
+        KeyEventType::Repeat => 2,
+        KeyEventType::Release => 3,
+    };
+
+    let seq = if (flags & 2) != 0 {
+        format!("\x1b[{key_num};{mod_val}:{event_code}u")
+    } else if mod_val > 1 {
+        format!("\x1b[{key_num};{mod_val}u")
+    } else {
+        format!("\x1b[{key_num}u")
+    };
+
+    Some(seq.into_bytes())
 }

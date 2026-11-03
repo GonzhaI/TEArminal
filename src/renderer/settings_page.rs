@@ -117,6 +117,53 @@ impl TerminalRenderer {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_stepper_row(
+        &mut self,
+        canvas: &mut Canvas,
+        label_x: usize,
+        label_max: usize,
+        label: &str,
+        minus_rect: Rect,
+        plus_rect: Rect,
+        val_str: &str,
+        is_editing: bool,
+        hovered_minus: bool,
+        hovered_plus: bool,
+        hovered_box: bool,
+        theme: &Theme,
+    ) {
+        self.draw_label(canvas, label_x, minus_rect.1, label_max, label, theme);
+        self.draw_button(canvas, minus_rect, "−", hovered_minus, false, theme);
+        self.draw_stepper_value(
+            canvas,
+            minus_rect,
+            plus_rect,
+            val_str,
+            is_editing,
+            hovered_box,
+            theme,
+        );
+        self.draw_button(canvas, plus_rect, "+", hovered_plus, false, theme);
+    }
+
+    pub(super) fn draw_segmented_group(
+        &mut self,
+        canvas: &mut Canvas,
+        label_x: usize,
+        label_max: usize,
+        label: &str,
+        buttons: &[(Rect, &str, bool, bool)],
+        theme: &Theme,
+    ) {
+        if let Some((first_rect, _, _, _)) = buttons.first() {
+            self.draw_label(canvas, label_x, first_rect.1, label_max, label, theme);
+        }
+        for &(rect, btn_text, hovered, active) in buttons {
+            self.draw_button(canvas, rect, btn_text, hovered, active, theme);
+        }
+    }
+
     pub(super) fn draw_label(
         &mut self,
         canvas: &mut Canvas,
@@ -804,79 +851,55 @@ impl TerminalRenderer {
         );
 
         let label_max_x = rects.theme_mode_system_btn.0.saturating_sub(12);
-        self.draw_label(
-            canvas,
-            content_x + 20,
-            rects.theme_mode_system_btn.1,
-            label_max_x,
-            "Modo de color",
-            theme,
-        );
         let is_sys = config.appearance.theme_mode.eq_ignore_ascii_case("system");
         let is_dark = config.appearance.theme_mode.eq_ignore_ascii_case("dark");
         let is_light = config.appearance.theme_mode.eq_ignore_ascii_case("light");
-        self.draw_button(
+        self.draw_segmented_group(
             canvas,
-            rects.theme_mode_system_btn,
-            "Sistema",
-            state.hovered_theme_mode == Some(0),
-            is_sys,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.theme_mode_dark_btn,
-            "Oscuro",
-            state.hovered_theme_mode == Some(1),
-            is_dark,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.theme_mode_light_btn,
-            "Claro",
-            state.hovered_theme_mode == Some(2),
-            is_light,
+            content_x + 20,
+            label_max_x,
+            "Modo de color",
+            &[
+                (
+                    rects.theme_mode_system_btn,
+                    "Sistema",
+                    state.hovered_theme_mode == Some(0),
+                    is_sys,
+                ),
+                (
+                    rects.theme_mode_dark_btn,
+                    "Oscuro",
+                    state.hovered_theme_mode == Some(1),
+                    is_dark,
+                ),
+                (
+                    rects.theme_mode_light_btn,
+                    "Claro",
+                    state.hovered_theme_mode == Some(2),
+                    is_light,
+                ),
+            ],
             theme,
         );
 
-        self.draw_label(
-            canvas,
-            content_x + 20,
-            rects.opacity_minus_btn.1,
-            label_max_x,
-            "Opacidad de ventana",
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.opacity_minus_btn,
-            "−",
-            state.hovered_opacity_minus,
-            false,
-            theme,
-        );
         let is_editing_opacity = state.editing_setting == Some(EditingSettingField::WindowOpacity);
         let op_str = if is_editing_opacity {
             state.setting_input_buffer.clone()
         } else {
             format!("{:.0}%", (config.appearance.window_opacity * 100.0).round())
         };
-        self.draw_stepper_value(
+        self.draw_stepper_row(
             canvas,
+            content_x + 20,
+            label_max_x,
+            "Opacidad de ventana",
             rects.opacity_minus_btn,
             rects.opacity_plus_btn,
             &op_str,
             is_editing_opacity,
-            state.hovered_opacity_box,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.opacity_plus_btn,
-            "+",
+            state.hovered_opacity_minus,
             state.hovered_opacity_plus,
-            false,
+            state.hovered_opacity_box,
             theme,
         );
 
@@ -1065,40 +1088,35 @@ impl TerminalRenderer {
             theme,
         );
 
-        self.draw_label(
-            canvas,
-            label_x,
-            rects.cursor_shape_block_btn.1,
-            label_max,
-            "Forma del cursor",
-            theme,
-        );
         let cs = config.terminal.cursor_shape.to_ascii_lowercase();
         let is_beam = cs == "beam" || cs == "bar" || cs == "line";
         let is_under = cs == "underline";
         let is_block = !is_beam && !is_under;
-        self.draw_button(
+        self.draw_segmented_group(
             canvas,
-            rects.cursor_shape_block_btn,
-            "Bloque",
-            state.hovered_cursor_shape == Some(0),
-            is_block,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.cursor_shape_beam_btn,
-            "Barra",
-            state.hovered_cursor_shape == Some(1),
-            is_beam,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.cursor_shape_underline_btn,
-            "Subrayado",
-            state.hovered_cursor_shape == Some(2),
-            is_under,
+            label_x,
+            label_max,
+            "Forma del cursor",
+            &[
+                (
+                    rects.cursor_shape_block_btn,
+                    "Bloque",
+                    state.hovered_cursor_shape == Some(0),
+                    is_block,
+                ),
+                (
+                    rects.cursor_shape_beam_btn,
+                    "Barra",
+                    state.hovered_cursor_shape == Some(1),
+                    is_beam,
+                ),
+                (
+                    rects.cursor_shape_underline_btn,
+                    "Subrayado",
+                    state.hovered_cursor_shape == Some(2),
+                    is_under,
+                ),
+            ],
             theme,
         );
 
@@ -1124,80 +1142,56 @@ impl TerminalRenderer {
         );
 
         self.draw_group_label(canvas, label_x, card_y + 220, label_max, "SHELL", theme);
-        self.draw_label(
-            canvas,
-            label_x,
-            rects.shell_pwsh_btn.1,
-            label_max,
-            "Shell por defecto",
-            theme,
-        );
         let sh = config.terminal.default_shell.to_ascii_lowercase();
         let is_pwsh = sh.contains("pwsh");
         let is_cmd = sh.ends_with("cmd.exe") || sh == "cmd";
         let is_winps = !is_pwsh && !is_cmd;
-        self.draw_button(
+        self.draw_segmented_group(
             canvas,
-            rects.shell_pwsh_btn,
-            "PowerShell 7",
-            state.hovered_default_shell == Some(0),
-            is_pwsh,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.shell_powershell_btn,
-            "PowerShell",
-            state.hovered_default_shell == Some(1),
-            is_winps,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.shell_cmd_btn,
-            "CMD",
-            state.hovered_default_shell == Some(2),
-            is_cmd,
+            label_x,
+            label_max,
+            "Shell por defecto",
+            &[
+                (
+                    rects.shell_pwsh_btn,
+                    "PowerShell 7",
+                    state.hovered_default_shell == Some(0),
+                    is_pwsh,
+                ),
+                (
+                    rects.shell_powershell_btn,
+                    "PowerShell",
+                    state.hovered_default_shell == Some(1),
+                    is_winps,
+                ),
+                (
+                    rects.shell_cmd_btn,
+                    "CMD",
+                    state.hovered_default_shell == Some(2),
+                    is_cmd,
+                ),
+            ],
             theme,
         );
 
-        self.draw_label(
-            canvas,
-            label_x,
-            rects.scrollback_minus_btn.1,
-            label_max,
-            "Historial (scrollback)",
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.scrollback_minus_btn,
-            "−",
-            state.hovered_scrollback_minus,
-            false,
-            theme,
-        );
         let is_editing_sb = state.editing_setting == Some(EditingSettingField::ScrollbackLines);
         let sb_str = if is_editing_sb {
             state.setting_input_buffer.clone()
         } else {
             format!("{}", config.terminal.scrollback_lines)
         };
-        self.draw_stepper_value(
+        self.draw_stepper_row(
             canvas,
+            label_x,
+            label_max,
+            "Historial (scrollback)",
             rects.scrollback_minus_btn,
             rects.scrollback_plus_btn,
             &sb_str,
             is_editing_sb,
-            state.hovered_scrollback_box,
-            theme,
-        );
-        self.draw_button(
-            canvas,
-            rects.scrollback_plus_btn,
-            "+",
+            state.hovered_scrollback_minus,
             state.hovered_scrollback_plus,
-            false,
+            state.hovered_scrollback_box,
             theme,
         );
 

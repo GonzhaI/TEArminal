@@ -12,11 +12,9 @@ mod fs_watcher;
 mod handler;
 mod host;
 mod keyboard;
-mod keys;
 mod layout;
 mod machine;
 mod palette;
-mod panel;
 pub(crate) mod platform;
 mod redraw;
 mod settings;
@@ -33,12 +31,15 @@ pub(crate) use crate::renderer::PaletteRects;
 pub(crate) use ai_usage::*;
 pub(crate) use context_menu::*;
 pub(crate) use host::TearminalHost;
-pub(crate) use keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
+#[cfg(test)]
+pub(crate) use keyboard::{encode_kitty_key, key_code_to_char};
+pub(crate) use keyboard::{key_is_char, KeyEventType};
 pub(crate) use layout::*;
 pub(crate) use machine::*;
 pub(crate) use palette::*;
 pub(crate) use shell_context::detect_ai_agent;
 pub(crate) use spaces::*;
+pub(crate) use std::path::PathBuf;
 pub(crate) use viewer::*;
 
 use platform::{
@@ -151,22 +152,10 @@ pub(crate) struct TearminalApp {
     /// Instante a partir del cual se aplica el tamaño final de rejilla al PTY (antirrebote)
     resize_deadline: Option<Instant>,
     is_focused: bool,
-    // Barra de desplazamiento interactiva y auto-ocultable
-    scrollbar_dragging: bool,
-    scrollbar_drag_pane_id: Option<PaneId>,
-    scrollbar_drag_offset_y: f32,
-    explorer_scrollbar_dragging: bool,
+    /// Barra de desplazamiento interactiva y auto-ocultable (terminal, explorador, visor, ajustes, paleta)
+    pub(crate) scrollbar_drag: Option<ScrollbarDragState>,
     /// Arrastrando el borde izquierdo del explorador para cambiar su ancho
     explorer_resizing: bool,
-    explorer_scrollbar_drag_offset_y: f32,
-    viewer_scrollbar_dragging: bool,
-    viewer_scrollbar_drag_offset_y: f32,
-    viewer_hscrollbar_dragging: bool,
-    settings_scrollbar_dragging: bool,
-    settings_scrollbar_drag_offset_y: f32,
-    pub(crate) palette_scrollbar_dragging: bool,
-    pub(crate) palette_scrollbar_drag_offset_y: f32,
-    viewer_hscrollbar_drag_offset_x: f32,
     viewer_drag_selecting: bool,
     viewer_drag_start: Option<(usize, usize)>,
     last_viewer_click_time: Instant,
@@ -231,6 +220,36 @@ pub(crate) struct TearminalApp {
     pub ai_usage: AiUsageState,
     /// Observador de cambios del sistema de archivos local para refresco reactivo de Git y archivos
     fs_watcher: Option<fs_watcher::FsWatcher>,
+    /// Estado de arrastre de un archivo o carpeta desde el explorador lateral hacia la terminal
+    pub(crate) explorer_drag: Option<ExplorerDragState>,
+}
+
+/// Estado de arrastre de un elemento desde el explorador lateral de archivos hacia la terminal
+#[derive(Clone, Debug)]
+pub(crate) struct ExplorerDragState {
+    pub(crate) path: PathBuf,
+    pub(crate) start_pos: (usize, usize),
+    pub(crate) is_dir: bool,
+    pub(crate) idx: usize,
+    pub(crate) is_dragging: bool,
+}
+
+/// Objetivo activo de una barra de desplazamiento arrastrada
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum ScrollbarTarget {
+    Terminal(PaneId),
+    Explorer,
+    ViewerVertical,
+    ViewerHorizontal,
+    Settings,
+    Palette,
+}
+
+/// Estado de arrastre de una barra de desplazamiento
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ScrollbarDragState {
+    pub(crate) target: ScrollbarTarget,
+    pub(crate) grab_offset: f32,
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -485,6 +504,107 @@ impl TearminalApp {
             .unwrap_or_default()
     }
 
+    /// Ancho actual del panel lateral / explorador de archivos.
+    #[inline]
+    pub(crate) fn panel_width(&self) -> usize {
+        self.file_explorer.width
+    }
+
+    /// ¿Se ve el panel lateral / explorador de archivos?
+    #[inline]
+    pub(crate) fn panel_shown(&self) -> bool {
+        self.sidebar_visible
+    }
+
+    /// El explorador siempre va a la derecha.
+    #[inline]
+    pub(crate) fn panel_on_right(&self) -> bool {
+        true
+    }
+
+    /// X de la ventana donde empieza el explorador lateral (siempre a la derecha).
+    #[inline]
+    pub(crate) fn panel_x(&self, win_w: usize) -> usize {
+        win_w.saturating_sub(self.panel_width())
+    }
+
+    /// Coordenada x local al panel si `(mx, my)` cae en su parte propia.
+    pub(crate) fn panel_local_x(&self, mx: usize, my: usize, win_w: usize) -> Option<usize> {
+        if !self.sidebar_visible {
+            return None;
+        }
+        let in_dock = self
+            .file_explorer
+            .dock
+            .is_some_and(|(x, y, w, h)| mx >= x && mx < x + w && my >= y && my < y + h);
+        if in_dock {
+            return None;
+        }
+        let x0 = self.panel_x(win_w);
+        let pw = self.panel_width();
+        (mx >= x0 && mx < x0 + pw).then(|| mx - x0)
+    }
+
+    /// Coloca el explorador acoplado al borde derecho dentro del área disponible.
+    pub(crate) fn sync_explorer_dock(&mut self, win_w: usize, win_h: usize) {
+        self.file_explorer.dock = if self.sidebar_visible && self.file_explorer.visible {
+            let usable_h = win_h.saturating_sub(self.status_bar_height());
+            let pw = self.panel_width();
+            let (x, y, w, h) =
+                crate::renderer::FilesPanelRects::explorer_rect_with_width(pw, usable_h);
+            Some((self.panel_x(win_w) + x, y, w, h))
+        } else {
+            None
+        };
+    }
+
+    /// ¿Está el ratón `(mx, my)` sobre el borde que separa el panel / explorador y el contenido?
+    pub(crate) fn on_panel_resize_edge(
+        &self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
+        if self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(|t| t.is_settings)
+        {
+            return false;
+        }
+        let top_offset = self.top_offset();
+        let status_bar_h = self.status_bar_height();
+        let usable_h = win_h.saturating_sub(status_bar_h);
+        if my < top_offset || my >= usable_h {
+            return false;
+        }
+
+        if self.sidebar_visible {
+            let pw = self.panel_width();
+            let edge_x = win_w.saturating_sub(pw);
+            mx + 6 >= edge_x && mx <= edge_x + 5
+        } else if self.file_explorer.visible {
+            self.file_explorer
+                .on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
+        } else {
+            false
+        }
+    }
+
+    /// Redimensiona el ancho del explorador de archivos al arrastrar su borde con el ratón.
+    pub(crate) fn resize_panel_from_mouse(&mut self, mx: usize, win_w: usize) {
+        let new_w = win_w.saturating_sub(mx);
+        self.file_explorer.width = crate::explorer::FileExplorer::clamp_width(new_w, win_w);
+        if let Some(ref mut cfg_pw) = self.config.appearance.panel_width {
+            *cfg_pw = self.file_explorer.width;
+        }
+        if self.sidebar_visible {
+            let win_h = self.window_size().1;
+            self.sync_explorer_dock(win_w, win_h);
+        }
+    }
+
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {
         let id = self.next_tab_id;
         self.next_tab_id = TabId(id.0 + 1);
@@ -634,18 +754,10 @@ impl TearminalApp {
         tabs: Vec<TerminalTab>,
         active_tab_index: usize,
         sidebar_visible: bool,
-        explorer_visible: bool,
+        _explorer_visible: bool,
     ) -> Self {
-        // Con pestañas superiores el explorador vive en el panel y se muestra con él
-        let explorer_visible = if config
-            .appearance
-            .tab_layout
-            .eq_ignore_ascii_case("horizontal")
-        {
-            sidebar_visible
-        } else {
-            explorer_visible
-        };
+        // El explorador lateral vive en el panel y se muestra con él
+        let explorer_visible = sidebar_visible;
         let next_tab_id = TabId(tabs.len());
         let mut file_explorer =
             crate::explorer::FileExplorer::new(std::env::current_dir().ok(), explorer_visible);
@@ -708,20 +820,8 @@ impl TearminalApp {
             ssh_rx,
             resize_deadline: None,
             is_focused: true,
-            scrollbar_dragging: false,
-            scrollbar_drag_pane_id: None,
-            scrollbar_drag_offset_y: 0.0,
-            explorer_scrollbar_dragging: false,
+            scrollbar_drag: None,
             explorer_resizing: false,
-            explorer_scrollbar_drag_offset_y: 0.0,
-            viewer_scrollbar_dragging: false,
-            viewer_scrollbar_drag_offset_y: 0.0,
-            viewer_hscrollbar_dragging: false,
-            settings_scrollbar_dragging: false,
-            settings_scrollbar_drag_offset_y: 0.0,
-            palette_scrollbar_dragging: false,
-            palette_scrollbar_drag_offset_y: 0.0,
-            viewer_hscrollbar_drag_offset_x: 0.0,
             viewer_drag_selecting: false,
             viewer_drag_start: None,
             last_viewer_click_time: Instant::now(),
@@ -766,6 +866,7 @@ impl TearminalApp {
             keep_awake_active: false,
             ai_usage: AiUsageState::default(),
             fs_watcher: None,
+            explorer_drag: None,
         };
         app.update_keep_awake();
         app

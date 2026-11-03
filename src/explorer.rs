@@ -76,13 +76,84 @@ fn score_item(query: &str, item: &ExplorerItem, root: &Path) -> Option<i32> {
     None
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum GitFileStatus {
+    #[default]
     Modified,
     Untracked,
     Added,
     Deleted,
     Renamed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct GitStatusInfo {
+    pub(crate) status: GitFileStatus,
+    pub(crate) is_staged: bool,
+    pub(crate) is_unstaged: bool,
+}
+
+/// Añade un archivo al índice de Git (`git add`)
+pub(crate) fn git_stage_file(repo: &Path, file: &Path) -> std::io::Result<()> {
+    let rel = file.strip_prefix(repo).unwrap_or(file);
+    let status = git_command(repo).args(["add", "--"]).arg(rel).status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("git add falló"))
+    }
+}
+
+/// Quita un archivo del índice de Git (`git restore --staged` o `git reset HEAD`)
+pub(crate) fn git_unstage_file(repo: &Path, file: &Path) -> std::io::Result<()> {
+    let rel = file.strip_prefix(repo).unwrap_or(file);
+    let mut cmd = git_command(repo);
+    cmd.args(["restore", "--staged", "--"]).arg(rel);
+    if let Ok(st) = cmd.status() {
+        if st.success() {
+            return Ok(());
+        }
+    }
+    let mut reset_cmd = git_command(repo);
+    reset_cmd.args(["reset", "HEAD", "--"]).arg(rel);
+    let status = reset_cmd.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("git unstage falló"))
+    }
+}
+
+/// Descarta los cambios de un archivo en el árbol de trabajo (`git restore` o borrado de untracked)
+pub(crate) fn git_discard_file(
+    repo: &Path,
+    file: &Path,
+    is_untracked: bool,
+) -> std::io::Result<()> {
+    if is_untracked {
+        if file.is_dir() {
+            std::fs::remove_dir_all(file)?;
+        } else if file.exists() {
+            std::fs::remove_file(file)?;
+        }
+        return Ok(());
+    }
+    let rel = file.strip_prefix(repo).unwrap_or(file);
+    let mut cmd = git_command(repo);
+    cmd.args(["restore", "--"]).arg(rel);
+    if let Ok(st) = cmd.status() {
+        if st.success() {
+            return Ok(());
+        }
+    }
+    let mut co_cmd = git_command(repo);
+    co_cmd.args(["checkout", "HEAD", "--"]).arg(rel);
+    let status = co_cmd.status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("git discard falló"))
+    }
 }
 
 /// Raíz del repositorio git que contiene `dir` (busca `.git` hacia arriba)
@@ -126,15 +197,15 @@ pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
 /// Estado de una carpeta según lo que cambió dentro: si todo es del mismo tipo, ese (verde añadido,
 /// rojo borrado); con una mezcla, o con modificados, amarillo. `None` si no cambió nada.
 pub(crate) fn dir_git_status(
-    git_map: &FxHashMap<PathBuf, GitFileStatus>,
+    git_map: &FxHashMap<PathBuf, GitStatusInfo>,
     dir: &Path,
 ) -> Option<GitFileStatus> {
     let mut found: Option<GitFileStatus> = None;
-    for (path, status) in git_map {
+    for (path, info) in git_map {
         if !path.starts_with(dir) {
             continue;
         }
-        let kind = match status {
+        let kind = match info.status {
             GitFileStatus::Untracked | GitFileStatus::Added => GitFileStatus::Added,
             GitFileStatus::Deleted => GitFileStatus::Deleted,
             GitFileStatus::Modified | GitFileStatus::Renamed => GitFileStatus::Modified,
@@ -154,7 +225,7 @@ pub(crate) fn dir_git_status(
 pub(crate) fn collect_git_statuses(
     repo_root: &Path,
     changes_only: bool,
-) -> FxHashMap<PathBuf, GitFileStatus> {
+) -> FxHashMap<PathBuf, GitStatusInfo> {
     let untracked_mode = if changes_only { "-uall" } else { "-unormal" };
     let Ok(output) = git_command(repo_root)
         .args(["--no-optional-locks", "status", "--porcelain", "-z"])
@@ -171,7 +242,7 @@ pub(crate) fn collect_git_statuses(
 
 /// Salida de `git status --porcelain -z`: entradas `XY ruta` separadas por NUL, sin comillas ni escapes (los
 /// nombres con tildes o espacios llegan tal cual); tras un renombrado/copia va otra entrada con el origen
-fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> FxHashMap<PathBuf, GitFileStatus> {
+fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> FxHashMap<PathBuf, GitStatusInfo> {
     let mut map = FxHashMap::default();
     let text = String::from_utf8_lossy(stdout);
     let mut entries = text.split('\0');
@@ -187,21 +258,35 @@ fn parse_porcelain_z(repo_root: &Path, stdout: &[u8]) -> FxHashMap<PathBuf, GitF
         }
         let file_path = repo_root.join(rel_path.replace('/', "\\"));
 
-        let status = if status_code.contains('M') {
-            GitFileStatus::Modified
-        } else if status_code.contains('?') {
-            GitFileStatus::Untracked
-        } else if status_code.contains('A') {
-            GitFileStatus::Added
-        } else if status_code.contains('D') {
-            GitFileStatus::Deleted
-        } else if status_code.contains('R') {
-            GitFileStatus::Renamed
+        let bytes = status_code.as_bytes();
+        let x = bytes.first().copied().unwrap_or(b' ');
+        let y = bytes.get(1).copied().unwrap_or(b' ');
+
+        let (status, is_staged, is_unstaged) = if x == b'?' && y == b'?' {
+            (GitFileStatus::Untracked, false, true)
         } else {
-            GitFileStatus::Modified
+            let staged = x != b' ' && x != b'?';
+            let unstaged = y != b' ' && y != b'?';
+            let st = if x == b'A' || y == b'A' {
+                GitFileStatus::Added
+            } else if x == b'D' || y == b'D' {
+                GitFileStatus::Deleted
+            } else if x == b'R' || y == b'R' {
+                GitFileStatus::Renamed
+            } else {
+                GitFileStatus::Modified
+            };
+            (st, staged, unstaged)
         };
 
-        map.insert(file_path, status);
+        map.insert(
+            file_path,
+            GitStatusInfo {
+                status,
+                is_staged,
+                is_unstaged,
+            },
+        );
     }
     map
 }
@@ -214,6 +299,8 @@ pub(crate) struct ExplorerItem {
     pub(crate) depth: usize,
     pub(crate) is_expanded: bool,
     pub(crate) git_status: Option<GitFileStatus>,
+    pub(crate) is_staged: bool,
+    pub(crate) is_unstaged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -265,7 +352,9 @@ pub(crate) struct FileExplorer {
     pub last_click_time: std::time::Instant,
     pub history: Vec<PathBuf>,
     pub history_index: usize,
-    pub git_statuses: FxHashMap<PathBuf, GitFileStatus>,
+    pub git_statuses: FxHashMap<PathBuf, GitStatusInfo>,
+    /// Botón de acción rápida de Git (`(row_idx, action)`) sobre el que se encuentra el cursor
+    pub hovered_git_action: Option<(usize, crate::renderer::GitActionKind)>,
     /// Rectángulo `(x, y, ancho, alto)` cuando vive dentro del panel lateral; con `None` se acopla al borde derecho
     pub dock: Option<(usize, usize, usize, usize)>,
     /// Raíz del repositorio del directorio actual (None si no hay repo)
@@ -498,6 +587,7 @@ impl FileExplorer {
             history: vec![root_dir],
             history_index: 0,
             git_statuses: FxHashMap::default(),
+            hovered_git_action: None,
             dock: None,
             git_root: None,
             changes_only: false,
@@ -563,6 +653,8 @@ impl FileExplorer {
                 depth,
                 is_expanded: false,
                 git_status: None,
+                is_staged: false,
+                is_unstaged: false,
             })
             .partition(|i| i.is_dir);
         dirs.sort_by(|a, b| cmp_ignore_case(&a.name, &b.name));
@@ -1015,7 +1107,7 @@ impl FileExplorer {
     pub(crate) fn apply_git_statuses(
         &mut self,
         repo_root: &Path,
-        statuses: FxHashMap<PathBuf, GitFileStatus>,
+        statuses: FxHashMap<PathBuf, GitStatusInfo>,
     ) {
         self.git_status_running = false;
         if self.remote_session.is_some() || self.git_root.as_deref() != Some(repo_root) {
@@ -1029,8 +1121,14 @@ impl FileExplorer {
             for item in &mut self.items {
                 if item.is_dir {
                     item.git_status = dir_git_status(&self.git_statuses, &item.path);
+                } else if let Some(info) = self.git_statuses.get(&item.path) {
+                    item.git_status = Some(info.status);
+                    item.is_staged = info.is_staged;
+                    item.is_unstaged = info.is_unstaged;
                 } else {
-                    item.git_status = self.git_statuses.get(&item.path).copied();
+                    item.git_status = None;
+                    item.is_staged = false;
+                    item.is_unstaged = false;
                 }
             }
         }
@@ -1049,7 +1147,8 @@ impl FileExplorer {
         };
 
         if cfg!(test) {
-            self.git_statuses = collect_git_statuses(&repo_root, self.changes_only);
+            let statuses = collect_git_statuses(&repo_root, self.changes_only);
+            self.apply_git_statuses(&repo_root, statuses);
         } else {
             self.git_status_req = Some((repo_root, self.changes_only));
         }
@@ -1062,7 +1161,7 @@ impl FileExplorer {
         }
         self.git_statuses
             .values()
-            .filter(|s| **s != GitFileStatus::Deleted)
+            .filter(|s| s.status != GitFileStatus::Deleted)
             .count()
     }
 
@@ -1083,8 +1182,8 @@ impl FileExplorer {
         let mut items: Vec<ExplorerItem> = self
             .git_statuses
             .iter()
-            .filter(|(path, status)| **status != GitFileStatus::Deleted && path.is_file())
-            .map(|(path, status)| ExplorerItem {
+            .filter(|(path, info)| info.status != GitFileStatus::Deleted && path.is_file())
+            .map(|(path, info)| ExplorerItem {
                 path: path.clone(),
                 name: path
                     .file_name()
@@ -1093,7 +1192,9 @@ impl FileExplorer {
                 is_dir: false,
                 depth: 0,
                 is_expanded: false,
-                git_status: Some(*status),
+                git_status: Some(info.status),
+                is_staged: info.is_staged,
+                is_unstaged: info.is_unstaged,
             })
             .collect();
         items.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1166,7 +1267,7 @@ impl FileExplorer {
         dir: &Path,
         depth: usize,
         expanded_paths: &FxHashSet<PathBuf>,
-        git_map: &FxHashMap<PathBuf, GitFileStatus>,
+        git_map: &FxHashMap<PathBuf, GitStatusInfo>,
         out: &mut Vec<ExplorerItem>,
     ) {
         let Ok(read_dir) = fs::read_dir(dir) else {
@@ -1210,6 +1311,8 @@ impl FileExplorer {
                 depth,
                 is_expanded,
                 git_status,
+                is_staged: false,
+                is_unstaged: false,
             });
 
             if is_expanded {
@@ -1219,7 +1322,11 @@ impl FileExplorer {
 
         // Archivos después
         for (path, name) in files {
-            let git_status = git_map.get(&path).copied();
+            let (git_status, is_staged, is_unstaged) = if let Some(info) = git_map.get(&path) {
+                (Some(info.status), info.is_staged, info.is_unstaged)
+            } else {
+                (None, false, false)
+            };
             out.push(ExplorerItem {
                 path,
                 name,
@@ -1227,6 +1334,8 @@ impl FileExplorer {
                 depth,
                 is_expanded: false,
                 git_status,
+                is_staged,
+                is_unstaged,
             });
         }
     }
@@ -1334,6 +1443,16 @@ impl FileExplorer {
         if self.visible && self.items.is_empty() && self.remote_session.is_none() {
             self.refresh();
         }
+    }
+
+    /// Obtiene la posición Y de la fila `idx` considerando el desplazamiento superior
+    pub(crate) fn item_y(&self, idx: usize, top_offset: usize) -> Option<usize> {
+        if idx < self.scroll_offset || idx >= self.visible_item_count() {
+            return None;
+        }
+        let list_top =
+            top_offset + Self::HEADER_HEIGHT + self.subheader_height() + Self::LIST_TOP_PAD;
+        Some(list_top + (idx - self.scroll_offset) * Self::ITEM_HEIGHT)
     }
 
     /// Obtiene el índice del elemento en la posición Y considerando el desplazamiento superior
@@ -1522,10 +1641,19 @@ mod tests {
     #[test]
     fn test_dir_git_status_uses_one_color_per_kind_and_yellow_for_mixes() {
         use GitFileStatus::*;
-        let map = |entries: &[(&str, GitFileStatus)]| -> FxHashMap<PathBuf, GitFileStatus> {
+        let map = |entries: &[(&str, GitFileStatus)]| -> FxHashMap<PathBuf, GitStatusInfo> {
             entries
                 .iter()
-                .map(|(p, s)| (PathBuf::from(p), *s))
+                .map(|(p, s)| {
+                    (
+                        PathBuf::from(p),
+                        GitStatusInfo {
+                            status: *s,
+                            is_staged: false,
+                            is_unstaged: true,
+                        },
+                    )
+                })
                 .collect()
         };
         let dir = Path::new("repo/src");
@@ -1567,14 +1695,22 @@ mod tests {
         let out =
             "?? niño.txt\0 M dir/mi archivo.rs\0R  nuevo.rs\0viejo.rs\0 D borrado.rs\0".as_bytes();
         let map = parse_porcelain_z(root, out);
-        assert_eq!(map[&root.join("niño.txt")], GitFileStatus::Untracked);
+        assert_eq!(map[&root.join("niño.txt")].status, GitFileStatus::Untracked);
+        assert!(!map[&root.join("niño.txt")].is_staged);
+        assert!(map[&root.join("niño.txt")].is_unstaged);
         assert_eq!(
-            map[&root.join("dir\\mi archivo.rs")],
+            map[&root.join("dir\\mi archivo.rs")].status,
             GitFileStatus::Modified
         );
-        assert_eq!(map[&root.join("nuevo.rs")], GitFileStatus::Renamed);
+        assert!(!map[&root.join("dir\\mi archivo.rs")].is_staged);
+        assert!(map[&root.join("dir\\mi archivo.rs")].is_unstaged);
+        assert_eq!(map[&root.join("nuevo.rs")].status, GitFileStatus::Renamed);
+        assert!(map[&root.join("nuevo.rs")].is_staged);
+        assert!(!map[&root.join("nuevo.rs")].is_unstaged);
         assert!(!map.contains_key(&root.join("viejo.rs")));
-        assert_eq!(map[&root.join("borrado.rs")], GitFileStatus::Deleted);
+        assert_eq!(map[&root.join("borrado.rs")].status, GitFileStatus::Deleted);
+        assert!(!map[&root.join("borrado.rs")].is_staged);
+        assert!(map[&root.join("borrado.rs")].is_unstaged);
     }
 
     /// Una sola consulta de `git status` en vuelo: la ráfaga siguiente queda como una petición pendiente
@@ -1794,6 +1930,166 @@ mod tests {
         explorer.close_filter();
         assert!(!explorer.is_filtering());
         assert_eq!(explorer.subheader_height(), 0);
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_git_action_buttons_geometry_and_hit_test() {
+        use crate::renderer::{GitActionBtnRects, GitActionKind};
+        let panel_x = 100;
+        let panel_w = 200;
+        let item_y = 50;
+        let item_h = 24;
+
+        // 1. Solo staged: unstage
+        let btns =
+            GitActionBtnRects::buttons_for_item(panel_x, panel_w, item_y, item_h, true, false);
+        assert_eq!(btns.len(), 1);
+        assert_eq!(btns[0].0, GitActionKind::Unstage);
+        let (_action, rect) = btns[0];
+        assert_eq!(
+            GitActionBtnRects::hit_test(
+                panel_x,
+                panel_w,
+                item_y,
+                item_h,
+                true,
+                false,
+                rect.0 + 2,
+                rect.1 + 2
+            ),
+            Some(GitActionKind::Unstage)
+        );
+
+        // 2. Solo unstaged: stage y discard
+        let btns =
+            GitActionBtnRects::buttons_for_item(panel_x, panel_w, item_y, item_h, false, true);
+        assert_eq!(btns.len(), 2);
+        assert_eq!(btns[0].0, GitActionKind::Stage);
+        assert_eq!(btns[1].0, GitActionKind::Discard);
+        assert_eq!(
+            GitActionBtnRects::hit_test(
+                panel_x,
+                panel_w,
+                item_y,
+                item_h,
+                false,
+                true,
+                btns[0].1 .0 + 2,
+                btns[0].1 .1 + 2
+            ),
+            Some(GitActionKind::Stage)
+        );
+        assert_eq!(
+            GitActionBtnRects::hit_test(
+                panel_x,
+                panel_w,
+                item_y,
+                item_h,
+                false,
+                true,
+                btns[1].1 .0 + 2,
+                btns[1].1 .1 + 2
+            ),
+            Some(GitActionKind::Discard)
+        );
+
+        // 3. Staged y unstaged a la vez: unstage, stage, discard
+        let btns =
+            GitActionBtnRects::buttons_for_item(panel_x, panel_w, item_y, item_h, true, true);
+        assert_eq!(btns.len(), 3);
+        assert_eq!(btns[0].0, GitActionKind::Unstage);
+        assert_eq!(btns[1].0, GitActionKind::Stage);
+        assert_eq!(btns[2].0, GitActionKind::Discard);
+
+        // 4. Fuera de los botones: None
+        assert_eq!(
+            GitActionBtnRects::hit_test(
+                panel_x,
+                panel_w,
+                item_y,
+                item_h,
+                true,
+                true,
+                panel_x + 10,
+                item_y + 2
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_git_stage_unstage_and_discard_actions() {
+        let tmp = std::env::temp_dir().join(format!(
+            "tearminal-test-git-actions-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Inicializar repositorio git
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&tmp);
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd.args(["init"]).status();
+
+        let file_a = tmp.join("file_a.txt");
+        std::fs::write(&file_a, "initial line 1\n").unwrap();
+
+        // 1. Stage de file_a
+        let res = git_stage_file(&tmp, &file_a);
+        assert!(res.is_ok());
+        let statuses = collect_git_statuses(&tmp, true);
+        assert!(statuses
+            .get(&file_a)
+            .is_some_and(|s| s.is_staged && !s.is_unstaged));
+
+        // 2. Unstage de file_a
+        let res = git_unstage_file(&tmp, &file_a);
+        assert!(res.is_ok());
+        let statuses = collect_git_statuses(&tmp, true);
+        assert!(statuses
+            .get(&file_a)
+            .is_some_and(|s| !s.is_staged && s.is_unstaged));
+
+        // Commit inicial para poder probar restore de modificaciones
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&tmp);
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd.args(["config", "user.name", "TestUser"]).status();
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&tmp);
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd
+            .args(["config", "user.email", "test@example.com"])
+            .status();
+        let _ = git_stage_file(&tmp, &file_a);
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&tmp);
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd.args(["commit", "-m", "init"]).status();
+
+        // 3. Modificar file_a y descartar cambios
+        std::fs::write(&file_a, "modified line\n").unwrap();
+        let statuses = collect_git_statuses(&tmp, true);
+        assert!(statuses.get(&file_a).is_some_and(|s| s.is_unstaged));
+        let res = git_discard_file(&tmp, &file_a, false);
+        assert!(res.is_ok());
+        assert_eq!(
+            std::fs::read_to_string(&file_a).unwrap(),
+            "initial line 1\n"
+        );
+
+        // 4. Crear archivo untracked y descartarlo (debe ser eliminado)
+        let file_b = tmp.join("file_b.txt");
+        std::fs::write(&file_b, "untracked\n").unwrap();
+        assert!(file_b.exists());
+        let res = git_discard_file(&tmp, &file_b, true);
+        assert!(res.is_ok());
+        assert!(!file_b.exists());
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

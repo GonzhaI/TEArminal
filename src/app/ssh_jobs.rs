@@ -33,7 +33,7 @@ pub(super) struct SshSaveDone {
 #[derive(Debug)]
 pub(super) struct SshGitStatusDone {
     pub(super) repo_root: PathBuf,
-    pub(super) statuses: rustc_hash::FxHashMap<PathBuf, crate::explorer::GitFileStatus>,
+    pub(super) statuses: rustc_hash::FxHashMap<PathBuf, crate::explorer::GitStatusInfo>,
 }
 
 /// Resultado de un trabajo SSH.

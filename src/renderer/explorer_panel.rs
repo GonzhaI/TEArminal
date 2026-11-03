@@ -169,9 +169,15 @@ impl TerminalRenderer {
                 }
             }
 
-            // Insignia de Git si el archivo/carpeta tiene estado
-            let badge_w = if item.git_status.is_some() { 16 } else { 0 };
-            let max_name_x = panel_x + row_w.saturating_sub(SidebarRects::PAD_R + badge_w + 6);
+            // Espacio reservado a la derecha para botones de acción o insignia de Git
+            let right_reserve = if explorer.changes_only {
+                68
+            } else if item.git_status.is_some() {
+                SidebarRects::PAD_R + 16 + 6
+            } else {
+                SidebarRects::PAD_R + 6
+            };
+            let max_name_x = panel_x + row_w.saturating_sub(right_reserve);
 
             if item.is_dir {
                 // Directorio: Lucide Chevron + Folder/FolderOpen
@@ -256,8 +262,57 @@ impl TerminalRenderer {
                 );
             }
 
-            // Renderizar insignia de Git a la derecha (M, U, A, D)
-            if let Some(git) = item.git_status {
+            let show_actions = explorer.changes_only && is_hovered;
+            if show_actions {
+                let buttons = crate::renderer::GitActionBtnRects::buttons_for_item(
+                    panel_x,
+                    row_w,
+                    item_y,
+                    item_h,
+                    item.is_staged,
+                    item.is_unstaged,
+                );
+                for (action, (bx, by, bw, bh)) in buttons {
+                    let btn_hovered = explorer.hovered_git_action == Some((actual_idx, action));
+                    if btn_hovered {
+                        canvas.rounded_fill(
+                            bx,
+                            by,
+                            bw,
+                            bh,
+                            tokens::RADIUS_ROW,
+                            theme.surface_hover(),
+                        );
+                    }
+                    let (icon, fg) = match action {
+                        crate::renderer::GitActionKind::Stage => (
+                            crate::ui::LucideIcon::Plus,
+                            if btn_hovered {
+                                theme.ansi[2]
+                            } else {
+                                theme.text_secondary()
+                            },
+                        ),
+                        crate::renderer::GitActionKind::Unstage => (
+                            crate::ui::LucideIcon::Minus,
+                            if btn_hovered {
+                                theme.ansi[3]
+                            } else {
+                                theme.text_secondary()
+                            },
+                        ),
+                        crate::renderer::GitActionKind::Discard => (
+                            crate::ui::LucideIcon::Undo2,
+                            if btn_hovered {
+                                theme.ansi[1]
+                            } else {
+                                theme.text_secondary()
+                            },
+                        ),
+                    };
+                    self.draw_lucide_icon(canvas, icon, bx + bw / 2, by + bh / 2, 11.0, fg);
+                }
+            } else if let Some(git) = item.git_status {
                 let badge_letter = match git {
                     crate::explorer::GitFileStatus::Modified => "M",
                     crate::explorer::GitFileStatus::Untracked => "U",
@@ -709,6 +764,57 @@ impl TerminalRenderer {
                 tokens::MICRO,
                 true,
             );
+        }
+    }
+
+    /// Dibuja el fondo del panel en un búfer propio de ancho `panel_w`.
+    /// `on_right`: el panel está a la derecha y el borde que lo separa del contenido es el izquierdo.
+    pub(crate) fn render_files_panel(
+        &mut self,
+        canvas: &mut Canvas,
+        panel_w: usize,
+        status_bar_h: usize,
+        on_right: bool,
+        theme: &Theme,
+    ) {
+        let (width, height) = canvas.size();
+        if panel_w == 0 || width == 0 || height == 0 {
+            return;
+        }
+        let top = SidebarRects::TOP;
+        let body_h = height.saturating_sub(status_bar_h).saturating_sub(top);
+        Self::draw_rect(canvas, 0, top, panel_w, body_h, theme.chrome_bg());
+        let edge_x = if on_right { 0 } else { panel_w - 1 };
+        Self::draw_rect(canvas, edge_x, top, 1, body_h, theme.chrome_line());
+    }
+
+    /// Resalte de una fila de lista del panel (Archivos y Cambios): inset de 8 px, esquinas redondeadas
+    /// y, si está seleccionada, una marca de acento (gris cuando la lista no tiene el foco).
+    pub(crate) fn draw_list_row_highlight(
+        canvas: &mut Canvas,
+        row: Rect,
+        selected: bool,
+        focused: bool,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = row;
+        let fill = if selected && !focused {
+            theme.surface_bg()
+        } else {
+            theme.surface_hover()
+        };
+        let row_w = w.saturating_sub(16);
+        canvas.rounded_fill(x + 8, y, row_w, h, tokens::RADIUS_ROW, fill);
+        if selected && focused {
+            canvas.rounded_stroke(x + 8, y, row_w, h, tokens::RADIUS_ROW, theme.card_outline());
+        }
+        if selected {
+            let bar = if focused {
+                theme.accent_color()
+            } else {
+                theme.chrome_line_strong()
+            };
+            canvas.rounded_fill(x + 12, y + 6, 2, h.saturating_sub(12), 1, bar);
         }
     }
 }

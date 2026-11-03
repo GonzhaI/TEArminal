@@ -66,6 +66,58 @@ impl TearminalApp {
         }
     }
 
+    /// Maneja el evento de soltar un archivo o carpeta en la ventana (desde el explorador
+    /// del sistema de Windows o desde el explorador lateral de TEArminal).
+    ///
+    /// - Si la pestaña activa es Ajustes, se ignora.
+    /// - Si la pestaña activa es un visor de archivos, abre el archivo arrastrado en el visor.
+    /// - Si es una pestaña de terminal, pega su ruta entre comillas (con espacio final)
+    ///   en el panel bajo el cursor o en el panel activo.
+    pub(crate) fn on_file_dropped(&mut self, path: PathBuf) {
+        if self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(|t| t.is_settings)
+        {
+            return;
+        }
+
+        // Si la pestaña activa es un visor de archivos, abrir el archivo arrastrado en el visor
+        if self.tabs[self.active_tab_index].file_viewer.is_some() {
+            self.open_file_in_viewer(&path, true);
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+
+        let (win_w, win_h) = self.window_size();
+        let mx = self.mouse_pos.x as usize;
+        let my = self.mouse_pos.y as usize;
+        let pane_rects = self.active_tab_pane_rects(win_w, win_h);
+        let target_pane_id = pane_rects
+            .iter()
+            .find(|r| mx >= r.x && mx < r.x + r.width && my >= r.y && my < r.y + r.height)
+            .map(|r| r.pane_id);
+
+        let active_tab = &mut self.tabs[self.active_tab_index];
+        if let Some(pid) = target_pane_id {
+            active_tab.active_pane_id = pid;
+        }
+
+        let path_str = path.to_string_lossy();
+        let trimmed = path_str.trim().trim_matches('"');
+        let formatted = format!("\"{}\" ", trimmed);
+
+        if let Some(pane) = active_tab.active_pane_mut() {
+            Self::paste_into_pane(pane, &formatted);
+        }
+
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
     /// Pegar desde el portapapeles con soporte inteligente para texto, imágenes de IA y archivos.
     /// Si el portapapeles contiene una imagen (captura Snipping Tool, Win+Shift+S, recorte web),
     /// la guarda automáticamente en un archivo PNG temporal y pega la ruta entrecomillada

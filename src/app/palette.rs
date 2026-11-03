@@ -494,7 +494,15 @@ impl TearminalApp {
             });
         }
 
-        self.palette_scrollbar_dragging = false;
+        if matches!(
+            self.scrollbar_drag,
+            Some(ScrollbarDragState {
+                target: ScrollbarTarget::Palette,
+                ..
+            })
+        ) {
+            self.scrollbar_drag = None;
+        }
         self.palette = Some(PaletteState::new(items));
         if let Some(w) = &self.window {
             w.request_redraw();

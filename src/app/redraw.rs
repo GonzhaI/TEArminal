@@ -95,11 +95,7 @@ impl TearminalApp {
 
         // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
         for t in &mut self.tabs {
-            if t.is_preview
-                && t.file_viewer
-                    .as_ref()
-                    .is_some_and(|v| v.is_dirty || !v.is_read_only)
-            {
+            if t.is_preview && t.file_viewer.as_ref().is_some_and(|v| v.is_dirty) {
                 t.is_preview = false;
             }
         }
@@ -114,7 +110,7 @@ impl TearminalApp {
             .map(|&idx| (idx, &self.tabs[idx]))
             .map(|(idx, t)| SidebarTabItem {
                 index: idx,
-                status: super::panel::session_status(t),
+                status: t.session_status(),
                 title: t.display_title(),
                 detail: None,
                 is_active: idx == content_idx,

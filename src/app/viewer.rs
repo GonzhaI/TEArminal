@@ -7,6 +7,7 @@ pub(crate) struct ViewerSnapshot {
     pub(crate) cursor_col: usize,
 }
 
+use super::TearminalApp;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -2149,4 +2150,45 @@ pub(crate) fn unified_diff(base: &[String], cur: &[String], ctx: usize) -> Vec<S
         k = end + 1;
     }
     out
+}
+
+impl TearminalApp {
+    /// Filas de texto visibles en el visor de la pestaña activa
+    pub(crate) fn viewer_visible_lines(&self) -> usize {
+        let win_h = self
+            .window
+            .as_ref()
+            .map_or(600, |w| w.inner_size().height as usize);
+        let row_h = self.renderer.as_ref().map_or(20, |r| r.row_height);
+        (win_h.saturating_sub(self.top_offset() + self.status_bar_height() + 38) / row_h.max(16))
+            .max(1)
+    }
+
+    /// Ctrl+S / «Guardar»: escribe el archivo del visor activo y refresca el estado git del explorador
+    pub(crate) fn save_active_viewer(&mut self) {
+        // Archivo remoto: guardado asíncrono y seguro fuera de banda mediante SshConnection
+        let remote = self.tabs[self.active_tab_index]
+            .file_viewer
+            .as_ref()
+            .and_then(|v| Some((v.remote_destination.clone()?, v.path.clone(), v.is_dirty)));
+        if let Some((dest, path, dirty)) = remote {
+            if dirty {
+                self.ssh_save_viewer(&dest, &path);
+            }
+            return;
+        }
+        let Some(viewer) = self.tabs[self.active_tab_index].file_viewer.as_mut() else {
+            return;
+        };
+        match viewer.save_to_disk() {
+            Ok(()) => {
+                crate::logger::log(&format!("-> Archivo guardado: {}", viewer.file_name));
+                if self.file_explorer.visible {
+                    self.file_explorer.refresh();
+                    self.pump_explorer_ssh();
+                }
+            }
+            Err(e) => crate::logger::log(&format!("-> Error al guardar archivo: {}", e)),
+        }
+    }
 }

@@ -50,10 +50,11 @@ TEArminal se define por cuatro pilares irrenunciables:
 * **Gestión contextual de archivos (Menú contextual)** ✅ *[Completado]*:
   * Opciones: *Nuevo archivo*, *Nueva carpeta*, *Renombrar* y *Eliminar*.
   * La eliminación utiliza la API Win32 (`SHFileOperationW` con `FOF_ALLOWUNDO`, sin dependencias nuevas) para enviar a la **Papelera de Reciclaje**, protegiendo el trabajo del usuario.
-* **Arrastrar y soltar (Drag & Drop) hacia la terminal**:
-  * Soporte de `WM_DROPFILES` para soltar archivos desde el explorador o desde Windows hacia el panel de terminal activo, inyectando su ruta entrecomillada.
-* **Acciones rápidas de Git en pestaña "Cambios"**:
-  * Botones discretos en cada fila para *Stage* (`git add`), *Unstage* y *Discard* (`git restore`), ejecutados de forma totalmente oculta (`CREATE_NO_WINDOW`).
+* **Arrastrar y soltar (Drag & Drop) hacia la terminal** ✅ *[Completado]*:
+  * Soporte nativo de `WindowEvent::DroppedFile` / `WM_DROPFILES` para soltar archivos desde el explorador del sistema de Windows o desde el explorador lateral de TEArminal hacia el panel de terminal bajo el cursor o activo, inyectando su ruta entre comillas (con espacio final) y con compatibilidad total con Bracketed Paste Mode.
+  * Si se suelta sobre una pestaña de visor de archivos, abre automáticamente el archivo arrastrado en el visor.
+* **Acciones rápidas de Git en pestaña "Cambios"** ✅ *[Completado]*:
+  * Botones discretos en cada fila al pasar el cursor para *Stage* (`+` / `git add`), *Unstage* (`-` / `git restore --staged`) y *Discard* (`↩` / `git restore`), ejecutados de forma totalmente oculta (`CREATE_NO_WINDOW`) con recálculo y sincronización inmediata de visores abiertos.
 
 ### 2.3. Emulador de Terminal y Paneles (`src/terminal.rs`, `src/pty.rs`, `src/renderer/pane.rs`)
 
@@ -111,9 +112,9 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 * **Situación:** En `src/terminal.rs` se mantienen banderas como el modo 1004 (Focus reporting), que luego debe ser neutralizado porque Windows ConPTY lo convierte erróneamente en caracteres `Enter` o `Escape`.
 * **Acción recomendada:** Auditar y eliminar estados del emulador VT que nunca pueden ser procesados de forma fiable a través de ConPTY en Windows, documentando las secuencias no soportadas en lugar de emularlas a medias.
 
-### 3.6. Modo "Solo lectura" artificial en el Visor de Archivos
-* **Situación:** En `src/app/viewer.rs` existe una alternancia manual entre modo lectura y edición (`Ctrl + E`). Para archivos locales regulares en los que el usuario tiene permisos de escritura, este bloqueo suele provocar pulsaciones perdidas y confusión en el usuario.
-* **Acción recomendada:** Hacer que los archivos con permisos de escritura sean editables por defecto (como en editores modernos), reservando el indicador de solo lectura estrictamente para archivos del sistema que carecen de permisos de escritura o buffers protegidos.
+### 3.6. Modo "Solo lectura" artificial en el Visor de Archivos ✅ *[Completado]*
+* **Situación:** En `src/app/viewer.rs` existía una alternancia manual entre modo lectura y edición (`Ctrl + E`). Para archivos locales regulares en los que el usuario tiene permisos de escritura, este bloqueo provocaba pulsaciones perdidas y confusión en el usuario.
+* **Acción realizada:** Los archivos locales y remotos con permisos de escritura se abren directamente en modo editable, reservando el indicador y bloqueo de solo lectura estrictamente para archivos marcados como de solo lectura en el sistema (`permissions().readonly()`), archivos binarios, no-UTF8 o en modo diff. Las pestañas de vista previa se reemplazan automáticamente mientras no existan modificaciones (`!is_dirty`) y se fijan de inmediato tan pronto como el usuario realiza una edición.
 
 ---
 
@@ -130,6 +131,7 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 | **Config** | Eliminar opción fantasma `terminal.gpu` | Limpieza | **P1** | ✅ Completado | Medio (Claridad) |
 | **Cleanup** | Eliminar comprobaciones de temporales pre-0.18 | Limpieza | **P1** | ✅ Completado | Bajo (Arranque) |
 | **Explorador** | Filtro rápido en árbol (Fuzzy / `Ctrl + P`) | Característica | **P2** | ✅ Completado | Alto |
+| **Explorador** | Acciones rápidas de Git en pestaña «Cambios» (Stage / Unstage / Discard) | Característica | **P2** | ✅ Completado | Alto |
 | **Terminal** | Hipervínculos interactivos (OSC 8 / URLs regex) | Característica | **P2** | ✅ Completado | Alto |
 | **Terminal** | Perfiles rápidos de Shell en botón `+` | Característica | **P2** | ✅ Completado | Alto |
 | **Visor** | Visor nativo de imágenes (`.png`, `.jpg`, `.gif` animado, `.webp`, `.ico`; local y remoto) | Característica | **P2** | ✅ Completado | Medio-Alto |
@@ -138,4 +140,5 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 | **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | Pendiente | Medio-Alto |
 | **Ajustes** | Selector de fuentes instaladas del sistema (`DirectWrite`) | Característica | **P3** | ✅ Completado | Medio |
 | **SSH** | Consolidar listados remotos en `SshConnection` vs OSC en banda | Limpieza / Refactor | **P3** | ✅ Completado | Alto (Estabilidad) |
+| **Visor** | Abrir archivos con permisos de escritura en modo editable por defecto | Usabilidad / Limpieza | **P3** | ✅ Completado | Alto |
 | **Visor** | Diff lado a lado (*Side-by-side*) | Característica | **P4** | ✅ Completado | Medio-Alto |

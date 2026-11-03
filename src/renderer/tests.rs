@@ -1690,6 +1690,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     // escena no puede depender del usuario ni de dónde esté `%TEMP%` (en CI sale otra ruta). Ruta fija, ya leído el texto.
     tab.file_viewer.as_mut().unwrap().path =
         std::path::PathBuf::from("C:/Users/dev/tearminal/src/renderer/pane.rs");
+    tab.file_viewer.as_mut().unwrap().is_read_only = true;
     let viewer = tab.file_viewer.as_ref().unwrap();
     let mut canvas = test_support::new_canvas(w, h);
     canvas.clear(theme.background);
@@ -2869,7 +2870,6 @@ fn test_no_loose_radius_literals_in_chrome() {
         ("pane.rs", include_str!("pane.rs")),
         ("draw.rs", include_str!("draw.rs")),
         ("top_bar.rs", include_str!("top_bar.rs")),
-        ("sidebar.rs", include_str!("sidebar.rs")),
         ("explorer_panel.rs", include_str!("explorer_panel.rs")),
         ("md_preview.rs", include_str!("md_preview.rs")),
     ];
@@ -5058,6 +5058,7 @@ mod gpu_scenes {
             is_expanded: false,
             depth: 0,
             git_status: None,
+            ..Default::default()
         };
         let long_item = ExplorerItem {
             name: "check_inventario_herramientas_checklistherramientas.rs".into(),
@@ -5066,6 +5067,7 @@ mod gpu_scenes {
             is_expanded: false,
             depth: 1,
             git_status: None,
+            ..Default::default()
         };
         explorer.items = vec![short_item, long_item];
 

@@ -483,8 +483,12 @@ impl TerminalTab {
             .unwrap_or_else(|| "archivo".to_string());
 
         // La fecha se toma antes de leer: una escritura posterior cuenta como cambio externo
-        let disk_mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let metadata = std::fs::metadata(&path).ok();
+        let disk_mtime = metadata.as_ref().and_then(|m| m.modified().ok());
+        let file_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+        let is_readonly_file = metadata
+            .as_ref()
+            .is_some_and(|m| m.permissions().readonly());
         let mut is_binary = false;
         let mut image = None;
         let mut lines = Vec::new();
@@ -543,6 +547,7 @@ impl TerminalTab {
             path.parent().map(|p| p.to_path_buf())
         };
         let local_branch = crate::app::shell_context::get_git_branch(local_dir.as_deref());
+        let is_read_only = is_binary || text_meta.2 || is_readonly_file;
         let viewer = FileViewerState {
             path: path.clone(),
             file_name: file_name.clone(),
@@ -568,7 +573,7 @@ impl TerminalTab {
             selection: None,
             remote_destination: None,
             remote_branch: local_branch,
-            is_read_only: true,
+            is_read_only,
             crlf: text_meta.0,
             final_newline: text_meta.1,
             non_utf8: text_meta.2,
@@ -683,6 +688,7 @@ impl TerminalTab {
             .and_then(|e| e.to_str())
             .map(|s| s.eq_ignore_ascii_case("md") || s.eq_ignore_ascii_case("markdown"))
             .unwrap_or(false);
+        let is_read_only = is_binary || non_utf8;
         let viewer = FileViewerState {
             path: path.clone(),
             file_name: file_name.clone(),
@@ -708,7 +714,7 @@ impl TerminalTab {
             selection: None,
             remote_destination: Some(dest),
             remote_branch,
-            is_read_only: true,
+            is_read_only,
             crlf,
             final_newline,
             non_utf8,
@@ -838,6 +844,30 @@ impl TerminalTab {
         }
 
         raw.trim().to_string()
+    }
+
+    /// Estado de la sesión según OSC 133. `None` en Ajustes y visores de archivo.
+    pub(crate) fn session_status(&self) -> Option<crate::renderer::SessionStatus> {
+        let terminal = &self.active_pane()?.terminal;
+        if terminal
+            .active_block
+            .as_ref()
+            .is_some_and(|b| b.output_start.is_some())
+        {
+            return Some(crate::renderer::SessionStatus::Running);
+        }
+        Some(
+            match terminal
+                .command_blocks
+                .iter()
+                .rev()
+                .find_map(|b| b.exit_code)
+            {
+                Some(0) => crate::renderer::SessionStatus::Done,
+                Some(_) => crate::renderer::SessionStatus::Failed,
+                None => crate::renderer::SessionStatus::Idle,
+            },
+        )
     }
 
     pub(crate) fn active_pane(&self) -> Option<&TerminalPane> {
