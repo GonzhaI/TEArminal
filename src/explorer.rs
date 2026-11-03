@@ -104,11 +104,12 @@ pub(crate) fn git_stage_file(repo: &Path, file: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Quita un archivo del índice de Git (`git restore --staged` o `git reset HEAD`)
+/// Quita un archivo del índice de Git (`git restore --staged`, `git reset HEAD` o `git rm --cached`)
 pub(crate) fn git_unstage_file(repo: &Path, file: &Path) -> std::io::Result<()> {
     let rel = file.strip_prefix(repo).unwrap_or(file);
     let mut cmd = git_command(repo);
     cmd.args(["restore", "--staged", "--"]).arg(rel);
+    cmd.stderr(std::process::Stdio::null());
     if let Ok(st) = cmd.status() {
         if st.success() {
             return Ok(());
@@ -116,7 +117,16 @@ pub(crate) fn git_unstage_file(repo: &Path, file: &Path) -> std::io::Result<()> 
     }
     let mut reset_cmd = git_command(repo);
     reset_cmd.args(["reset", "HEAD", "--"]).arg(rel);
-    let status = reset_cmd.status()?;
+    reset_cmd.stderr(std::process::Stdio::null());
+    if let Ok(status) = reset_cmd.status() {
+        if status.success() {
+            return Ok(());
+        }
+    }
+    let mut rm_cmd = git_command(repo);
+    rm_cmd.args(["rm", "--cached", "--"]).arg(rel);
+    rm_cmd.stderr(std::process::Stdio::null());
+    let status = rm_cmd.status()?;
     if status.success() {
         Ok(())
     } else {
@@ -2035,6 +2045,10 @@ mod tests {
         cmd.current_dir(&tmp);
         crate::app::platform::hide_console(&mut cmd);
         let _ = cmd.args(["init"]).status();
+        let mut cmd = std::process::Command::new("git");
+        cmd.current_dir(&tmp);
+        crate::app::platform::hide_console(&mut cmd);
+        let _ = cmd.args(["config", "core.autocrlf", "false"]).status();
 
         let file_a = tmp.join("file_a.txt");
         std::fs::write(&file_a, "initial line 1\n").unwrap();
@@ -2079,7 +2093,9 @@ mod tests {
         let res = git_discard_file(&tmp, &file_a, false);
         assert!(res.is_ok());
         assert_eq!(
-            std::fs::read_to_string(&file_a).unwrap(),
+            std::fs::read_to_string(&file_a)
+                .unwrap()
+                .replace("\r\n", "\n"),
             "initial line 1\n"
         );
 

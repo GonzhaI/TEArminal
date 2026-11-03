@@ -1673,6 +1673,10 @@ fn test_git_quick_actions_in_changes_view() {
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
     let _ = cmd.args(["init"]).status();
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["config", "core.autocrlf", "false"]).status();
 
     let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
     app.file_explorer.set_root(dir.clone());
@@ -1720,7 +1724,12 @@ fn test_git_quick_actions_in_changes_view() {
     // Discard rápido
     app.execute_git_action(&tracked, crate::renderer::GitActionKind::Discard, false);
     assert_eq!(app.file_explorer.items.len(), 0);
-    assert_eq!(std::fs::read_to_string(&tracked).unwrap(), "version 1\n");
+    assert_eq!(
+        std::fs::read_to_string(&tracked)
+            .unwrap()
+            .replace("\r\n", "\n"),
+        "version 1\n"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
