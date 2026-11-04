@@ -584,16 +584,13 @@ impl TextInput {
                 break;
             }
         }
-        if chars.is_empty() {
-            return 0;
-        }
-
         // 2. Determinar la clase del carácter inicial
-        let last_c = chars.last().unwrap().1;
+        let Some(&(mut target, last_c)) = chars.last() else {
+            return 0;
+        };
         let word_class = Self::is_word_char(last_c);
 
         // 3. Retroceder mientras sea de la misma clase
-        let mut target = chars.last().unwrap().0;
         while let Some(&(idx, c)) = chars.last() {
             if c.is_whitespace() || (Self::is_word_char(c) != word_class) {
                 break;

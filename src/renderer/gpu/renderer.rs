@@ -38,7 +38,7 @@ pub(super) type RectFor<'a> =
 
 #[inline]
 fn color_bits(c: Color) -> u32 {
-    (c.a as u32) << 24 | (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32
+    u32::from(c.a) << 24 | u32::from(c.r) << 16 | u32::from(c.g) << 8 | u32::from(c.b)
 }
 
 /// Recorte de la escena acotado al destino; `None` si queda vacío.
@@ -52,13 +52,13 @@ fn clamp_clip(c: RealClip, tw: i32, th: i32) -> Option<[u16; 4]> {
 /// ¿Corta el rectángulo `(x, y, w, h)` con el recorte? (`i64`: sin desbordes con tamaños absurdos.)
 #[inline]
 fn visible(x: i32, y: i32, w: u32, h: u32, clip: [u16; 4]) -> bool {
-    let (x, y) = (x as i64, y as i64);
+    let (x, y) = (i64::from(x), i64::from(y));
     w > 0
         && h > 0
-        && x < clip[2] as i64
-        && y < clip[3] as i64
-        && x + w as i64 > clip[0] as i64
-        && y + h as i64 > clip[1] as i64
+        && x < i64::from(clip[2])
+        && y < i64::from(clip[3])
+        && x + i64::from(w) > i64::from(clip[0])
+        && y + i64::from(h) > i64::from(clip[1])
 }
 
 /// El rect cabe en `i16` (los campos de `Instance`). Con la forma visible solo falla si es descomunal.
@@ -142,11 +142,11 @@ where
                 let Some(c) = clamp_clip(clip, tw, th) else {
                     continue;
                 };
-                let (x, y) = (x as i64, y as i64);
-                let x0 = x.max(c[0] as i64);
-                let y0 = y.max(c[1] as i64);
-                let x1 = (x + w as i64).min(c[2] as i64);
-                let y1 = (y + h as i64).min(c[3] as i64);
+                let (x, y) = (i64::from(x), i64::from(y));
+                let x0 = x.max(i64::from(c[0]));
+                let y0 = y.max(i64::from(c[1]));
+                let x1 = (x + i64::from(w)).min(i64::from(c[2]));
+                let y1 = (y + i64::from(h)).min(i64::from(c[3]));
                 sink.solid((x0 as i32, y0 as i32, x1 as i32, y1 as i32), color);
             }
             Op::Glyph {
@@ -172,7 +172,7 @@ where
                 if r.w == 0 || r.h == 0 {
                     continue;
                 }
-                let Some(rect) = rect_i16(x, y, r.w as u32, r.h as u32) else {
+                let Some(rect) = rect_i16(x, y, u32::from(r.w), u32::from(r.h)) else {
                     continue;
                 };
                 sink.push(
@@ -253,15 +253,21 @@ fn encode_card(
     radius: u32,
     outer: Color,
 ) {
-    let (bw, bh) = (bw as i64, bh as i64);
-    let (x, y, w, h, inset) = (x as i64, y as i64, w as i64, h as i64, inset as i64);
+    let (bw, bh) = (i64::from(bw), i64::from(bh));
+    let (x, y, w, h, inset) = (
+        i64::from(x),
+        i64::from(y),
+        i64::from(w),
+        i64::from(h),
+        i64::from(inset),
+    );
     let (x_end, y_end) = ((x + w).min(bw), (y + h).min(bh));
     if w <= inset * 2 || h <= inset * 2 || x >= x_end || y >= y_end {
         return;
     }
     let (cx0, cy0) = (x + inset, y + inset);
     let (cx1, cy1) = (x + w - inset, y + h - inset);
-    let r = (radius as i64).min((cx1 - cx0) / 2).min((cy1 - cy0) / 2);
+    let r = i64::from(radius).min((cx1 - cx0) / 2).min((cy1 - cy0) / 2);
     let mut solid = |x0: i64, y0: i64, x1: i64, y1: i64| {
         sink.solid((x0 as i32, y0 as i32, x1 as i32, y1 as i32), outer);
     };

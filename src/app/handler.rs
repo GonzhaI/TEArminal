@@ -127,13 +127,12 @@ impl TearminalApp {
             .with_min_inner_size(PhysicalSize::new(540, 320))
             .with_decorations(false)
             .with_resizable(true)
-            .with_window_icon(Some(icon));
+            .with_window_icon(icon);
 
-        let window = Arc::new(
-            event_loop
-                .create_window(window_attributes)
-                .expect("Error al crear ventana nativa de Windows"),
-        );
+        let window = Arc::new(match event_loop.create_window(window_attributes) {
+            Ok(w) => w,
+            Err(e) => super::platform::fatal_window_error(&e),
+        });
         window.set_ime_allowed(true);
 
         // Configurar tema nativo inmersivo de Windows 11 (DWM Dark/Light Mode y Mica)
@@ -719,7 +718,7 @@ impl TearminalApp {
                     if img.line_index + img.height_rows > view_start && img.line_index < view_end {
                         if let Some(delay_ms) = img.next_frame_delay_ms() {
                             let next_instant =
-                                now + std::time::Duration::from_millis(delay_ms as u64);
+                                now + std::time::Duration::from_millis(u64::from(delay_ms));
                             anim_wake =
                                 Some(anim_wake.map_or(next_instant, |w| w.min(next_instant)));
                         }
@@ -752,7 +751,7 @@ impl TearminalApp {
                 }
                 earliest(
                     &mut wake,
-                    now + std::time::Duration::from_millis(remaining_ms.max(10) as u64),
+                    now + std::time::Duration::from_millis(u64::from(remaining_ms.max(10))),
                 );
             }
         }

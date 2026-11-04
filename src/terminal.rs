@@ -20,6 +20,8 @@ use vte::{Params, Parser, Perform};
 /// Tamaño máximo de una secuencia OSC. El de vte por defecto (1 KB) descarta el resto en silencio: cortaba
 /// los listados remotos (`TearminalLs`), los trozos de `TearminalFile` (32 KB) y OSC 52 (hasta 100 KB).
 pub(crate) const OSC_BUF_SIZE: usize = 128 * 1024;
+/// Codepoint base en el plano de uso privado Unicode para mapear índices de grafemas complejos en celdas.
+pub(crate) const GRAPHEME_BASE_CODEPOINT: u32 = 0x0010_0000;
 type OscParser = Parser<OSC_BUF_SIZE>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -391,7 +393,7 @@ impl TerminalState {
     #[inline]
     pub(crate) fn grapheme_of(&self, cell: &Cell) -> Option<&str> {
         if cell.is_grapheme() {
-            let id = (cell.c as u32).checked_sub(0x100000)? as usize;
+            let id = (cell.c as u32).checked_sub(GRAPHEME_BASE_CODEPOINT)? as usize;
             self.graphemes.get(id).map(|s| &**s)
         } else {
             None
@@ -1016,7 +1018,8 @@ impl TerminalState {
                                 &mut self.grid[cy][px]
                             };
                             target.flags |= Cell::FLAG_GRAPHEME;
-                            target.c = char::from_u32(0x100000 + id).unwrap_or(prev_cell.c);
+                            target.c =
+                                char::from_u32(GRAPHEME_BASE_CODEPOINT + id).unwrap_or(prev_cell.c);
                             return;
                         }
                     }

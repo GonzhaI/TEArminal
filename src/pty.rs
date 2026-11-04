@@ -553,7 +553,7 @@ mod tests {
     fn read_until(pty: &PtyManager, needle: &str, timeout_ms: u64) -> (bool, String) {
         let mut out = String::new();
         let start = std::time::Instant::now();
-        while start.elapsed().as_millis() < timeout_ms as u128 {
+        while start.elapsed().as_millis() < u128::from(timeout_ms) {
             while let Some(bytes) = pty.try_recv_output() {
                 out.push_str(&String::from_utf8_lossy(&bytes));
             }

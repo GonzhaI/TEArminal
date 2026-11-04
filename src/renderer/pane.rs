@@ -16,7 +16,7 @@ const OCTANTS_OMITTED: [u8; 26] = [
 pub(crate) fn octant_pattern(c: char) -> u8 {
     let mut pattern = c as u32 - OCTANTS_START as u32;
     for omitted in OCTANTS_OMITTED {
-        if pattern >= omitted as u32 {
+        if pattern >= u32::from(omitted) {
             pattern += 1;
         }
     }
@@ -71,9 +71,9 @@ pub(crate) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
 
     if cell.dim() {
         Color::from_rgb(
-            (base.r as f32 * 0.65) as u8,
-            (base.g as f32 * 0.65) as u8,
-            (base.b as f32 * 0.65) as u8,
+            (f32::from(base.r) * 0.65) as u8,
+            (f32::from(base.g) * 0.65) as u8,
+            (f32::from(base.b) * 0.65) as u8,
         )
     } else {
         base

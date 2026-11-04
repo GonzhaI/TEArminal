@@ -91,7 +91,7 @@ impl Cell {
     #[inline(always)]
     pub(crate) fn pack_meta(hyperlink_id: u16, underline_color_id: u8) -> u16 {
         (hyperlink_id & Self::HYPERLINK_MASK)
-            | (((underline_color_id as u16) & Self::UNDERLINE_COLOR_MASK)
+            | ((u16::from(underline_color_id) & Self::UNDERLINE_COLOR_MASK)
                 << Self::UNDERLINE_COLOR_SHIFT)
     }
 
@@ -194,7 +194,7 @@ impl InlineImage {
 /// sistema (sin estado: cualquier vista de la misma animación va al compás). `None` si no hay fotogramas
 /// o ninguno tiene duración.
 pub(crate) fn current_frame(frames: &[ImageFrame]) -> Option<(usize, u32)> {
-    let total_ms: u64 = frames.iter().map(|f| f.delay_ms as u64).sum();
+    let total_ms: u64 = frames.iter().map(|f| u64::from(f.delay_ms)).sum();
     if total_ms == 0 {
         return None;
     }
@@ -204,7 +204,7 @@ pub(crate) fn current_frame(frames: &[ImageFrame]) -> Option<(usize, u32)> {
         .as_millis() as u64;
     let mut rem = now_ms % total_ms;
     for (i, frame) in frames.iter().enumerate() {
-        let d = frame.delay_ms as u64;
+        let d = u64::from(frame.delay_ms);
         if rem < d {
             return Some((i, (d - rem) as u32));
         }

@@ -2203,7 +2203,7 @@ fn bench_viewer_wrap_edit_and_selection() {
     let _ = std::fs::remove_file(path);
     println!(
         "bench_viewer_wrap_edit_and_selection: {n} ciclos (insert+wrap+git+sel+backspace en 1000 líneas) en {elapsed:.2?} ({:.2} µs/ciclo)",
-        elapsed.as_secs_f64() * 1_000_000.0 / n as f64
+        elapsed.as_secs_f64() * 1_000_000.0 / f64::from(n)
     );
 }
 

@@ -932,7 +932,7 @@ impl TerminalRenderer {
 
             if !code && (ch == '[' || (ch == '!' && chars.get(i + 1) == Some(&'['))) {
                 let is_img = ch == '!';
-                let open = i + is_img as usize;
+                let open = i + usize::from(is_img);
                 let link = find_from(&chars, open + 1, ']')
                     .filter(|c| chars.get(c + 1) == Some(&'('))
                     .and_then(|c| find_from(&chars, c + 2, ')').map(|e| (c, e)));

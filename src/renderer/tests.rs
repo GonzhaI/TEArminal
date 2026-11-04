@@ -35,7 +35,7 @@ mod bench {
             canvas.begin(w as u32, h as u32);
             r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
         }
-        let record = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let record = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
         println!("render_pane {w}x{h} ({cols}x{rows} celdas): {record:.2} ms/frame (SOLO grabar la escena; no incluye dibujarla)");
     }
 
@@ -60,7 +60,7 @@ mod bench {
             for row in 0..rows - 1 {
                 let line: String = (0..cols - 1)
                     .map(|col| {
-                        let n = (row * 31 + col * 17) as u32 % count + (base == 0x2800) as u32;
+                        let n = (row * 31 + col * 17) as u32 % count + u32::from(base == 0x2800);
                         char::from_u32(base + n).unwrap()
                     })
                     .collect();
@@ -76,7 +76,7 @@ mod bench {
                 canvas.begin(w as u32, h as u32);
                 r.render_pane(&mut canvas, 0, 0, w, h, &term, &theme, true, true, false);
             }
-            let record = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+            let record = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
             println!("{name} {cols}x{rows}: {record:.2} ms/frame grabando, {ops} operaciones");
         }
     }
@@ -180,14 +180,14 @@ mod bench {
         for _ in 0..n {
             record(&mut canvas);
         }
-        let rec = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let rec = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
         let t = Instant::now();
         for _ in 0..n {
             record(&mut canvas);
             g.render(canvas.scene(), &rtv, (w as u32, h as u32))
                 .unwrap();
         }
-        let submit = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let submit = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
         let t = Instant::now();
         sync();
         let drain = t.elapsed().as_secs_f64() * 1000.0;
@@ -215,7 +215,7 @@ mod bench {
                 canvas.rounded_stroke(80, y, 820, 64, 10, stroke_color);
             }
         }
-        let per = t.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let per = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
         println!(
             "bench_sdf_rounded_rect_and_stroke (12 cards 820x64, SOLO grabar): {per:.3} ms/iter"
         );
@@ -284,7 +284,7 @@ mod bench {
                 &theme,
             );
         }
-        let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let rs_ms = t_rs.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
 
         r.render_file_viewer(
             &mut canvas,
@@ -312,7 +312,7 @@ mod bench {
                 &theme,
             );
         }
-        let md_ms = t_md.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let md_ms = t_md.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
 
         let _ = std::fs::remove_dir_all(&dir);
         println!("bench_render_file_viewer (1920x1080, SOLO grabar): Rust code = {rs_ms:.2} ms/frame | Markdown preview = {md_ms:.2} ms/frame");
@@ -446,7 +446,7 @@ mod bench {
                 &theme,
             );
         }
-        let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let chrome_ms = t_chrome.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
 
         let t_settings = Instant::now();
         for _ in 0..n {
@@ -463,7 +463,7 @@ mod bench {
                 &theme,
             );
         }
-        let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / n as f64;
+        let settings_ms = t_settings.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
         println!("bench_render_ui_chrome (SOLO grabar): sidebar+topbar+statusbar = {chrome_ms:.2} ms/frame | settings_page = {settings_ms:.2} ms/frame");
     }
 }
@@ -853,7 +853,7 @@ fn test_ai_agent_detection_and_status_bar() {
     let sidebar_offset = 180;
     let mut canvas = Canvas::new();
     canvas.begin(1000, 600);
-    canvas.clear(Color::from_u32_xrgb(0xCAFEBABE)); // valor centinela: lo no dibujado se nota
+    canvas.clear(Color::from_u32_xrgb(0xCAFE_BABE)); // valor centinela: lo no dibujado se nota
     renderer.render_status_bar(
         &mut canvas,
         sidebar_offset,
@@ -877,7 +877,7 @@ fn test_ai_agent_detection_and_status_bar() {
     );
     assert_eq!(
         buffer[(600 - 22) * 1000 + sidebar_offset - 1],
-        Color::from_u32_xrgb(0xCAFEBABE).to_u32_xrgb(),
+        Color::from_u32_xrgb(0xCAFE_BABE).to_u32_xrgb(),
         "La barra de estado no invade el panel de Spaces, que ocupa todo el alto"
     );
     assert_eq!(
@@ -979,8 +979,8 @@ fn test_render_frame_latency_and_fps_benchmark() {
         );
     }
     let total_elapsed = start.elapsed();
-    let avg_frame_ms = total_elapsed.as_secs_f64() * 1000.0 / frames as f64;
-    let potential_fps = frames as f64 / total_elapsed.as_secs_f64();
+    let avg_frame_ms = total_elapsed.as_secs_f64() * 1000.0 / f64::from(frames);
+    let potential_fps = f64::from(frames) / total_elapsed.as_secs_f64();
 
     println!(
             "\n⚡ [TEArminal Render Benchmark 1080p Fullscreen, SOLO grabar la escena] {} fotogramas en {:.2?}: {:.3} ms/frame | {:.0} FPS teóricos",
@@ -2990,7 +2990,7 @@ fn test_with_offset_equals_offscreen_copy() {
         );
     };
     let base: Vec<u32> = (0..W * H)
-        .map(|i| (i as u32).wrapping_mul(0x010203) & 0xFFFFFF)
+        .map(|i| (i as u32).wrapping_mul(0x0001_0203) & 0x00FF_FFFF)
         .collect();
 
     // Referencia: el dibujo en un lienzo local de 56x100 sobre el fondo (sin recorte ni traslación) y copia de la
@@ -3893,7 +3893,7 @@ mod gpu_renderer {
             let mut corners = 0;
             for i in &out {
                 let [x, y, w, h] = i.rect;
-                let (x, y, w, h) = (x as i32, y as i32, w as i32, h as i32);
+                let (x, y, w, h) = (i32::from(x), i32::from(y), i32::from(w), i32::from(h));
                 let is_solid = kind_of(i) == Kind::Solid as u32;
                 if !is_solid {
                     assert_eq!(kind_of(i), Kind::CardCorner as u32, "caso {n}");
@@ -3922,7 +3922,7 @@ mod gpu_renderer {
                 let changed = drawn[p] != SENTINEL;
                 assert_eq!(
                     solid[p],
-                    changed as u8,
+                    u8::from(changed),
                     "caso {n}: píxel {p} ({}, {})",
                     p % bw,
                     p / bw
@@ -4559,7 +4559,7 @@ mod gpu_renderer {
             .max()
             .unwrap();
         assert!(
-            max <= PARITY_TOLERANCE as u32,
+            max <= u32::from(PARITY_TOLERANCE),
             "los glifos pequeños deben dibujarse y los enormes no (máx {max})"
         );
         assert_ne!(gpu, base, "los glifos pequeños deben dibujar algo");
@@ -4752,7 +4752,7 @@ mod gpu_surface {
         assert_eq!(s.size(), (1, 1));
         let mut canvas = Canvas::new();
         assert!(matches!(
-            s.present(scene(&mut canvas, 1, 1, 0x336699)),
+            s.present(scene(&mut canvas, 1, 1, 0x0033_6699)),
             Ok(Presented::Ok)
         ));
 
@@ -4771,13 +4771,13 @@ mod gpu_surface {
         assert_eq!(s.size(), (64, 48));
         let mut canvas = Canvas::new();
         assert!(matches!(
-            s.present(scene(&mut canvas, 64, 48, 0xFF8000)),
+            s.present(scene(&mut canvas, 64, 48, 0x00FF_8000)),
             Ok(Presented::Ok)
         ));
         s.resize(128, 96).unwrap();
         assert_eq!(s.size(), (128, 96));
         assert!(matches!(
-            s.present(scene(&mut canvas, 128, 96, 0x0080FF)),
+            s.present(scene(&mut canvas, 128, 96, 0x0000_80FF)),
             Ok(Presented::Ok)
         ));
     }
@@ -4788,8 +4788,15 @@ mod gpu_surface {
         let mut s = win.surface(64, 48);
         let mut canvas = Canvas::new();
         canvas.begin(64, 48);
-        canvas.clear(Color::from_u32_xrgb(0x203040));
-        canvas.fill_rect((0, 0, 64, 48), 8, 6, 20, 10, Color::from_u32_xrgb(0xE0A010));
+        canvas.clear(Color::from_u32_xrgb(0x0020_3040));
+        canvas.fill_rect(
+            (0, 0, 64, 48),
+            8,
+            6,
+            20,
+            10,
+            Color::from_u32_xrgb(0x00E0_A010),
+        );
         let scene = canvas.scene();
         assert!(matches!(s.present(scene), Ok(Presented::Ok)));
         let before = s.renderer_mut().render_to_pixels(scene).unwrap();
@@ -4847,7 +4854,7 @@ mod gpu_scenes {
                 let mut d_px = 0u8;
                 for s in [0, 8, 16] {
                     let d = ((c >> s) & 255).abs_diff((g >> s) & 255) as u8;
-                    sum += d as u64;
+                    sum += u64::from(d);
                     d_px = d_px.max(d);
                 }
                 max = max.max(d_px);

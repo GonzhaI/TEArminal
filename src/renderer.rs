@@ -9,6 +9,7 @@
 mod blocks;
 mod canvas;
 mod context_menu;
+mod diff_view;
 mod draw;
 mod explorer_panel;
 mod file_viewer;
@@ -24,6 +25,7 @@ mod settings_page;
 mod spaces_panel;
 mod state;
 mod status_bar;
+mod syntax;
 #[cfg(test)]
 mod test_support;
 pub(crate) mod tokens;
@@ -102,13 +104,12 @@ impl TerminalRenderer {
         };
 
         let inter_font = fontdue::Font::from_bytes(EMBEDDED_INTER_MEDIUM, font_settings())
-            .expect("invariante: fuente embebida Inter Medium válida en tiempo de compilación");
+            .unwrap_or_else(|_| regular_font.clone());
         let inter_semibold_font =
-            fontdue::Font::from_bytes(EMBEDDED_INTER_SEMIBOLD, font_settings()).expect(
-                "invariante: fuente embebida Inter SemiBold válida en tiempo de compilación",
-            );
+            fontdue::Font::from_bytes(EMBEDDED_INTER_SEMIBOLD, font_settings())
+                .unwrap_or_else(|_| regular_font.clone());
         let lucide_font = fontdue::Font::from_bytes(EMBEDDED_LUCIDE, font_settings())
-            .expect("invariante: fuente embebida Lucide válida en tiempo de compilación");
+            .unwrap_or_else(|_| regular_font.clone());
 
         let mut renderer = Self {
             regular_font,

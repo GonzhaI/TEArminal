@@ -972,6 +972,13 @@ pub(crate) fn parse_iso8601_utc(s: &str) -> Option<u64> {
     let mm: u64 = s[14..16].parse().ok()?;
     let ss: u64 = s[17..19].parse().ok()?;
 
+    // Constantes del calendario gregoriano y algoritmo civil de Howard Hinnant
+    const DAYS_PER_400_YEARS: i64 = 146_097;
+    const DAYS_TO_UNIX_EPOCH: i64 = 719_468;
+    const SECONDS_PER_DAY: u64 = 86_400;
+    const SECONDS_PER_HOUR: u64 = 3_600;
+    const SECONDS_PER_MINUTE: u64 = 60;
+
     // Algoritmo civil-from-days de Howard Hinnant
     let y_adj = y - if m <= 2 { 1 } else { 0 };
     let era = if y_adj >= 0 { y_adj } else { y_adj - 399 } / 400;
@@ -979,11 +986,11 @@ pub(crate) fn parse_iso8601_utc(s: &str) -> Option<u64> {
     let mp = (m + if m > 2 { -3 } else { 9 }) as u64;
     let doy = (153 * mp + 2) / 5 + d as u64 - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146097 + doe as i64 - 719468;
+    let days = era * DAYS_PER_400_YEARS + doe as i64 - DAYS_TO_UNIX_EPOCH;
     if days < 0 {
         return None;
     }
-    Some(days as u64 * 86400 + hh * 3600 + mm * 60 + ss)
+    Some(days as u64 * SECONDS_PER_DAY + hh * SECONDS_PER_HOUR + mm * SECONDS_PER_MINUTE + ss)
 }
 
 #[cfg(test)]

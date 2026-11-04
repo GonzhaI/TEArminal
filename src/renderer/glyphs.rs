@@ -107,8 +107,12 @@ impl TerminalRenderer {
                 return (font, true);
             }
         }
-        let regular = fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_REGULAR, font_settings())
-            .expect("invariante: fuente embebida JetBrains Mono Nerd Font Regular válida");
+        let regular = match fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_REGULAR, font_settings()) {
+            Ok(f) => f,
+            Err(e) => crate::app::platform::fatal_window_error(&format!(
+                "Fuente regular embebida no se pudo cargar: {e}"
+            )),
+        };
         (regular, false)
     }
 
@@ -118,16 +122,16 @@ impl TerminalRenderer {
         }
         self.bold_font.get_or_init(|| {
             fontdue::Font::from_bytes(EMBEDDED_JETBRAINS_BOLD, font_settings())
-                .expect("invariante: fuente embebida JetBrains Mono Nerd Font Bold válida")
+                .unwrap_or_else(|_| self.regular_font.clone())
         })
     }
 
     /// Fuente de iconos Nerd que contiene `c` (solo para PUA), cargándola si hace falta
     pub(super) fn nerd_font(&self, c: char) -> &fontdue::Font {
-        let block = (c as u32 >= 0xF0000) as usize;
+        let block = usize::from(c as u32 >= 0xF0000);
         self.nerd_fonts[block].get_or_init(|| {
             fontdue::Font::from_bytes(EMBEDDED_NERD_ICONS[block], font_settings())
-                .expect("invariante: fuente embebida Nerd Font válida")
+                .unwrap_or_else(|_| self.regular_font.clone())
         })
     }
 
@@ -252,11 +256,12 @@ impl TerminalRenderer {
         if code < 256 {
             let idx = code as usize + if bold { 256 } else { 0 };
             if self.ascii_cache[idx].is_none() {
-                self.ascii_cache[idx] = Some(Rc::new(self.rasterize_glyph(c, bold)));
+                let glyph = Rc::new(self.rasterize_glyph(c, bold));
+                self.ascii_cache[idx] = Some(glyph);
             }
-            return self.ascii_cache[idx]
-                .as_ref()
-                .expect("invariante: inicializado inmediatamente si era None");
+            if let Some(ref g) = self.ascii_cache[idx] {
+                return g;
+            }
         }
 
         if !self.glyph_cache.contains_key(&(c, bold)) {

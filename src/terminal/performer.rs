@@ -793,9 +793,9 @@ impl<'a> Perform for Performer<'a> {
             b"10" if params.len() > 1 => {
                 if params[1] == b"?" {
                     let fg = self.state.theme.foreground;
-                    let r = (fg.r as u16) * 0x0101;
-                    let g = (fg.g as u16) * 0x0101;
-                    let b = (fg.b as u16) * 0x0101;
+                    let r = u16::from(fg.r) * 0x0101;
+                    let g = u16::from(fg.g) * 0x0101;
+                    let b = u16::from(fg.b) * 0x0101;
                     let resp = format!("\x1b]10;rgb:{:04x}/{:04x}/{:04x}\x1b\\", r, g, b);
                     self.state.pty_write_queue.push(resp.into_bytes());
                 }
@@ -803,9 +803,9 @@ impl<'a> Perform for Performer<'a> {
             // Consulta de color de fondo (OSC 11)
             b"11" if params.len() > 1 && params[1] == b"?" => {
                 let bg = self.state.theme.background;
-                let r = (bg.r as u16) * 0x0101;
-                let g = (bg.g as u16) * 0x0101;
-                let b = (bg.b as u16) * 0x0101;
+                let r = u16::from(bg.r) * 0x0101;
+                let g = u16::from(bg.g) * 0x0101;
+                let b = u16::from(bg.b) * 0x0101;
                 let resp = format!("\x1b]11;rgb:{:04x}/{:04x}/{:04x}\x1b\\", r, g, b);
                 self.state.pty_write_queue.push(resp.into_bytes());
             }

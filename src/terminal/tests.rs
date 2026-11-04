@@ -1655,9 +1655,9 @@ fn test_osc_10_and_11_color_queries() {
     let fg = theme.foreground;
     let expected_fg = format!(
         "\x1b]10;rgb:{:04x}/{:04x}/{:04x}\x1b\\",
-        fg.r as u16 * 0x0101,
-        fg.g as u16 * 0x0101,
-        fg.b as u16 * 0x0101
+        u16::from(fg.r) * 0x0101,
+        u16::from(fg.g) * 0x0101,
+        u16::from(fg.b) * 0x0101
     );
     assert_eq!(term.pty_write_queue[0], expected_fg.as_bytes());
 
@@ -1669,9 +1669,9 @@ fn test_osc_10_and_11_color_queries() {
     let bg = theme.background;
     let expected_bg = format!(
         "\x1b]11;rgb:{:04x}/{:04x}/{:04x}\x1b\\",
-        bg.r as u16 * 0x0101,
-        bg.g as u16 * 0x0101,
-        bg.b as u16 * 0x0101
+        u16::from(bg.r) * 0x0101,
+        u16::from(bg.g) * 0x0101,
+        u16::from(bg.b) * 0x0101
     );
     assert_eq!(term.pty_write_queue[0], expected_bg.as_bytes());
 }

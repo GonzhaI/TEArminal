@@ -88,13 +88,13 @@ pub(crate) fn set_keep_awake(stay_awake: bool) {
     }
 }
 
-pub(super) fn create_native_icon() -> Icon {
+pub(super) fn create_native_icon() -> Option<Icon> {
     const ICON_BYTES: &[u8] = include_bytes!("../../assets/icon-256.png");
     if let Ok(img) = image::load_from_memory(ICON_BYTES) {
         let rgba = img.to_rgba8();
         let (w, h) = rgba.dimensions();
         if let Ok(icon) = Icon::from_rgba(rgba.into_raw(), w, h) {
-            return icon;
+            return Some(icon);
         }
     }
 
@@ -124,8 +124,7 @@ pub(super) fn create_native_icon() -> Icon {
             }
         }
     }
-    Icon::from_rgba(rgba, size as u32, size as u32)
-        .expect("invariante: el buffer rgba tiene tamaño exacto size * size * 4")
+    Icon::from_rgba(rgba, size as u32, size as u32).ok()
 }
 
 #[cfg(target_os = "windows")]
@@ -146,9 +145,9 @@ pub(super) fn update_windows_theme(window: &Window, theme: &Theme) {
                 );
 
                 let to_bgr = |c: crate::theme::Color| -> u32 {
-                    let r = c.r as u32;
-                    let g = c.g as u32;
-                    let b = c.b as u32;
+                    let r = u32::from(c.r);
+                    let g = u32::from(c.g);
+                    let b = u32::from(c.b);
                     (b << 16) | (g << 8) | r
                 };
 
@@ -253,7 +252,7 @@ pub(super) fn get_physical_modifiers() -> (bool, bool, bool, bool, bool) {
     };
 
     unsafe {
-        let is_down = |vk: u16| -> bool { (GetAsyncKeyState(vk as i32) as i16) < 0 };
+        let is_down = |vk: u16| -> bool { (GetAsyncKeyState(i32::from(vk)) as i16) < 0 };
 
         let shift = is_down(VK_SHIFT);
         let rmenu = is_down(VK_RMENU); // AltGr (Right Alt)
@@ -302,7 +301,7 @@ pub fn get_screen_cursor_pos() -> Option<(i32, i32)> {
 pub(crate) fn double_click_time() -> std::time::Duration {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
     let ms = unsafe { GetDoubleClickTime() };
-    std::time::Duration::from_millis(ms as u64)
+    std::time::Duration::from_millis(u64::from(ms))
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -392,8 +391,8 @@ unsafe extern "system" fn wnd_proc_subclass(
 
     match msg {
         WM_NCHITTEST => {
-            let x = (lparam as i32) as i16 as i32;
-            let y = ((lparam as i32 >> 16) as i16) as i32;
+            let x = i32::from((lparam as i32) as i16);
+            let y = i32::from((lparam as i32 >> 16) as i16);
             let mut pt = POINT { x, y };
             ScreenToClient(hwnd, &mut pt);
 
@@ -456,8 +455,8 @@ unsafe extern "system" fn wnd_proc_subclass(
         }
         WM_NCMOUSEMOVE => {
             if wparam == HTMAXBUTTON as usize {
-                let x = (lparam as i32) as i16 as i32;
-                let y = ((lparam as i32 >> 16) as i16) as i32;
+                let x = i32::from((lparam as i32) as i16);
+                let y = i32::from((lparam as i32 >> 16) as i16);
                 let mut pt = POINT { x, y };
                 ScreenToClient(hwnd, &mut pt);
 
@@ -510,6 +509,27 @@ pub(crate) fn gpu_error_message(err: &dyn std::fmt::Display) -> String {
          la variable de entorno TEARMINAL_RENDERER=warp para forzar el render por software y \
          actualiza los controladores de la tarjeta gráfica."
     )
+}
+
+/// Error irrecuperable al crear la ventana nativa de Windows: informar y salir limpiamente
+/// sin provocar un pánico de consola.
+#[cold]
+pub(crate) fn fatal_window_error(err: &dyn std::fmt::Display) -> ! {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    crate::logger::log(&format!(
+        "Error fatal al crear ventana nativa de Windows: {err}"
+    ));
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(Some(0)).collect() };
+    let text = wide(&format!(
+        "No se pudo inicializar la ventana de Windows.\n\n\
+         Detalles del sistema:\n{}\n\n\
+         Compruebe los recursos del sistema o reinicie el equipo.",
+        err
+    ));
+    let title = wide("TEArminal - Error de Ventana");
+    // SAFETY: cadenas UTF-16 terminadas en nulo válidas durante la llamada
+    unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
+    std::process::exit(1)
 }
 
 /// Error irrecuperable al crear la superficie de GPU: informar (registro + diálogo nativo) y salir,

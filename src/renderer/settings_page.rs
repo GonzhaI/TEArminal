@@ -726,7 +726,7 @@ impl TerminalRenderer {
         );
 
         // Lista desplazable de temas
-        let current = slot_names[state.theme_slot_light as usize];
+        let current = slot_names[usize::from(state.theme_slot_light)];
         let first = state
             .theme_scroll
             .min(matches.len().saturating_sub(SettingsPageRects::THEME_ROWS));

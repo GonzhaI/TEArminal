@@ -1518,16 +1518,16 @@ impl TearminalApp {
         }
 
         // Con la paleta de comandos abierta solo se resalta su opción bajo el ratón
-        if self.palette.is_some() {
-            let (is_dragging, filtered_len, scroll_offset, selected) = {
-                let p = self.palette.as_ref().unwrap();
+        if let Some((is_dragging, filtered_len, scroll_offset, selected)) =
+            self.palette.as_ref().map(|p| {
                 (
                     p.input.is_dragging,
                     p.filtered.len(),
                     p.scroll_offset,
                     p.selected,
                 )
-            };
+            })
+        {
             let rects =
                 PaletteRects::compute_with_scroll(win_w, win_h, filtered_len, scroll_offset);
             if is_dragging {

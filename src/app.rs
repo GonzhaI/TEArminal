@@ -5,6 +5,9 @@
 
 mod ai_usage;
 mod click;
+mod click_explorer;
+mod click_settings;
+mod click_viewer;
 mod clipboard;
 mod context_menu;
 mod cursor;
@@ -12,6 +15,8 @@ mod fs_watcher;
 mod handler;
 mod host;
 mod keyboard;
+mod keyboard_viewer;
+pub(crate) mod kitty_keys;
 mod layout;
 mod machine;
 mod palette;
@@ -24,6 +29,8 @@ mod spaces;
 mod ssh_jobs;
 mod tabs;
 pub(crate) mod viewer;
+pub(crate) mod viewer_diff;
+pub(crate) mod viewer_image;
 mod wheel;
 
 pub(crate) use crate::config::KeepAwakeMode;
@@ -31,9 +38,7 @@ pub(crate) use crate::renderer::PaletteRects;
 pub(crate) use ai_usage::*;
 pub(crate) use context_menu::*;
 pub(crate) use host::TearminalHost;
-#[cfg(test)]
-pub(crate) use keyboard::{encode_kitty_key, key_code_to_char};
-pub(crate) use keyboard::{key_is_char, KeyEventType};
+pub(crate) use kitty_keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub(crate) use layout::*;
 pub(crate) use machine::*;
 pub(crate) use palette::*;

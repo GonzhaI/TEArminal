@@ -80,7 +80,7 @@ impl Instance {
             clip,
             color,
             uv,
-            kind_radius: kind as u32 | (radius as u32) << 8 | (extra as u32) << 16,
+            kind_radius: kind as u32 | u32::from(radius) << 8 | u32::from(extra) << 16,
             _reserved: 0,
         }
     }

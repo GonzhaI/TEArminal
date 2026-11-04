@@ -45,7 +45,7 @@ impl Color {
     /// Convierte a formato de pixel 32-bit XRGB nativo de Windows (0x00RRGGBB)
     #[inline(always)]
     pub(crate) fn to_u32_xrgb(self) -> u32 {
-        ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+        (u32::from(self.r) << 16) | (u32::from(self.g) << 8) | u32::from(self.b)
     }
 
     /// Inversa de `to_u32_xrgb`: color opaco desde un píxel XRGB.
@@ -63,12 +63,12 @@ impl Color {
         if alpha == 255 {
             return fg.to_u32_xrgb();
         }
-        let a = alpha as u32;
+        let a = u32::from(alpha);
         let inv_a = 255 - a;
-        let r = ((fg.r as u32 * a + self.r as u32 * inv_a) / 255) as u8;
-        let g = ((fg.g as u32 * a + self.g as u32 * inv_a) / 255) as u8;
-        let b = ((fg.b as u32 * a + self.b as u32 * inv_a) / 255) as u8;
-        ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+        let r = ((u32::from(fg.r) * a + u32::from(self.r) * inv_a) / 255) as u8;
+        let g = ((u32::from(fg.g) * a + u32::from(self.g) * inv_a) / 255) as u8;
+        let b = ((u32::from(fg.b) * a + u32::from(self.b) * inv_a) / 255) as u8;
+        (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
     }
 }
 
@@ -157,7 +157,7 @@ fn hex(s: &str) -> Option<Color> {
 /// Luminancia relativa WCAG (0..1) de un color opaco.
 fn luminance(c: Color) -> f32 {
     let channel = |v: u8| {
-        let s = v as f32 / 255.0;
+        let s = f32::from(v) / 255.0;
         if s <= 0.04045 {
             s / 12.92
         } else {
@@ -267,16 +267,42 @@ impl Theme {
     pub(crate) fn from_name(name: &str) -> Self {
         Self::find(name)
             .or_else(|| Self::find(Self::DEFAULT_DARK))
+            .or_else(|| THEMES.lines().find_map(parse_line))
             .map(|(_, t)| t)
-            .expect("invariante: DEFAULT_DARK está garantizado en assets/themes.txt compilado")
+            .unwrap_or(Self {
+                background: Color::from_rgb(30, 30, 46),
+                foreground: Color::from_rgb(205, 214, 244),
+                cursor: Color::from_rgb(245, 224, 220),
+                selection: Color::from_rgb(88, 91, 112),
+                selection_fg: Color::from_rgb(205, 214, 244),
+                ansi: [
+                    Color::from_rgb(69, 71, 90),
+                    Color::from_rgb(243, 139, 168),
+                    Color::from_rgb(166, 227, 161),
+                    Color::from_rgb(249, 226, 175),
+                    Color::from_rgb(137, 180, 250),
+                    Color::from_rgb(245, 194, 231),
+                    Color::from_rgb(148, 226, 213),
+                    Color::from_rgb(186, 194, 222),
+                    Color::from_rgb(88, 91, 112),
+                    Color::from_rgb(243, 139, 168),
+                    Color::from_rgb(166, 227, 161),
+                    Color::from_rgb(249, 226, 175),
+                    Color::from_rgb(137, 180, 250),
+                    Color::from_rgb(245, 194, 231),
+                    Color::from_rgb(148, 226, 213),
+                    Color::from_rgb(166, 173, 200),
+                ],
+                ui_accent: Color::from_rgb(137, 180, 250),
+            })
     }
 
     /// Determina si el tema activo es de tonalidad clara
     #[inline]
     pub(crate) fn is_light(&self) -> bool {
-        let lum = 0.2126 * (self.background.r as f32)
-            + 0.7152 * (self.background.g as f32)
-            + 0.0722 * (self.background.b as f32);
+        let lum = 0.2126 * f32::from(self.background.r)
+            + 0.7152 * f32::from(self.background.g)
+            + 0.0722 * f32::from(self.background.b);
         lum > 140.0
     }
 
@@ -289,7 +315,7 @@ impl Theme {
     /// Mezcla lineal en sRGB entre dos colores opacos (`t` = 0 devuelve `a`, 1 devuelve `b`).
     pub(crate) fn mix(&self, a: Color, b: Color, t: f32) -> Color {
         let t = t.clamp(0.0, 1.0);
-        let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+        let lerp = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
         Color::from_rgb(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b))
     }
 
