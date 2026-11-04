@@ -15,10 +15,30 @@ impl TerminalRenderer {
     ) {
         let (win_w, win_h) = canvas.size();
         let items_len = state.filtered.len();
-        let rects = PaletteRects::compute_with_scroll(win_w, win_h, items_len, state.scroll_offset);
+        let progress = self.palette_anim_progress.unwrap_or(1.0).clamp(0.0, 1.0);
+        let offset_y = if progress < 1.0 {
+            ((1.0 - progress) * -16.0).round() as isize
+        } else {
+            0
+        };
+        let rects = PaletteRects::compute_with_scroll_offset_y(
+            win_w,
+            win_h,
+            items_len,
+            state.scroll_offset,
+            offset_y,
+        );
 
-        // Velo translúcido que oscurece suavemente el fondo sin ocultar la ventana en negro opaco
-        canvas.rounded_fill(0, 0, win_w, win_h, 0, Color::from_rgba(0, 0, 0, 125));
+        // Velo translúcido modulado por el progreso de apertura
+        let overlay_alpha = (125.0 * progress).round() as u8;
+        canvas.rounded_fill(
+            0,
+            0,
+            win_w,
+            win_h,
+            0,
+            Color::from_rgba(0, 0, 0, overlay_alpha),
+        );
 
         let (cx, cy, cw, ch) = rects.card;
 

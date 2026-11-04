@@ -6,7 +6,7 @@ impl TearminalApp {
     /// Región `(x, y, ancho, alto)` del modal de Ajustes en coordenadas de ventana.
     pub(super) fn settings_modal(&self) -> crate::renderer::Rect {
         let (w, h) = self.window_size();
-        SettingsPageRects::modal_region(w, h, self.sidebar_offset())
+        SettingsPageRects::modal_region(w, h)
     }
 
     /// Cierra el modal de Ajustes (quita su pestaña) y vuelve a la terminal anterior.

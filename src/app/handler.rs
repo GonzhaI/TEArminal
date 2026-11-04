@@ -665,24 +665,6 @@ impl TearminalApp {
                 }
             }
             earliest(&mut wake, self.cursor_timer + BLINK);
-        } else if !self.config.terminal.cursor_blink && self.is_focused && !self.occluded {
-            // Sin parpadeo de cursor, comprobar cambios de rama Git cada segundo si la ventana está activa
-            if let Some(active_pane) = self
-                .tabs
-                .get_mut(self.active_tab_index)
-                .and_then(|t| t.active_pane_mut())
-            {
-                if active_pane.terminal.ssh_session.is_none() {
-                    let old_branch = active_pane.cached_git_branch.clone();
-                    let new_branch = active_pane.get_git_branch();
-                    if old_branch != new_branch {
-                        if let Some(w) = &self.window {
-                            w.request_redraw();
-                        }
-                    }
-                }
-            }
-            earliest(&mut wake, now + std::time::Duration::from_secs(1));
         }
 
         // Spinner de la pestaña que ejecuta: solo con foco y a la vista. 110 ms por paso, el mismo
@@ -753,6 +735,104 @@ impl TearminalApp {
                     &mut wake,
                     now + std::time::Duration::from_millis(u64::from(remaining_ms.max(10))),
                 );
+            }
+        }
+
+        // Animaciones fluidas de interfaz (cursor suave, pastilla de pestañas, modales y scroll amortiguado)
+        if !self.occluded && self.config.terminal.animations {
+            let mut anim_active = false;
+
+            // Cursor suave y scroll amortiguado en paneles de la pestaña activa
+            if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+                for pane in &mut tab.panes {
+                    if pane.update_animations(true, now) {
+                        anim_active = true;
+                    }
+                }
+            }
+
+            // Indicador deslizante de pestaña activa
+            let visible_tabs = self.visible_tab_indices();
+            let (win_w, _) = self.window.as_ref().map_or((0, 0), |w| {
+                let size = w.inner_size();
+                (size.width as usize, size.height as usize)
+            });
+            let left_x = self.sidebar_offset();
+            let rects = crate::renderer::TopTabBarRects::compute(win_w, left_x, visible_tabs.len());
+            let active_pos = visible_tabs
+                .iter()
+                .position(|&idx| idx == self.active_tab_index);
+            if let Some(pos) = active_pos {
+                let r = rects.tab_rect(pos);
+                let target_x = r.0 as f32;
+                let target_w = r.2 as f32;
+                match self.tab_anim_rect {
+                    None => {
+                        self.tab_anim_rect = Some((target_x, target_w));
+                        self.last_tab_anim_time = now;
+                    }
+                    Some((mut cx, mut cw)) => {
+                        let dt = now
+                            .duration_since(self.last_tab_anim_time)
+                            .as_secs_f32()
+                            .min(0.05);
+                        self.last_tab_anim_time = now;
+                        let dx = target_x - cx;
+                        let dw = target_w - cw;
+                        if dx.abs() > 400.0 || (dx.abs() < 0.2 && dw.abs() < 0.2) {
+                            cx = target_x;
+                            cw = target_w;
+                        } else {
+                            let factor = 1.0 - (-dt * 32.0).exp();
+                            cx += dx * factor;
+                            cw += dw * factor;
+                            anim_active = true;
+                        }
+                        self.tab_anim_rect = Some((cx, cw));
+                    }
+                }
+            }
+
+            // Paleta de comandos (fade-in & slide)
+            if self.palette.is_some() {
+                if self.palette_anim_progress < 1.0 {
+                    let dt = now
+                        .duration_since(self.last_palette_anim_time)
+                        .as_secs_f32()
+                        .min(0.05);
+                    self.last_palette_anim_time = now;
+                    self.palette_anim_progress = (self.palette_anim_progress + dt * 10.0).min(1.0);
+                    anim_active = true;
+                }
+            } else {
+                self.palette_anim_progress = 0.0;
+            }
+
+            // Modal de Ajustes (fade-in & slide)
+            let settings_open = self
+                .tabs
+                .get(self.active_tab_index)
+                .is_some_and(|t| t.is_settings);
+            if settings_open {
+                if self.settings_modal_anim_progress < 1.0 {
+                    let dt = now
+                        .duration_since(self.last_settings_anim_time)
+                        .as_secs_f32()
+                        .min(0.05);
+                    self.last_settings_anim_time = now;
+                    self.settings_modal_anim_progress =
+                        (self.settings_modal_anim_progress + dt * 10.0).min(1.0);
+                    anim_active = true;
+                }
+            } else {
+                self.settings_modal_anim_progress = 0.0;
+            }
+
+            if anim_active {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                earliest(&mut wake, now + std::time::Duration::from_millis(16));
             }
         }
 

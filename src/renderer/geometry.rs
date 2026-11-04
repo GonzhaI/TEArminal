@@ -290,13 +290,16 @@ impl SettingsPageRects {
     pub(crate) const MODAL_MAX_W: usize = 980;
     pub(crate) const MODAL_MAX_H: usize = 680;
 
-    /// Región `(x, y, w, h)` del modal de Ajustes: centrado en el área a la derecha de `left` (el panel de
-    /// Spaces, que el modal no tapa), con margen a los bordes.
-    pub(crate) fn modal_region(win_w: usize, win_h: usize, left: usize) -> Rect {
-        let area_w = win_w.saturating_sub(left);
-        let w = Self::MODAL_MAX_W.min(area_w.saturating_sub(80));
+    /// Región `(x, y, w, h)` del modal de Ajustes: centrado en la ventana, con margen a los bordes.
+    pub(crate) fn modal_region(win_w: usize, win_h: usize) -> Rect {
+        let w = Self::MODAL_MAX_W.min(win_w.saturating_sub(80));
         let h = Self::MODAL_MAX_H.min(win_h.saturating_sub(120));
-        (left + (area_w - w) / 2, (win_h - h) / 2, w, h)
+        (
+            (win_w.saturating_sub(w)) / 2,
+            (win_h.saturating_sub(h)) / 2,
+            w,
+            h,
+        )
     }
 
     /// Geometría del modal: columna de navegación a la izquierda (`NAV_W`) y el contenido de la página
@@ -1740,9 +1743,19 @@ impl PaletteRects {
         items_count: usize,
         scroll_offset: usize,
     ) -> Self {
+        Self::compute_with_scroll_offset_y(win_w, win_h, items_count, scroll_offset, 0)
+    }
+
+    pub(crate) fn compute_with_scroll_offset_y(
+        win_w: usize,
+        win_h: usize,
+        items_count: usize,
+        scroll_offset: usize,
+        offset_y: isize,
+    ) -> Self {
         let card_w = Self::WIDTH.min(win_w.saturating_sub(40));
         let card_x = (win_w.saturating_sub(card_w)) / 2;
-        let card_y = 54.min(win_h / 6);
+        let card_y = (54.min(win_h / 6) as isize + offset_y).max(0) as usize;
         let visible_items = items_count.min(Self::MAX_VISIBLE);
         let list_h = visible_items * Self::ITEM_H;
         let card_h = Self::INPUT_H

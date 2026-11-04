@@ -41,6 +41,9 @@ struct SceneParams<'a> {
     tab_items: &'a [SidebarTabItem],
     panel_right: bool,
     panel_width: usize,
+    tab_anim_rect: Option<(f32, f32)>,
+    palette_anim_progress: f32,
+    settings_modal_anim_progress: f32,
 }
 
 impl TearminalApp {
@@ -190,6 +193,9 @@ impl TearminalApp {
             tab_items: &tab_items,
             panel_right,
             panel_width,
+            tab_anim_rect: self.tab_anim_rect,
+            palette_anim_progress: self.palette_anim_progress,
+            settings_modal_anim_progress: self.settings_modal_anim_progress,
         };
 
         self.canvas.begin(size.width, size.height);
@@ -214,6 +220,7 @@ impl TearminalApp {
             return;
         };
         gpu.set_render_tuning(1.0, false);
+        gpu.set_vsync(self.config.terminal.vsync);
         match gpu.present(self.canvas.scene()) {
             Ok(Presented::Ok) => {}
             Ok(Presented::Recovered) => {
@@ -258,6 +265,7 @@ fn draw_full_scene(
     let settings_open = tabs[p.active_idx].is_settings;
     let active_tab = &mut tabs[p.content_idx];
 
+    renderer.tab_indicator_visual = p.tab_anim_rect;
     renderer.render_top_tab_bar(
         canvas,
         p.tab_items,
@@ -275,6 +283,7 @@ fn draw_full_scene(
         p.offset,
         theme,
     );
+    renderer.tab_indicator_visual = None;
     renderer.render_spaces_panel(
         canvas,
         p.space_items,
@@ -303,6 +312,7 @@ fn draw_full_scene(
         )
         .visible_cols;
 
+        renderer.scroll_visual_offset = Some(viewer.scroll_offset as f32);
         renderer.render_file_viewer(
             canvas,
             p.offset,
@@ -314,6 +324,7 @@ fn draw_full_scene(
             viewer,
             theme,
         );
+        renderer.scroll_visual_offset = None;
 
         if file_explorer.visible {
             renderer.render_file_explorer(
@@ -375,6 +386,7 @@ fn draw_full_scene(
                     .hovered_url_span
                     .filter(|(pane_id, _, _, _)| *pane_id == rect.pane_id)
                     .map(|(_, line, sc, ec)| (line, sc, ec));
+                renderer.cursor_visual = pane.cursor_visual_pos;
                 renderer.render_pane(
                     canvas,
                     rect.x,
@@ -387,6 +399,7 @@ fn draw_full_scene(
                     is_active,
                     has_multiple,
                 );
+                renderer.cursor_visual = None;
                 renderer.hovered_url_span = None;
             }
         }
@@ -537,8 +550,8 @@ fn draw_full_scene(
         );
     }
     if settings_open {
-        let (mx0, my0, mw, mh) =
-            crate::renderer::SettingsPageRects::modal_region(width, height, p.offset);
+        let (mx0, my0, mw, mh) = crate::renderer::SettingsPageRects::modal_region(width, height);
+        renderer.modal_anim_progress = Some(p.settings_modal_anim_progress);
         canvas.with_offset(
             mx0 as i32,
             my0 as i32,
@@ -558,6 +571,7 @@ fn draw_full_scene(
                 )
             },
         );
+        renderer.modal_anim_progress = None;
     }
     if let Some(m) = machine {
         let hosts: Vec<(String, String)> = m
@@ -582,6 +596,7 @@ fn draw_full_scene(
     }
 
     if let Some(palette) = palette {
+        renderer.palette_anim_progress = Some(p.palette_anim_progress);
         renderer.render_palette(
             canvas,
             palette,
@@ -589,6 +604,7 @@ fn draw_full_scene(
             p.palette_scrollbar_hovered,
             theme,
         );
+        renderer.palette_anim_progress = None;
     }
 }
 

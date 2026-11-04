@@ -1603,7 +1603,7 @@ pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Ca
     // Igual que `redraw.rs`: velo translúcido sobre toda la ventana y el modal en su propio `with_offset`,
     // desplazado para ejercitar el recorte anidado del contenido.
     canvas.rounded_fill(0, 0, w, h, 0, crate::theme::Color::from_rgba(0, 0, 0, 120));
-    let (mx0, my0, mw, mh) = crate::renderer::SettingsPageRects::modal_region(w, h, SIDEBAR_WIDTH);
+    let (mx0, my0, mw, mh) = crate::renderer::SettingsPageRects::modal_region(w, h);
     let mut modal_state = settings.clone();
     modal_state.scroll_y = 120;
     canvas.with_offset(
@@ -4817,6 +4817,22 @@ mod gpu_surface {
             s.driver_kind(),
             DriverKind::Hardware | DriverKind::Warp
         ));
+    }
+
+    #[test]
+    fn test_surface_vsync_toggle_and_present() {
+        let win = TestWindow::new();
+        let mut s = win.surface(64, 48);
+        let mut canvas = Canvas::new();
+        let sc = scene(&mut canvas, 64, 48, 0x0011_2233);
+
+        // Con VSync activo (1)
+        s.set_vsync(true);
+        assert!(matches!(s.present(sc), Ok(Presented::Ok)));
+
+        // Con VSync desactivado (0 / tearing si soportado)
+        s.set_vsync(false);
+        assert!(matches!(s.present(sc), Ok(Presented::Ok)));
     }
 }
 

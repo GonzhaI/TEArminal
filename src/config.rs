@@ -88,6 +88,14 @@ pub(crate) struct TerminalConfig {
     /// Modo para mantener la pantalla encendida: "off" / "apagado", "agent" / "agente", "active" / "activo".
     #[serde(default)]
     pub(crate) keep_awake: KeepAwakeMode,
+    /// Sincronización vertical (VSync). Activo por defecto; desactivarlo permite la mínima latencia
+    /// absoluta en pantallas de alta tasa de refresco o compatibles con VRR / G-Sync / FreeSync.
+    #[serde(default = "default_true")]
+    pub(crate) vsync: bool,
+    /// Animaciones fluidas de interfaz: cursor elástico, transiciones de pestañas,
+    /// desplazamiento amortiguado y apertura suave de modales/paleta.
+    #[serde(default = "default_true")]
+    pub(crate) animations: bool,
 }
 
 /// Modos de suspensión y pantalla encendida (keep-awake) para Windows.
@@ -257,6 +265,8 @@ impl Default for TearminalConfig {
                 auto_check_updates: true,
                 ai_limits: true,
                 keep_awake: KeepAwakeMode::Off,
+                vsync: true,
+                animations: true,
             },
         }
     }
@@ -959,5 +969,17 @@ gpu = true
         assert_eq!(parsed.mode, KeepAwakeMode::Agent);
         let parsed: TestMode = toml::from_str(r#"mode = "active""#).unwrap();
         assert_eq!(parsed.mode, KeepAwakeMode::Active);
+    }
+
+    #[test]
+    fn test_terminal_config_animations_default_and_parsing() {
+        let mut def = TearminalConfig::default();
+        assert!(def.terminal.animations);
+
+        def.terminal.animations = false;
+        let mut bytes = Vec::new();
+        def.write_to(&mut bytes).unwrap();
+        let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
+        assert!(!reloaded.terminal.animations);
     }
 }

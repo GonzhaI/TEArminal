@@ -126,7 +126,34 @@ impl TerminalRenderer {
             theme.bar_bg(),
         );
 
-        // 2. Pestañas
+        // 2. Chip activo animado (si hay animación activa) o estático por pestaña
+        let anim_active_drawn = if let Some((ix, iw)) = self.tab_indicator_visual {
+            let active_y = 4;
+            let active_h = bar_h.saturating_sub(8);
+            let rx = ix.round() as usize;
+            let rw = iw.round() as usize;
+            canvas.rounded_fill(
+                rx,
+                active_y,
+                rw,
+                active_h,
+                tokens::RADIUS_CONTROL,
+                theme.background,
+            );
+            canvas.rounded_stroke(
+                rx,
+                active_y,
+                rw,
+                active_h,
+                tokens::RADIUS_CONTROL,
+                theme.card_outline(),
+            );
+            true
+        } else {
+            false
+        };
+
+        // 3. Pestañas
         for (pos, tab) in tabs.iter().enumerate() {
             let idx = tab.index;
             let r = rects.tab_rect(pos);
@@ -135,7 +162,13 @@ impl TerminalRenderer {
             }
             let is_hovered = hovered_tab == Some(idx);
 
-            Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
+            if anim_active_drawn {
+                if !tab.is_active && is_hovered {
+                    Self::draw_tab_chip(canvas, r, false, true, theme);
+                }
+            } else {
+                Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
+            }
 
             let show_close = rects.tab_w >= 76 && (tab.is_active || is_hovered);
 

@@ -805,8 +805,17 @@ impl TerminalRenderer {
             && terminal.cursor_y < terminal.rows
             && terminal.cursor_x < terminal.cols
         {
-            let cx = base_x + (terminal.cursor_x * self.char_width);
-            let cy = base_y + (terminal.cursor_y * self.row_height);
+            let (cx, cy) = if let Some((vx, vy)) = self.cursor_visual {
+                (
+                    (base_x as f32 + vx * (self.char_width as f32)).round() as usize,
+                    (base_y as f32 + vy * (self.row_height as f32)).round() as usize,
+                )
+            } else {
+                (
+                    base_x + (terminal.cursor_x * self.char_width),
+                    base_y + (terminal.cursor_y * self.row_height),
+                )
+            };
 
             let active_grid = if terminal.is_alt_screen {
                 &terminal.alt_grid
@@ -832,45 +841,58 @@ impl TerminalRenderer {
                 self.char_width
             };
 
+            let is_close_to_target = self.cursor_visual.is_none_or(|(vx, vy)| {
+                (vx - terminal.cursor_x as f32).abs() < 0.25
+                    && (vy - terminal.cursor_y as f32).abs() < 0.25
+            });
+
             match terminal.cursor_shape {
                 crate::terminal::CursorShape::Block => {
                     if is_active_pane {
                         canvas.fill_rect(clip, cx, cy, c_width, self.row_height, theme.cursor);
 
-                        // Dibujar carácter invertido debajo del cursor para legibilidad perfecta
-                        if let Some(cell) = cell_under {
-                            if cell.c != ' ' && cell.width > 0 {
-                                if cell.is_grapheme() {
-                                    if let Some(g) = terminal.grapheme_of(cell) {
-                                        for ch in g.chars() {
-                                            let glyph = self.get_glyph(ch, cell.bold());
-                                            let glyph_x = cx as i32 + glyph.x_offset;
-                                            let glyph_y = (cy + baseline_y) as i32
-                                                - glyph.y_offset
-                                                - glyph.height as i32;
-                                            canvas.glyph(
-                                                clip,
-                                                glyph,
-                                                glyph_x,
-                                                glyph_y,
-                                                theme.background,
-                                            );
+                        // Dibujar carácter invertido debajo del cursor para legibilidad perfecta cuando esté alineado
+                        if is_close_to_target {
+                            if let Some(cell) = cell_under {
+                                if cell.c != ' ' && cell.width > 0 {
+                                    if cell.is_grapheme() {
+                                        if let Some(g) = terminal.grapheme_of(cell) {
+                                            for ch in g.chars() {
+                                                let glyph = self.get_glyph(ch, cell.bold());
+                                                let glyph_x = cx as i32 + glyph.x_offset;
+                                                let glyph_y = (cy + baseline_y) as i32
+                                                    - glyph.y_offset
+                                                    - glyph.height as i32;
+                                                canvas.glyph(
+                                                    clip,
+                                                    glyph,
+                                                    glyph_x,
+                                                    glyph_y,
+                                                    theme.background,
+                                                );
+                                            }
                                         }
+                                    } else if !self.draw_block_element(
+                                        canvas,
+                                        clip,
+                                        cell.c,
+                                        cx,
+                                        cy,
+                                        theme.background,
+                                    ) {
+                                        let glyph = self.get_glyph(cell.c, cell.bold());
+                                        let glyph_x = cx as i32 + glyph.x_offset;
+                                        let glyph_y = (cy + baseline_y) as i32
+                                            - glyph.y_offset
+                                            - glyph.height as i32;
+                                        canvas.glyph(
+                                            clip,
+                                            glyph,
+                                            glyph_x,
+                                            glyph_y,
+                                            theme.background,
+                                        );
                                     }
-                                } else if !self.draw_block_element(
-                                    canvas,
-                                    clip,
-                                    cell.c,
-                                    cx,
-                                    cy,
-                                    theme.background,
-                                ) {
-                                    let glyph = self.get_glyph(cell.c, cell.bold());
-                                    let glyph_x = cx as i32 + glyph.x_offset;
-                                    let glyph_y = (cy + baseline_y) as i32
-                                        - glyph.y_offset
-                                        - glyph.height as i32;
-                                    canvas.glyph(clip, glyph, glyph_x, glyph_y, theme.background);
                                 }
                             }
                         }

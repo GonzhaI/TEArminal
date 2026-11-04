@@ -37,6 +37,7 @@ pub(crate) enum DiffCellKind {
     Deleted,
     Modified,
     Empty,
+    Separator,
 }
 
 /// Celda de una línea en una columna del diff lado a lado.
@@ -148,137 +149,187 @@ fn diff_hunks(base: &[String], cur: &[String]) -> Vec<Hunk> {
     hunks
 }
 
-/// Calcula las filas alineadas y sincronizadas para el visor de diff lado a lado.
+/// Calcula las filas alineadas y sincronizadas para el visor de diff lado a lado,
+/// mostrando únicamente los fragmentos cambiados con líneas de contexto (estilo git diff).
 pub(crate) fn compute_side_by_side(base: &[String], cur: &[String]) -> Vec<SideBySideRow> {
+    const CONTEXT: usize = 3;
     let hunks = diff_hunks(base, cur);
-    let mut rows = Vec::new();
-    let mut base_idx = 0;
-    let mut cur_idx = 0;
+    if hunks.is_empty() {
+        return vec![SideBySideRow {
+            left: SideBySideCell {
+                line_num: None,
+                text: "Sin cambios".to_string(),
+                kind: DiffCellKind::Normal,
+            },
+            right: SideBySideCell {
+                line_num: None,
+                text: "Sin cambios".to_string(),
+                kind: DiffCellKind::Normal,
+            },
+        }];
+    }
 
-    for h in hunks {
-        while base_idx < h.b && cur_idx < h.c {
+    let mut rows = Vec::new();
+    let mut k = 0;
+    while k < hunks.len() {
+        let mut end = k;
+        while end + 1 < hunks.len()
+            && hunks[end + 1]
+                .c
+                .saturating_sub(hunks[end].c + hunks[end].add)
+                <= 2 * CONTEXT
+        {
+            end += 1;
+        }
+
+        let first = &hunks[k];
+        let last = &hunks[end];
+
+        let lead = CONTEXT.min(first.b).min(first.c);
+        let b_start = first.b - lead;
+        let c_start = first.c - lead;
+
+        let trail = CONTEXT
+            .min(base.len().saturating_sub(last.b + last.del))
+            .min(cur.len().saturating_sub(last.c + last.add));
+        let b_end = last.b + last.del + trail;
+        let c_end = last.c + last.add + trail;
+
+        let b_len = b_end - b_start;
+        let c_len = c_end - c_start;
+
+        // Separador de fragmento cuando se omiten líneas antes de este tramo
+        if k > 0 || b_start > 0 || c_start > 0 {
+            let at = |start: usize, len: usize| if len == 0 { start } else { start + 1 };
+            let header = format!(
+                "@@ -{},{} +{},{} @@",
+                at(b_start, b_len),
+                b_len,
+                at(c_start, c_len),
+                c_len
+            );
             rows.push(SideBySideRow {
                 left: SideBySideCell {
-                    line_num: Some(base_idx + 1),
-                    text: base[base_idx].clone(),
+                    line_num: None,
+                    text: header.clone(),
+                    kind: DiffCellKind::Separator,
+                },
+                right: SideBySideCell {
+                    line_num: None,
+                    text: header,
+                    kind: DiffCellKind::Separator,
+                },
+            });
+        }
+
+        // Líneas de contexto inicial
+        for i in 0..lead {
+            let bi = b_start + i;
+            let ci = c_start + i;
+            rows.push(SideBySideRow {
+                left: SideBySideCell {
+                    line_num: Some(bi + 1),
+                    text: base[bi].clone(),
                     kind: DiffCellKind::Normal,
                 },
                 right: SideBySideCell {
-                    line_num: Some(cur_idx + 1),
-                    text: cur[cur_idx].clone(),
+                    line_num: Some(ci + 1),
+                    text: cur[ci].clone(),
                     kind: DiffCellKind::Normal,
                 },
             });
-            base_idx += 1;
-            cur_idx += 1;
         }
 
-        let count = h.del.max(h.add);
-        for k in 0..count {
-            let left = if k < h.del {
-                let idx = h.b + k;
-                let kind = if k < h.add {
-                    DiffCellKind::Modified
+        // Tramo con cambios y líneas intermedias comunes
+        let mut cur_b = first.b;
+        let mut cur_c = first.c;
+
+        for h in &hunks[k..=end] {
+            while cur_b < h.b && cur_c < h.c {
+                rows.push(SideBySideRow {
+                    left: SideBySideCell {
+                        line_num: Some(cur_b + 1),
+                        text: base[cur_b].clone(),
+                        kind: DiffCellKind::Normal,
+                    },
+                    right: SideBySideCell {
+                        line_num: Some(cur_c + 1),
+                        text: cur[cur_c].clone(),
+                        kind: DiffCellKind::Normal,
+                    },
+                });
+                cur_b += 1;
+                cur_c += 1;
+            }
+
+            let count = h.del.max(h.add);
+            for m in 0..count {
+                let left = if m < h.del {
+                    let idx = h.b + m;
+                    let kind = if m < h.add {
+                        DiffCellKind::Modified
+                    } else {
+                        DiffCellKind::Deleted
+                    };
+                    SideBySideCell {
+                        line_num: Some(idx + 1),
+                        text: base.get(idx).cloned().unwrap_or_default(),
+                        kind,
+                    }
                 } else {
-                    DiffCellKind::Deleted
+                    SideBySideCell {
+                        line_num: None,
+                        text: String::new(),
+                        kind: DiffCellKind::Empty,
+                    }
                 };
-                SideBySideCell {
-                    line_num: Some(idx + 1),
-                    text: base.get(idx).cloned().unwrap_or_default(),
-                    kind,
-                }
-            } else {
-                SideBySideCell {
-                    line_num: None,
-                    text: String::new(),
-                    kind: DiffCellKind::Empty,
-                }
-            };
 
-            let right = if k < h.add {
-                let idx = h.c + k;
-                let kind = if k < h.del {
-                    DiffCellKind::Modified
+                let right = if m < h.add {
+                    let idx = h.c + m;
+                    let kind = if m < h.del {
+                        DiffCellKind::Modified
+                    } else {
+                        DiffCellKind::Added
+                    };
+                    SideBySideCell {
+                        line_num: Some(idx + 1),
+                        text: cur.get(idx).cloned().unwrap_or_default(),
+                        kind,
+                    }
                 } else {
-                    DiffCellKind::Added
+                    SideBySideCell {
+                        line_num: None,
+                        text: String::new(),
+                        kind: DiffCellKind::Empty,
+                    }
                 };
-                SideBySideCell {
-                    line_num: Some(idx + 1),
-                    text: cur.get(idx).cloned().unwrap_or_default(),
-                    kind,
-                }
-            } else {
-                SideBySideCell {
-                    line_num: None,
-                    text: String::new(),
-                    kind: DiffCellKind::Empty,
-                }
-            };
 
-            rows.push(SideBySideRow { left, right });
+                rows.push(SideBySideRow { left, right });
+            }
+
+            cur_b = h.b + h.del;
+            cur_c = h.c + h.add;
         }
 
-        base_idx = h.b + h.del;
-        cur_idx = h.c + h.add;
-    }
-
-    while base_idx < base.len() || cur_idx < cur.len() {
-        let left_text = base.get(base_idx).cloned().unwrap_or_default();
-        let right_text = cur.get(cur_idx).cloned().unwrap_or_default();
-        let has_left = base_idx < base.len();
-        let has_right = cur_idx < cur.len();
-
-        let (left_kind, right_kind) = if has_left && has_right && left_text == right_text {
-            (DiffCellKind::Normal, DiffCellKind::Normal)
-        } else {
-            (
-                if has_left {
-                    DiffCellKind::Deleted
-                } else {
-                    DiffCellKind::Empty
+        // Líneas de contexto final
+        for i in 0..trail {
+            let bi = cur_b + i;
+            let ci = cur_c + i;
+            rows.push(SideBySideRow {
+                left: SideBySideCell {
+                    line_num: Some(bi + 1),
+                    text: base[bi].clone(),
+                    kind: DiffCellKind::Normal,
                 },
-                if has_right {
-                    DiffCellKind::Added
-                } else {
-                    DiffCellKind::Empty
+                right: SideBySideCell {
+                    line_num: Some(ci + 1),
+                    text: cur[ci].clone(),
+                    kind: DiffCellKind::Normal,
                 },
-            )
-        };
-
-        rows.push(SideBySideRow {
-            left: SideBySideCell {
-                line_num: has_left.then_some(base_idx + 1),
-                text: left_text,
-                kind: left_kind,
-            },
-            right: SideBySideCell {
-                line_num: has_right.then_some(cur_idx + 1),
-                text: right_text,
-                kind: right_kind,
-            },
-        });
-
-        if has_left {
-            base_idx += 1;
+            });
         }
-        if has_right {
-            cur_idx += 1;
-        }
-    }
 
-    if rows.is_empty() {
-        rows.push(SideBySideRow {
-            left: SideBySideCell {
-                line_num: None,
-                text: String::new(),
-                kind: DiffCellKind::Normal,
-            },
-            right: SideBySideCell {
-                line_num: None,
-                text: String::new(),
-                kind: DiffCellKind::Normal,
-            },
-        });
+        k = end + 1;
     }
 
     rows

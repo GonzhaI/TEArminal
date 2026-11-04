@@ -180,6 +180,13 @@ pub(crate) struct TearminalApp {
     last_scroll_time: Instant,
     /// Fracción de línea pendiente de la rueda (los touchpads envían deltas pequeños)
     wheel_remainder: f32,
+    wheel_remainder_x: f32,
+    pub(crate) tab_anim_rect: Option<(f32, f32)>,
+    pub(crate) last_tab_anim_time: Instant,
+    pub(crate) palette_anim_progress: f32,
+    pub(crate) last_palette_anim_time: Instant,
+    pub(crate) settings_modal_anim_progress: f32,
+    pub(crate) last_settings_anim_time: Instant,
     hovered_win_min: bool,
     hovered_win_max: bool,
     hovered_win_close: bool,
@@ -845,6 +852,13 @@ impl TearminalApp {
             last_input_click_count: 0,
             last_scroll_time: Instant::now(),
             wheel_remainder: 0.0,
+            wheel_remainder_x: 0.0,
+            tab_anim_rect: None,
+            last_tab_anim_time: Instant::now(),
+            palette_anim_progress: 1.0,
+            last_palette_anim_time: Instant::now(),
+            settings_modal_anim_progress: 1.0,
+            last_settings_anim_time: Instant::now(),
             hovered_win_min: false,
             hovered_win_max: false,
             hovered_win_close: false,
@@ -969,6 +983,17 @@ impl TearminalApp {
         }
         self.save_session();
         self.closing = true;
+    }
+
+    /// Alterna entre modo ventana y pantalla completa (F11 / Alt+Enter).
+    pub(crate) fn toggle_fullscreen(&mut self) {
+        if let Some(w) = &self.window {
+            if w.fullscreen().is_some() {
+                w.set_fullscreen(None);
+            } else {
+                w.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+            }
+        }
     }
 
     pub(crate) fn owns_pane(&self, pane_id: PaneId) -> bool {

@@ -24,6 +24,8 @@ pub(crate) struct GpuSurface {
     size: (u32, u32),
     hwnd: HWND,
     max_dim: u32,
+    vsync: bool,
+    allow_tearing: bool,
     /// Fallo inyectado: el próximo `present` se comporta como si DXGI devolviera DEVICE_REMOVED.
     /// Ejercita la lógica de recreación, no un reinicio real del driver (no se puede provocar un TDR en
     /// un test); la prueba real en una segunda máquina es de la tarea 20.
@@ -45,15 +47,40 @@ fn is_device_error(e: &Error) -> bool {
     .contains(&e.code())
 }
 
-/// Swap chain Flip de 2 búferes para `hwnd` (mismo descriptor que `d3d11.rs`) y la vista de su búfer trasero.
+/// Swap chain Flip de 3 búferes para `hwnd` con mínima latencia (1 fotograma) y soporte opcional para VRR / tearing.
 fn create_target(
     dev: &GpuDevice,
     hwnd: HWND,
     (w, h): (u32, u32),
-) -> Result<(IDXGISwapChain1, ID3D11RenderTargetView)> {
-    let dxgi_device: IDXGIDevice = dev.device.cast()?;
+) -> Result<(IDXGISwapChain1, ID3D11RenderTargetView, bool)> {
+    let dxgi_device: IDXGIDevice1 = dev.device.cast()?;
+    // Forzar latencia máxima de 1 fotograma para eliminar el input lag de GPU (por defecto en DirectX es 3)
+    unsafe { dxgi_device.SetMaximumFrameLatency(1)? };
     let adapter = unsafe { dxgi_device.GetAdapter()? };
     let factory: IDXGIFactory2 = unsafe { adapter.GetParent()? };
+
+    let mut allow_tearing = false;
+    if let Ok(factory5) = factory.cast::<IDXGIFactory5>() {
+        let mut supported = windows::Win32::Foundation::BOOL::default();
+        if unsafe {
+            factory5.CheckFeatureSupport(
+                DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                &mut supported as *mut _ as *mut _,
+                std::mem::size_of::<windows::Win32::Foundation::BOOL>() as u32,
+            )
+        }
+        .is_ok()
+        {
+            allow_tearing = supported.as_bool();
+        }
+    }
+
+    let flags = if allow_tearing {
+        DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
+    } else {
+        0
+    };
+
     let desc = DXGI_SWAP_CHAIN_DESC1 {
         Width: w,
         Height: h,
@@ -64,15 +91,15 @@ fn create_target(
             Quality: 0,
         },
         BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: 2,
+        BufferCount: 3,
         Scaling: DXGI_SCALING_NONE,
         SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
         AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-        Flags: 0,
+        Flags: flags,
     };
     let swap = unsafe { factory.CreateSwapChainForHwnd(&dev.device, hwnd, &desc, None, None)? };
     let rtv = create_rtv(dev, &swap)?;
-    Ok((swap, rtv))
+    Ok((swap, rtv, allow_tearing))
 }
 
 fn create_rtv(dev: &GpuDevice, swap: &IDXGISwapChain1) -> Result<ID3D11RenderTargetView> {
@@ -90,7 +117,7 @@ impl GpuSurface {
         let dev = GpuDevice::new(Some(hwnd))?;
         let max_dim = dev.max_texture_dim();
         let size = (clamp_dim(w, max_dim), clamp_dim(h, max_dim));
-        let (swap, rtv) = create_target(&dev, hwnd, size)?;
+        let (swap, rtv, allow_tearing) = create_target(&dev, hwnd, size)?;
         Ok(Self {
             renderer: GpuRenderer::new(dev)?,
             swap: Some(swap),
@@ -98,6 +125,8 @@ impl GpuSurface {
             size,
             hwnd,
             max_dim,
+            vsync: true,
+            allow_tearing,
             #[cfg(test)]
             simulated_loss: false,
         })
@@ -116,6 +145,11 @@ impl GpuSurface {
     pub(crate) fn set_render_tuning(&mut self, font_contrast: f32, linear_images: bool) {
         self.renderer.font_contrast = font_contrast;
         self.renderer.linear_images = linear_images;
+    }
+
+    /// Activa o desactiva la sincronización vertical (VSync).
+    pub(crate) fn set_vsync(&mut self, vsync: bool) {
+        self.vsync = vsync;
     }
 
     /// Acota cada lado a `1..=max_dim` (una ventana minimizada llega como 0x0) y redimensiona los búferes.
@@ -137,13 +171,18 @@ impl GpuSurface {
                 .context
                 .OMSetRenderTargets(None, None)
         };
-        unsafe { swap.ResizeBuffers(0, size.0, size.1, DXGI_FORMAT_UNKNOWN, 0)? };
+        let flags = if self.allow_tearing {
+            DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32
+        } else {
+            0
+        };
+        unsafe { swap.ResizeBuffers(0, size.0, size.1, DXGI_FORMAT_UNKNOWN, flags)? };
         self.size = size;
         self.rtv = Some(create_rtv(self.renderer.device(), &swap)?);
         Ok(())
     }
 
-    /// Dibuja `scene` en el búfer trasero y lo presenta con VSync. Ante un dispositivo perdido lo recrea todo,
+    /// Dibuja `scene` en el búfer trasero y lo presenta. Ante un dispositivo perdido lo recrea todo,
     /// repinta la escena y devuelve `Recovered`; los demás errores se propagan.
     pub(crate) fn present(&mut self, scene: &Scene) -> Result<Presented> {
         if self.swap.is_none() || self.rtv.is_none() {
@@ -170,8 +209,14 @@ impl GpuSurface {
             return Err(Error::from(E_FAIL));
         };
         self.renderer.render(scene, rtv, self.size)?;
+        let sync_interval = if self.vsync { 1 } else { 0 };
+        let present_flags = if !self.vsync && self.allow_tearing {
+            DXGI_PRESENT_ALLOW_TEARING
+        } else {
+            0
+        };
         // `DXGI_STATUS_OCCLUDED` es un código de éxito: la ventana tapada no es un error
-        unsafe { swap.Present(1, 0).ok() }
+        unsafe { swap.Present(sync_interval, present_flags).ok() }
     }
 
     /// Suelta la vista y la cadena (un HWND solo admite una), recrea dispositivo, renderer (atlas e imágenes
@@ -193,9 +238,11 @@ impl GpuSurface {
             clamp_dim(self.size.0, self.max_dim),
             clamp_dim(self.size.1, self.max_dim),
         );
-        let (swap, rtv) = create_target(self.renderer.device(), self.hwnd, self.size)?;
+        let (swap, rtv, allow_tearing) =
+            create_target(self.renderer.device(), self.hwnd, self.size)?;
         self.swap = Some(swap);
         self.rtv = Some(rtv);
+        self.allow_tearing = allow_tearing;
         self.draw_and_present(scene)?;
         Ok(Presented::Recovered)
     }

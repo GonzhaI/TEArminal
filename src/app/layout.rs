@@ -189,6 +189,10 @@ pub(crate) struct TerminalPane {
     pub(crate) cached_git_branch: Option<String>,
     pub(crate) cached_git_dir: Option<std::path::PathBuf>,
     pub(crate) cached_git_check: Option<Instant>,
+    pub(crate) cursor_visual_pos: Option<(f32, f32)>,
+    pub(crate) last_cursor_time: Instant,
+    pub(crate) scroll_visual_offset: f32,
+    pub(crate) last_scroll_time: Instant,
 }
 
 impl TerminalPane {
@@ -199,6 +203,7 @@ impl TerminalPane {
         last_grid_size: (usize, usize),
     ) -> Self {
         terminal.pane_token = pty.token.clone();
+        let now = Instant::now();
         Self {
             id,
             pty,
@@ -207,7 +212,78 @@ impl TerminalPane {
             cached_git_branch: None,
             cached_git_dir: None,
             cached_git_check: None,
+            cursor_visual_pos: None,
+            last_cursor_time: now,
+            scroll_visual_offset: 0.0,
+            last_scroll_time: now,
         }
+    }
+
+    pub(crate) fn update_animations(&mut self, animations_enabled: bool, now: Instant) -> bool {
+        let mut is_animating = false;
+
+        // 1. Cursor elástico
+        let target_x = self.terminal.cursor_x as f32;
+        let target_y = self.terminal.cursor_y as f32;
+
+        if !animations_enabled || self.terminal.is_alt_screen || self.terminal.scroll_offset > 0 {
+            self.cursor_visual_pos = Some((target_x, target_y));
+            self.last_cursor_time = now;
+        } else {
+            let dt = now
+                .duration_since(self.last_cursor_time)
+                .as_secs_f32()
+                .min(0.05);
+            self.last_cursor_time = now;
+
+            match self.cursor_visual_pos {
+                None => {
+                    self.cursor_visual_pos = Some((target_x, target_y));
+                }
+                Some((mut cx, mut cy)) => {
+                    let dx = target_x - cx;
+                    let dy = target_y - cy;
+                    if dx.abs() > 35.0 || dy.abs() > 12.0 {
+                        // Salto brusco (clear / reset de pantalla)
+                        cx = target_x;
+                        cy = target_y;
+                    } else if dx.abs() < 0.01 && dy.abs() < 0.01 {
+                        cx = target_x;
+                        cy = target_y;
+                    } else {
+                        let factor = 1.0 - (-dt * 36.0).exp();
+                        cx += dx * factor;
+                        cy += dy * factor;
+                        is_animating = true;
+                    }
+                    self.cursor_visual_pos = Some((cx, cy));
+                }
+            }
+        }
+
+        // 2. Scroll amortiguado
+        let target_scroll = self.terminal.scroll_offset as f32;
+        if !animations_enabled {
+            self.scroll_visual_offset = target_scroll;
+            self.last_scroll_time = now;
+        } else {
+            let dt = now
+                .duration_since(self.last_scroll_time)
+                .as_secs_f32()
+                .min(0.05);
+            self.last_scroll_time = now;
+
+            let sdiff = target_scroll - self.scroll_visual_offset;
+            if sdiff.abs() > 60.0 || sdiff.abs() < 0.01 {
+                self.scroll_visual_offset = target_scroll;
+            } else {
+                let factor = 1.0 - (-dt * 28.0).exp();
+                self.scroll_visual_offset += sdiff * factor;
+                is_animating = true;
+            }
+        }
+
+        is_animating
     }
 
     pub(crate) fn get_git_branch(&mut self) -> Option<String> {

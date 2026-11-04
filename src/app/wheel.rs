@@ -11,9 +11,12 @@ impl TearminalApp {
 
         let (win_w, win_h) = self.window_size();
         let scroll_multiplier = platform::wheel_scroll_lines();
+        let (row_h, char_w) = self.renderer.as_ref().map_or((20.0, 9.0), |r| {
+            (r.row_height.max(1) as f32, r.char_width.max(1) as f32)
+        });
         let (scroll_x_lines, scroll_y_lines) = match delta {
             MouseScrollDelta::LineDelta(x, y) => (x, y),
-            MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / 20.0, pos.y as f32 / 20.0),
+            MouseScrollDelta::PixelDelta(pos) => (pos.x as f32 / char_w, pos.y as f32 / row_h),
         };
 
         let top_offset = self.top_offset();
@@ -52,8 +55,12 @@ impl TearminalApp {
                     ly
                 };
                 if lx < modal_w && ly < modal_h && rects.theme_row_at(lx, page_y).is_some() {
-                    let rows = (-scroll_y_lines * scroll_multiplier).round() as isize;
-                    self.scroll_theme_list(rows);
+                    self.wheel_remainder += scroll_y_lines * scroll_multiplier;
+                    let rows = (-self.wheel_remainder.trunc()) as isize;
+                    if rows != 0 {
+                        self.wheel_remainder += rows as f32;
+                        self.scroll_theme_list(rows);
+                    }
                     return;
                 }
             }
@@ -71,14 +78,18 @@ impl TearminalApp {
 
         // Scroll en la lista de Spaces
         if self.spaces_rects(win_h).contains(mx, my, win_h) {
-            let steps = scroll_y_lines.round() as isize;
-            self.spaces_scroll = if steps > 0 {
-                self.spaces_scroll.saturating_sub(steps as usize)
-            } else {
-                self.spaces_scroll + steps.unsigned_abs()
-            };
-            self.clamp_spaces_scroll();
-            self.request_redraw();
+            self.wheel_remainder += scroll_y_lines;
+            let steps = self.wheel_remainder.trunc() as isize;
+            if steps != 0 {
+                self.wheel_remainder -= steps as f32;
+                self.spaces_scroll = if steps > 0 {
+                    self.spaces_scroll.saturating_sub(steps as usize)
+                } else {
+                    self.spaces_scroll + steps.unsigned_abs()
+                };
+                self.clamp_spaces_scroll();
+                self.request_redraw();
+            }
             return;
         }
 
@@ -87,58 +98,67 @@ impl TearminalApp {
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
             if mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h {
-                let lines = (scroll_y_lines * scroll_multiplier).round() as isize;
-                let list_h = panel_h.saturating_sub(
-                    crate::explorer::FileExplorer::HEADER_HEIGHT
-                        + self.file_explorer.subheader_height(),
-                );
-                let max_lines = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
-                self.file_explorer.scroll(lines, max_lines);
-                self.request_redraw();
+                self.wheel_remainder += scroll_y_lines * scroll_multiplier;
+                let lines = self.wheel_remainder.trunc() as isize;
+                if lines != 0 {
+                    self.wheel_remainder -= lines as f32;
+                    let list_h = panel_h.saturating_sub(
+                        crate::explorer::FileExplorer::HEADER_HEIGHT
+                            + self.file_explorer.subheader_height(),
+                    );
+                    let max_lines = (list_h / crate::explorer::FileExplorer::ITEM_HEIGHT).max(1);
+                    self.file_explorer.scroll(lines, max_lines);
+                    self.request_redraw();
+                }
                 return;
             }
         }
 
         // Scroll en pestaña de visor de archivos (soporte vertical y horizontal)
         if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
-            let (dx, dy) = (
-                (scroll_x_lines * scroll_multiplier).round() as isize,
-                (scroll_y_lines * scroll_multiplier).round() as isize,
-            );
             let max_x = if viewer.wrap_active() {
                 0
             } else {
                 viewer.max_scroll_x()
             };
+
+            let mut changed = false;
             if self.modifiers.shift_key() {
                 // Shift + rueda vertical -> scroll horizontal
-                if dy > 0 {
-                    viewer.scroll_offset_x =
-                        viewer.scroll_offset_x.saturating_sub(dy.unsigned_abs() * 3);
-                } else if dy < 0 {
-                    viewer.scroll_offset_x =
-                        (viewer.scroll_offset_x + dy.unsigned_abs() * 3).min(max_x);
-                }
-            } else if dx != 0 {
-                // Rueda horizontal nativa: winit da dx > 0 cuando el CONTENIDO se mueve a la
-                // derecha (la vista va a la izquierda), igual que dy > 0 sube la vista
-                if dx > 0 {
-                    viewer.scroll_offset_x =
-                        viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs() * 3);
-                } else if dx < 0 {
-                    viewer.scroll_offset_x =
-                        (viewer.scroll_offset_x + dx.unsigned_abs() * 3).min(max_x);
-                }
+                self.wheel_remainder_x += scroll_y_lines * scroll_multiplier * 3.0;
             } else {
-                // Scroll vertical estándar
+                self.wheel_remainder += scroll_y_lines * scroll_multiplier;
+                self.wheel_remainder_x += scroll_x_lines * scroll_multiplier * 3.0;
+            }
+
+            let dy = self.wheel_remainder.trunc() as isize;
+            if dy != 0 {
+                self.wheel_remainder -= dy as f32;
                 if dy > 0 {
                     viewer.scroll_offset = viewer.scroll_offset.saturating_sub(dy.unsigned_abs());
-                } else if dy < 0 {
+                } else {
                     viewer.scroll_offset = (viewer.scroll_offset + dy.unsigned_abs())
                         .min(viewer.total_display_rows().saturating_sub(1));
                 }
+                changed = true;
             }
-            self.request_redraw();
+
+            let dx = self.wheel_remainder_x.trunc() as isize;
+            if dx != 0 {
+                self.wheel_remainder_x -= dx as f32;
+                if dx > 0 {
+                    viewer.scroll_offset_x =
+                        viewer.scroll_offset_x.saturating_sub(dx.unsigned_abs());
+                } else {
+                    viewer.scroll_offset_x =
+                        (viewer.scroll_offset_x + dx.unsigned_abs()).min(max_x);
+                }
+                changed = true;
+            }
+
+            if changed {
+                self.request_redraw();
+            }
             return;
         }
 

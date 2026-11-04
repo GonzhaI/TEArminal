@@ -492,7 +492,7 @@ impl TearminalApp {
         false
     }
 
-    fn handle_key_app_shortcuts(
+    pub(crate) fn handle_key_app_shortcuts(
         &mut self,
         logical_key: &Key,
         physical_key: PhysicalKey,
@@ -506,6 +506,27 @@ impl TearminalApp {
             .get(self.active_tab_index)
             .map(|t| t.is_settings)
             .unwrap_or(false);
+
+        // Pantalla completa (F11 o Alt + Enter, estándar Windows)
+        let is_enter = matches!(
+            physical_key,
+            PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
+        ) || matches!(&logical_key, Key::Named(NamedKey::Enter));
+        if matches!(&logical_key, Key::Named(NamedKey::F11)) || (alt && !ctrl && !shift && is_enter)
+        {
+            crate::logger::log("-> Hotkey: Alternar pantalla completa (F11 / Alt+Enter)");
+            self.toggle_fullscreen();
+            return true;
+        }
+
+        // Refrescar explorador y estado git (F5, estándar Windows)
+        if !ctrl && !alt && !shift && matches!(&logical_key, Key::Named(NamedKey::F5)) {
+            crate::logger::log("-> Hotkey: Refrescar (F5)");
+            self.file_explorer.refresh();
+            self.request_redraw();
+            return true;
+        }
+
         // Abrir / alternar pestaña de Ajustes (Ctrl + ,)
         if ctrl && !shift && key_is_char(logical_key, physical_key, ',') {
             crate::logger::log("-> Hotkey: Abrir / alternar Ajustes (Ctrl+,)");
@@ -513,15 +534,21 @@ impl TearminalApp {
             return true;
         }
 
-        // Paleta de comandos y búsqueda central (Ctrl + K)
-        if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'k') {
-            crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+K)");
+        // Paleta de comandos (Ctrl + Shift + P, F1, Ctrl + K)
+        let is_k = key_is_char(logical_key, physical_key, 'k');
+        let is_p = key_is_char(logical_key, physical_key, 'p');
+        let is_f1 = matches!(&logical_key, Key::Named(NamedKey::F1));
+        if (ctrl && shift && !alt && is_p)
+            || (ctrl && !shift && !alt && is_k)
+            || (!ctrl && !shift && !alt && is_f1)
+        {
+            crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+Shift+P / F1 / Ctrl+K)");
             self.toggle_palette();
             return true;
         }
 
         // Filtro rápido de archivos en el árbol del explorador (Ctrl + P)
-        if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'p') {
+        if ctrl && !shift && !alt && is_p {
             crate::logger::log("-> Hotkey: Filtro rápido de archivos (Ctrl+P)");
             self.open_explorer_filter();
             return true;
@@ -540,12 +567,12 @@ impl TearminalApp {
             return true;
         }
 
-        // Búsqueda en el historial de la terminal activa (Ctrl + Shift + F) y su barra abierta
+        // Búsqueda en el historial de la terminal activa (Ctrl + F o Ctrl + Shift + F) y su barra abierta
         let term_tab = self
             .tabs
             .get(self.active_tab_index)
             .is_some_and(|t| t.file_viewer.is_none() && !t.is_settings);
-        if term_tab && ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'f') {
+        if term_tab && ctrl && !alt && key_is_char(logical_key, physical_key, 'f') {
             if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
                 pane.terminal.open_search();
             }
@@ -600,35 +627,55 @@ impl TearminalApp {
             }
         }
 
-        // --- ATAJOS DE PANELES DIVIDIDOS (SPLIT PANES) CANÓNICOS (Alt+Shift o Ctrl+Alt) ---
+        // --- ATAJOS DE PANELES DIVIDIDOS (SPLIT PANES) CANÓNICOS (Alt+Shift, Alt o Ctrl+Shift) ---
         let is_d = key_is_char(logical_key, physical_key, 'd');
         let is_v = key_is_char(logical_key, physical_key, 'v');
         let is_w = key_is_char(logical_key, physical_key, 'w');
+        let is_plus = key_is_char(logical_key, physical_key, '+')
+            || key_is_char(logical_key, physical_key, '=')
+            || matches!(physical_key, PhysicalKey::Code(KeyCode::NumpadAdd));
+        let is_minus = key_is_char(logical_key, physical_key, '-')
+            || key_is_char(logical_key, physical_key, '_')
+            || matches!(physical_key, PhysicalKey::Code(KeyCode::NumpadSubtract));
         let is_split_mod = (alt && shift) || (ctrl && alt);
 
-        // 1. División Horizontal: Alt + Shift + D (o Ctrl + Alt + D) -> Lanzar terminal debajo
-        if is_split_mod && is_d {
-            crate::logger::log("-> Hotkey: Split Horizontal (Alt+Shift+D)");
+        // 1. División Horizontal: Alt + Shift + D o Alt + Shift + - (estándar Windows Terminal)
+        if (is_split_mod && is_d) || (alt && shift && is_minus) {
+            crate::logger::log("-> Hotkey: Split Horizontal (Alt+Shift+D / Alt+Shift+-)");
             self.split_active_pane(SplitDirection::Horizontal);
             return true;
         }
 
-        // 2. División Vertical: Alt + Shift + V (o Ctrl + Alt + V) -> Lanzar terminal al lado
-        if is_split_mod && is_v {
-            crate::logger::log("-> Hotkey: Split Vertical (Alt+Shift+V)");
+        // 2. División Vertical: Alt + Shift + V o Alt + Shift + + (estándar Windows Terminal)
+        if (is_split_mod && is_v) || (alt && shift && is_plus) {
+            crate::logger::log("-> Hotkey: Split Vertical (Alt+Shift+V / Alt+Shift++)");
             self.split_active_pane(SplitDirection::Vertical);
             return true;
         }
 
-        // 3. Cerrar panel activo en split: Alt + Shift + W (o Ctrl + Alt + W)
-        if is_split_mod && is_w {
-            crate::logger::log("-> Hotkey: Cerrar panel activo (Alt+Shift+W)");
-            self.close_active_pane();
-            return true;
+        // 3. Cerrar panel activo en split: Ctrl + Shift + W o Alt + Shift + W
+        if (ctrl && shift && !alt && is_w) || (is_split_mod && is_w) {
+            let has_splits = self
+                .tabs
+                .get(self.active_tab_index)
+                .is_some_and(|t| t.panes.len() > 1);
+            if has_splits {
+                crate::logger::log("-> Hotkey: Cerrar panel activo (Ctrl+Shift+W / Alt+Shift+W)");
+                self.close_active_pane();
+                return true;
+            } else if ctrl && shift && is_w {
+                crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+Shift+W)");
+                self.close_tab(self.active_tab_index);
+                return true;
+            }
         }
 
-        // 4. Navegación direccional entre paneles: Alt + Shift + Flechas (o Ctrl + Alt + Flechas)
-        if is_split_mod {
+        // 4. Navegación direccional entre paneles: Alt + Flechas o Alt + Shift + Flechas (Windows Terminal)
+        let has_splits = self
+            .tabs
+            .get(self.active_tab_index)
+            .is_some_and(|t| t.panes.len() > 1);
+        if is_split_mod || (alt && !ctrl && !shift && has_splits) {
             let is_up = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowUp))
                 || *logical_key == Key::Named(NamedKey::ArrowUp);
             let is_down = matches!(physical_key, PhysicalKey::Code(KeyCode::ArrowDown))
@@ -656,7 +703,7 @@ impl TearminalApp {
             }
         }
 
-        // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) CANÓNICOS ---
+        // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) CANÓNICOS DE WINDOWS ---
         // 1. Nueva pestaña / terminal: Ctrl + T
         if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 't') {
             crate::logger::log("-> Hotkey: Nueva terminal (Ctrl+T)");
@@ -664,7 +711,7 @@ impl TearminalApp {
             return true;
         }
 
-        // Nueva ventana: Ctrl + Shift + N
+        // Nueva ventana: Ctrl + Shift + N o Ctrl + N (si la pestaña activa no es terminal o no escribe)
         if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'n') {
             crate::logger::log("-> Hotkey: Nueva ventana (Ctrl+Shift+N)");
             self.new_window_request = true;
@@ -678,19 +725,25 @@ impl TearminalApp {
             return true;
         }
 
-        // 3. Conmutar pestaña siguiente / anterior: Ctrl + Tab / Ctrl + Shift + Tab
-        if ctrl && *logical_key == Key::Named(NamedKey::Tab) {
-            if shift {
-                crate::logger::log("-> Hotkey: Pestaña anterior");
-                self.prev_tab();
-            } else {
-                crate::logger::log("-> Hotkey: Pestaña siguiente");
+        // 3. Conmutar pestaña siguiente / anterior: Ctrl + Tab / Ctrl + Shift + Tab / Ctrl + PageDown / Ctrl + PageUp
+        if ctrl && !alt {
+            let is_next = (*logical_key == Key::Named(NamedKey::Tab) && !shift)
+                || (!shift && matches!(&logical_key, Key::Named(NamedKey::PageDown)));
+            let is_prev = (*logical_key == Key::Named(NamedKey::Tab) && shift)
+                || (!shift && matches!(&logical_key, Key::Named(NamedKey::PageUp)));
+            if is_next {
+                crate::logger::log("-> Hotkey: Pestaña siguiente (Ctrl+Tab / Ctrl+PageDown)");
                 self.next_tab();
+                return true;
             }
-            return true;
+            if is_prev {
+                crate::logger::log("-> Hotkey: Pestaña anterior (Ctrl+Shift+Tab / Ctrl+PageUp)");
+                self.prev_tab();
+                return true;
+            }
         }
 
-        // 4. Cambiar directamente a pestaña 1-9: Ctrl + 1..9
+        // 4. Cambiar directamente a pestaña 1-8 o última con Ctrl + 9 (estándar Windows)
         if ctrl && !shift && !alt {
             let tab_num = match &logical_key {
                 Key::Character(s) if matches!(s.as_bytes(), [b'1'..=b'9']) => {
@@ -710,7 +763,15 @@ impl TearminalApp {
                 },
             };
             if let Some(idx) = tab_num {
-                if let Some(&real) = self.visible_tab_indices().get(idx) {
+                let visible = self.visible_tab_indices();
+                if idx == 8 {
+                    // Ctrl+9 en Windows salta a la última pestaña visible
+                    if let Some(&last_real) = visible.last() {
+                        crate::logger::log("-> Hotkey: Ir a última pestaña (Ctrl+9)");
+                        self.switch_to_tab(last_real);
+                        return true;
+                    }
+                } else if let Some(&real) = visible.get(idx) {
                     crate::logger::log(&format!("-> Hotkey: Ir a pestaña {}", idx + 1));
                     self.switch_to_tab(real);
                     return true;
@@ -781,39 +842,51 @@ impl TearminalApp {
             return true;
         }
 
-        // 6. Pegar desde el portapapeles: Ctrl + V
-        if ctrl && !shift && key_is_char(logical_key, physical_key, 'v') {
+        // 6. Pegar desde el portapapeles: Ctrl + V, Ctrl + Shift + V o Shift + Insert (estándar Windows)
+        let is_v = key_is_char(logical_key, physical_key, 'v');
+        let is_insert = matches!(physical_key, PhysicalKey::Code(KeyCode::Insert))
+            || matches!(&logical_key, Key::Named(NamedKey::Insert));
+        if (ctrl && !alt && is_v) || (shift && !ctrl && !alt && is_insert) {
+            crate::logger::log("-> Hotkey: Pegar desde portapapeles (Ctrl+V / Shift+Insert)");
             self.paste_from_clipboard();
             return true;
         }
 
-        // 7. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0)
+        // 7. Zoom dinámico de tipografía (Ctrl + +, Ctrl + -, Ctrl + 0 y Teclado Numérico)
+        let is_numpad_plus = matches!(physical_key, PhysicalKey::Code(KeyCode::NumpadAdd));
+        let is_numpad_minus = matches!(physical_key, PhysicalKey::Code(KeyCode::NumpadSubtract));
+        let is_numpad_zero = matches!(physical_key, PhysicalKey::Code(KeyCode::Numpad0));
+
         if ctrl && !shift {
             if key_is_char(logical_key, physical_key, '+')
                 || key_is_char(logical_key, physical_key, '=')
+                || is_numpad_plus
             {
                 self.adjust_font_size(1.0);
                 return true;
             }
             if key_is_char(logical_key, physical_key, '-')
                 || key_is_char(logical_key, physical_key, '_')
+                || is_numpad_minus
             {
                 self.adjust_font_size(-1.0);
                 return true;
             }
-            if key_is_char(logical_key, physical_key, '0') {
+            if key_is_char(logical_key, physical_key, '0') || is_numpad_zero {
                 self.reset_font_size();
                 return true;
             }
         } else if ctrl && shift {
             if key_is_char(logical_key, physical_key, '+')
                 || key_is_char(logical_key, physical_key, '=')
+                || is_numpad_plus
             {
                 self.adjust_font_size(1.0);
                 return true;
             }
             if key_is_char(logical_key, physical_key, '_')
                 || key_is_char(logical_key, physical_key, '-')
+                || is_numpad_minus
             {
                 self.adjust_font_size(-1.0);
                 return true;
@@ -989,8 +1062,11 @@ impl TearminalApp {
             return;
         }
 
-        // Copiar selección (Ctrl + Shift + C o Ctrl + C con selección activa)
+        // Copiar selección (Ctrl + Shift + C, Ctrl + C con selección activa, o Ctrl + Insert estándar Windows)
+        let is_insert = matches!(physical_key, PhysicalKey::Code(KeyCode::Insert))
+            || matches!(&logical_key, Key::Named(NamedKey::Insert));
         if (ctrl && shift && key_is_char(logical_key, physical_key, 'c'))
+            || (ctrl && is_insert && active.terminal.has_selection())
             || (ctrl
                 && !shift
                 && key_is_char(logical_key, physical_key, 'c')

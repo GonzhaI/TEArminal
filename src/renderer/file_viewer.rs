@@ -441,7 +441,14 @@ impl TerminalRenderer {
         let total_rows = rows.len();
         let wrap = viewer.wrap_active();
         let scroll_x = if wrap { 0 } else { scroll_x };
-        let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
+        let (start_row, subpixel_y) = if let Some(sv) = self.scroll_visual_offset {
+            let clamped = sv.clamp(0.0, total_rows.saturating_sub(1) as f32);
+            let s_row = clamped.floor() as usize;
+            let sub = ((clamped - s_row as f32) * row_h as f32).round() as usize;
+            (s_row, sub)
+        } else {
+            (viewer.scroll_offset.min(total_rows.saturating_sub(1)), 0)
+        };
         let selection = viewer.selection_ordered().filter(|(a, b)| a != b);
         let accent = theme.accent_color();
         let sel_bg = Color::from_rgba(accent.r(), accent.g(), accent.b(), 70);
@@ -454,9 +461,9 @@ impl TerminalRenderer {
             .iter()
             .enumerate()
             .skip(start_row)
-            .take(visible_lines + 1)
+            .take(visible_lines + 2)
         {
-            let row_y = content_y + (row_idx - start_row) * row_h;
+            let row_y = (content_y + (row_idx - start_row) * row_h).saturating_sub(subpixel_y);
             if row_y + row_h > content_y + content_h {
                 break;
             }

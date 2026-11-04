@@ -504,6 +504,12 @@ impl TearminalApp {
             self.scrollbar_drag = None;
         }
         self.palette = Some(PaletteState::new(items));
+        self.palette_anim_progress = if self.config.terminal.animations {
+            0.0
+        } else {
+            1.0
+        };
+        self.last_palette_anim_time = Instant::now();
         if let Some(w) = &self.window {
             w.request_redraw();
         }

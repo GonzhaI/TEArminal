@@ -234,8 +234,13 @@ impl TearminalApp {
                 return true;
             }
 
-            // Copiar selección o línea actual: Ctrl + C
-            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'c') {
+            let is_insert = matches!(physical_key, PhysicalKey::Code(KeyCode::Insert))
+                || matches!(&logical_key, Key::Named(NamedKey::Insert));
+
+            // Copiar selección o línea actual: Ctrl + C o Ctrl + Insert
+            if (ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'c'))
+                || (ctrl && !alt && is_insert)
+            {
                 if let Some(ref viewer) = self.tabs[self.active_tab_index].file_viewer {
                     let text = if let Some(sel_text) = viewer.selected_text() {
                         Some(sel_text)
@@ -263,8 +268,10 @@ impl TearminalApp {
                 }
             }
 
-            // Pegar texto del portapapeles: Ctrl + V (el modo lectura lo bloquea el propio visor)
-            if ctrl && !shift && !alt && key_is_char(logical_key, physical_key, 'v') {
+            // Pegar texto del portapapeles: Ctrl + V, Ctrl + Shift + V o Shift + Insert
+            if (ctrl && !alt && key_is_char(logical_key, physical_key, 'v'))
+                || (shift && !ctrl && !alt && is_insert)
+            {
                 self.paste_from_clipboard();
                 return true;
             }

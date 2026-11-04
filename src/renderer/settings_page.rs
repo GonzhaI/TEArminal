@@ -329,8 +329,15 @@ impl TerminalRenderer {
             return;
         }
 
+        let progress = self.modal_anim_progress.unwrap_or(1.0).clamp(0.0, 1.0);
+        let offset_y = if progress < 1.0 {
+            ((1.0 - progress) * -14.0).round() as isize
+        } else {
+            0
+        };
+        let page_y = (page_y as isize + offset_y).max(0) as usize;
         let page_w = width - page_x - right_inset;
-        let page_h = height - page_y;
+        let page_h = height.saturating_sub(page_y);
         let rects = SettingsPageRects::compute_modal(page_x, page_y, page_w, page_h);
 
         // 1. Fondo del modal con esquinas redondeadas; la columna de navegación se extiende bajo el contenido
@@ -1404,19 +1411,19 @@ impl TerminalRenderer {
         let shortcuts = [
             ("Ctrl + T", "Nueva terminal o pestaña"),
             ("Ctrl + W", "Cerrar pestaña o panel activo"),
-            ("Ctrl + Tab", "Siguiente pestaña (Shift: anterior)"),
-            ("Ctrl + 1..9", "Ir a la pestaña 1–9"),
-            ("Ctrl + B", "Mostrar u ocultar la barra lateral"),
+            ("Ctrl + Tab", "Siguiente pestaña (o Ctrl+AvPág)"),
+            ("Ctrl + 1..9", "Ir a pestaña 1–8 o última (9)"),
+            ("Ctrl + F", "Buscar en terminal o explorador"),
+            ("Ctrl + Shift + P", "Paleta de comandos (o F1)"),
             ("Ctrl + ,", "Abrir o cerrar Ajustes"),
-            ("Ctrl + Shift + E", "Mostrar u ocultar el explorador"),
-            ("Ctrl + Shift + C", "Copiar la selección"),
-            ("Alt + Shift + D", "Dividir debajo"),
-            ("Alt + Shift + V", "Dividir al lado"),
-            ("Alt + Shift + W", "Cerrar panel dividido"),
-            ("Alt + Shift + Flechas", "Mover el foco entre paneles"),
-            ("Ctrl + V", "Pegar texto o imágenes"),
-            ("Ctrl + Shift + K", "Limpiar pantalla y scrollback"),
-            ("Ctrl + Shift + O", "Copiar salida del último comando"),
+            ("F11", "Pantalla completa (o Alt+Enter)"),
+            ("Alt + Shift + D", "Dividir debajo (o Alt+Shift+-)"),
+            ("Alt + Shift + V", "Dividir al lado (o Alt+Shift++)"),
+            ("Alt + Flechas", "Mover el foco entre paneles"),
+            ("Ctrl + Shift + W", "Cerrar panel dividido"),
+            ("Ctrl + C", "Copiar (o Ctrl+Insert)"),
+            ("Ctrl + V", "Pegar (o Shift+Insert)"),
+            ("F5", "Refrescar explorador y Git"),
             ("Ctrl + Backspace", "Borrar palabra atrás"),
         ];
 

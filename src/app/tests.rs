@@ -1856,6 +1856,53 @@ fn test_side_by_side_diff_and_toggle() {
 }
 
 #[test]
+fn test_side_by_side_diff_shows_only_changed_fragments() {
+    use crate::app::viewer::DiffCellKind;
+
+    // 1. Archivo de 100 líneas con un cambio en la línea 50
+    let mut base = Vec::new();
+    let mut cur = Vec::new();
+    for i in 1..=100 {
+        base.push(format!("linea {i}"));
+        if i == 50 {
+            cur.push("linea 50 modificada".to_string());
+        } else {
+            cur.push(format!("linea {i}"));
+        }
+    }
+
+    let rows = crate::app::viewer::compute_side_by_side(&base, &cur);
+    // Debe incluir únicamente el separador de fragmento + 3 líneas de contexto antes + 1 cambio + 3 líneas de contexto después = 8 filas
+    assert_eq!(rows.len(), 8);
+    assert_eq!(rows[0].left.kind, DiffCellKind::Separator);
+    assert_eq!(rows[0].right.kind, DiffCellKind::Separator);
+    assert!(rows[0].left.text.starts_with("@@"));
+
+    // Contexto previo: líneas 47, 48, 49
+    assert_eq!(rows[1].left.line_num, Some(47));
+    assert_eq!(rows[1].left.kind, DiffCellKind::Normal);
+    assert_eq!(rows[2].left.line_num, Some(48));
+    assert_eq!(rows[3].left.line_num, Some(49));
+
+    // Modificación: línea 50
+    assert_eq!(rows[4].left.line_num, Some(50));
+    assert_eq!(rows[4].left.kind, DiffCellKind::Modified);
+    assert_eq!(rows[4].right.kind, DiffCellKind::Modified);
+    assert_eq!(rows[4].right.text, "linea 50 modificada");
+
+    // Contexto posterior: líneas 51, 52, 53
+    assert_eq!(rows[5].left.line_num, Some(51));
+    assert_eq!(rows[6].left.line_num, Some(52));
+    assert_eq!(rows[7].left.line_num, Some(53));
+
+    // 2. Archivo idéntico: una sola fila indicando "Sin cambios"
+    let same = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let no_change_rows = crate::app::viewer::compute_side_by_side(&same, &same);
+    assert_eq!(no_change_rows.len(), 1);
+    assert_eq!(no_change_rows[0].left.text, "Sin cambios");
+}
+
+#[test]
 fn test_file_viewer_save_preserves_format_and_never_corrupts() {
     let dir = std::env::temp_dir().join(format!("tearminal_test_save_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -2942,6 +2989,40 @@ fn test_settings_modal_keeps_the_layout_underneath() {
 }
 
 #[test]
+fn test_modals_are_centered_with_respect_to_app() {
+    use crate::renderer::{MachineModalRects, SettingsPageRects};
+
+    let (win_w, win_h) = (1280, 800);
+
+    // Modal de Ajustes: centrado horizontal y verticalmente en la ventana de la app
+    let (sx, sy, sw, sh) = SettingsPageRects::modal_region(win_w, win_h);
+    assert_eq!(
+        sx,
+        (win_w - sw) / 2,
+        "el modal de Ajustes debe estar centrado horizontalmente en la app"
+    );
+    assert_eq!(
+        sy,
+        (win_h - sh) / 2,
+        "el modal de Ajustes debe estar centrado verticalmente en la app"
+    );
+
+    // Modal de Añadir máquina: centrado horizontal y verticalmente en la ventana de la app
+    let machine_rects = MachineModalRects::compute(win_w, win_h, 3);
+    let (mx, my, mw, mh) = machine_rects.card;
+    assert_eq!(
+        mx,
+        (win_w - mw) / 2,
+        "el modal de Añadir máquina debe estar centrado horizontalmente en la app"
+    );
+    assert_eq!(
+        my,
+        (win_h - mh) / 2,
+        "el modal de Añadir máquina debe estar centrado verticalmente en la app"
+    );
+}
+
+#[test]
 fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
     let base = std::env::temp_dir().join(format!("tearminal-focus-{}", std::process::id()));
     let (a, b) = (base.join("a"), base.join("b"));
@@ -3445,4 +3526,231 @@ fn test_explorer_left_click_directory_expands_and_stays_expanded() {
     );
     assert!(!app.file_explorer.items[0].is_expanded);
     assert_eq!(app.file_explorer.items.len(), 1);
+}
+
+#[test]
+fn test_terminal_config_vsync_default_and_parsing() {
+    let cfg = TearminalConfig::default();
+    assert!(cfg.terminal.vsync, "vsync debe estar activo por defecto");
+
+    let mut modified = TearminalConfig::default();
+    modified.terminal.vsync = false;
+    let toml_str = toml::to_string(&modified).expect("serializar configuración");
+    let loaded: TearminalConfig =
+        toml::from_str(&toml_str).expect("parsear configuración con vsync");
+    assert!(!loaded.terminal.vsync, "vsync debe parsearse como false");
+}
+
+#[test]
+fn test_wheel_remainder_fractional_touchpad_scroll() {
+    let config = TearminalConfig::default();
+    let mut app = TearminalApp::new(config, None);
+    // Posicionar el cursor sobre el área del panel de terminal (fuera de Spaces panel a la izquierda que mide 264px)
+    app.mouse_pos = winit::dpi::PhysicalPosition::new(400.0, 200.0);
+
+    // Simular un panel activo con historial
+    let tab = &mut app.tabs[app.active_tab_index];
+    let pane = tab.active_pane_mut().expect("panel activo");
+    for _ in 0..100 {
+        pane.terminal
+            .scrollback
+            .push_back(vec![crate::terminal::Cell::default(); 80]);
+        pane.terminal.total_lines_count += 1;
+    }
+    assert_eq!(pane.terminal.scroll_offset, 0);
+
+    // Delta fraccionario pequeño típico de Precision Touchpad (y = 0.25 líneas)
+    let delta_small = winit::event::MouseScrollDelta::LineDelta(0.0, 0.25);
+    app.on_mouse_wheel(delta_small);
+    // 0.25 * 3.0 = 0.75, aún no cruza a 1 línea entera, no se debe perder
+    assert!(app.wheel_remainder > 0.0);
+    let offset_before = app.tabs[app.active_tab_index]
+        .active_pane()
+        .unwrap()
+        .terminal
+        .scroll_offset;
+
+    // Segundo delta que completa el entero (y = 0.1 líneas -> 0.75 + 0.3 = 1.05)
+    let delta_completer = winit::event::MouseScrollDelta::LineDelta(0.0, 0.1);
+    app.on_mouse_wheel(delta_completer);
+    let offset_after = app.tabs[app.active_tab_index]
+        .active_pane()
+        .unwrap()
+        .terminal
+        .scroll_offset;
+    assert!(
+        offset_after > offset_before,
+        "el desplazamiento acumulado debe avanzar al cruzar 1 línea"
+    );
+    assert!(
+        app.wheel_remainder < 1.0,
+        "el resto acumulado debe descontar las líneas desplazadas"
+    );
+}
+
+#[test]
+fn test_terminal_pane_smooth_cursor_and_scroll_animation() {
+    let config = TearminalConfig::default();
+    let mut app = TearminalApp::new(config, None);
+    let tab = &mut app.tabs[app.active_tab_index];
+    let pane = tab.active_pane_mut().expect("panel activo");
+
+    let mut now = Instant::now();
+    // 1. Inicialización en el cursor lógico
+    pane.terminal.cursor_x = 5;
+    pane.terminal.cursor_y = 2;
+    let anim = pane.update_animations(true, now);
+    assert!(
+        !anim,
+        "en reposo inicial no debe requerir repintado continuo"
+    );
+    assert_eq!(pane.cursor_visual_pos, Some((5.0, 2.0)));
+
+    // 2. Movimiento lógico del cursor (p.ej. al teclear)
+    pane.terminal.cursor_x = 15;
+    now += std::time::Duration::from_millis(16);
+    let anim_active = pane.update_animations(true, now);
+    assert!(
+        anim_active,
+        "al cambiar de posición debe reportar animación activa"
+    );
+
+    let (vx, vy) = pane.cursor_visual_pos.expect("posicion visual presente");
+    assert!(
+        vx > 5.0 && vx < 15.0,
+        "debe interpolar suavemente entre 5 y 15 (actual: {})",
+        vx
+    );
+    assert_eq!(vy, 2.0);
+
+    // 3. Simular convergencia
+    for _ in 0..30 {
+        now += std::time::Duration::from_millis(16);
+        pane.update_animations(true, now);
+    }
+    let (vx_final, _) = pane.cursor_visual_pos.expect("posicion visual");
+    assert!((vx_final - 15.0).abs() < 0.05, "debe converger al objetivo");
+
+    // 4. Con animaciones desactivadas debe saltar instantáneamente
+    pane.terminal.cursor_x = 30;
+    now += std::time::Duration::from_millis(16);
+    let anim_off = pane.update_animations(false, now);
+    assert!(!anim_off, "sin animaciones no debe encadenar repintado");
+    assert_eq!(pane.cursor_visual_pos, Some((30.0, 2.0)));
+}
+
+#[test]
+fn test_palette_rects_with_offset_y() {
+    use crate::renderer::PaletteRects;
+    let normal = PaletteRects::compute_with_scroll(1000, 800, 5, 0);
+    let shifted = PaletteRects::compute_with_scroll_offset_y(1000, 800, 5, 0, -10);
+
+    assert_eq!(normal.card.1.saturating_sub(10), shifted.card.1);
+    assert_eq!(normal.input.1.saturating_sub(10), shifted.input.1);
+    assert_eq!(normal.list.1.saturating_sub(10), shifted.list.1);
+}
+
+#[test]
+fn test_windows_canonical_shortcuts() {
+    use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+
+    let config = TearminalConfig::default();
+    let mut app = TearminalApp::new(config, None);
+
+    // 1. Paleta de comandos con Ctrl+Shift+P y F1
+    assert!(app.palette.is_none());
+    let handled_p = app.handle_key_app_shortcuts(
+        &Key::Character("P".into()),
+        PhysicalKey::Code(KeyCode::KeyP),
+        &None,
+        true,
+        true,
+        false,
+    );
+    assert!(handled_p);
+    assert!(
+        app.palette.is_some(),
+        "Ctrl+Shift+P debe abrir la paleta de comandos"
+    );
+
+    app.palette = None;
+    let handled_f1 = app.handle_key_app_shortcuts(
+        &Key::Named(NamedKey::F1),
+        PhysicalKey::Code(KeyCode::F1),
+        &None,
+        false,
+        false,
+        false,
+    );
+    assert!(handled_f1);
+    assert!(app.palette.is_some(), "F1 debe abrir la paleta de comandos");
+    app.palette = None;
+
+    // 2. Navegación de pestañas con Ctrl+PageDown / Ctrl+PageUp y Ctrl+9
+    app.create_new_tab();
+    app.create_new_tab();
+    assert_eq!(app.tabs.len(), 3);
+    app.active_tab_index = 0;
+
+    // Ctrl+PageDown -> pestaña siguiente
+    let handled_next = app.handle_key_app_shortcuts(
+        &Key::Named(NamedKey::PageDown),
+        PhysicalKey::Code(KeyCode::PageDown),
+        &None,
+        true,
+        false,
+        false,
+    );
+    assert!(handled_next);
+    assert_eq!(app.active_tab_index, 1);
+
+    // Ctrl+PageUp -> pestaña anterior
+    let handled_prev = app.handle_key_app_shortcuts(
+        &Key::Named(NamedKey::PageUp),
+        PhysicalKey::Code(KeyCode::PageUp),
+        &None,
+        true,
+        false,
+        false,
+    );
+    assert!(handled_prev);
+    assert_eq!(app.active_tab_index, 0);
+
+    // Ctrl+9 -> última pestaña
+    let handled_last = app.handle_key_app_shortcuts(
+        &Key::Character("9".into()),
+        PhysicalKey::Code(KeyCode::Digit9),
+        &None,
+        true,
+        false,
+        false,
+    );
+    assert!(handled_last);
+    assert_eq!(app.active_tab_index, 2);
+
+    // 3. Splits: dividir y cerrar con Ctrl+Shift+W
+    let initial_panes = app.tabs[app.active_tab_index].panes.len();
+    assert_eq!(initial_panes, 1);
+    let handled_split = app.handle_key_app_shortcuts(
+        &Key::Character("v".into()),
+        PhysicalKey::Code(KeyCode::KeyV),
+        &None,
+        false,
+        true,
+        true, // Alt + Shift + V
+    );
+    assert!(handled_split);
+    assert_eq!(app.tabs[app.active_tab_index].panes.len(), 2);
+
+    // Ctrl+Shift+W debe cerrar el split activo
+    let handled_close_split = app.handle_key_app_shortcuts(
+        &Key::Character("W".into()),
+        PhysicalKey::Code(KeyCode::KeyW),
+        &None,
+        true,
+        true,
+        false, // Ctrl + Shift + W
+    );
+    assert!(handled_close_split);
+    assert_eq!(app.tabs[app.active_tab_index].panes.len(), 1);
 }

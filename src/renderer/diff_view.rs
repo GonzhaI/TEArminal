@@ -213,20 +213,54 @@ impl TerminalRenderer {
         let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
         let end_row = (start_row + visible_rows + 1).min(total_rows);
 
-        let del_tint =
-            Color::from_rgba(theme.ansi[1].r(), theme.ansi[1].g(), theme.ansi[1].b(), 32);
-        let add_tint =
-            Color::from_rgba(theme.ansi[2].r(), theme.ansi[2].g(), theme.ansi[2].b(), 32);
-        let mod_left_tint =
-            Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
-        let mod_right_tint =
-            Color::from_rgba(theme.ansi[3].r(), theme.ansi[3].g(), theme.ansi[3].b(), 32);
+        let del_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[1], 34));
+        let add_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[2], 34));
+        let mod_left_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[3], 34));
+        let mod_right_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[3], 34));
         let empty_tint = theme.mix(theme.background, theme.foreground, 0.02);
 
         // 3. Dibujo de filas sincronizadas
         for (idx, r) in rows[start_row..end_row].iter().enumerate() {
             let row_y = content_y + idx * row_h;
             let baseline_y = row_y + baseline_offset;
+
+            // Fila separadora de fragmentos (hunk @@)
+            if r.left.kind == crate::app::DiffCellKind::Separator {
+                let sep_bg = theme.mix(theme.background, theme.foreground, 0.05);
+                let sep_line = theme.chrome_line();
+                let sep_fg = theme.ansi[4]; // Cyan característico de @@
+
+                // Franja horizontal en todo el ancho con borde sutil
+                canvas.fill_rect(clip, lay.left_x, row_y, w, row_h, sep_bg);
+                canvas.fill_rect(clip, lay.left_x, row_y, w, 1, sep_line);
+                canvas.fill_rect(clip, lay.left_x, row_y + row_h - 1, w, 1, sep_line);
+                canvas.fill_rect(clip, lay.divider_x, row_y, 1, row_h, sep_line);
+
+                let text = &r.left.text;
+                if !text.is_empty() {
+                    self.draw_mono_text(
+                        canvas,
+                        text,
+                        lay.left_text_x,
+                        baseline_y,
+                        lay.left_text_max_x,
+                        sep_fg,
+                        tokens::MICRO,
+                        true,
+                    );
+                    self.draw_mono_text(
+                        canvas,
+                        text,
+                        lay.right_text_x,
+                        baseline_y,
+                        lay.right_text_max_x,
+                        sep_fg,
+                        tokens::MICRO,
+                        true,
+                    );
+                }
+                continue;
+            }
 
             // --- COLUMNA IZQUIERDA ---
             let left_row_clip: Clip = (lay.left_x, row_y, lay.divider_x, row_y + row_h);
@@ -277,7 +311,9 @@ impl TerminalRenderer {
                         empty_tint,
                     );
                 }
-                crate::app::DiffCellKind::Normal | crate::app::DiffCellKind::Added => {}
+                crate::app::DiffCellKind::Normal
+                | crate::app::DiffCellKind::Added
+                | crate::app::DiffCellKind::Separator => {}
             }
 
             if let Some(line_num) = r.left.line_num {
@@ -362,7 +398,9 @@ impl TerminalRenderer {
                         empty_tint,
                     );
                 }
-                crate::app::DiffCellKind::Normal | crate::app::DiffCellKind::Deleted => {}
+                crate::app::DiffCellKind::Normal
+                | crate::app::DiffCellKind::Deleted
+                | crate::app::DiffCellKind::Separator => {}
             }
 
             if let Some(line_num) = r.right.line_num {
