@@ -68,7 +68,7 @@ impl TerminalRenderer {
             w,
             h,
             is_markdown,
-            viewer.git_base.is_some(),
+            viewer.has_diff_capability(),
             viewer.is_diff(),
         );
         let accent = theme.accent_color();
@@ -97,7 +97,7 @@ impl TerminalRenderer {
 
         if let Some(rect) = header_rects.diff_btn {
             let hov = viewer.hovered_diff_btn;
-            let changed = viewer.has_git_changes();
+            let changed = viewer.has_git_changes() || viewer.git_new_file;
             let showing = viewer.is_diff();
             let color = if showing {
                 accent

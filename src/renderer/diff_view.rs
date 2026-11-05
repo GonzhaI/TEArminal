@@ -349,6 +349,17 @@ impl TerminalRenderer {
                     ext,
                     false,
                 );
+            } else if r.left.kind == crate::app::DiffCellKind::Normal && !r.left.text.is_empty() {
+                self.draw_ui_text(
+                    canvas,
+                    &r.left.text,
+                    lay.left_text_x,
+                    baseline_y,
+                    lay.left_text_max_x,
+                    theme.text_muted(),
+                    tokens::BODY,
+                    false,
+                );
             }
 
             // --- COLUMNA DERECHA ---
@@ -431,6 +442,17 @@ impl TerminalRenderer {
                     char_w,
                     theme,
                     ext,
+                    false,
+                );
+            } else if r.right.kind == crate::app::DiffCellKind::Normal && !r.right.text.is_empty() {
+                self.draw_ui_text(
+                    canvas,
+                    &r.right.text,
+                    lay.right_text_x,
+                    baseline_y,
+                    lay.right_text_max_x,
+                    theme.text_muted(),
+                    tokens::BODY,
                     false,
                 );
             }

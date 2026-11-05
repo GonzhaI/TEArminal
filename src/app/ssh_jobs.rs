@@ -54,6 +54,7 @@ pub(super) enum SshDone {
     GitHead {
         path: PathBuf,
         lines: Option<Vec<String>>,
+        is_new_file: bool,
     },
 }
 
@@ -97,8 +98,17 @@ impl TearminalApp {
     /// Obtiene `git show HEAD:<path>` en un hilo en segundo plano para el visor de archivos local
     pub(super) fn spawn_git_head_lines(&self, path: PathBuf) {
         self.spawn_ssh(move || {
-            let lines = crate::explorer::git_head_lines(&path);
-            SshDone::GitHead { path, lines }
+            let res = crate::explorer::git_head_result(&path);
+            let (lines, is_new_file) = match res {
+                crate::explorer::GitHeadResult::Lines(lines) => (Some(lines), false),
+                crate::explorer::GitHeadResult::NewFile => (None, true),
+                crate::explorer::GitHeadResult::None => (None, false),
+            };
+            SshDone::GitHead {
+                path,
+                lines,
+                is_new_file,
+            }
         });
     }
 
@@ -305,11 +315,16 @@ impl TearminalApp {
                     // Si llegaron cambios durante la consulta, queda una petición pendiente
                     self.pump_explorer_ssh();
                 }
-                SshDone::GitHead { path, lines } => {
+                SshDone::GitHead {
+                    path,
+                    lines,
+                    is_new_file,
+                } => {
                     for tab in &mut self.tabs {
                         if let Some(viewer) = tab.file_viewer.as_mut() {
                             if viewer.path == path && viewer.remote_destination.is_none() {
                                 viewer.git_base = lines.clone();
+                                viewer.git_new_file = is_new_file;
                                 viewer.edit_gen = viewer.edit_gen.wrapping_add(1);
                             }
                         }

@@ -83,6 +83,15 @@ impl TearminalApp {
             return;
         }
 
+        let is_git_new = self
+            .file_explorer
+            .git_statuses
+            .get(path)
+            .is_some_and(|info| {
+                info.status == crate::explorer::GitFileStatus::Untracked
+                    || info.status == crate::explorer::GitFileStatus::Added
+            });
+
         // Si ya existe una pestaña con este archivo local, alternar a ella
         if let Some(pos) = self.tabs.iter().position(|t| {
             t.file_viewer
@@ -91,8 +100,11 @@ impl TearminalApp {
                 .unwrap_or(false)
         }) {
             self.tabs[pos].is_preview &= !pin;
-            if self.file_explorer.changes_only {
-                if let Some(v) = self.tabs[pos].file_viewer.as_mut() {
+            if let Some(v) = self.tabs[pos].file_viewer.as_mut() {
+                if is_git_new {
+                    v.git_new_file = true;
+                }
+                if self.file_explorer.changes_only {
                     v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
                 }
             }
@@ -102,8 +114,11 @@ impl TearminalApp {
 
         let tab_id = self.alloc_tab_id();
         let mut tab = TerminalTab::new_file_viewer(tab_id, path.to_path_buf());
-        if self.file_explorer.changes_only {
-            if let Some(v) = tab.file_viewer.as_mut() {
+        if let Some(v) = tab.file_viewer.as_mut() {
+            if is_git_new {
+                v.git_new_file = true;
+            }
+            if self.file_explorer.changes_only {
                 v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
             }
         }

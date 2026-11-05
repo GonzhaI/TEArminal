@@ -604,10 +604,14 @@ impl TerminalTab {
         }
 
         let original_lines = lines.clone();
-        let git_base = if is_binary || !cfg!(test) {
-            None
+        let (git_base, git_new_file) = if is_binary || !cfg!(test) {
+            (None, false)
         } else {
-            crate::explorer::git_head_lines(&path)
+            match crate::explorer::git_head_result(&path) {
+                crate::explorer::GitHeadResult::Lines(l) => (Some(l), false),
+                crate::explorer::GitHeadResult::NewFile => (None, true),
+                crate::explorer::GitHeadResult::None => (None, false),
+            }
         };
         let is_markdown = path
             .extension()
@@ -640,6 +644,7 @@ impl TerminalTab {
             redo_stack: Vec::new(),
             original_lines,
             git_base,
+            git_new_file,
             diff_mode: crate::app::viewer::DiffMode::None,
             diff_stash: None,
             hovered_diff_btn: false,
@@ -781,6 +786,7 @@ impl TerminalTab {
             redo_stack: Vec::new(),
             original_lines,
             git_base: None,
+            git_new_file: false,
             diff_mode: crate::app::viewer::DiffMode::None,
             diff_stash: None,
             hovered_diff_btn: false,

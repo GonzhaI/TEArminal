@@ -192,6 +192,8 @@ pub(crate) struct FileViewerState {
     pub original_lines: Vec<String>,
     /// Contenido en `HEAD` (base del diff del margen). `None` fuera de un repo: se compara con el texto al abrir/guardar.
     pub git_base: Option<Vec<String>>,
+    /// Archivo nuevo en un repositorio Git (untracked o recién añadido, sin versión previa en `HEAD`).
+    pub git_new_file: bool,
     /// Modo de diff activo (Lado a lado, Unificado, o ninguno)
     pub diff_mode: DiffMode,
     /// Con el diff unificado «HEAD vs ahora» a la vista: guarda el estado real del visor para volver a él
@@ -1376,13 +1378,25 @@ impl FileViewerState {
         self.diff_mode == DiffMode::Unified || self.diff_stash.is_some()
     }
 
+    /// Indica si el visor puede mostrar diff (tiene versión base en HEAD, es un archivo nuevo de Git, o ya está en diff)
+    pub(crate) fn has_diff_capability(&self) -> bool {
+        self.git_base.is_some() || self.git_new_file || self.is_diff()
+    }
+
     pub(crate) fn side_by_side_rows(&self) -> Rc<[SideBySideRow]> {
         if let Some((gen, ref rows)) = *self.side_by_side_cache.borrow() {
             if gen == self.edit_gen {
                 return Rc::clone(rows);
             }
         }
-        let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+        let empty = Vec::new();
+        let base = if let Some(base) = &self.git_base {
+            base
+        } else if self.git_new_file {
+            &empty
+        } else {
+            &self.original_lines
+        };
         let rows: Rc<[SideBySideRow]> = Rc::from(compute_side_by_side(base, &self.lines));
         *self.side_by_side_cache.borrow_mut() = Some((self.edit_gen, Rc::clone(&rows)));
         rows
@@ -1482,7 +1496,14 @@ impl FileViewerState {
         if self.diff_stash.is_some() {
             return;
         }
-        let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+        let empty = Vec::new();
+        let base = if let Some(base) = &self.git_base {
+            base
+        } else if self.git_new_file {
+            &empty
+        } else {
+            &self.original_lines
+        };
         let mut diff = unified_diff(base, &self.lines, 3);
         if diff.is_empty() {
             diff.push("Sin cambios respecto a HEAD".to_string());

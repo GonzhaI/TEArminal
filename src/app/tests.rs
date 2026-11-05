@@ -1653,6 +1653,20 @@ b
         Some(crate::app::viewer::GitLineStatus::Added)
     );
 
+    // Archivo nuevo (untracked) en vista de cambios muestra el diff con el contenido añadido
+    let mut tab_nuevo = TerminalTab::new_file_viewer(TabId(104), dir.join("nuevo.txt"));
+    let viewer_nuevo = tab_nuevo.file_viewer.as_mut().unwrap();
+    assert!(viewer_nuevo.git_new_file);
+    assert!(viewer_nuevo.has_diff_capability());
+    viewer_nuevo.diff_mode = crate::app::viewer::DiffMode::SideBySide;
+    let rows_nuevo = viewer_nuevo.side_by_side_rows();
+    assert_eq!(rows_nuevo.len(), 1);
+    assert_eq!(rows_nuevo[0].right.text, "x");
+    assert_eq!(
+        rows_nuevo[0].right.kind,
+        crate::app::viewer::DiffCellKind::Added
+    );
+
     explorer.toggle_changes_only();
     assert!(explorer.items.iter().any(|i| i.name == "keep.txt"));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1900,6 +1914,55 @@ fn test_side_by_side_diff_shows_only_changed_fragments() {
     let no_change_rows = crate::app::viewer::compute_side_by_side(&same, &same);
     assert_eq!(no_change_rows.len(), 1);
     assert_eq!(no_change_rows[0].left.text, "Sin cambios");
+}
+
+#[test]
+fn test_side_by_side_diff_for_new_git_file() {
+    use crate::app::viewer::{DiffCellKind, DiffMode};
+
+    let path = std::env::temp_dir().join(format!(
+        "tearminal_test_diff_new_file_{}.sql",
+        std::process::id()
+    ));
+    std::fs::write(&path, "CREATE TABLE t (\n    id INT,\n    name TEXT\n);\n").unwrap();
+
+    let mut tab = TerminalTab::new_file_viewer(TabId(109), path.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.git_base = None;
+    viewer.git_new_file = true;
+
+    assert!(viewer.has_diff_capability());
+    assert_eq!(viewer.get_line_git_diff_status(0), None);
+
+    // Abrir diff en modo Lado a lado
+    viewer.diff_mode = DiffMode::SideBySide;
+    assert!(viewer.is_diff());
+    assert!(viewer.is_side_by_side());
+
+    let rows = viewer.side_by_side_rows();
+    assert_eq!(rows.len(), 4);
+    for (idx, r) in rows.iter().enumerate() {
+        assert_eq!(r.left.kind, DiffCellKind::Empty);
+        assert_eq!(r.left.line_num, None);
+        assert_eq!(r.right.kind, DiffCellKind::Added);
+        assert_eq!(r.right.line_num, Some(idx + 1));
+    }
+    assert_eq!(rows[0].right.text, "CREATE TABLE t (");
+
+    let (dels, adds) = viewer.side_by_side_stats();
+    assert_eq!(dels, 0);
+    assert_eq!(adds, 4);
+
+    // Alternar a modo unificado
+    viewer.toggle_diff_mode();
+    assert!(viewer.is_diff());
+    assert!(viewer.is_unified_diff());
+    assert!(viewer
+        .lines
+        .iter()
+        .any(|l| l.starts_with("+CREATE TABLE t (")));
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

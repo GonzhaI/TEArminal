@@ -105,28 +105,51 @@ pub(crate) fn git_command(repo: &Path) -> std::process::Command {
     cmd
 }
 
-/// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
-/// `None` si el archivo no está versionado en el repo (untracked) o fuera de un repo.
-pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
-    let repo = git_repo_root(path.parent()?)?;
-    let rel = path
-        .strip_prefix(&repo)
-        .ok()?
-        .to_string_lossy()
-        .replace('\\', "/");
-    let out = git_command(&repo)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GitHeadResult {
+    /// Fuera de un repositorio Git
+    None,
+    /// Archivo nuevo dentro del repo (untracked o recién añadido, no existe en HEAD)
+    NewFile,
+    /// Contenido base en HEAD
+    Lines(Vec<String>),
+}
+
+/// Consulta HEAD para `path`: `Lines` si existe en HEAD, `NewFile` si está en el repo pero no en HEAD,
+/// o `None` si está fuera de un repositorio.
+pub(crate) fn git_head_result(path: &Path) -> GitHeadResult {
+    let Some(repo) = git_repo_root(path.parent().unwrap_or(path)) else {
+        return GitHeadResult::None;
+    };
+    let Ok(rel) = path.strip_prefix(&repo) else {
+        return GitHeadResult::None;
+    };
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    let Ok(out) = git_command(&repo)
         .args(["show", &format!("HEAD:{rel}")])
         .output()
-        .ok()?;
+    else {
+        return GitHeadResult::None;
+    };
     if !out.status.success() {
-        return None;
+        return GitHeadResult::NewFile;
     }
-    Some(
+    GitHeadResult::Lines(
         String::from_utf8_lossy(&out.stdout)
             .lines()
             .map(String::from)
             .collect(),
     )
+}
+
+/// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
+/// `None` si el archivo no está versionado en el repo (untracked) o fuera de un repo.
+#[allow(dead_code)]
+pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
+    match git_head_result(path) {
+        GitHeadResult::Lines(lines) => Some(lines),
+        _ => None,
+    }
 }
 
 /// Estado de una carpeta según lo que cambió dentro: si todo es del mismo tipo, ese (verde añadido,

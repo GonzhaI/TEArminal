@@ -53,7 +53,7 @@ impl TearminalApp {
                                 viewer_w,
                                 viewer_h,
                                 is_markdown,
-                                viewer.git_base.is_some(),
+                                viewer.has_diff_capability(),
                                 viewer.is_diff(),
                             );
 
