@@ -1,9 +1,85 @@
 //! Resaltado sintáctico multilenguaje de alto rendimiento para el visor de archivos.
 
+use std::rc::Rc;
+
 use super::*;
 use crate::theme::Theme;
 
+/// Especificación sintáctica ligera de un lenguaje para delimitación de bloques de comentarios.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LanguageSpec {
+    pub(crate) block_comment: Option<(&'static str, &'static str)>,
+}
+
+/// Identifica delimitadores de comentarios de bloque según la extensión del archivo.
+pub(crate) fn language_spec(ext: &str) -> LanguageSpec {
+    let block_comment = match ext {
+        "rs" | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp" | "cs" | "java" | "js" | "jsx" | "mjs"
+        | "cjs" | "ts" | "tsx" | "go" | "swift" | "kt" | "kts" | "css" | "scss" | "sass"
+        | "less" | "php" | "dart" | "scala" | "zig" | "sql" => Some(("/*", "*/")),
+        "html" | "htm" | "xml" | "svg" | "vue" | "svelte" => Some(("<!--", "-->")),
+        "ps1" | "psm1" | "psd1" => Some(("<#", "#>")),
+        "lua" => Some(("--[[", "]]")),
+        "hs" | "lhs" => Some(("{-", "-}")),
+        "py" | "pyw" => Some(("\"\"\"", "\"\"\"")),
+        _ => None,
+    };
+    LanguageSpec { block_comment }
+}
+
 impl TerminalRenderer {
+    /// Obtiene o calcula los bloques de comentario multilínea de un archivo en caché.
+    pub(crate) fn get_syntax_multiline_blocks(
+        &mut self,
+        path: &std::path::Path,
+        gen: u64,
+        lines: &[String],
+        spec: LanguageSpec,
+    ) -> Rc<[bool]> {
+        if let Some((ref cached_path, cached_gen, ref cached_blocks)) = self.syntax_blocks_cache {
+            if cached_gen == gen && cached_path == path {
+                return cached_blocks.clone();
+            }
+        }
+
+        let (open_tag, close_tag) = match spec.block_comment {
+            Some(tags) => tags,
+            None => {
+                let empty: Rc<[bool]> = Rc::from(vec![false; lines.len()].into_boxed_slice());
+                return empty;
+            }
+        };
+
+        let mut in_block = false;
+        let mut blocks = Vec::with_capacity(lines.len());
+
+        for line in lines {
+            let trimmed = line.trim();
+            if in_block {
+                blocks.push(true);
+                if trimmed.contains(close_tag) {
+                    in_block = false;
+                }
+            } else if let Some(open_pos) = trimmed.find(open_tag) {
+                let rest = &trimmed[open_pos + open_tag.len()..];
+                if rest.contains(close_tag) {
+                    // Abierto y cerrado en la misma línea: no se propaga a líneas posteriores
+                    blocks.push(trimmed.starts_with(open_tag));
+                } else {
+                    // Abierto en esta línea y continúa en las siguientes
+                    in_block = true;
+                    blocks.push(trimmed.starts_with(open_tag));
+                }
+            } else {
+                blocks.push(false);
+            }
+        }
+
+        let rc: Rc<[bool]> = Rc::from(blocks.into_boxed_slice());
+        self.syntax_blocks_cache = Some((path.to_path_buf(), gen, rc.clone()));
+        rc
+    }
+
     /// Resaltado sintáctico multilenguaje de tokens ligero y de alto rendimiento
     #[allow(clippy::too_many_arguments)]
     pub(super) fn render_highlighted_line(
@@ -17,6 +93,7 @@ impl TerminalRenderer {
         char_w: usize,
         theme: &Theme,
         ext: &str,
+        in_block_comment: bool,
     ) {
         let max_x_i32 = max_x as i32;
         let char_w_i32 = char_w as i32;
@@ -25,19 +102,24 @@ impl TerminalRenderer {
         let trimmed = line.trim_start();
 
         // Comentarios completos de línea
-        let is_full_comment = match ext {
-            "py" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "toml" | "yaml" | "yml" | "rb"
-            | "r" | "jl" | "dockerfile" | "makefile" | "mk" => trimmed.starts_with('#'),
-            "bat" | "cmd" => {
-                trimmed.to_ascii_uppercase().starts_with("REM ") || trimmed.starts_with("::")
-            }
-            "sql" | "lua" | "hs" | "elm" | "vhd" | "vhdl" => trimmed.starts_with("--"),
-            "html" | "xml" | "svg" | "vue" | "svelte" => trimmed.starts_with("<!--"),
-            "ini" | "cfg" | "conf" | "properties" => {
-                trimmed.starts_with(';') || trimmed.starts_with('#')
-            }
-            _ => trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*'),
-        };
+        let is_full_comment = in_block_comment
+            || match ext {
+                "py" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "toml" | "yaml" | "yml" | "rb"
+                | "r" | "jl" | "dockerfile" | "makefile" | "mk" => trimmed.starts_with('#'),
+                "bat" | "cmd" => {
+                    trimmed.to_ascii_uppercase().starts_with("REM ") || trimmed.starts_with("::")
+                }
+                "sql" | "lua" | "hs" | "elm" | "vhd" | "vhdl" => trimmed.starts_with("--"),
+                "html" | "xml" | "svg" | "vue" | "svelte" => trimmed.starts_with("<!--"),
+                "ini" | "cfg" | "conf" | "properties" => {
+                    trimmed.starts_with(';') || trimmed.starts_with('#')
+                }
+                _ => {
+                    trimmed.starts_with("//")
+                        || trimmed.starts_with("/*")
+                        || trimmed.starts_with('*')
+                }
+            };
 
         if is_full_comment {
             let comment_fg = theme.ansi[8];
@@ -162,7 +244,7 @@ impl TerminalRenderer {
                         ext,
                         "ps1" | "php" | "sh" | "bash" | "zsh" | "fish" | "pl" | "rb"
                     ))
-                || (ch == '#' && matches!(ext, "c" | "cpp" | "h" | "hpp" | "cs"))
+                || (ch == '#' && matches!(ext, "c" | "cpp" | "h" | "hpp" | "cs" | "rs"))
             {
                 let decorator_fg = theme.ansi[5]; // Magenta / Púrpura
                 let glyph = self.get_glyph(ch, false);
@@ -215,28 +297,30 @@ impl TerminalRenderer {
                     | "Self" | "function" | "def" | "class" | "import" | "from" | "export"
                     | "var" | "val" | "interface" | "package" | "go" | "defer" | "errdefer"
                     | "select" | "switch" | "case" | "default" | "break" | "continue" | "try"
-                    | "catch" | "finally" | "throw" | "throws" | "new" | "delete" | "in" | "is"
-                    | "as" | "yield" | "lambda" | "with" | "pass" | "raise" | "assert"
-                    | "global" | "nonlocal" | "static" | "public" | "private" | "protected"
-                    | "virtual" | "override" | "abstract" | "extends" | "implements"
-                    | "namespace" | "using" | "template" | "typename" | "constexpr" | "sizeof"
-                    | "param" | "process" | "begin" | "end" | "unsafe" | "dyn" | "ref" | "move"
-                    | "fun" | "guard" | "when" | "protocol" | "extension" | "mutating"
-                    | "comptime" | "unreachable" | "echo" | "source" | "alias" | "local"
-                    | "then" | "fi" | "do" | "done" | "esac" | "SELECT" | "FROM" | "WHERE"
-                    | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE" | "CREATE"
-                    | "TABLE" | "DROP" | "ALTER" | "INDEX" | "JOIN" | "INNER" | "LEFT"
-                    | "RIGHT" | "OUTER" | "GROUP" | "BY" | "HAVING" | "ORDER" | "LIMIT"
-                    | "OFFSET" | "UNION" | "ALL" | "DISTINCT" | "PRIMARY" | "KEY" | "FOREIGN"
-                    | "REFERENCES" | "CONSTRAINT" | "DATABASE" | "SCHEMA" | "VIEW" | "TRIGGER"
-                    | "RUN" | "CMD" | "LABEL" | "EXPOSE" | "ENV" | "ADD" | "COPY"
-                    | "ENTRYPOINT" | "VOLUME" | "USER" | "WORKDIR" | "ARG" | "ONBUILD" => {
+                    | "catch" | "except" | "finally" | "throw" | "throws" | "new" | "delete"
+                    | "in" | "is" | "as" | "yield" | "lambda" | "with" | "pass" | "raise"
+                    | "assert" | "global" | "nonlocal" | "static" | "public" | "private"
+                    | "protected" | "virtual" | "override" | "abstract" | "extends"
+                    | "implements" | "namespace" | "using" | "template" | "typename"
+                    | "constexpr" | "sizeof" | "param" | "process" | "begin" | "end" | "unsafe"
+                    | "dyn" | "ref" | "move" | "fun" | "guard" | "when" | "protocol"
+                    | "extension" | "mutating" | "comptime" | "unreachable" | "echo" | "source"
+                    | "alias" | "local" | "then" | "fi" | "do" | "done" | "esac" | "SELECT"
+                    | "FROM" | "WHERE" | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET"
+                    | "DELETE" | "CREATE" | "TABLE" | "DROP" | "ALTER" | "INDEX" | "JOIN"
+                    | "INNER" | "LEFT" | "RIGHT" | "OUTER" | "GROUP" | "BY" | "HAVING"
+                    | "ORDER" | "LIMIT" | "OFFSET" | "UNION" | "ALL" | "DISTINCT" | "PRIMARY"
+                    | "KEY" | "FOREIGN" | "REFERENCES" | "CONSTRAINT" | "DATABASE" | "SCHEMA"
+                    | "VIEW" | "TRIGGER" | "RUN" | "CMD" | "LABEL" | "EXPOSE" | "ENV" | "ADD"
+                    | "COPY" | "ENTRYPOINT" | "VOLUME" | "USER" | "WORKDIR" | "ARG" | "ONBUILD" => {
                         theme.accent_color()
                     }
 
                     // Booleanos y valores nulos: Amarillo
-                    "true" | "false" | "TRUE" | "FALSE" | "None" | "null" | "nil" | "undefined"
-                    | "NULL" | "nullptr" | "NaN" | "Infinity" => theme.ansi[3],
+                    "true" | "false" | "True" | "False" | "TRUE" | "FALSE" | "None" | "null"
+                    | "nil" | "undefined" | "NULL" | "nullptr" | "NaN" | "Infinity" => {
+                        theme.ansi[3]
+                    }
 
                     // Tipos primitivos y contenedores estándar: Cian brillante (ANSI 6)
                     "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8"

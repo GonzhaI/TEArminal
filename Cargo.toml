@@ -1,6 +1,6 @@
 [package]
 name = "tearminal"
-version = "0.28.0"
+version = "0.29.0"
 edition = "2021"
 license = "MIT"
 description = "TEArminal: Workspace y terminal nativa veloz para Windows optimizada para agentes CLI y PowerShell"

@@ -531,6 +531,7 @@ impl TerminalRenderer {
                 index: i,
                 // El último Space de cada escena se dibuja como remoto para ver los dos grupos
                 remote: i + 1 == tabs.len() && tabs.len() > 2,
+                editing_input: None,
             })
             .collect();
         self.render_spaces_panel(
@@ -539,6 +540,7 @@ impl TerminalRenderer {
             false,
             crate::renderer::SpacesHover::None,
             0,
+            true,
             theme,
         );
     }
@@ -5162,4 +5164,45 @@ fn test_spaces_panel_slots_group_local_and_remote_without_overlap() {
         assert_eq!(r.slot_count(&flags), if collapsed { 5 } else { 6 });
         assert!(r.visible_slots(&flags, 2).len() < slots.len());
     }
+}
+
+#[test]
+fn test_syntax_multiline_blocks_and_language_spec() {
+    let spec_rs = crate::renderer::syntax::language_spec("rs");
+    assert_eq!(spec_rs.block_comment, Some(("/*", "*/")));
+
+    let spec_html = crate::renderer::syntax::language_spec("html");
+    assert_eq!(spec_html.block_comment, Some(("<!--", "-->")));
+
+    let spec_ps = crate::renderer::syntax::language_spec("ps1");
+    assert_eq!(spec_ps.block_comment, Some(("<#", "#>")));
+
+    let spec_unknown = crate::renderer::syntax::language_spec("txt");
+    assert_eq!(spec_unknown.block_comment, None);
+
+    let config = TearminalConfig::load_or_default();
+    let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+
+    let lines = vec![
+        "fn main() {".to_string(),
+        "    /* Comentario multilínea".to_string(),
+        "       continúa aquí".to_string(),
+        "    */".to_string(),
+        "    let x = 42;".to_string(),
+        "}".to_string(),
+    ];
+
+    let path = std::path::Path::new("test.rs");
+    let blocks = renderer.get_syntax_multiline_blocks(path, 1, &lines, spec_rs);
+    assert_eq!(blocks.len(), 6);
+    assert!(!blocks[0]);
+    assert!(blocks[1]);
+    assert!(blocks[2]);
+    assert!(blocks[3]);
+    assert!(!blocks[4]);
+    assert!(!blocks[5]);
+
+    // Caché hit: mismo path y gen devuelven el mismo Rc
+    let cached = renderer.get_syntax_multiline_blocks(path, 1, &lines, spec_rs);
+    assert!(std::rc::Rc::ptr_eq(&blocks, &cached));
 }

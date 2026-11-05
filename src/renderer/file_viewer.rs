@@ -436,6 +436,22 @@ impl TerminalRenderer {
             blocks
         });
 
+        let syntax_blocks = if !viewer.is_diff() && (!viewer.render_markdown || !is_markdown) {
+            let spec = crate::renderer::syntax::language_spec(&ext);
+            if spec.block_comment.is_some() {
+                Some(self.get_syntax_multiline_blocks(
+                    &viewer.path,
+                    viewer.edit_gen,
+                    &viewer.lines,
+                    spec,
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // 4. Renderizado por filas visuales (ajuste de línea y plegado ya resueltos en `viewer.rows()`)
         let rows = viewer.rows();
         let total_rows = rows.len();
@@ -752,6 +768,10 @@ impl TerminalRenderer {
                     char_w,
                     theme,
                     if viewer.is_diff() { "" } else { &ext },
+                    syntax_blocks
+                        .as_ref()
+                        .and_then(|b| b.get(line_idx).copied())
+                        .unwrap_or(false),
                 ),
             }
 

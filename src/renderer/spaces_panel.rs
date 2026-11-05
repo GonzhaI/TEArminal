@@ -14,6 +14,8 @@ pub(crate) struct SpaceItem {
     pub index: usize,
     /// Space de un equipo remoto (va bajo «Equipos remotos»); los locales, bajo «Este equipo».
     pub remote: bool,
+    /// Edición en curso del nombre del Space (input activo).
+    pub editing_input: Option<crate::ui::TextInput>,
 }
 
 /// Elemento del panel bajo el ratón.
@@ -60,6 +62,7 @@ impl TerminalRenderer {
         collapsed: bool,
         hover: SpacesHover,
         scroll: usize,
+        cursor_visible: bool,
         theme: &Theme,
     ) {
         let (_, height) = canvas.size();
@@ -158,7 +161,15 @@ impl TerminalRenderer {
                 }
                 SpacesSlot::Space(pos) => {
                     if let Some(item) = items.get(pos) {
-                        self.draw_space_row(canvas, item, r, collapsed, hover, theme);
+                        self.draw_space_row(
+                            canvas,
+                            item,
+                            r,
+                            collapsed,
+                            hover,
+                            cursor_visible,
+                            theme,
+                        );
                     }
                 }
             }
@@ -200,6 +211,7 @@ impl TerminalRenderer {
         r: Rect,
         collapsed: bool,
         hover: SpacesHover,
+        cursor_visible: bool,
         theme: &Theme,
     ) {
         let hovered = hover == SpacesHover::Row(item.index);
@@ -230,7 +242,17 @@ impl TerminalRenderer {
             tokens::RADIUS_ROW - 2,
             theme.ansi[item.color_index()],
         );
-        let letter = item.letter().to_string();
+        let letter = item
+            .editing_input
+            .as_ref()
+            .and_then(|inp| {
+                inp.text()
+                    .chars()
+                    .find(|c| c.is_alphanumeric())
+                    .map(|c| c.to_uppercase().next().unwrap_or(c))
+            })
+            .unwrap_or_else(|| item.letter())
+            .to_string();
         let lw = self.measure_ui_text(&letter, 11.0, true);
         let lb = self.centered_baseline(by + badge / 2);
         self.draw_ui_text(
@@ -254,6 +276,44 @@ impl TerminalRenderer {
         let tx = bx + badge + 10;
         let base = self.centered_baseline(r.1 + r.3 / 2);
         let end = r.0 + r.2 - 8;
+
+        if let Some(ref input) = item.editing_input {
+            let input_x = tx.saturating_sub(4);
+            let input_y = r.1 + 3;
+            let input_w = end.saturating_sub(input_x);
+            let input_h = r.3.saturating_sub(6);
+            canvas.rounded_fill(
+                input_x,
+                input_y,
+                input_w,
+                input_h,
+                tokens::RADIUS_ROW - 2,
+                theme.surface_bg(),
+            );
+            canvas.rounded_stroke(
+                input_x,
+                input_y,
+                input_w,
+                input_h,
+                tokens::RADIUS_ROW - 2,
+                theme.accent_color(),
+            );
+            self.render_text_input_content(
+                canvas,
+                input,
+                input_x + 6,
+                base,
+                input_x + input_w.saturating_sub(6),
+                input_y,
+                input_h,
+                cursor_visible,
+                "Nombre del espacio",
+                true,
+                theme,
+            );
+            return;
+        }
+
         let counter = (item.tab_count > 1).then(|| item.tab_count.to_string());
         let name_end = match &counter {
             Some(c) => end.saturating_sub(self.measure_mono_text(c, tokens::MICRO, false) + 8),

@@ -129,6 +129,10 @@ impl TearminalApp {
             return;
         }
 
+        if self.handle_key_space_edit(&logical_key, physical_key, &text) {
+            return;
+        }
+
         if self.handle_key_explorer_inputs(&logical_key, physical_key, &text) {
             return;
         }
@@ -230,6 +234,36 @@ impl TearminalApp {
         }
 
         false
+    }
+
+    pub(crate) fn handle_key_space_edit(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+    ) -> bool {
+        if self.space_edit.is_none() {
+            return false;
+        }
+        match &logical_key {
+            Key::Named(NamedKey::Escape) => self.cancel_space_rename(),
+            Key::Named(NamedKey::Enter) => self.commit_space_rename(),
+            _ => {
+                if let Some(mut edit) = self.space_edit.take() {
+                    self.handle_text_input_key(
+                        &mut edit.input,
+                        logical_key,
+                        physical_key,
+                        text.as_deref(),
+                    );
+                    self.space_edit = Some(edit);
+                }
+            }
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+        true
     }
 
     fn handle_key_explorer_inputs(
@@ -781,8 +815,7 @@ impl TearminalApp {
 
         // Spaces: Ctrl+Shift+T nuevo, Ctrl+Alt+↑/↓ anterior / siguiente, Ctrl+Shift+B colapsa el panel
         if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 't') {
-            let cwd = self.active_cwd();
-            self.create_space(cwd);
+            self.create_space(None);
             return true;
         }
         if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'b') {
@@ -1009,6 +1042,16 @@ impl TearminalApp {
                     return true;
                 }
                 _ => {}
+            }
+        }
+
+        // F2 sobre un espacio del panel lateral: renombrar el espacio
+        if !ctrl && !alt && !shift && matches!(&logical_key, Key::Named(NamedKey::F2)) {
+            if let crate::renderer::SpacesHover::Row(idx) = self.spaces_hover {
+                if let Some(id) = self.spaces.get(idx).map(|s| s.id) {
+                    self.start_renaming_space(id);
+                    return true;
+                }
             }
         }
 

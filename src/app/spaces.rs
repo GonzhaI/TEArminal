@@ -15,6 +15,12 @@ pub(crate) struct Space {
     pub(crate) remote: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SpaceEdit {
+    pub(crate) id: SpaceId,
+    pub(crate) input: crate::ui::TextInput,
+}
+
 /// Nombre de un Space nuevo: la carpeta de su primera terminal o, sin ella, «Space N».
 pub(crate) fn space_name(cwd: Option<&Path>, n: usize) -> String {
     cwd.and_then(Path::file_name)
@@ -68,12 +74,17 @@ impl TearminalApp {
             .into_iter()
             .map(|i| {
                 let s = &self.spaces[i];
+                let editing_input = self
+                    .space_edit
+                    .as_ref()
+                    .and_then(|e| (e.id == s.id).then(|| e.input.clone()));
                 SpaceItem {
                     name: s.name.clone(),
                     is_active: s.id == active,
                     tab_count: self.tabs.iter().filter(|t| t.space == s.id).count(),
                     index: i,
                     remote: self.space_is_remote(s),
+                    editing_input,
                 }
             })
             .collect()
@@ -151,7 +162,43 @@ impl TearminalApp {
     /// Clic izquierdo en el panel de Spaces. Devuelve `true` si el clic cayó dentro del panel.
     pub(super) fn click_spaces_panel(&mut self, mx: usize, my: usize, win_h: usize) -> bool {
         if !self.spaces_rects(win_h).contains(mx, my, win_h) {
+            if self.space_edit.is_some() {
+                self.commit_space_rename();
+            }
             return false;
+        }
+
+        if let Some(edit) = &self.space_edit {
+            let hit = self.spaces_hit(mx, my, win_h);
+            let editing_idx = self.spaces.iter().position(|s| s.id == edit.id);
+            if hit
+                == editing_idx
+                    .map(SpacesHover::Row)
+                    .unwrap_or(SpacesHover::None)
+            {
+                let rects = self.spaces_rects(win_h);
+                let order = self.space_order();
+                let flags = self.space_remote_flags();
+                if let Some(pos) = order.iter().position(|&idx| editing_idx == Some(idx)) {
+                    if let Some((_, r)) = rects
+                        .visible_slots(&flags, self.spaces_scroll)
+                        .into_iter()
+                        .find(|(slot, _)| matches!(slot, SpacesSlot::Space(p) if *p == pos))
+                    {
+                        let tx = r.0 + 8 + SpacesPanelRects::BADGE + 10;
+                        let text_start_x = tx + 2;
+                        let mut edit = self.space_edit.take().unwrap();
+                        self.handle_text_input_click(&mut edit.input, mx, text_start_x);
+                        self.space_edit = Some(edit);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                }
+            } else {
+                self.commit_space_rename();
+            }
         }
         match self.spaces_hit(mx, my, win_h) {
             SpacesHover::Toggle => self.toggle_spaces_panel(),
@@ -161,7 +208,7 @@ impl TearminalApp {
                 if self.modifiers.shift_key() || self.modifiers.alt_key() {
                     let r = self.spaces_rects(win_h);
                     let (win_w, win_h_curr) = self.window_size();
-                    let items = self.shell_profiles_menu();
+                    let items = self.space_profiles_menu();
                     self.show_menu(
                         items,
                         (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4),
@@ -169,8 +216,7 @@ impl TearminalApp {
                     );
                     return true;
                 }
-                let cwd = self.active_cwd();
-                self.create_space(cwd);
+                self.create_space(None);
             }
             SpacesHover::Row(i) => {
                 if let Some(id) = self.spaces.get(i).map(|s| s.id) {
@@ -307,6 +353,11 @@ impl TearminalApp {
 
     /// Cierra todas las pestañas de un Space (y con ellas el Space).
     pub(crate) fn close_space(&mut self, space: SpaceId) {
+        if let Some(edit) = &self.space_edit {
+            if edit.id == space {
+                self.space_edit = None;
+            }
+        }
         while let Some(i) = self.tabs.iter().position(|t| t.space == space) {
             let before = self.tabs.len();
             self.close_tab(i);
@@ -328,6 +379,13 @@ impl TearminalApp {
                 true,
             ),
             MenuItem::new(
+                "Renombrar espacio",
+                crate::ui::LucideIcon::Pencil,
+                "F2",
+                MenuAction::RenameSpace(id),
+                true,
+            ),
+            MenuItem::new(
                 "Cerrar espacio",
                 crate::ui::LucideIcon::X,
                 "",
@@ -341,6 +399,50 @@ impl TearminalApp {
     pub(super) fn prune_spaces(&mut self) {
         let tabs = &self.tabs;
         self.spaces.retain(|s| tabs.iter().any(|t| t.space == s.id));
+        if let Some(edit) = &self.space_edit {
+            if !self.spaces.iter().any(|s| s.id == edit.id) {
+                self.space_edit = None;
+            }
+        }
+    }
+
+    /// Inicia el renombrado del Space `id`. Si el panel está colapsado, lo expande para ver el campo.
+    pub(crate) fn start_renaming_space(&mut self, id: SpaceId) {
+        let Some(space) = self.spaces.iter().find(|s| s.id == id) else {
+            return;
+        };
+        self.spaces_collapsed = false;
+        let mut input = crate::ui::TextInput::new(&space.name);
+        input.select_all();
+        self.space_edit = Some(SpaceEdit { id, input });
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    /// Guarda el nuevo nombre del Space en edición si no está vacío y persiste la sesión.
+    pub(crate) fn commit_space_rename(&mut self) {
+        if let Some(edit) = self.space_edit.take() {
+            let new_name = edit.input.text.trim();
+            if !new_name.is_empty() {
+                if let Some(space) = self.spaces.iter_mut().find(|s| s.id == edit.id) {
+                    space.name = new_name.to_string();
+                    self.save_session();
+                }
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// Cancela la edición del nombre del Space sin aplicar cambios.
+    pub(crate) fn cancel_space_rename(&mut self) {
+        if self.space_edit.take().is_some() {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
     }
 }
 

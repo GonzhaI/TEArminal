@@ -30,6 +30,10 @@ impl TearminalApp {
             return;
         }
 
+        if self.space_edit.is_some() && !self.spaces_rects(win_h).contains(mx, my, win_h) {
+            self.commit_space_rename();
+        }
+
         if self.click_spaces_panel_area(state, button, mx, my, win_h) {
             return;
         }

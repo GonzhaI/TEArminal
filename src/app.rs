@@ -101,6 +101,8 @@ pub(crate) struct TearminalApp {
     pub(crate) spaces_collapsed: bool,
     /// Modal «Añadir máquina» abierto
     pub(crate) machine_modal: Option<MachineModal>,
+    /// Edición en curso del nombre de un Space
+    pub(crate) space_edit: Option<crate::app::spaces::SpaceEdit>,
     spaces_hover: crate::renderer::SpacesHover,
     /// Primera fila visible de la lista de Spaces
     spaces_scroll: usize,
@@ -792,6 +794,7 @@ impl TearminalApp {
             spaces,
             spaces_collapsed: false,
             machine_modal: None,
+            space_edit: None,
             spaces_hover: crate::renderer::SpacesHover::None,
             spaces_scroll: 0,
             hovered_changes_btn: false,

@@ -769,7 +769,7 @@ impl SideBySideLayout {
         h: usize,
         row_height: usize,
         char_width: usize,
-        total_rows: usize,
+        total_lines: usize,
     ) -> Self {
         let row_h = row_height.max(16);
         let char_w = char_width.max(7);
@@ -785,8 +785,8 @@ impl SideBySideLayout {
         let right_x = divider_x + 1;
         let right_w = (x + w).saturating_sub(right_x);
 
-        let digits = total_rows.to_string().len().max(3);
-        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 16;
+        let digits = total_lines.to_string().len().max(3);
+        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 20;
 
         let left_gutter_w = gutter_w.min(left_w / 3);
         let left_sep_x = left_x + left_gutter_w;
@@ -1844,5 +1844,26 @@ impl PaletteRects {
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect_contains(rect, mx, my)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_side_by_side_layout_gutter_width_and_no_clipping() {
+        let char_w = 9;
+        let row_h = 18;
+        let lay = SideBySideLayout::compute(0, 0, 1000, 800, row_h, char_w, 1500);
+        assert!(lay.left_gutter_w >= SidebarRects::CARD_INSET + 4 * char_w + 20);
+
+        let num_w = 4 * char_w;
+        let num_x = lay.left_sep_x.saturating_sub(num_w + 10);
+        assert!(
+            num_x >= lay.left_x + SidebarRects::CARD_INSET,
+            "num_x ({num_x}) no debe colisionar con el borde izquierdo del card ({})",
+            lay.left_x + SidebarRects::CARD_INSET
+        );
     }
 }

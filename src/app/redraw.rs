@@ -290,6 +290,7 @@ fn draw_full_scene(
         p.spaces_collapsed,
         p.spaces_hover,
         p.spaces_scroll,
+        p.cursor_visible,
         theme,
     );
 

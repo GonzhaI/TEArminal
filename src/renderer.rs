@@ -96,6 +96,7 @@ pub(crate) struct TerminalRenderer {
     ligature_cache: FastMap<(u16, bool), Rc<CachedGlyph>>,
     shaped_ligatures: FastMap<glyphs::PunctKey, glyphs::ShapedGids>,
     md_blocks_cache: Option<(std::path::PathBuf, u64, Rc<[md_preview::MdBlock]>)>,
+    syntax_blocks_cache: Option<(std::path::PathBuf, u64, Rc<[bool]>)>,
 }
 
 impl TerminalRenderer {
@@ -154,6 +155,7 @@ impl TerminalRenderer {
             ligature_cache: FastMap::default(),
             shaped_ligatures: FastMap::default(),
             md_blocks_cache: None,
+            syntax_blocks_cache: None,
         };
         renderer.update_scale(config, scale_factor);
         renderer

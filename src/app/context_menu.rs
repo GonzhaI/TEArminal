@@ -35,6 +35,9 @@ pub(crate) enum MenuAction {
     // Pestañas y ventana
     NewTabInSpace(SpaceId),
     CloseSpace(SpaceId),
+    RenameSpace(SpaceId),
+    NewSpace,
+    NewSpaceWithShell(String),
     PinTab(usize),
     MoveTabToNewWindow(usize),
     MoveTabToOtherWindow(usize),
@@ -211,7 +214,7 @@ impl TearminalApp {
             match self.spaces_hit(mx, my, win_h) {
                 crate::renderer::SpacesHover::Plus => {
                     let r = self.spaces_rects(win_h);
-                    let items = self.shell_profiles_menu();
+                    let items = self.space_profiles_menu();
                     self.show_menu(
                         items,
                         (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4),
@@ -623,6 +626,37 @@ impl TearminalApp {
             MenuAction::SplitHorizontal,
             true,
         ));
+        items.push(MenuItem::separator());
+        items.push(MenuItem::new(
+            "Añadir máquina...",
+            LucideIcon::Server,
+            "",
+            MenuAction::OpenMachineModal,
+            true,
+        ));
+        items.push(MenuItem::new(
+            "Ajustes",
+            LucideIcon::Settings,
+            "Ctrl+,",
+            MenuAction::OpenSettings,
+            true,
+        ));
+        items
+    }
+
+    /// Menú desplegable de perfiles de shell para crear un nuevo espacio (botón «+» de Spaces).
+    pub(super) fn space_profiles_menu(&self) -> Vec<MenuItem> {
+        let profiles = crate::app::shell_profiles::available_shell_profiles();
+        let mut items = Vec::with_capacity(profiles.len() + 3);
+        for p in &profiles {
+            items.push(MenuItem::new(
+                p.title,
+                p.icon,
+                "",
+                MenuAction::NewSpaceWithShell(p.command.clone()),
+                true,
+            ));
+        }
         items.push(MenuItem::separator());
         items.push(MenuItem::new(
             "Añadir máquina...",
@@ -1056,6 +1090,9 @@ impl TearminalApp {
                 self.create_new_tab();
             }
             MenuAction::CloseSpace(id) => self.close_space(id),
+            MenuAction::RenameSpace(id) => self.start_renaming_space(id),
+            MenuAction::NewSpace => self.create_space(None),
+            MenuAction::NewSpaceWithShell(shell) => self.create_space_with_shell(None, &shell),
             MenuAction::PinTab(i) => {
                 if let Some(t) = self.tabs.get_mut(i) {
                     t.is_preview = false;

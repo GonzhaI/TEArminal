@@ -22,6 +22,11 @@ impl TerminalRenderer {
     ) {
         let rows = viewer.side_by_side_rows();
         let total_rows = rows.len();
+        let max_line = viewer
+            .lines
+            .len()
+            .max(viewer.git_base.as_ref().map_or(0, |b| b.len()))
+            .max(total_rows);
         let lay = crate::renderer::geometry::SideBySideLayout::compute(
             x,
             y,
@@ -29,7 +34,7 @@ impl TerminalRenderer {
             h,
             self.row_height,
             self.char_width,
-            total_rows,
+            max_line,
         );
         let (row_h, char_w) = (lay.row_h, lay.char_w);
         let content_y = lay.content_y;
@@ -64,7 +69,7 @@ impl TerminalRenderer {
         self.draw_lucide_icon(
             canvas,
             crate::ui::LucideIcon::GitBranch,
-            lay.left_x + 16,
+            lay.left_x + SidebarRects::CARD_INSET + 16,
             lay.col_header_y + lay.col_header_h / 2,
             tokens::MICRO,
             theme.ansi[3],
@@ -73,7 +78,7 @@ impl TerminalRenderer {
         self.draw_ui_text(
             canvas,
             left_title,
-            lay.left_x + 36,
+            lay.left_x + SidebarRects::CARD_INSET + 34,
             col_base,
             lay.divider_x.saturating_sub(60),
             theme.foreground,
@@ -120,7 +125,7 @@ impl TerminalRenderer {
         self.draw_lucide_icon(
             canvas,
             crate::ui::LucideIcon::FileDiff,
-            lay.right_x + 16,
+            lay.right_x + SidebarRects::CARD_INSET + 16,
             lay.col_header_y + lay.col_header_h / 2,
             tokens::MICRO,
             theme.ansi[2],
@@ -129,7 +134,7 @@ impl TerminalRenderer {
         self.draw_ui_text(
             canvas,
             right_title,
-            lay.right_x + 36,
+            lay.right_x + SidebarRects::CARD_INSET + 34,
             col_base,
             (x + w).saturating_sub(60),
             theme.foreground,
@@ -319,22 +324,18 @@ impl TerminalRenderer {
             if let Some(line_num) = r.left.line_num {
                 let num_str = line_num.to_string();
                 let num_w = num_str.len() * char_w;
-                let num_x = lay.left_sep_x.saturating_sub(num_w + 8);
+                let num_x = lay.left_sep_x.saturating_sub(num_w + 10);
                 let num_color = match r.left.kind {
                     crate::app::DiffCellKind::Deleted => theme.ansi[1],
                     crate::app::DiffCellKind::Modified => theme.ansi[3],
-                    _ => theme.ansi[8],
+                    _ => theme.text_muted(),
                 };
-                self.draw_mono_text(
-                    canvas,
-                    &num_str,
-                    num_x,
-                    baseline_y,
-                    lay.left_sep_x,
-                    num_color,
-                    tokens::BODY,
-                    false,
-                );
+                for (ci, &b) in num_str.as_bytes().iter().enumerate() {
+                    let glyph = self.get_glyph(b as char, false);
+                    let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
+                    let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+                    canvas.glyph(left_gutter_clip, glyph, gx, gy, num_color);
+                }
 
                 self.render_highlighted_line(
                     canvas,
@@ -346,6 +347,7 @@ impl TerminalRenderer {
                     char_w,
                     theme,
                     ext,
+                    false,
                 );
             }
 
@@ -406,22 +408,18 @@ impl TerminalRenderer {
             if let Some(line_num) = r.right.line_num {
                 let num_str = line_num.to_string();
                 let num_w = num_str.len() * char_w;
-                let num_x = lay.right_sep_x.saturating_sub(num_w + 8);
+                let num_x = lay.right_sep_x.saturating_sub(num_w + 10);
                 let num_color = match r.right.kind {
                     crate::app::DiffCellKind::Added => theme.ansi[2],
                     crate::app::DiffCellKind::Modified => theme.ansi[3],
-                    _ => theme.ansi[8],
+                    _ => theme.text_muted(),
                 };
-                self.draw_mono_text(
-                    canvas,
-                    &num_str,
-                    num_x,
-                    baseline_y,
-                    lay.right_sep_x,
-                    num_color,
-                    tokens::BODY,
-                    false,
-                );
+                for (ci, &b) in num_str.as_bytes().iter().enumerate() {
+                    let glyph = self.get_glyph(b as char, false);
+                    let gx = (num_x + ci * char_w) as i32 + glyph.x_offset;
+                    let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+                    canvas.glyph(right_gutter_clip, glyph, gx, gy, num_color);
+                }
 
                 self.render_highlighted_line(
                     canvas,
@@ -433,6 +431,7 @@ impl TerminalRenderer {
                     char_w,
                     theme,
                     ext,
+                    false,
                 );
             }
         }

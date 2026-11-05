@@ -353,6 +353,7 @@ impl TerminalRenderer {
                     char_w,
                     theme,
                     fence_ext(lang),
+                    false,
                 );
                 return;
             }

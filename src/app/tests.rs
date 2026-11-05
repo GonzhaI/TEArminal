@@ -3318,6 +3318,99 @@ fn test_session_round_trips_spaces() {
 }
 
 #[test]
+fn test_rename_space_lifecycle() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let space_id = app.spaces[0].id;
+    let old_name = app.spaces[0].name.clone();
+
+    // Iniciar edición
+    app.start_renaming_space(space_id);
+    assert!(app.space_edit.is_some());
+    assert_eq!(app.space_edit.as_ref().unwrap().input.text(), old_name);
+
+    // Cancelar edición no cambia el nombre
+    app.cancel_space_rename();
+    assert!(app.space_edit.is_none());
+    assert_eq!(app.spaces[0].name, old_name);
+
+    // Renombrar con nuevo nombre válido
+    app.start_renaming_space(space_id);
+    if let Some(edit) = app.space_edit.as_mut() {
+        edit.input = crate::ui::TextInput::new("Proyecto Alpha");
+    }
+    app.commit_space_rename();
+    assert!(app.space_edit.is_none());
+    assert_eq!(app.spaces[0].name, "Proyecto Alpha");
+
+    // Renombrar con texto vacío o solo espacios se ignora
+    app.start_renaming_space(space_id);
+    if let Some(edit) = app.space_edit.as_mut() {
+        edit.input = crate::ui::TextInput::new("   ");
+    }
+    app.commit_space_rename();
+    assert!(app.space_edit.is_none());
+    assert_eq!(app.spaces[0].name, "Proyecto Alpha");
+}
+
+#[test]
+fn test_rename_space_via_menu_and_keyboard() {
+    use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let space_id = app.spaces[0].id;
+
+    // Menú contextual incluye opción de renombrar
+    let menu = app.space_menu(0).expect("menu de espacio");
+    let rename_item = menu
+        .iter()
+        .find(|m| m.label == "Renombrar espacio")
+        .expect("opción renombrar");
+    assert_eq!(
+        rename_item.action,
+        Some(crate::app::context_menu::MenuAction::RenameSpace(space_id))
+    );
+
+    // Ejecutar acción del menú
+    app.run_menu_action(crate::app::context_menu::MenuAction::RenameSpace(space_id));
+    assert!(app.space_edit.is_some());
+
+    // Escribir con teclado y confirmar con Enter
+    if let Some(edit) = app.space_edit.as_mut() {
+        edit.input = crate::ui::TextInput::new("Backend API");
+    }
+    let handled_enter = app.handle_key_space_edit(
+        &Key::Named(NamedKey::Enter),
+        PhysicalKey::Code(KeyCode::Enter),
+        &None,
+    );
+    assert!(handled_enter);
+    assert!(app.space_edit.is_none());
+    assert_eq!(app.spaces[0].name, "Backend API");
+
+    // F2 sobre la fila en hover
+    app.spaces_hover = crate::renderer::SpacesHover::Row(0);
+    let handled_f2 = app.handle_key_app_shortcuts(
+        &Key::Named(NamedKey::F2),
+        PhysicalKey::Code(KeyCode::F2),
+        &None,
+        false,
+        false,
+        false,
+    );
+    assert!(handled_f2);
+    assert!(app.space_edit.is_some());
+
+    // Cancelar con Escape
+    let handled_esc = app.handle_key_space_edit(
+        &Key::Named(NamedKey::Escape),
+        PhysicalKey::Code(KeyCode::Escape),
+        &None,
+    );
+    assert!(handled_esc);
+    assert!(app.space_edit.is_none());
+    assert_eq!(app.spaces[0].name, "Backend API");
+}
+
+#[test]
 fn test_spaces_are_split_between_this_computer_and_remote_machines() {
     use crate::renderer::{SpacesHover, SpacesPanelRects};
 
@@ -3370,6 +3463,86 @@ fn test_spaces_are_split_between_this_computer_and_remote_machines() {
         };
         assert_eq!(app.spaces_hit(p.0 + 4, p.1 + 4, win_h), expect);
     }
+}
+
+#[test]
+fn test_tab_inherits_cwd_and_new_space_starts_in_default_cwd() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let mock_dir = std::env::current_dir().unwrap();
+    if let Some(p) = app.tabs[0].active_pane_mut() {
+        p.terminal.current_dir = Some(mock_dir.clone());
+    }
+    assert_eq!(app.active_cwd(), Some(mock_dir.clone()));
+
+    // Nueva pestaña dentro del espacio: debe heredar el directorio activo
+    app.create_new_tab();
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(
+        app.tabs[1]
+            .active_pane()
+            .and_then(|p| p.terminal.current_dir.as_ref()),
+        Some(&mock_dir),
+        "la nueva pestaña debe heredar el directorio activo de la pestaña actual"
+    );
+
+    // Nuevo espacio de trabajo: debe arrancar en None (directorio por defecto)
+    app.create_space(None);
+    assert_eq!(app.spaces.len(), 2);
+    let space_tab_idx = *app.visible_tab_indices().first().unwrap();
+    assert_eq!(
+        app.tabs[space_tab_idx]
+            .active_pane()
+            .and_then(|p| p.terminal.current_dir.as_ref()),
+        None,
+        "el nuevo espacio de trabajo debe iniciar en el directorio por defecto (None), no en el del espacio anterior"
+    );
+}
+
+#[test]
+fn test_hotkey_ctrl_t_inherits_cwd_and_ctrl_shift_t_starts_default_cwd() {
+    use winit::keyboard::{Key, KeyCode, PhysicalKey};
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let mock_dir = std::env::current_dir().unwrap();
+    if let Some(p) = app.tabs[0].active_pane_mut() {
+        p.terminal.current_dir = Some(mock_dir.clone());
+    }
+
+    // Ctrl+T crea una nueva pestaña heredando el cwd
+    let handled_t = app.handle_key_app_shortcuts(
+        &Key::Character("t".into()),
+        PhysicalKey::Code(KeyCode::KeyT),
+        &None,
+        true,  // ctrl
+        false, // shift
+        false, // alt
+    );
+    assert!(handled_t);
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(
+        app.tabs[1]
+            .active_pane()
+            .and_then(|p| p.terminal.current_dir.as_ref()),
+        Some(&mock_dir),
+    );
+
+    // Ctrl+Shift+T crea un nuevo espacio en el cwd por defecto (None)
+    let handled_space = app.handle_key_app_shortcuts(
+        &Key::Character("T".into()),
+        PhysicalKey::Code(KeyCode::KeyT),
+        &None,
+        true,  // ctrl
+        true,  // shift
+        false, // alt
+    );
+    assert!(handled_space);
+    assert_eq!(app.spaces.len(), 2);
+    let space_tab_idx = *app.visible_tab_indices().first().unwrap();
+    assert_eq!(
+        app.tabs[space_tab_idx]
+            .active_pane()
+            .and_then(|p| p.terminal.current_dir.as_ref()),
+        None,
+    );
 }
 
 #[test]

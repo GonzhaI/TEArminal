@@ -228,15 +228,17 @@ impl TearminalApp {
         }
     }
 
-    /// Sesión nueva en la carpeta por defecto del shell.
+    /// Sesión nueva en la carpeta de la terminal activa (o en la carpeta por defecto del shell si no hay activa).
     pub(crate) fn create_new_tab(&mut self) {
-        self.create_tab_in(None);
+        let cwd = self.active_cwd();
+        self.create_tab_in(cwd);
     }
 
-    /// Sesión nueva con un shell específico.
+    /// Sesión nueva con un shell específico en la carpeta activa.
     pub(crate) fn create_new_tab_with_shell(&mut self, shell: &str) {
         let space = self.active_space();
-        self.create_tab_in_space_with_shell(None, space, shell);
+        let cwd = self.active_cwd();
+        self.create_tab_in_space_with_shell(cwd, space, shell);
     }
 
     /// Sesión nueva con un shell en `cwd` (o en la carpeta por defecto del shell).

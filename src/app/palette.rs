@@ -356,6 +356,22 @@ impl TearminalApp {
             file: None,
             action: PaletteAction::Execute(MenuAction::NewTab),
         });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Nuevo espacio de trabajo".to_string(),
+            subtitle: "Ctrl+Shift+T".to_string(),
+            icon: LucideIcon::Plus,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::NewSpace),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Renombrar espacio de trabajo activo".to_string(),
+            subtitle: "F2".to_string(),
+            icon: LucideIcon::Pencil,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::RenameSpace(self.active_space())),
+        });
         for p in crate::app::shell_profiles::available_shell_profiles() {
             items.push(PaletteItem {
                 category: PaletteCategory::Command,
