@@ -281,6 +281,7 @@ impl TearminalApp {
             if let Some(ref mut viewer) = self.tabs[self.active_tab_index].file_viewer {
                 if viewer.is_side_by_side() {
                     let max_offset = viewer.total_display_rows().saturating_sub(visible_lines);
+                    let max_x = viewer.max_scroll_x();
                     match logical_key {
                         Key::Named(NamedKey::ArrowUp) => {
                             if ctrl {
@@ -296,6 +297,23 @@ impl TearminalApp {
                                 viewer.scroll_offset = (viewer.scroll_offset + 1).min(max_offset);
                             }
                         }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            if ctrl {
+                                viewer.scroll_offset_x = viewer
+                                    .scroll_offset_x
+                                    .saturating_sub(viewer.visible_cols / 2);
+                            } else {
+                                viewer.scroll_offset_x = viewer.scroll_offset_x.saturating_sub(4);
+                            }
+                        }
+                        Key::Named(NamedKey::ArrowRight) => {
+                            if ctrl {
+                                viewer.scroll_offset_x =
+                                    (viewer.scroll_offset_x + viewer.visible_cols / 2).min(max_x);
+                            } else {
+                                viewer.scroll_offset_x = (viewer.scroll_offset_x + 4).min(max_x);
+                            }
+                        }
                         Key::Named(NamedKey::PageUp) => {
                             viewer.scroll_offset =
                                 viewer.scroll_offset.saturating_sub(visible_lines);
@@ -305,10 +323,18 @@ impl TearminalApp {
                                 (viewer.scroll_offset + visible_lines).min(max_offset);
                         }
                         Key::Named(NamedKey::Home) => {
-                            viewer.scroll_offset = 0;
+                            if ctrl {
+                                viewer.scroll_offset = 0;
+                            } else {
+                                viewer.scroll_offset_x = 0;
+                            }
                         }
                         Key::Named(NamedKey::End) => {
-                            viewer.scroll_offset = max_offset;
+                            if ctrl {
+                                viewer.scroll_offset = max_offset;
+                            } else {
+                                viewer.scroll_offset_x = max_x;
+                            }
                         }
                         _ => {}
                     }

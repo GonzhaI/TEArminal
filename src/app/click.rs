@@ -46,6 +46,10 @@ impl TearminalApp {
             return;
         }
 
+        if self.click_status_bar_area(state, button, mx, my, win_w, win_h, is_settings_active) {
+            return;
+        }
+
         if self.click_explorer_area(state, button, mx, my, win_w, win_h, is_settings_active) {
             return;
         }
@@ -547,6 +551,50 @@ impl TearminalApp {
                 // Arrastrar ventana o doble clic para maximizar
                 self.drag_or_maximize_window();
             }
+            return true;
+        }
+
+        false
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn click_status_bar_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+        is_settings_active: bool,
+    ) -> bool {
+        if !self.config.appearance.show_status_bar || is_settings_active {
+            return false;
+        }
+        let status_bar_h = self.status_bar_height();
+        if my < win_h.saturating_sub(status_bar_h) {
+            return false;
+        }
+
+        if state != ElementState::Pressed || button != MouseButton::Left {
+            return false;
+        }
+
+        // Clic sobre el badge de actualización disponible en la barra de estado
+        if self.hovered_update_badge {
+            crate::updater::trigger_update();
+            return true;
+        }
+
+        // Clic sobre el botón de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha
+        let keep_awake_w = self.renderer.as_ref().map_or(65, |r| {
+            r.keep_awake_button_width(self.config.terminal.keep_awake)
+        });
+        let rects = StatusBarRects::compute_full(win_w, win_h, 0, None, 0, 0, keep_awake_w);
+        if self.hovered_keep_awake || StatusBarRects::inside(mx, my, rects.keep_awake_btn) {
+            self.keep_awake_popup_open = !self.keep_awake_popup_open;
+            self.hovered_keep_awake_option = None;
+            self.request_redraw();
             return true;
         }
 

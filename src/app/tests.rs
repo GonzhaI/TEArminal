@@ -797,6 +797,7 @@ fn test_terminal_pane_git_branch_ssh_isolation() {
         remote_dir: Some("/home/user/app".to_string()),
         remote_git_branch: None,
         is_active: true,
+        ..Default::default()
     });
     assert_eq!(pane.get_git_branch(), None);
 
@@ -891,6 +892,7 @@ fn test_file_explorer_remote_session_state() {
     let remote = crate::explorer::RemoteSshSession {
         destination: "admin@server".to_string(),
         remote_dir: "/var/www".to_string(),
+        ..Default::default()
     };
 
     // Configurar sesión remota: no se conecta aquí, solo deja el listado pedido para un hilo
@@ -920,6 +922,7 @@ fn test_explorer_remote_listing_is_requested_not_run_and_stale_replies_ignored()
     let remote = crate::explorer::RemoteSshSession {
         destination: "admin@server".to_string(),
         remote_dir: ".".to_string(),
+        ..Default::default()
     };
 
     explorer.set_remote_session(Some(remote.clone()));
@@ -963,6 +966,7 @@ fn test_explorer_remote_root_listing_filters_hostile_output() {
     explorer.set_remote_session(Some(crate::explorer::RemoteSshSession {
         destination: "admin@server".to_string(),
         remote_dir: "/srv".to_string(),
+        ..Default::default()
     }));
     let req = explorer.take_ssh_requests().remove(0);
     explorer.apply_remote_listing(
@@ -988,6 +992,7 @@ fn test_explorer_remote_expand_is_async() {
     explorer.set_remote_session(Some(crate::explorer::RemoteSshSession {
         destination: "admin@server".to_string(),
         remote_dir: "/srv".to_string(),
+        ..Default::default()
     }));
     let root = explorer.take_ssh_requests().remove(0);
     explorer.apply_remote_listing(&root, ssh_output("/srv\n\n---\napp/\nlogs/\n"));
@@ -1374,6 +1379,7 @@ fn test_explorer_shows_in_band_remote_listing_without_ssh() {
     let sess = RemoteSshSession {
         destination: "user@host".into(),
         remote_dir: "/home/django".into(),
+        ..Default::default()
     };
     let names: Vec<String> = ["z.txt", "app/", ".git/", "Bin/", "a.py"]
         .into_iter()
@@ -1444,6 +1450,7 @@ fn test_explorer_remote_tree_expands_in_band_and_survives_root_refresh() {
     let sess = RemoteSshSession {
         destination: "user@host".into(),
         remote_dir: "/srv".into(),
+        ..Default::default()
     };
     let root: Vec<String> = ["app/", "docs/", "run.sh"]
         .into_iter()
@@ -1961,6 +1968,34 @@ fn test_side_by_side_diff_for_new_git_file() {
         .lines
         .iter()
         .any(|l| l.starts_with("+CREATE TABLE t (")));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_side_by_side_diff_horizontal_scrolling_and_wrap() {
+    let path = std::env::temp_dir().join(format!("sbs_hscroll_{}.rs", std::process::id()));
+    let cur = "let very_long_line_in_cur = \"This is a modified long string that extends far to the right in disk\";\n";
+    std::fs::write(&path, cur).unwrap();
+    let mut tab = TerminalTab::new_file_viewer(TabId(1099), path.clone());
+    let viewer = tab.file_viewer.as_mut().unwrap();
+    viewer.git_base = Some(vec![
+        "let very_long_line_in_base = \"This is a long base string that extends far to the right in the diff view\";".to_string(),
+    ]);
+    viewer.diff_mode = crate::app::viewer::DiffMode::SideBySide;
+    viewer.word_wrap = true; // Activo a nivel global
+
+    // Side-by-side no envuelve líneas para mantener la alineación tabular
+    assert!(!viewer.wrap_active());
+
+    // Con visible_cols reducido (ej. 40 caracteres por columna), max_scroll_x debe permitir scroll
+    viewer.visible_cols = 40;
+    let max_x = viewer.max_scroll_x();
+    assert!(max_x > 0, "max_scroll_x ({max_x}) debe ser mayor a 0");
+
+    // Desplazamiento horizontal
+    viewer.scroll_offset_x = 20;
+    assert_eq!(viewer.scroll_offset_x, 20);
 
     let _ = std::fs::remove_file(path);
 }
@@ -2966,12 +3001,12 @@ fn test_explorer_docks_right_and_spaces_panel_reserves_the_left() {
     let (x, y, _, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
     assert_eq!(x, 1200 - pw + SidebarRects::CARD_INSET);
     assert_eq!(
-        app.panel_local_x(x + 5, 40, 1200),
+        app.panel_local_x(x + 5, 40, 1200, 800),
         Some(5 + SidebarRects::CARD_INSET)
     );
     // El ratón dentro del explorador no es del panel; el panel de Spaces tampoco es «panel»
-    assert_eq!(app.panel_local_x(x + 5, y + 5, 1200), None);
-    assert_eq!(app.panel_local_x(10, 100, 1200), None);
+    assert_eq!(app.panel_local_x(x + 5, y + 5, 1200, 800), None);
+    assert_eq!(app.panel_local_x(10, 100, 1200, 800), None);
 
     // Con la tarjeta oculta el contenido recupera el ancho
     app.sidebar_visible = false;

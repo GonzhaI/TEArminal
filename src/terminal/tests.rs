@@ -1250,6 +1250,76 @@ fn test_remote_integration_reports_branch_and_listing_and_validates_input() {
     assert!(!term.remote_integration && term.ssh_session.is_none());
 }
 
+#[test]
+fn test_remote_integration_inband_listing_and_git_status() {
+    use base64::prelude::*;
+    let theme = crate::theme::Theme::default();
+    let mut term = TerminalState::new(80, 24, 100, theme);
+    term.pane_token = "t0k3n".into();
+    term.process_bytes(
+        b"\x1b]1337;TearminalSSH=start;dest=developer@192.168.31.240;token=t0k3n\x07",
+    );
+    term.process_bytes(b"\x1b]7;file://srv/home/django\x07");
+
+    // Enviar listado remoto en base64
+    let ls_raw = "app/\nmanage.py\nrequirements.txt\n.env\n";
+    let ls_b64 = BASE64_STANDARD.encode(ls_raw.as_bytes());
+    let osc_ls = format!("\x1b]1337;TearminalLs={ls_b64}\x07");
+    term.process_bytes(osc_ls.as_bytes());
+
+    let sess = term.ssh_session.as_ref().expect("ssh session");
+    assert_eq!(
+        sess.remote_listing,
+        Some(vec![
+            "app/".to_string(),
+            "manage.py".to_string(),
+            "requirements.txt".to_string(),
+            ".env".to_string(),
+        ])
+    );
+
+    // Enviar git status remoto en base64
+    let git_raw = b" M manage.py\0?? .env\0";
+    let git_b64 = BASE64_STANDARD.encode(git_raw);
+    let osc_git = format!("\x1b]1337;TearminalGitStatus={git_b64}\x07");
+    term.process_bytes(osc_git.as_bytes());
+
+    let sess = term.ssh_session.as_ref().expect("ssh session");
+    let statuses = sess.remote_git_statuses.as_ref().expect("git statuses");
+    assert_eq!(statuses.len(), 2);
+    assert!(statuses.contains_key(&std::path::PathBuf::from("/home/django/manage.py")));
+    assert!(statuses.contains_key(&std::path::PathBuf::from("/home/django/.env")));
+
+    // Caso de repositorio limpio ("EMPTY")
+    term.process_bytes(b"\x1b]1337;TearminalGitStatus=EMPTY\x07");
+    let sess = term.ssh_session.as_ref().expect("ssh session");
+    assert_eq!(
+        sess.remote_git_statuses,
+        Some(rustc_hash::FxHashMap::default())
+    );
+
+    // Caso de no ser repositorio ("-")
+    term.process_bytes(b"\x1b]1337;TearminalGitStatus=-\x07");
+    let sess = term.ssh_session.as_ref().expect("ssh session");
+    assert_eq!(sess.remote_git_statuses, None);
+}
+
+#[test]
+fn test_remote_session_with_pem_identity_and_port() {
+    let theme = crate::theme::Theme::default();
+    let mut term = TerminalState::new(80, 24, 100, theme);
+    term.pane_token = "t0k3n".into();
+    term.process_bytes(
+        b"\x1b]1337;TearminalSSH=start;dest=ubuntu@54.210.10.5;ident=C:\\keys\\server.pem;port=2222;inband=1;token=t0k3n\x07",
+    );
+    assert!(term.remote_integration);
+    let sess = term.ssh_session.as_ref().expect("ssh session");
+    assert_eq!(sess.destination, "ubuntu@54.210.10.5");
+    assert_eq!(sess.identity_file.as_deref(), Some("C:\\keys\\server.pem"));
+    assert_eq!(sess.port, Some(2222));
+    assert!(sess.is_active);
+}
+
 /// agy y Claude Code envían `CSI > 4 ; 2 m` (modifyOtherKeys) al arrancar: no es SGR y no debe
 /// dejar subrayado/tenue activos (subrayaba la primera fila del banner, también los espacios).
 #[test]

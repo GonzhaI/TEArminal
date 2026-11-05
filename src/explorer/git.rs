@@ -217,7 +217,15 @@ pub(crate) fn parse_porcelain_z(
         if status_code.contains(['R', 'C']) {
             entries.next();
         }
-        let file_path = repo_root.join(rel_path.replace('/', "\\"));
+        let repo_str = repo_root.to_string_lossy();
+        let file_path = if repo_str.starts_with('/') {
+            let clean_root = repo_str.replace('\\', "/");
+            let clean_root = clean_root.trim_end_matches('/');
+            let clean_rel = rel_path.trim_start_matches('/');
+            PathBuf::from(format!("{clean_root}/{clean_rel}"))
+        } else {
+            repo_root.join(rel_path.replace('/', "\\"))
+        };
 
         let bytes = status_code.as_bytes();
         let x = bytes.first().copied().unwrap_or(b' ');
@@ -250,4 +258,32 @@ pub(crate) fn parse_porcelain_z(
         );
     }
     map
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_porcelain_z_unix_and_windows_paths() {
+        let unix_root = Path::new("/home/django/repo");
+        let stdout = b" M app/models.py\0?? config.ini\0A  new_file.txt\0";
+        let map = parse_porcelain_z(unix_root, stdout);
+        assert_eq!(map.len(), 3);
+        assert_eq!(
+            map.get(&PathBuf::from("/home/django/repo/app/models.py"))
+                .map(|i| (i.status, i.is_staged, i.is_unstaged)),
+            Some((GitFileStatus::Modified, false, true))
+        );
+        assert_eq!(
+            map.get(&PathBuf::from("/home/django/repo/config.ini"))
+                .map(|i| (i.status, i.is_staged, i.is_unstaged)),
+            Some((GitFileStatus::Untracked, false, true))
+        );
+        assert_eq!(
+            map.get(&PathBuf::from("/home/django/repo/new_file.txt"))
+                .map(|i| (i.status, i.is_staged, i.is_unstaged)),
+            Some((GitFileStatus::Added, true, false))
+        );
+    }
 }

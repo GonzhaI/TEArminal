@@ -960,14 +960,15 @@ impl TearminalApp {
                     needs_redraw = true;
                 }
 
-                let over_hscroll = lay
-                    .hscrollbar(viewer.max_scroll_x(), viewer.scroll_offset_x)
-                    .is_some_and(|(track, _)| {
-                        mx >= track.0
-                            && mx < track.0 + track.2
-                            && my + 4 >= track.1
-                            && my < track.1 + track.3 + 4
-                    });
+                let over_hscroll = TerminalRenderer::file_viewer_hscrollbar_geometry(
+                    offset, top_offset, viewer_w, viewer_h, viewer, row_h, char_w,
+                )
+                .is_some_and(|(track, _)| {
+                    mx >= track.0
+                        && mx < track.0 + track.2
+                        && my + 4 >= track.1
+                        && my < track.1 + track.3 + 4
+                });
                 if over_hscroll {
                     is_pointer = true;
                 }
@@ -1377,17 +1378,10 @@ impl TearminalApp {
                     .get_mut(self.active_tab_index)
                     .and_then(|t| t.file_viewer.as_mut())
                 {
-                    let lay = crate::renderer::FileViewerLayout::compute(
-                        offset,
-                        top_offset,
-                        viewer_w,
-                        viewer_h,
-                        row_h,
-                        char_w,
-                        viewer.lines.len(),
-                    );
                     let max_x = viewer.max_scroll_x();
-                    if let Some((track, thumb)) = lay.hscrollbar(max_x, viewer.scroll_offset_x) {
+                    if let Some((track, thumb)) = TerminalRenderer::file_viewer_hscrollbar_geometry(
+                        offset, top_offset, viewer_w, viewer_h, viewer, row_h, char_w,
+                    ) {
                         let travel = track.2.saturating_sub(thumb.2);
                         if travel > 0 {
                             let thumb_left =

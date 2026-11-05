@@ -105,11 +105,11 @@ impl TerminalRenderer {
                 (err.as_str(), theme.ansi[3])
             } else if explorer.is_filtering() {
                 ("No se encontraron coincidencias", theme.text_muted())
-            } else if explorer.remote_session.is_some() {
-                ("Cargando archivos remotos...", theme.ansi[8])
             } else if explorer.changes_only {
                 // Sin cambios: la pestaña queda vacía, sin mensaje.
                 return;
+            } else if explorer.remote_session.is_some() {
+                ("Cargando archivos remotos...", theme.ansi[8])
             } else {
                 ("(Directorio vacío)", theme.ansi[8])
             };

@@ -823,6 +823,26 @@ impl SideBySideLayout {
             visible_cols,
         }
     }
+
+    /// Pista y pulgar de la barra horizontal sincronizada; `None` si todo cabe.
+    pub(crate) fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
+        if max_scroll == 0 || self.content_h < 32 {
+            return None;
+        }
+        let track_x = self.left_text_x;
+        let track_w = self.right_text_max_x.saturating_sub(track_x);
+        let track_h = ScrollbarRects::WIDTH;
+        let track_y = (self.content_y + self.content_h)
+            .saturating_sub(track_h + 4 + SidebarRects::CARD_INSET);
+        let total = max_scroll + self.visible_cols;
+        let thumb_w = (track_w * self.visible_cols / total).clamp(24.min(track_w), track_w);
+        let travel = track_w - thumb_w;
+        let thumb_x = track_x + travel * scroll_x.min(max_scroll) / max_scroll;
+        Some((
+            (track_x, track_y, track_w, track_h),
+            (thumb_x, track_y, thumb_w, track_h),
+        ))
+    }
 }
 
 /// Rectángulos de la barra flotante de búsqueda interna en el visor de archivos (`Ctrl + F`).
@@ -1865,5 +1885,18 @@ mod tests {
             "num_x ({num_x}) no debe colisionar con el borde izquierdo del card ({})",
             lay.left_x + SidebarRects::CARD_INSET
         );
+    }
+
+    #[test]
+    fn test_side_by_side_layout_hscrollbar() {
+        let char_w = 9;
+        let row_h = 18;
+        let lay = SideBySideLayout::compute(0, 0, 1000, 800, row_h, char_w, 100);
+        assert!(lay.hscrollbar(0, 0).is_none());
+        let (track, thumb) = lay.hscrollbar(50, 0).expect("hscrollbar presente");
+        assert!(track.2 > 0);
+        assert_eq!(thumb.0, track.0);
+        let (_, thumb_end) = lay.hscrollbar(50, 50).expect("hscrollbar al final");
+        assert!(thumb_end.0 > thumb.0);
     }
 }

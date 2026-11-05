@@ -218,6 +218,10 @@ impl TerminalRenderer {
         let start_row = viewer.scroll_offset.min(total_rows.saturating_sub(1));
         let end_row = (start_row + visible_rows + 1).min(total_rows);
 
+        let max_scroll_x = viewer.max_scroll_x();
+        let scroll_x = viewer.scroll_offset_x.min(max_scroll_x);
+        let scroll_px = (scroll_x * char_w) as i32;
+
         let del_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[1], 34));
         let add_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[2], 34));
         let mod_left_tint = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[3], 34));
@@ -337,11 +341,12 @@ impl TerminalRenderer {
                     canvas.glyph(left_gutter_clip, glyph, gx, gy, num_color);
                 }
 
+                let cur_x = (lay.left_text_x as i32) - scroll_px;
                 self.render_highlighted_line(
                     canvas,
                     left_text_clip,
                     &r.left.text,
-                    lay.left_text_x as i32,
+                    cur_x,
                     baseline_y,
                     lay.left_text_max_x,
                     char_w,
@@ -350,10 +355,12 @@ impl TerminalRenderer {
                     false,
                 );
             } else if r.left.kind == crate::app::DiffCellKind::Normal && !r.left.text.is_empty() {
+                let cur_x =
+                    ((lay.left_text_x as i32) - scroll_px).max(lay.left_text_x as i32) as usize;
                 self.draw_ui_text(
                     canvas,
                     &r.left.text,
-                    lay.left_text_x,
+                    cur_x,
                     baseline_y,
                     lay.left_text_max_x,
                     theme.text_muted(),
@@ -432,11 +439,12 @@ impl TerminalRenderer {
                     canvas.glyph(right_gutter_clip, glyph, gx, gy, num_color);
                 }
 
+                let cur_x = (lay.right_text_x as i32) - scroll_px;
                 self.render_highlighted_line(
                     canvas,
                     right_text_clip,
                     &r.right.text,
-                    lay.right_text_x as i32,
+                    cur_x,
                     baseline_y,
                     lay.right_text_max_x,
                     char_w,
@@ -445,10 +453,12 @@ impl TerminalRenderer {
                     false,
                 );
             } else if r.right.kind == crate::app::DiffCellKind::Normal && !r.right.text.is_empty() {
+                let cur_x =
+                    ((lay.right_text_x as i32) - scroll_px).max(lay.right_text_x as i32) as usize;
                 self.draw_ui_text(
                     canvas,
                     &r.right.text,
-                    lay.right_text_x,
+                    cur_x,
                     baseline_y,
                     lay.right_text_max_x,
                     theme.text_muted(),
@@ -467,6 +477,18 @@ impl TerminalRenderer {
                 track,
                 thumb,
                 viewer.hovered_scrollbar,
+                self.scrollbars_awake,
+                theme,
+            );
+        }
+
+        // 5. Barra de desplazamiento horizontal sincronizada
+        if let Some((track, thumb)) = lay.hscrollbar(max_scroll_x, scroll_x) {
+            Self::draw_scrollbar_rects(
+                canvas,
+                track,
+                thumb,
+                viewer.hovered_hscrollbar,
                 self.scrollbars_awake,
                 theme,
             );

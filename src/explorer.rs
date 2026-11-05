@@ -94,6 +94,9 @@ pub(crate) struct ExplorerItem {
 pub(crate) struct RemoteSshSession {
     pub(crate) destination: String,
     pub(crate) remote_dir: String,
+    pub(crate) identity_file: Option<String>,
+    pub(crate) port: Option<u16>,
+    pub(crate) is_inband: bool,
 }
 
 impl From<(&str, &str)> for RemoteSshSession {
@@ -101,6 +104,9 @@ impl From<(&str, &str)> for RemoteSshSession {
         Self {
             destination: destination.to_string(),
             remote_dir: remote_dir.to_string(),
+            identity_file: None,
+            port: None,
+            is_inband: false,
         }
     }
 }
@@ -110,6 +116,9 @@ impl From<(String, String)> for RemoteSshSession {
         Self {
             destination,
             remote_dir,
+            identity_file: None,
+            port: None,
+            is_inband: false,
         }
     }
 }
@@ -132,6 +141,7 @@ pub(crate) struct FileExplorer {
     pub hovered_scrollbar: bool,
     /// Sesión SSH con integración: el listado llega por el propio terminal (sin segunda conexión)
     pub inband_remote: bool,
+    pub cached_remote_names: Vec<String>,
     /// «Expandir todo» remoto en curso: cada listado recibido dispara la petición de la siguiente carpeta
     pub remote_expand_all: bool,
     pub is_focused: bool,
@@ -182,6 +192,8 @@ pub(crate) struct RemoteLsReq {
     pub(crate) gen: u64,
     pub(crate) dest: String,
     pub(crate) dir: String,
+    pub(crate) identity_file: Option<String>,
+    pub(crate) port: Option<u16>,
     pub(crate) expand: Option<PathBuf>,
 }
 
@@ -362,6 +374,7 @@ impl FileExplorer {
             width: FILE_EXPLORER_WIDTH,
             hovered_scrollbar: false,
             inband_remote: false,
+            cached_remote_names: Vec::new(),
             remote_expand_all: false,
             remote_requested: None,
             remote_gen: 0,
@@ -640,7 +653,8 @@ impl FileExplorer {
     #[allow(dead_code)]
     pub(crate) fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
         let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);
-        if same && self.listing_names_match(names) {
+        self.cached_remote_names = names.to_vec();
+        if same && !self.changes_only && self.listing_names_match(names) {
             return;
         }
         if !same {
@@ -654,7 +668,12 @@ impl FileExplorer {
         self.root_dir = PathBuf::from(&session.remote_dir);
         let base = session.remote_dir.trim_end_matches('/').to_string();
         self.remote_session = Some(session);
-        self.items = Self::remote_items(&base, 0, names);
+        if self.changes_only {
+            self.items = self.change_items();
+        } else {
+            self.items = Self::remote_items(&base, 0, names);
+            self.apply_statuses_to_items();
+        }
     }
 
     #[allow(dead_code)]
@@ -753,8 +772,15 @@ impl FileExplorer {
             self.history = vec![self.root_dir.clone()];
             self.history_index = 0;
             self.items.clear();
-            self.refresh_remote();
+            self.cached_remote_names.clear();
+            if rem.is_inband {
+                self.inband_remote = true;
+            } else {
+                self.refresh_remote();
+            }
         } else {
+            self.inband_remote = false;
+            self.cached_remote_names.clear();
             self.history = vec![self.root_dir.clone()];
             self.history_index = 0;
             self.refresh();
@@ -763,6 +789,9 @@ impl FileExplorer {
 
     /// Pide el listado de la raíz remota por SSH (sin bloquear: lo lanza la app en un hilo)
     pub(crate) fn refresh_remote(&mut self) {
+        if self.inband_remote {
+            return;
+        }
         let Some(sess) = &self.remote_session else {
             return;
         };
@@ -770,6 +799,8 @@ impl FileExplorer {
             gen: self.remote_gen + 1,
             dest: sess.destination.clone(),
             dir: sess.remote_dir.clone(),
+            identity_file: sess.identity_file.clone(),
+            port: sess.port,
             expand: None,
         };
         self.remote_gen = req.gen;
@@ -810,6 +841,9 @@ impl FileExplorer {
     }
 
     fn apply_remote_root(&mut self, result: Result<crate::ssh::Output, String>) -> Option<String> {
+        if self.inband_remote {
+            return None;
+        }
         let output = match result {
             Ok(out) => out,
             Err(e) => {
@@ -890,7 +924,24 @@ impl FileExplorer {
         self.git_status_running = false;
     }
 
-    /// Aplica el mapa de estados de `git status` obtenido en segundo plano
+    /// Aplica el mapa de estados de `git status` a los elementos actuales del árbol
+    pub(crate) fn apply_statuses_to_items(&mut self) {
+        for item in &mut self.items {
+            if item.is_dir {
+                item.git_status = dir_git_status(&self.git_statuses, &item.path);
+            } else if let Some(info) = self.git_statuses.get(&item.path) {
+                item.git_status = Some(info.status);
+                item.is_staged = info.is_staged;
+                item.is_unstaged = info.is_unstaged;
+            } else {
+                item.git_status = None;
+                item.is_staged = false;
+                item.is_unstaged = false;
+            }
+        }
+    }
+
+    /// Aplica el mapa de estados de `git status` obtenido en segundo plano (sesión local)
     pub(crate) fn apply_git_statuses(
         &mut self,
         repo_root: &Path,
@@ -905,24 +956,37 @@ impl FileExplorer {
             self.items = self.change_items();
             self.scroll_offset = self.scroll_offset.min(self.items.len().saturating_sub(1));
         } else {
-            for item in &mut self.items {
-                if item.is_dir {
-                    item.git_status = dir_git_status(&self.git_statuses, &item.path);
-                } else if let Some(info) = self.git_statuses.get(&item.path) {
-                    item.git_status = Some(info.status);
-                    item.is_staged = info.is_staged;
-                    item.is_unstaged = info.is_unstaged;
-                } else {
-                    item.git_status = None;
-                    item.is_staged = false;
-                    item.is_unstaged = false;
-                }
-            }
+            self.apply_statuses_to_items();
+        }
+    }
+
+    /// Aplica el mapa de estados Git recibido del servidor remoto vía integración en banda
+    pub(crate) fn apply_remote_git_statuses(
+        &mut self,
+        repo_root: &Path,
+        statuses: FxHashMap<PathBuf, GitStatusInfo>,
+    ) {
+        if self.remote_session.is_none() {
+            return;
+        }
+        if self.git_root.as_deref() == Some(repo_root) && self.git_statuses == statuses {
+            return;
+        }
+        self.git_root = Some(repo_root.to_path_buf());
+        self.git_statuses = statuses;
+        if self.changes_only {
+            self.items = self.change_items();
+            self.scroll_offset = self.scroll_offset.min(self.items.len().saturating_sub(1));
+        } else {
+            self.apply_statuses_to_items();
         }
     }
 
     /// Consulta el estado Git del repositorio activo (en un hilo en la GUI; síncrono en tests)
     pub(crate) fn refresh_git_status(&mut self) {
+        if self.remote_session.is_some() {
+            return;
+        }
         let new_root = git_repo_root(&self.root_dir);
         if new_root != self.git_root {
             self.git_statuses.clear();
@@ -952,24 +1016,34 @@ impl FileExplorer {
             .count()
     }
 
-    /// Alterna entre el árbol de archivos y la lista de archivos con cambios (solo sesiones locales)
+    /// Alterna entre el árbol de archivos y la lista de archivos con cambios
     pub(crate) fn toggle_changes_only(&mut self) {
-        if self.remote_session.is_some() {
-            return;
-        }
         self.changes_only = !self.changes_only;
         self.scroll_offset = 0;
         self.selected_index = None;
-        self.refresh();
+        if self.changes_only {
+            self.items = self.change_items();
+        } else if self.inband_remote {
+            if let Some(sess) = &self.remote_session {
+                let base = sess.remote_dir.trim_end_matches('/').to_string();
+                self.items = Self::remote_items(&base, 0, &self.cached_remote_names);
+                self.apply_statuses_to_items();
+            }
+        } else {
+            self.refresh();
+        }
     }
 
     /// Archivos con cambios (sin los borrados, que ya no se pueden abrir), ordenados por ruta relativa;
     /// la carpeta solo se muestra cuando el nombre de archivo se repite.
     fn change_items(&self) -> Vec<ExplorerItem> {
+        let is_remote = self.remote_session.is_some();
         let mut items: Vec<ExplorerItem> = self
             .git_statuses
             .iter()
-            .filter(|(path, info)| info.status != GitFileStatus::Deleted && path.is_file())
+            .filter(|(path, info)| {
+                info.status != GitFileStatus::Deleted && (is_remote || path.is_file())
+            })
             .map(|(path, info)| ExplorerItem {
                 path: path.clone(),
                 name: path
@@ -1156,6 +1230,8 @@ impl FileExplorer {
                     gen: self.remote_gen,
                     dest: sess.destination.clone(),
                     dir: dir_path.to_string_lossy().replace('\\', "/"),
+                    identity_file: sess.identity_file.clone(),
+                    port: sess.port,
                     expand: Some(dir_path),
                 });
             } else {

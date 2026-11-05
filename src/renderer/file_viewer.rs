@@ -1131,4 +1131,42 @@ impl TerminalRenderer {
             viewer.scroll_offset,
         )
     }
+
+    pub(crate) fn file_viewer_hscrollbar_geometry(
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        viewer: &FileViewerState,
+        row_height: usize,
+        char_width: usize,
+    ) -> Option<(Rect, Rect)> {
+        let max_x = viewer.max_scroll_x();
+        if max_x == 0 {
+            return None;
+        }
+        if viewer.is_side_by_side() {
+            let total_rows = viewer.side_by_side_rows().len();
+            let max_line = viewer
+                .lines
+                .len()
+                .max(viewer.git_base.as_ref().map_or(0, |b| b.len()))
+                .max(total_rows);
+            let sbs_lay = crate::renderer::geometry::SideBySideLayout::compute(
+                x, y, w, h, row_height, char_width, max_line,
+            );
+            sbs_lay.hscrollbar(max_x, viewer.scroll_offset_x)
+        } else {
+            let lay = crate::renderer::geometry::FileViewerLayout::compute(
+                x,
+                y,
+                w,
+                h,
+                row_height,
+                char_width,
+                viewer.lines.len(),
+            );
+            lay.hscrollbar(max_x, viewer.scroll_offset_x)
+        }
+    }
 }

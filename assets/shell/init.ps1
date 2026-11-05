@@ -153,6 +153,8 @@ Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction Silently
 function ssh {
     $rawArgs = $args
     $dest = ''
+    $identity = ''
+    $port = ''
     $posCount = 0
     $optWithArg = @('-p', '-i', '-l', '-o', '-c', '-b', '-B', '-J', '-F', '-D', '-E', '-I', '-R', '-L', '-m', '-O', '-Q', '-S', '-w', '-W')
     for ($i = 0; $i -lt $rawArgs.Count; $i++) {
@@ -164,6 +166,16 @@ function ssh {
             break
         }
         if ($arg.StartsWith('-')) {
+            if ($arg -eq '-i' -and ($i + 1 -lt $rawArgs.Count)) {
+                $i++
+                $identity = [string]$rawArgs[$i]
+                continue
+            }
+            if ($arg -eq '-p' -and ($i + 1 -lt $rawArgs.Count)) {
+                $i++
+                $port = [string]$rawArgs[$i]
+                continue
+            }
             if ($arg -in $optWithArg -and ($i + 1 -lt $rawArgs.Count)) { $i++ }
             continue
         }
@@ -171,6 +183,22 @@ function ssh {
         $posCount++
     }
     if (-not $dest) { $dest = 'remote' }
+    if ($identity) {
+        try {
+            if (Test-Path -LiteralPath $identity) {
+                $identity = (Resolve-Path -LiteralPath $identity).ProviderPath
+            }
+        } catch { }
+        # Con llaves .pem explícitas, forzar IdentitiesOnly=yes evita que OpenSSH pruebe primero
+        # otras llaves de ssh-agent o ~/.ssh/ que agotan MaxAuthTries y provocan baneo (fail2ban)
+        $hasIdentities = $false
+        foreach ($a in $rawArgs) {
+            if ([string]$a -like '*IdentitiesOnly*') { $hasIdentities = $true; break }
+        }
+        if (-not $hasIdentities) {
+            $rawArgs = @('-o', 'IdentitiesOnly=yes') + $rawArgs
+        }
+    }
     # Mantener viva la sesión SSH: si el usuario no especificó ServerAliveInterval, enviar
     # paquetes keep-alive cada 30 s para evitar desconexiones por inactividad de routers/firewalls (NAT drop)
     $hasAlive = $false
@@ -188,10 +216,10 @@ function ssh {
     foreach ($a in $rawArgs) { if ($a -cin @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'
-__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007' ${__axp:--} ${HOSTNAME:-host} ${__axq// /%20};
+__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);if [ -r . ];then __axl=$(ls -1Ap 2>/dev/null|head -n 500|base64 2>/dev/null|tr -d '\r\n');__axl=${__axl:-EMPTY};else __axl="-";fi;if git rev-parse --is-inside-work-tree >/dev/null 2>&1;then __axs=$(git --no-optional-locks status --porcelain -z 2>/dev/null|head -c 65536|base64 2>/dev/null|tr -d '\r\n');__axs=${__axs:-EMPTY};else __axs="-";fi;printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007\033]1337;TearminalLs=%s\007\033]1337;TearminalGitStatus=%s\007' "${__axp:--}" "${HOSTNAME:-host}" "${__axq// /%20}" "$__axl" "$__axs";
 '@
         $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
-        $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;case $SHELL in */bash|*/zsh) exec "$SHELL" -l;; *) exec ${SHELL:-/bin/sh};; esac'
+        $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; */zsh) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + '; precmd() { eval "$PROMPT_COMMAND"; };; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;case $SHELL in */bash|*/zsh) exec "$SHELL" -l;; *) exec ${SHELL:-/bin/sh};; esac'
         $remoteCmd = 'sh -c ' + (& $q $script)
         # Windows PowerShell 5.1 (y 7.0-7.2) no escapa las comillas dobles al llamar a un .exe
         if ($PSVersionTable.PSVersion -lt [version]'7.3') { $remoteCmd = $remoteCmd.Replace('"', '\"') }
@@ -199,7 +227,12 @@ __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git r
     }
     $esc = [char]27; $bel = [char]7
     if ($dest -ne 'remote') {
-        [Console]::Write($esc + ']1337;TearminalSSH=start;dest=' + $dest + ';token=' + $env:TEARMINAL_PANE_TOKEN + $bel)
+        $startMsg = $esc + ']1337;TearminalSSH=start;dest=' + $dest
+        if ($identity) { $startMsg += ';ident=' + $identity }
+        if ($port) { $startMsg += ';port=' + $port }
+        if ($integrate) { $startMsg += ';inband=1' }
+        $startMsg += ';token=' + $env:TEARMINAL_PANE_TOKEN + $bel
+        [Console]::Write($startMsg)
         [Console]::Write($esc + ']0;ssh: ' + $dest + $bel)
     }
     $prevTerm = $env:TERM; $prevColor = $env:COLORTERM

@@ -247,7 +247,7 @@ impl TearminalApp {
                 })
                 .map(|pos| visible[pos]);
             self.tab_or_window_menu(hit)
-        } else if self.panel_local_x(mx, my, win_w).is_some() {
+        } else if self.panel_local_x(mx, my, win_w, win_h).is_some() {
             // El panel derecho es solo el explorador, que tiene su propio menú
             return false;
         } else if self.tabs[self.active_tab_index].is_settings {

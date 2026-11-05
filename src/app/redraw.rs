@@ -302,16 +302,35 @@ fn draw_full_scene(
         let term_area_w = width.saturating_sub(p.offset + p.right_offset);
         let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
         viewer.word_wrap = config.terminal.word_wrap;
-        viewer.visible_cols = crate::renderer::FileViewerLayout::compute(
-            p.offset,
-            p.top_offset,
-            term_area_w,
-            term_area_h,
-            renderer.row_height,
-            renderer.char_width,
-            viewer.lines.len(),
-        )
-        .visible_cols;
+        viewer.visible_cols = if viewer.is_side_by_side() {
+            let total_rows = viewer.side_by_side_rows().len();
+            let max_line = viewer
+                .lines
+                .len()
+                .max(viewer.git_base.as_ref().map_or(0, |b| b.len()))
+                .max(total_rows);
+            crate::renderer::SideBySideLayout::compute(
+                p.offset,
+                p.top_offset,
+                term_area_w,
+                term_area_h,
+                renderer.row_height,
+                renderer.char_width,
+                max_line,
+            )
+            .visible_cols
+        } else {
+            crate::renderer::FileViewerLayout::compute(
+                p.offset,
+                p.top_offset,
+                term_area_w,
+                term_area_h,
+                renderer.row_height,
+                renderer.char_width,
+                viewer.lines.len(),
+            )
+            .visible_cols
+        };
 
         renderer.scroll_visual_offset = Some(viewer.scroll_offset as f32);
         renderer.render_file_viewer(

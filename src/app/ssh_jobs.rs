@@ -115,10 +115,20 @@ impl TearminalApp {
     /// Lee un archivo remoto mediante SshConnection; la pestaña se abre al llegar
     pub(super) fn ssh_open_file(&self, dest: &str, path: &Path, pin: bool) {
         let (dest, path) = (dest.to_string(), path.to_path_buf());
+        let (ident, port) = self
+            .file_explorer
+            .remote_session
+            .as_ref()
+            .filter(|s| s.destination == dest)
+            .map(|s| (s.identity_file.clone(), s.port))
+            .unwrap_or((None, None));
         self.spawn_ssh(move || {
             let data = match ssh::SafeSshDestination::parse(&dest) {
                 Ok(safe_dest) => {
-                    let conn = ssh::SshConnection::new(safe_dest).with_timeout(5);
+                    let conn = ssh::SshConnection::new(safe_dest)
+                        .with_identity_file(ident)
+                        .with_port(port)
+                        .with_timeout(5);
                     match conn.authenticate(None) {
                         Ok(auth_conn) => auth_conn.read_file(&remote_path_string(&path)),
                         Err(e) => Err(e),
@@ -148,10 +158,20 @@ impl TearminalApp {
         let content = viewer.remote_content();
         let edit_gen = viewer.edit_gen;
         let (dest, path) = (dest.to_string(), path.to_path_buf());
+        let (ident, port) = self
+            .file_explorer
+            .remote_session
+            .as_ref()
+            .filter(|s| s.destination == dest)
+            .map(|s| (s.identity_file.clone(), s.port))
+            .unwrap_or((None, None));
         self.spawn_ssh(move || {
             let result = match ssh::SafeSshDestination::parse(&dest) {
                 Ok(safe_dest) => {
-                    let conn = ssh::SshConnection::new(safe_dest).with_timeout(5);
+                    let conn = ssh::SshConnection::new(safe_dest)
+                        .with_identity_file(ident)
+                        .with_port(port)
+                        .with_timeout(5);
                     match conn.authenticate(None) {
                         Ok(auth_conn) => {
                             auth_conn.write_file(&remote_path_string(&path), content.as_bytes())
@@ -172,9 +192,16 @@ impl TearminalApp {
 
     /// Sube una captura al remoto por `ssh`; al terminar se pega su ruta (o la local si falló) en el panel
     pub(super) fn ssh_upload_image(&self, pane_id: PaneId, local_path: String, dest: &str) {
-        let dest = dest.to_string();
+        let dest_str = dest.to_string();
+        let (ident, port) = self
+            .file_explorer
+            .remote_session
+            .as_ref()
+            .filter(|s| s.destination == dest)
+            .map(|s| (s.identity_file.clone(), s.port))
+            .unwrap_or((None, None));
         self.spawn_ssh(move || {
-            let remote_path = ssh::upload_image(&local_path, &dest);
+            let remote_path = ssh::upload_image(&local_path, &dest_str, ident.as_deref(), port);
             SshDone::Upload {
                 pane_id,
                 local_path,
@@ -189,7 +216,10 @@ impl TearminalApp {
             self.spawn_ssh(move || {
                 let result = match ssh::SafeSshDestination::parse(&req.dest) {
                     Ok(safe_dest) => {
-                        let conn = ssh::SshConnection::new(safe_dest).with_timeout(4);
+                        let conn = ssh::SshConnection::new(safe_dest)
+                            .with_identity_file(req.identity_file.clone())
+                            .with_port(req.port)
+                            .with_timeout(4);
                         match conn.authenticate(None) {
                             Ok(auth_conn) => match req.expand {
                                 None => auth_conn.list_root(&req.dir),

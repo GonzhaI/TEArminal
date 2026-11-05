@@ -40,9 +40,27 @@ impl TearminalApp {
                         let rdir = ssh.remote_dir.clone().unwrap_or_else(|| ".".to_string());
                         let remote_sess = crate::explorer::RemoteSshSession {
                             destination: dest,
-                            remote_dir: rdir,
+                            remote_dir: rdir.clone(),
+                            identity_file: ssh.identity_file.clone(),
+                            port: ssh.port,
+                            is_inband: pane.terminal.remote_integration,
                         };
-                        self.file_explorer.set_remote_session(Some(remote_sess));
+                        self.file_explorer
+                            .set_remote_session(Some(remote_sess.clone()));
+                        if let Some(names) = &ssh.remote_listing {
+                            self.file_explorer.set_remote_listing(remote_sess, names);
+                        }
+                        if let Some(statuses) = &ssh.remote_git_statuses {
+                            let root = std::path::PathBuf::from(&rdir);
+                            self.file_explorer
+                                .apply_remote_git_statuses(&root, statuses.clone());
+                        } else {
+                            self.file_explorer.git_root = None;
+                            self.file_explorer.git_statuses.clear();
+                            if self.file_explorer.changes_only {
+                                self.file_explorer.items.clear();
+                            }
+                        }
                         self.sync_fs_watcher();
                         return;
                     }

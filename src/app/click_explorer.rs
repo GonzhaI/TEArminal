@@ -26,7 +26,7 @@ impl TearminalApp {
 
         // Modalidad horizontal: lo que el panel tiene fuera del explorador (su margen) no hace nada;
         // el explorador alojado dentro atiende su propio ratón
-        if self.panel_local_x(mx, my, win_w).is_some() {
+        if self.panel_local_x(mx, my, win_w, win_h).is_some() {
             return true;
         }
 
@@ -244,30 +244,6 @@ impl TearminalApp {
                 }
                 return true;
             }
-        }
-
-        // Clic sobre el badge de actualización disponible en la barra de estado
-        if self.hovered_update_badge
-            && self.config.appearance.show_status_bar
-            && !self.tabs[self.active_tab_index].is_settings
-            && state == ElementState::Pressed
-            && button == MouseButton::Left
-        {
-            crate::updater::trigger_update();
-            return true;
-        }
-
-        // Clic sobre el botón de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha
-        if self.hovered_keep_awake
-            && self.config.appearance.show_status_bar
-            && !self.tabs[self.active_tab_index].is_settings
-            && state == ElementState::Pressed
-            && button == MouseButton::Left
-        {
-            self.keep_awake_popup_open = !self.keep_awake_popup_open;
-            self.hovered_keep_awake_option = None;
-            self.request_redraw();
-            return true;
         }
 
         false

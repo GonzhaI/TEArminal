@@ -636,6 +636,9 @@ impl<'a> Perform for Performer<'a> {
                 if p1.starts_with(b"TearminalSSH=start") {
                     let mut dest = String::new();
                     let mut token = String::new();
+                    let mut ident = None;
+                    let mut port = None;
+                    let mut inband = false;
                     for param in &params[1..] {
                         let text = String::from_utf8_lossy(param);
                         for part in text.split(';') {
@@ -643,6 +646,22 @@ impl<'a> Perform for Performer<'a> {
                                 dest = d.trim().to_string();
                             } else if let Some(t) = part.strip_prefix("token=") {
                                 token = t.trim().to_string();
+                            } else if let Some(i) = part.strip_prefix("ident=") {
+                                let id = i.trim();
+                                if !id.is_empty()
+                                    && id.len() <= 1024
+                                    && !id.chars().any(char::is_control)
+                                {
+                                    ident = Some(id.to_string());
+                                }
+                            } else if let Some(p) = part.strip_prefix("port=") {
+                                if let Ok(val) = p.trim().parse::<u16>() {
+                                    if val > 0 {
+                                        port = Some(val);
+                                    }
+                                }
+                            } else if part == "inband=1" {
+                                inband = true;
                             }
                         }
                     }
@@ -653,11 +672,15 @@ impl<'a> Perform for Performer<'a> {
                     {
                         self.state.ssh_session = Some(SshSession {
                             destination: dest,
+                            identity_file: ident,
+                            port,
                             remote_dir: None,
                             remote_git_branch: None,
                             is_active: true,
+                            remote_listing: None,
+                            remote_git_statuses: None,
                         });
-                        self.state.remote_integration = false;
+                        self.state.remote_integration = inband;
                     }
                 } else if p1.starts_with(b"TearminalSSH=end") {
                     let mut token = String::new();
@@ -728,6 +751,53 @@ impl<'a> Perform for Performer<'a> {
                         .then(|| branch.to_string());
                         self.state.remote_integration = true;
                         self.state.remote_at_prompt = true;
+                    }
+                } else if p1.starts_with(b"TearminalLs=") {
+                    let payload = &p1[b"TearminalLs=".len()..];
+                    if let Some(sess) = &mut self.state.ssh_session {
+                        self.state.remote_integration = true;
+                        self.state.remote_at_prompt = true;
+                        if payload == b"-" {
+                            sess.remote_listing = None;
+                        } else if payload == b"EMPTY" {
+                            sess.remote_listing = Some(Vec::new());
+                        } else {
+                            use base64::prelude::*;
+                            let clean: Vec<u8> = payload
+                                .iter()
+                                .copied()
+                                .filter(|b| !b.is_ascii_whitespace())
+                                .collect();
+                            if let Ok(decoded) = BASE64_STANDARD.decode(&clean) {
+                                if let Ok(text) = std::str::from_utf8(&decoded) {
+                                    sess.remote_listing = Some(clean_listing(text));
+                                }
+                            }
+                        }
+                    }
+                } else if p1.starts_with(b"TearminalGitStatus=") {
+                    let payload = &p1[b"TearminalGitStatus=".len()..];
+                    if let Some(sess) = &mut self.state.ssh_session {
+                        self.state.remote_integration = true;
+                        self.state.remote_at_prompt = true;
+                        if payload == b"-" {
+                            sess.remote_git_statuses = None;
+                        } else if payload == b"EMPTY" {
+                            sess.remote_git_statuses = Some(rustc_hash::FxHashMap::default());
+                        } else {
+                            use base64::prelude::*;
+                            let clean: Vec<u8> = payload
+                                .iter()
+                                .copied()
+                                .filter(|b| !b.is_ascii_whitespace())
+                                .collect();
+                            if let Ok(decoded) = BASE64_STANDARD.decode(&clean) {
+                                let dir = sess.remote_dir.as_deref().unwrap_or("/");
+                                let root = std::path::Path::new(dir);
+                                sess.remote_git_statuses =
+                                    Some(crate::explorer::parse_porcelain_z(root, &decoded));
+                            }
+                        }
                     }
                 } else {
                     self.handle_iterm2_image(&params[1..]);

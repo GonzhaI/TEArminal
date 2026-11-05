@@ -543,8 +543,19 @@ impl TearminalApp {
     }
 
     /// Coordenada x local al panel si `(mx, my)` cae en su parte propia.
-    pub(crate) fn panel_local_x(&self, mx: usize, my: usize, win_w: usize) -> Option<usize> {
+    pub(crate) fn panel_local_x(
+        &self,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> Option<usize> {
         if !self.sidebar_visible {
+            return None;
+        }
+        let top_offset = self.top_offset();
+        let usable_h = win_h.saturating_sub(self.status_bar_height());
+        if my < top_offset || my >= usable_h {
             return None;
         }
         let in_dock = self

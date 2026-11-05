@@ -313,6 +313,9 @@ impl FileViewerState {
 
     /// El ajuste de línea está activo si se solicitó explícitamente o en vista previa de Markdown
     pub(crate) fn wrap_active(&self) -> bool {
+        if self.is_side_by_side() {
+            return false;
+        }
         self.word_wrap || (self.render_markdown && self.is_markdown())
     }
 
@@ -561,12 +564,19 @@ impl FileViewerState {
                 return c.max_cols;
             }
         }
-        let max = self
+        let mut max = self
             .lines
             .iter()
             .map(|l| line_col_width(l))
             .max()
             .unwrap_or(0);
+        if self.is_side_by_side() {
+            if let Some(base) = &self.git_base {
+                if let Some(base_max) = base.iter().map(|l| line_col_width(l)).max() {
+                    max = max.max(base_max);
+                }
+            }
+        }
         if let Some(c) = &mut *self.rows_cache.borrow_mut() {
             c.max_cols_gen = self.edit_gen;
             c.max_cols = max;

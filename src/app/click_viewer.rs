@@ -167,7 +167,9 @@ impl TearminalApp {
                             // Barra de desplazamiento horizontal
                             let max_x = viewer.max_scroll_x();
                             if let Some((track, thumb)) =
-                                lay.hscrollbar(max_x, viewer.scroll_offset_x)
+                                TerminalRenderer::file_viewer_hscrollbar_geometry(
+                                    offset, top_offset, viewer_w, viewer_h, viewer, row_h, char_w,
+                                )
                             {
                                 if mx >= track.0
                                     && mx < track.0 + track.2

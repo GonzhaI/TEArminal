@@ -220,6 +220,8 @@ pub(crate) struct Authenticated;
 /// `PhantomData` ocupa 0 bytes en memoria.
 pub(crate) struct SshConnection<State = Unauthenticated> {
     destination: SafeSshDestination,
+    identity_file: Option<String>,
+    port: Option<u16>,
     connect_timeout: u32,
     _state: PhantomData<State>,
 }
@@ -231,9 +233,23 @@ impl SshConnection<Unauthenticated> {
     pub(crate) fn new(destination: SafeSshDestination) -> Self {
         Self {
             destination,
+            identity_file: None,
+            port: None,
             connect_timeout: 5,
             _state: PhantomData,
         }
+    }
+
+    /// Configura el archivo de identidad / clave privada (`-i`).
+    pub(crate) fn with_identity_file(mut self, identity: Option<String>) -> Self {
+        self.identity_file = identity;
+        self
+    }
+
+    /// Configura el puerto SSH (`-p`).
+    pub(crate) fn with_port(mut self, port: Option<u16>) -> Self {
+        self.port = port;
+        self
     }
 
     /// Configura el tiempo de espera de conexión (en segundos).
@@ -255,6 +271,8 @@ impl SshConnection<Unauthenticated> {
         }
         Ok(SshConnection {
             destination: self.destination,
+            identity_file: self.identity_file,
+            port: self.port,
             connect_timeout: self.connect_timeout,
             _state: PhantomData,
         })
@@ -277,6 +295,8 @@ impl SshConnection<Authenticated> {
     ) -> Result<Output, String> {
         run_safe(
             &self.destination,
+            self.identity_file.as_deref(),
+            self.port,
             remote_cmd,
             self.connect_timeout,
             stdin,
@@ -327,6 +347,8 @@ impl SshConnection<Authenticated> {
     pub(crate) fn disconnect(self) -> SshConnection<Unauthenticated> {
         SshConnection {
             destination: self.destination,
+            identity_file: self.identity_file,
+            port: self.port,
             connect_timeout: self.connect_timeout,
             _state: PhantomData,
         }
@@ -392,6 +414,8 @@ pub(crate) fn dir_listing_cmd(dir: &str) -> String {
 /// que el destino está validado y no contiene inyecciones ni flags peligrosos ("Parse, don't validate").
 pub(crate) fn run_safe(
     dest: &SafeSshDestination,
+    identity_file: Option<&str>,
+    port: Option<u16>,
     remote_cmd: &str,
     connect_timeout: u32,
     stdin: Option<&[u8]>,
@@ -402,13 +426,25 @@ pub(crate) fn run_safe(
         "-o",
         "BatchMode=yes",
         "-o",
-        "ServerAliveInterval=5",
+        "ConnectionAttempts=1",
         "-o",
-        "ServerAliveCountMax=2",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
         "-o",
     ])
-    .arg(format!("ConnectTimeout={connect_timeout}"))
-    .args(["--", dest.as_str(), remote_cmd]);
+    .arg(format!("ConnectTimeout={connect_timeout}"));
+
+    if let Some(ident) = identity_file {
+        if !ident.is_empty() && !ident.chars().any(char::is_control) {
+            cmd.args(["-i", ident, "-o", "IdentitiesOnly=yes"]);
+        }
+    }
+    if let Some(p) = port {
+        cmd.args(["-p", &p.to_string()]);
+    }
+
+    cmd.args(["--", dest.as_str(), remote_cmd]);
     run_command(cmd, stdin, max_out)
 }
 
@@ -423,7 +459,15 @@ pub(crate) fn run(
 ) -> Result<Output, String> {
     let safe = SafeSshDestination::parse(dest)
         .map_err(|e| format!("destino SSH no válido: {dest:?} ({e})"))?;
-    run_safe(&safe, remote_cmd, connect_timeout, stdin, max_out)
+    run_safe(
+        &safe,
+        None,
+        None,
+        remote_cmd,
+        connect_timeout,
+        stdin,
+        max_out,
+    )
 }
 
 pub(crate) fn run_command(
@@ -507,6 +551,8 @@ fn upload_cmd(name: &str) -> String {
 pub(crate) fn upload_image_safe(
     local_path: &str,
     destination: &SafeSshDestination,
+    identity_file: Option<&str>,
+    port: Option<u16>,
 ) -> Option<String> {
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -519,6 +565,8 @@ pub(crate) fn upload_image_safe(
     ));
     match run_safe(
         destination,
+        identity_file,
+        port,
         &upload_cmd(&remote_filename),
         3,
         Some(&bytes),
@@ -545,7 +593,12 @@ pub(crate) fn upload_image_safe(
 }
 
 /// Sube una imagen local al destino por `ssh` (stdin) a una carpeta privada; devuelve la ruta remota.
-pub(crate) fn upload_image(local_path: &str, destination: &str) -> Option<String> {
+pub(crate) fn upload_image(
+    local_path: &str,
+    destination: &str,
+    identity_file: Option<&str>,
+    port: Option<u16>,
+) -> Option<String> {
     let safe_dest = match SafeSshDestination::parse(destination) {
         Ok(d) => d,
         Err(_) => {
@@ -553,12 +606,28 @@ pub(crate) fn upload_image(local_path: &str, destination: &str) -> Option<String
             return None;
         }
     };
-    upload_image_safe(local_path, &safe_dest)
+    upload_image_safe(local_path, &safe_dest, identity_file, port)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ssh_connection_builder_identity_and_port() {
+        let safe = SafeSshDestination::parse("user@host").unwrap();
+        let conn = SshConnection::new(safe)
+            .with_identity_file(Some("C:\\keys\\my.pem".to_string()))
+            .with_port(Some(2200))
+            .with_timeout(10);
+        assert_eq!(conn.identity_file.as_deref(), Some("C:\\keys\\my.pem"));
+        assert_eq!(conn.port, Some(2200));
+        assert_eq!(conn.connect_timeout, 10);
+        let auth = conn.authenticate(None).unwrap();
+        assert_eq!(auth.destination().as_str(), "user@host");
+        assert_eq!(auth.identity_file.as_deref(), Some("C:\\keys\\my.pem"));
+        assert_eq!(auth.port, Some(2200));
+    }
 
     #[test]
     fn test_remote_commands_are_bounded_and_quoted() {

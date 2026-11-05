@@ -242,9 +242,14 @@ impl CommandBlock {
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct SshSession {
     pub(crate) destination: String,
+    pub(crate) identity_file: Option<String>,
+    pub(crate) port: Option<u16>,
     pub(crate) remote_dir: Option<String>,
     pub(crate) remote_git_branch: Option<String>,
     pub(crate) is_active: bool,
+    pub(crate) remote_listing: Option<Vec<String>>,
+    pub(crate) remote_git_statuses:
+        Option<rustc_hash::FxHashMap<std::path::PathBuf, crate::explorer::GitStatusInfo>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
