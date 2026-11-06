@@ -217,6 +217,7 @@ fn build_shell_command(
     cwd: Option<&std::path::Path>,
     token: &str,
     path_env: &str,
+    theme: Option<&crate::theme::Theme>,
 ) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(shell);
     if let Some(dir) = cwd.filter(|d| d.is_dir()) {
@@ -224,6 +225,27 @@ fn build_shell_command(
     }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+
+    let is_dark = theme.is_none_or(|t| t.is_dark());
+    let colorfgbg = if is_dark { "15;0" } else { "0;15" };
+    cmd.env("COLORFGBG", colorfgbg);
+    if let Some(t) = theme {
+        cmd.env(
+            "TEARMINAL_THEME_FG",
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                t.foreground.r, t.foreground.g, t.foreground.b
+            ),
+        );
+        cmd.env(
+            "TEARMINAL_THEME_BG",
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                t.background.r, t.background.g, t.background.b
+            ),
+        );
+    }
+
     cmd.env("TEARMINAL_PANE_TOKEN", token);
     cmd.env("PATH", path_env);
     let lower = shell.to_lowercase();
@@ -250,6 +272,7 @@ fn build_shell_command(
 }
 
 impl PtyManager {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         id: PaneId,
         shell: &str,
@@ -257,6 +280,7 @@ impl PtyManager {
         cols: u16,
         rows: u16,
         cwd: Option<&std::path::Path>,
+        theme: Option<&crate::theme::Theme>,
         proxy: Option<EventLoopProxy<TearminalEvent>>,
     ) -> Result<Self, PtyError> {
         let pty_system = native_pty_system();
@@ -272,7 +296,7 @@ impl PtyManager {
         let token = random_token();
         // `bin\` de TEArminal (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
-        let cmd = build_shell_command(shell, shell_integration, cwd, &token, &path_env);
+        let cmd = build_shell_command(shell, shell_integration, cwd, &token, &path_env, theme);
 
         let child = match pair.slave.spawn_command(cmd) {
             Ok(c) => c,
@@ -284,6 +308,7 @@ impl PtyManager {
                         cwd,
                         &token,
                         &path_env,
+                        theme,
                     );
                     pair.slave
                         .spawn_command(fallback)
@@ -313,6 +338,7 @@ impl PtyManager {
         remote_dir: Option<&str>,
         cols: u16,
         rows: u16,
+        theme: Option<&crate::theme::Theme>,
         proxy: Option<EventLoopProxy<TearminalEvent>>,
     ) -> Result<Self, PtyError> {
         if !is_safe_ssh_destination(destination) {
@@ -331,6 +357,26 @@ impl PtyManager {
         let mut cmd = CommandBuilder::new("powershell.exe");
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+
+        let is_dark = theme.is_none_or(|t| t.is_dark());
+        let colorfgbg = if is_dark { "15;0" } else { "0;15" };
+        cmd.env("COLORFGBG", colorfgbg);
+        if let Some(t) = theme {
+            cmd.env(
+                "TEARMINAL_THEME_FG",
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    t.foreground.r, t.foreground.g, t.foreground.b
+                ),
+            );
+            cmd.env(
+                "TEARMINAL_THEME_BG",
+                format!(
+                    "#{:02x}{:02x}{:02x}",
+                    t.background.r, t.background.g, t.background.b
+                ),
+            );
+        }
 
         // `bin\` de TEArminal (herramientas opcionales) al final del PATH: las del usuario tienen prioridad
         let path_env = crate::tools::path_with_bundled_tools();
@@ -394,9 +440,10 @@ mod tests {
     /// El shell recibe el token del panel (lo adjunta el wrapper `ssh` a `TearminalSSH=start`) y es único por panel
     #[test]
     fn test_pane_token_reaches_shell_and_is_unique() {
-        let pty = PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
+        let pty =
+            PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None, None).unwrap();
         let other =
-            PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).unwrap();
+            PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None, None).unwrap();
         assert_eq!(pty.token.len(), 32);
         assert_ne!(pty.token, other.token);
         std::thread::sleep(std::time::Duration::from_millis(1500)); // arranque de PowerShell
@@ -416,7 +463,8 @@ mod tests {
 
     #[test]
     fn test_pty_powershell_spawn_and_read() {
-        let pty = PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
+        let pty =
+            PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None, None).unwrap();
         let mut total_output = String::new();
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -495,7 +543,8 @@ mod tests {
 
     #[test]
     fn test_powershell_and_harness_kill_word() {
-        let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 120, 30, None, None).unwrap();
+        let pty =
+            PtyManager::new(PaneId(0), "powershell.exe", true, 120, 30, None, None, None).unwrap();
         // Esperar al prompt (no a un tiempo fijo): si PowerShell aún arranca, descarta lo que se teclea.
         let (ready, boot) = read_until(&pty, "]133;B", 40_000);
         assert!(ready, "el prompt de TEArminal no apareció: {boot:?}");
@@ -615,7 +664,7 @@ mod tests {
             "En línea:",
         ];
         for shell in installed_shells() {
-            let pty = PtyManager::new(PaneId(0), &shell, true, 120, 30, Some(&cwd), None)
+            let pty = PtyManager::new(PaneId(0), &shell, true, 120, 30, Some(&cwd), None, None)
                 .unwrap_or_else(|e| panic!("{shell}: no se pudo iniciar: {e}"));
 
             // 1. Arranque: el prompt completo termina con OSC 133;B
@@ -711,7 +760,7 @@ mod tests {
     #[test]
     fn test_pty_powershell_exit_detection() {
         let mut pty =
-            PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None).unwrap();
+            PtyManager::new(PaneId(0), "powershell.exe", false, 80, 24, None, None, None).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         assert!(
             !pty.is_child_exited(),
@@ -764,8 +813,11 @@ mod tests {
             assert!(!is_safe_ssh_destination(bad), "debe rechazar {bad:?}");
         }
         // el sumidero también valida (defensa en profundidad): ni siquiera abre el PTY
-        assert!(PtyManager::new_ssh(PaneId(0), "x; calc", None, 80, 24, None).is_err());
-        assert!(PtyManager::new_ssh(PaneId(0), "-oProxyCommand=calc", None, 80, 24, None).is_err());
+        assert!(PtyManager::new_ssh(PaneId(0), "x; calc", None, 80, 24, None, None).is_err());
+        assert!(
+            PtyManager::new_ssh(PaneId(0), "-oProxyCommand=calc", None, 80, 24, None, None)
+                .is_err()
+        );
     }
 
     #[test]
@@ -891,7 +943,8 @@ mod tests {
     /// Cerrar un panel (soltar el `PtyManager`) o morir TEArminal no debe dejar PowerShell ni sus hijos vivos.
     #[test]
     fn test_dropping_pty_kills_shell_and_its_children() {
-        let pty = PtyManager::new(PaneId(0), "powershell.exe", true, 100, 30, None, None).unwrap();
+        let pty =
+            PtyManager::new(PaneId(0), "powershell.exe", true, 100, 30, None, None, None).unwrap();
         let shell = pty.child.process_id().expect("pid del shell");
         let (ok, boot) = read_until(&pty, "]133;B", 40_000);
         assert!(ok, "prompt no apareció: {boot:?}");
@@ -939,8 +992,8 @@ mod tests {
         for shell in installed_shells() {
             let pids: Vec<u32> = (0..4)
                 .map(|i| {
-                    let pty =
-                        PtyManager::new(PaneId(i), &shell, true, 100, 30, None, None).unwrap();
+                    let pty = PtyManager::new(PaneId(i), &shell, true, 100, 30, None, None, None)
+                        .unwrap();
                     let pid = pty.child.process_id().expect("pid del shell");
                     drop(pty); // sin esperar al prompt
                     pid
@@ -1026,6 +1079,42 @@ mod tests {
         assert!(
             stdout.contains("ServerAliveInterval=60"),
             "Debe respetar ServerAliveInterval configurado por el usuario. Salida: {stdout}"
+        );
+    }
+
+    #[test]
+    fn test_pty_theme_environment_variables() {
+        let light_theme = crate::theme::Theme::from_name(crate::theme::Theme::DEFAULT_LIGHT);
+        assert!(light_theme.is_light());
+        let dark_theme = crate::theme::Theme::from_name(crate::theme::Theme::DEFAULT_DARK);
+        assert!(dark_theme.is_dark());
+
+        let cmd_light = build_shell_command(
+            "powershell.exe",
+            false,
+            None,
+            "tok",
+            "path",
+            Some(&light_theme),
+        );
+        assert_eq!(
+            cmd_light.get_env("COLORFGBG").and_then(|s| s.to_str()),
+            Some("0;15")
+        );
+        assert!(cmd_light.get_env("TEARMINAL_THEME_FG").is_some());
+        assert!(cmd_light.get_env("TEARMINAL_THEME_BG").is_some());
+
+        let cmd_dark = build_shell_command(
+            "powershell.exe",
+            false,
+            None,
+            "tok",
+            "path",
+            Some(&dark_theme),
+        );
+        assert_eq!(
+            cmd_dark.get_env("COLORFGBG").and_then(|s| s.to_str()),
+            Some("15;0")
         );
     }
 }

@@ -155,7 +155,7 @@ fn hex(s: &str) -> Option<Color> {
 }
 
 /// Luminancia relativa WCAG (0..1) de un color opaco.
-fn luminance(c: Color) -> f32 {
+pub(crate) fn luminance(c: Color) -> f32 {
     let channel = |v: u8| {
         let s = f32::from(v) / 255.0;
         if s <= 0.04045 {

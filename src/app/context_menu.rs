@@ -380,6 +380,7 @@ impl TearminalApp {
                         let clicked_row = viewer.scroll_offset + (my - content_y) / row_h.max(16);
                         let lay = self.renderer.as_ref().map(|r| {
                             let (cx, cy, cw, ch) = self.content_area_rect(win_w, win_h);
+                            let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
                             crate::renderer::FileViewerLayout::compute(
                                 cx,
                                 cy,
@@ -388,6 +389,7 @@ impl TearminalApp {
                                 r.row_height,
                                 r.char_width,
                                 viewer.lines.len(),
+                                show_gutter,
                             )
                         });
                         if let Some(lay) = lay {

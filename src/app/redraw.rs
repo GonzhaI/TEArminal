@@ -302,6 +302,7 @@ fn draw_full_scene(
         let term_area_w = width.saturating_sub(p.offset + p.right_offset);
         let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
         viewer.word_wrap = config.terminal.word_wrap;
+        viewer.row_height = renderer.row_height;
         viewer.visible_cols = if viewer.is_side_by_side() {
             let total_rows = viewer.side_by_side_rows().len();
             let max_line = viewer
@@ -320,6 +321,7 @@ fn draw_full_scene(
             )
             .visible_cols
         } else {
+            let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
             crate::renderer::FileViewerLayout::compute(
                 p.offset,
                 p.top_offset,
@@ -328,6 +330,7 @@ fn draw_full_scene(
                 renderer.row_height,
                 renderer.char_width,
                 viewer.lines.len(),
+                show_gutter,
             )
             .visible_cols
         };

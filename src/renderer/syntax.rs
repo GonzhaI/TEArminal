@@ -99,7 +99,41 @@ impl TerminalRenderer {
         let char_w_i32 = char_w as i32;
         let tab_adv_i32 = char_w_i32 * 4;
 
+        // Texto plano sin formato (bloques ```text o archivos .txt): sin coloreado sintáctico
+        if matches!(ext, "txt" | "text" | "plaintext" | "") {
+            for ch in line.chars() {
+                if cur_x >= max_x_i32 {
+                    break;
+                }
+                if ch != ' ' && ch != '\t' {
+                    let glyph = self.get_glyph(ch, false);
+                    let gx = cur_x + glyph.x_offset;
+                    let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
+                    canvas.glyph(clip, glyph, gx, gy, theme.foreground);
+                }
+                cur_x += if ch == '\t' { tab_adv_i32 } else { char_w_i32 };
+            }
+            return;
+        }
+
         let trimmed = line.trim_start();
+        let is_config_lang = matches!(ext, "toml" | "ini" | "cfg");
+        let is_kebab_lang = is_config_lang
+            || matches!(
+                ext,
+                "yaml" | "yml" | "css" | "scss" | "html" | "xml" | "vue" | "svelte"
+            );
+
+        // Cabeceras de sección/tabla en TOML/INI: [tabla], [[array_de_tablas]]
+        let is_toml_table_header = is_config_lang && trimmed.starts_with('[') && {
+            let after_bracket = trimmed.trim_start_matches('[');
+            if let Some(close_bracket_idx) = after_bracket.rfind(']') {
+                let rest = after_bracket[close_bracket_idx + 1..].trim_start();
+                rest.is_empty() || rest.starts_with('#') || rest.starts_with(';')
+            } else {
+                false
+            }
+        };
 
         // Comentarios completos de línea
         let is_full_comment = in_block_comment
@@ -280,6 +314,15 @@ impl TerminalRenderer {
                     let (c, ni) = decode_at(line, bytes, i);
                     if c.is_alphanumeric() || c == '_' {
                         i = ni;
+                    } else if is_kebab_lang && c == '-' {
+                        // Consumir el guión solo si va seguido de un carácter alfanumérico o '_'
+                        // para evitar consumir operadores de resta como 'a - b'
+                        let next_byte = bytes.get(ni).copied();
+                        if next_byte.is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                            i = ni;
+                        } else {
+                            break;
+                        }
                     } else {
                         break;
                     }
@@ -288,66 +331,81 @@ impl TerminalRenderer {
 
                 // Verificar si va seguido de paréntesis '(' para colorear como invocación de función
                 let is_func_call = line[i..].trim_start_matches(' ').starts_with('(');
+                let is_yaml_key = matches!(ext, "yaml" | "yml")
+                    && line[i..].trim_start_matches(' ').starts_with(':');
 
-                let token_fg = match word {
-                    // Palabras clave de control, estructura y definición: Acento del tema
-                    "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const" | "use"
-                    | "mod" | "type" | "return" | "if" | "else" | "elif" | "elsif" | "match"
-                    | "for" | "while" | "loop" | "async" | "await" | "trait" | "where" | "self"
-                    | "Self" | "function" | "def" | "class" | "import" | "from" | "export"
-                    | "var" | "val" | "interface" | "package" | "go" | "defer" | "errdefer"
-                    | "select" | "switch" | "case" | "default" | "break" | "continue" | "try"
-                    | "catch" | "except" | "finally" | "throw" | "throws" | "new" | "delete"
-                    | "in" | "is" | "as" | "yield" | "lambda" | "with" | "pass" | "raise"
-                    | "assert" | "global" | "nonlocal" | "static" | "public" | "private"
-                    | "protected" | "virtual" | "override" | "abstract" | "extends"
-                    | "implements" | "namespace" | "using" | "template" | "typename"
-                    | "constexpr" | "sizeof" | "param" | "process" | "begin" | "end" | "unsafe"
-                    | "dyn" | "ref" | "move" | "fun" | "guard" | "when" | "protocol"
-                    | "extension" | "mutating" | "comptime" | "unreachable" | "echo" | "source"
-                    | "alias" | "local" | "then" | "fi" | "do" | "done" | "esac" | "SELECT"
-                    | "FROM" | "WHERE" | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET"
-                    | "DELETE" | "CREATE" | "TABLE" | "DROP" | "ALTER" | "INDEX" | "JOIN"
-                    | "INNER" | "LEFT" | "RIGHT" | "OUTER" | "GROUP" | "BY" | "HAVING"
-                    | "ORDER" | "LIMIT" | "OFFSET" | "UNION" | "ALL" | "DISTINCT" | "PRIMARY"
-                    | "KEY" | "FOREIGN" | "REFERENCES" | "CONSTRAINT" | "DATABASE" | "SCHEMA"
-                    | "VIEW" | "TRIGGER" | "RUN" | "CMD" | "LABEL" | "EXPOSE" | "ENV" | "ADD"
-                    | "COPY" | "ENTRYPOINT" | "VOLUME" | "USER" | "WORKDIR" | "ARG" | "ONBUILD" => {
-                        theme.accent_color()
+                let token_fg = if is_toml_table_header {
+                    theme.ansi[5] // En cabeceras de tabla [profile.default], todo identificador pertenece a la cabecera
+                } else if is_config_lang {
+                    match word {
+                        // Booleanos y valores nulos: Amarillo
+                        "true" | "false" | "True" | "False" | "TRUE" | "FALSE" | "None"
+                        | "null" | "nil" | "undefined" | "nan" | "inf" => theme.ansi[3],
+                        // En TOML/INI, cualquier otro identificador es una clave de configuración
+                        _ => theme.ansi[4],
                     }
+                } else {
+                    match word {
+                        // Palabras clave de control, estructura y definición: Acento del tema
+                        "fn" | "pub" | "struct" | "enum" | "impl" | "let" | "mut" | "const"
+                        | "use" | "mod" | "type" | "return" | "if" | "else" | "elif" | "elsif"
+                        | "match" | "for" | "while" | "loop" | "async" | "await" | "trait"
+                        | "where" | "self" | "Self" | "function" | "def" | "class" | "import"
+                        | "from" | "export" | "var" | "val" | "interface" | "package" | "go"
+                        | "defer" | "errdefer" | "select" | "switch" | "case" | "default"
+                        | "break" | "continue" | "try" | "catch" | "except" | "finally"
+                        | "throw" | "throws" | "new" | "delete" | "in" | "is" | "as" | "yield"
+                        | "lambda" | "with" | "pass" | "raise" | "assert" | "global"
+                        | "nonlocal" | "static" | "public" | "private" | "protected"
+                        | "virtual" | "override" | "abstract" | "extends" | "implements"
+                        | "namespace" | "using" | "template" | "typename" | "constexpr"
+                        | "sizeof" | "param" | "process" | "begin" | "end" | "unsafe" | "dyn"
+                        | "ref" | "move" | "fun" | "guard" | "when" | "protocol" | "extension"
+                        | "mutating" | "comptime" | "unreachable" | "echo" | "source" | "alias"
+                        | "local" | "then" | "fi" | "do" | "done" | "esac" | "SELECT" | "FROM"
+                        | "WHERE" | "INSERT" | "INTO" | "VALUES" | "UPDATE" | "SET" | "DELETE"
+                        | "CREATE" | "TABLE" | "DROP" | "ALTER" | "INDEX" | "JOIN" | "INNER"
+                        | "LEFT" | "RIGHT" | "OUTER" | "GROUP" | "BY" | "HAVING" | "ORDER"
+                        | "LIMIT" | "OFFSET" | "UNION" | "ALL" | "DISTINCT" | "PRIMARY" | "KEY"
+                        | "FOREIGN" | "REFERENCES" | "CONSTRAINT" | "DATABASE" | "SCHEMA"
+                        | "VIEW" | "TRIGGER" | "RUN" | "CMD" | "LABEL" | "EXPOSE" | "ENV"
+                        | "ADD" | "COPY" | "ENTRYPOINT" | "VOLUME" | "USER" | "WORKDIR" | "ARG"
+                        | "ONBUILD" => theme.accent_color(),
 
-                    // Booleanos y valores nulos: Amarillo
-                    "true" | "false" | "True" | "False" | "TRUE" | "FALSE" | "None" | "null"
-                    | "nil" | "undefined" | "NULL" | "nullptr" | "NaN" | "Infinity" => {
-                        theme.ansi[3]
-                    }
+                        // Booleanos y valores nulos: Amarillo
+                        "true" | "false" | "True" | "False" | "TRUE" | "FALSE" | "None"
+                        | "null" | "nil" | "undefined" | "NULL" | "nullptr" | "NaN"
+                        | "Infinity" | "nan" | "inf" => theme.ansi[3],
 
-                    // Tipos primitivos y contenedores estándar: Cian brillante (ANSI 6)
-                    "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8"
-                    | "i16" | "i32" | "i64" | "i128" | "isize" | "f32" | "f64" | "bool"
-                    | "char" | "Option" | "Result" | "Vec" | "Some" | "Ok" | "Err" | "Box"
-                    | "Rc" | "Arc" | "Cell" | "RefCell" | "Mutex" | "RwLock" | "HashMap"
-                    | "HashSet" | "BTreeMap" | "BTreeSet" | "Map" | "Set" | "Array" | "List"
-                    | "int" | "float" | "double" | "dict" | "list" | "set" | "tuple" | "void"
-                    | "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32"
-                    | "uint64" | "byte" | "rune" | "any" | "unknown" | "never" | "number"
-                    | "boolean" | "object" | "bigint" | "symbol" | "this" => theme.ansi[6],
+                        // Tipos primitivos y contenedores estándar: Cian brillante (ANSI 6)
+                        "String" | "str" | "u8" | "u16" | "u32" | "u64" | "u128" | "usize"
+                        | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "f32" | "f64"
+                        | "bool" | "char" | "Option" | "Result" | "Vec" | "Some" | "Ok" | "Err"
+                        | "Box" | "Rc" | "Arc" | "Cell" | "RefCell" | "Mutex" | "RwLock"
+                        | "HashMap" | "HashSet" | "BTreeMap" | "BTreeSet" | "Map" | "Set"
+                        | "Array" | "List" | "int" | "float" | "double" | "dict" | "list"
+                        | "set" | "tuple" | "void" | "int8" | "int16" | "int32" | "int64"
+                        | "uint8" | "uint16" | "uint32" | "uint64" | "byte" | "rune" | "any"
+                        | "unknown" | "never" | "number" | "boolean" | "object" | "bigint"
+                        | "symbol" | "this" => theme.ansi[6],
 
-                    _ if is_func_call => theme.ansi[4], // Azul moderno para llamadas a función
-                    _ if word
-                        .chars()
-                        .all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
-                        && word.chars().nth(1).is_some() =>
-                    {
-                        theme.ansi[5] // Constantes en mayúsculas: Magenta
+                        _ if is_yaml_key => theme.ansi[4], // Claves YAML en azul
+                        _ if is_func_call => theme.ansi[4], // Azul moderno para llamadas a función
+                        _ if word
+                            .chars()
+                            .all(|c| c.is_uppercase() || c == '_' || c.is_numeric())
+                            && word.chars().nth(1).is_some() =>
+                        {
+                            theme.ansi[5] // Constantes en mayúsculas: Magenta
+                        }
+                        _ if ch.is_uppercase() => {
+                            theme.ansi[6] // Clases o Tipos PascalCase: Cian
+                        }
+                        _ => theme.foreground,
                     }
-                    _ if ch.is_uppercase() => {
-                        theme.ansi[6] // Clases o Tipos PascalCase: Cian
-                    }
-                    _ => theme.foreground,
                 };
 
-                let is_bold = token_fg == theme.accent_color();
+                let is_bold = token_fg == theme.accent_color() || is_toml_table_header;
                 for wc in word.chars() {
                     if cur_x >= max_x_i32 {
                         break;
@@ -420,7 +478,10 @@ impl TerminalRenderer {
                 }
             }
 
-            let symbol_fg = if matches!(ch, '{' | '}' | '(' | ')' | '[' | ']') {
+            let is_header_symbol = is_toml_table_header && (ch == '[' || ch == ']' || ch == '.');
+            let symbol_fg = if is_header_symbol {
+                theme.ansi[5] // Magenta para delimitadores y jerarquía de sección en TOML/INI
+            } else if matches!(ch, '{' | '}' | '(' | ')' | '[' | ']') {
                 theme.ansi[7]
             } else if matches!(
                 ch,
@@ -447,7 +508,7 @@ impl TerminalRenderer {
                 theme.foreground
             };
 
-            let glyph = self.get_glyph(ch, false);
+            let glyph = self.get_glyph(ch, is_header_symbol);
             let gx = cur_x + glyph.x_offset;
             let gy = baseline_y as i32 - glyph.y_offset - glyph.height as i32;
             canvas.glyph(clip, glyph, gx, gy, symbol_fg);

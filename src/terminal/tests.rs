@@ -1925,3 +1925,34 @@ fn test_terminal_update_theme_migrates_colors_and_preserves_contrast() {
     assert!(crate::theme::contrast_ratio(cell_rojo_after.fg, light_theme.background) >= 2.0);
     assert!(crate::theme::contrast_ratio(cell_gris_after.fg, light_theme.background) >= 2.0);
 }
+
+#[test]
+fn test_phantom_scrollback_prevention_and_has_scrollback() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+    assert!(!term.has_scrollback());
+    assert_eq!(term.scrollback.len(), 0);
+
+    // Nuevas líneas vacías en pantalla limpia no deben activar la barra de desplazamiento
+    for _ in 0..50 {
+        term.process_bytes(b"\r\n");
+    }
+    // Aunque haya líneas vacías en el búfer interno, has_scrollback es falso para la UI
+    assert!(!term.has_scrollback());
+
+    // Redimensionar pantalla limpia más pequeña tampoco debe activar scrollback para la UI
+    term.resize(80, 10);
+    assert!(!term.has_scrollback());
+
+    // Imprimir contenido real que desborde la pantalla activa sí crea scrollback visible
+    for i in 0..30 {
+        term.process_bytes(format!("Comando {}\r\n", i).as_bytes());
+    }
+    assert!(term.has_scrollback());
+    assert!(!term.scrollback.is_empty());
+
+    // Limpieza completa (ED 3 / Clear-Host) debe eliminar el scrollback
+    term.process_bytes(b"\x1b[2J\x1b[3J\x1b[H");
+    assert!(!term.has_scrollback());
+    assert_eq!(term.scrollback.len(), 0);
+    assert_eq!(term.scroll_offset, 0);
+}

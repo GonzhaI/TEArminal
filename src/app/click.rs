@@ -321,6 +321,11 @@ impl TearminalApp {
             self.handle_all_text_inputs_mouse_up();
             self.viewer_drag_selecting = false;
             self.viewer_drag_start = None;
+            if let Some(viewer) = self.tabs[self.active_tab_index].file_viewer.as_mut() {
+                if viewer.selection.is_some_and(|(p1, p2)| p1 == p2) {
+                    viewer.selection = None;
+                }
+            }
             let was_mouse_down = std::mem::take(&mut self.mouse_down);
             let had_drag = self.drag_start.take().is_some() | self.drag_anchor.take().is_some();
             if had_drag || was_mouse_down {

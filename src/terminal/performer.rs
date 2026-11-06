@@ -932,7 +932,7 @@ pub(crate) fn accept_cwd(dir: &str) -> Option<std::path::PathBuf> {
 }
 
 /// Decodifica los `%XX` de una URI `file://` (OSC 7); lo que no es un escape válido se deja tal cual
-pub(super) fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;

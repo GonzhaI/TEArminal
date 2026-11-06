@@ -233,8 +233,8 @@ fn test_split_panes_layout_and_tree() {
     use crate::theme::Theme;
 
     let theme = Theme::default();
-    let pty1 =
-        PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None).expect("Pty 1");
+    let pty1 = PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None, None)
+        .expect("Pty 1");
     let term1 = TerminalState::new(80, 24, 1000, theme.clone());
     let pane1 = TerminalPane::new(PaneId(1), pty1, term1, (80, 24));
 
@@ -255,8 +255,8 @@ fn test_split_panes_layout_and_tree() {
     assert_eq!(rects[0].height, 600 - header);
 
     // 2. División horizontal (Ctrl + Alt + D)
-    let pty2 =
-        PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None).expect("Pty 2");
+    let pty2 = PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None, None)
+        .expect("Pty 2");
     let term2 = TerminalState::new(80, 24, 1000, theme.clone());
     let pane2 = TerminalPane::new(PaneId(2), pty2, term2, (80, 24));
 
@@ -781,8 +781,9 @@ fn test_file_viewer_selection_and_deletion() {
 #[test]
 fn test_terminal_pane_git_branch_ssh_isolation() {
     let theme = crate::theme::Theme::default();
-    let pty = crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None)
-        .expect("pty");
+    let pty =
+        crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None, None)
+            .expect("pty");
     let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
     let mut pane = TerminalPane::new(PaneId(1), pty, term, (80, 24));
     pane.terminal.current_dir = Some(std::path::PathBuf::from("C:\\Users\\Mock\\Repo"));
@@ -811,8 +812,9 @@ fn test_terminal_pane_git_branch_ssh_isolation() {
 #[test]
 fn test_terminal_pane_git_branch_updates_when_head_changes_in_same_dir() {
     let theme = crate::theme::Theme::default();
-    let pty = crate::pty::PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None)
-        .expect("pty");
+    let pty =
+        crate::pty::PtyManager::new(PaneId(2), "powershell.exe", false, 80, 24, None, None, None)
+            .expect("pty");
     let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
     let mut pane = TerminalPane::new(PaneId(2), pty, term, (80, 24));
 
@@ -868,8 +870,17 @@ fn test_pane_grid_size_accounts_for_header_offset() {
         "Test".into(),
         TerminalPane::new(
             PaneId(1),
-            crate::pty::PtyManager::new(PaneId(1), "powershell.exe", false, 80, 24, None, None)
-                .unwrap(),
+            crate::pty::PtyManager::new(
+                PaneId(1),
+                "powershell.exe",
+                false,
+                80,
+                24,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
             crate::terminal::TerminalState::new(80, 24, 100, crate::theme::Theme::default()),
             (80, 24),
         ),
@@ -1273,6 +1284,43 @@ fn test_file_viewer_markdown_headings_fold_their_section() {
     assert_eq!(v.fold_end(2), Some(3));
     assert_eq!(v.fold_end(4), Some(5));
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn test_file_viewer_markdown_images_expand_rows_and_toggle_preview() {
+    // 1. Crear una imagen PNG válida de prueba en el directorio temporal
+    let img_path = std::env::temp_dir().join(format!("test_md_img_{}.png", std::process::id()));
+    let test_img = image::RgbaImage::new(120, 80);
+    test_img.save(&img_path).expect("guardar imagen de prueba");
+
+    let img_name = img_path.file_name().unwrap().to_str().unwrap();
+    let md_content = format!("# Encabezado\n![Diagrama]({img_name})\nPárrafo final\n");
+    let (mut tab, md_path) = viewer_with("doc_with_images.md", &md_content);
+    let v = tab.file_viewer.as_mut().expect("viewer");
+
+    // En vista previa de Markdown, la imagen ocupa filas proporcionales a su altura
+    assert!(v.render_markdown);
+    let preview_rows = v.rows();
+    assert!(
+        preview_rows.len() > 3,
+        "La imagen debe expandir filas virtuales en modo vista previa (obtenido: {})",
+        preview_rows.len()
+    );
+
+    // Comprobar que los segmentos de fila de la imagen pertenecen a la línea 1
+    let img_row_refs: Vec<_> = preview_rows.iter().filter(|r| r.line == 1).collect();
+    assert!(img_row_refs.len() >= 3);
+    assert_eq!(img_row_refs[0].start, 0);
+    assert_eq!(img_row_refs[1].start, 1);
+
+    // Al desactivar la vista previa de Markdown (modo código/raw), la línea de imagen ocupa 1 sola fila
+    v.render_markdown = false;
+    let raw_rows = v.rows();
+    assert_eq!(raw_rows.len(), 3, "en modo raw cada línea debe ser 1 fila");
+
+    // Limpieza
+    let _ = std::fs::remove_file(img_path);
+    let _ = std::fs::remove_file(md_path);
 }
 
 #[test]

@@ -17,7 +17,7 @@ mod geometry;
 mod glyphs;
 mod gpu;
 mod machine_modal;
-mod md_preview;
+pub(crate) mod md_preview;
 mod palette;
 mod pane;
 mod scene;

@@ -6,7 +6,7 @@ use crate::ui::LucideIcon;
 
 /// Rol de cada línea; los bloques de código necesitan el estado de las líneas anteriores.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum MdBlock {
+pub(crate) enum MdBlock {
     Text,
     FenceOpen(String),
     Code(String),
@@ -16,6 +16,84 @@ pub(super) enum MdBlock {
         widths: std::rc::Rc<[usize]>,
         header: bool,
     },
+    /// Imagen en bloque: texto alternativo y ruta o URL del archivo
+    Image {
+        alt: String,
+        url: String,
+    },
+}
+
+/// Extrae la ruta/URL y texto alternativo de una línea de Markdown que contiene una imagen como bloque.
+pub(crate) fn extract_markdown_image(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+
+    // 1. Enlace que envuelve una imagen: [![alt](src)](link)
+    if trimmed.starts_with("[![") {
+        let alt_start = 3;
+        let alt_end = trimmed[alt_start..].find("](").map(|idx| idx + alt_start)?;
+        let alt = &trimmed[alt_start..alt_end];
+        let src_start = alt_end + 2;
+        let src_end = trimmed[src_start..].find(')').map(|idx| idx + src_start)?;
+        let src_part = trimmed[src_start..src_end].trim();
+        let src = src_part.split_whitespace().next().unwrap_or(src_part);
+
+        let rest = trimmed[src_end + 1..].trim();
+        if rest.starts_with("](") && rest.ends_with(')') {
+            return Some((
+                alt.to_string(),
+                src.trim_matches(&['"', '\''][..]).to_string(),
+            ));
+        }
+    }
+
+    // 2. Imagen estándar Markdown: ![alt](src) o ![alt](src "title")
+    if trimmed.starts_with("![") {
+        let alt_start = 2;
+        let alt_end = trimmed[alt_start..].find("](").map(|idx| idx + alt_start)?;
+        let alt = &trimmed[alt_start..alt_end];
+        let src_start = alt_end + 2;
+        let src_end = trimmed[src_start..].find(')').map(|idx| idx + src_start)?;
+        let rest = trimmed[src_end + 1..].trim();
+        if rest.is_empty() {
+            let src_part = trimmed[src_start..src_end].trim();
+            let src = src_part.split_whitespace().next().unwrap_or(src_part);
+            return Some((
+                alt.to_string(),
+                src.trim_matches(&['"', '\''][..]).to_string(),
+            ));
+        }
+    }
+
+    // 3. Etiqueta HTML <img src="..." alt="..." /> (directa o dentro de <p>/<center>)
+    let content = if (trimmed.starts_with("<p") && trimmed.ends_with("</p>"))
+        || (trimmed.starts_with("<center") && trimmed.ends_with("</center>"))
+        || (trimmed.starts_with("<img") && trimmed.ends_with('>'))
+    {
+        trimmed
+    } else {
+        ""
+    };
+
+    if !content.is_empty() && content.contains("<img") {
+        let extract_attr = |attr: &str| -> Option<String> {
+            for quote in ['"', '\''] {
+                let needle = format!("{attr}={quote}");
+                if let Some(idx) = content.find(&needle) {
+                    let val_start = idx + needle.len();
+                    if let Some(val_len) = content[val_start..].find(quote) {
+                        return Some(content[val_start..val_start + val_len].to_string());
+                    }
+                }
+            }
+            None
+        };
+        if let Some(src) = extract_attr("src") {
+            let alt = extract_attr("alt").unwrap_or_default();
+            return Some((alt, src));
+        }
+    }
+
+    None
 }
 
 fn table_cells(line: &str) -> impl Iterator<Item = &str> {
@@ -63,7 +141,7 @@ fn mark_tables(lines: &[String], blocks: &mut [MdBlock]) {
     }
 }
 
-pub(super) fn classify_blocks(lines: &[String]) -> Vec<MdBlock> {
+pub(crate) fn classify_blocks(lines: &[String]) -> Vec<MdBlock> {
     let mut out = Vec::with_capacity(lines.len());
     let mut open: Option<(&'static str, String)> = None;
     for line in lines {
@@ -79,6 +157,8 @@ pub(super) fn classify_blocks(lines: &[String]) -> Vec<MdBlock> {
                         .to_lowercase();
                     out.push(MdBlock::FenceOpen(lang.clone()));
                     open = Some((m, lang));
+                } else if let Some((alt, url)) = extract_markdown_image(line) {
+                    out.push(MdBlock::Image { alt, url });
                 } else {
                     out.push(MdBlock::Text);
                 }
@@ -232,7 +312,9 @@ pub(crate) fn md_inline_state_at(full_line: &str, at: usize) -> (bool, bool, boo
                 i += 2;
                 continue;
             }
-            if ch == '*' {
+            let is_bullet = (i == 0 || chars[..i].iter().all(|c| c.is_whitespace()))
+                && chars.get(i + 1) == Some(&' ');
+            if ch == '*' && !is_bullet {
                 italic = !italic;
                 i += 1;
                 continue;
@@ -309,6 +391,8 @@ impl TerminalRenderer {
         max_x: usize,
         char_w: usize,
         theme: &Theme,
+        sel_cols: Option<(usize, usize)>,
+        sel_bg: Color,
     ) {
         let cw = char_w as i32;
         let max_x_i32 = max_x as i32;
@@ -343,6 +427,34 @@ impl TerminalRenderer {
                         .sum::<i32>();
                     cur_x + code_indent * cw
                 };
+                if let Some((c1, c2)) = sel_cols {
+                    let mut sx: Option<i32> = None;
+                    let mut ex = x;
+                    let mut acc = x;
+                    for (ci, ch) in line.chars().enumerate() {
+                        let col = row_start + ci;
+                        let adv = if ch == '\t' { cw * 4 } else { cw };
+                        if col >= c1 && col < c2 {
+                            sx.get_or_insert(acc);
+                            ex = acc + adv;
+                        }
+                        acc += adv;
+                    }
+                    if let Some(sx) = sx {
+                        let draw_sx = sx.max(clip.0 as i32) as usize;
+                        let draw_ex = ex.min(clip.2 as i32).max(draw_sx as i32) as usize;
+                        if draw_ex > draw_sx {
+                            canvas.rounded_fill(
+                                draw_sx,
+                                row_y,
+                                draw_ex - draw_sx,
+                                row_h,
+                                0,
+                                sel_bg,
+                            );
+                        }
+                    }
+                }
                 self.render_highlighted_line(
                     canvas,
                     clip,
@@ -358,6 +470,8 @@ impl TerminalRenderer {
                 return;
             }
             MdBlock::FenceOpen(lang) => {
+                let show_lang_badge =
+                    !lang.is_empty() && !matches!(lang.as_str(), "text" | "txt" | "plaintext");
                 let header_bg = theme.mix(theme.surface_bg(), theme.background, 0.45);
                 canvas.fill_rect(clip, clip.0, row_y, band_w, row_h, header_bg);
                 // Borde superior y lateral
@@ -370,15 +484,15 @@ impl TerminalRenderer {
                     row_h,
                     theme.mix(theme.background, theme.ansi[8], 0.45),
                 );
-                self.draw_lucide_icon(
-                    canvas,
-                    LucideIcon::Code,
-                    clip.0 + 16,
-                    row_y + row_h / 2,
-                    11.0,
-                    theme.ansi[4],
-                );
-                if !lang.is_empty() {
+                if show_lang_badge {
+                    self.draw_lucide_icon(
+                        canvas,
+                        LucideIcon::Code,
+                        clip.0 + 16,
+                        row_y + row_h / 2,
+                        11.0,
+                        theme.ansi[4],
+                    );
                     self.draw_ui_text(
                         canvas,
                         lang,
@@ -410,6 +524,42 @@ impl TerminalRenderer {
                     band_w,
                     1,
                     theme.border_color(),
+                );
+                if sel_cols.is_some() {
+                    canvas.rounded_fill(clip.0, row_y, band_w, row_h, 0, sel_bg);
+                }
+                return;
+            }
+            MdBlock::Image { alt, .. } => {
+                if sel_cols.is_some() {
+                    canvas.rounded_fill(clip.0, row_y, band_w, row_h, 0, sel_bg);
+                }
+                let cx = cur_x + cw / 2;
+                if cx > clip.0 as i32 + 6 && cx < clip.2 as i32 {
+                    self.draw_lucide_icon(
+                        canvas,
+                        LucideIcon::Image,
+                        cx as usize,
+                        baseline_y.saturating_sub(4),
+                        12.0,
+                        theme.ansi[5],
+                    );
+                }
+                let label = if alt.is_empty() { "imagen" } else { alt };
+                self.draw_md_span(
+                    canvas,
+                    clip,
+                    label,
+                    cur_x + cw * 2,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    (max_x_i32, cw),
+                    theme.ansi[4],
+                    true,
+                    sel_cols,
+                    row_start,
+                    sel_bg,
                 );
                 return;
             }
@@ -460,8 +610,30 @@ impl TerminalRenderer {
             } else {
                 trimmed
             };
+            let title_char_offset = if first_segment {
+                full_line
+                    .chars()
+                    .count()
+                    .saturating_sub(title.chars().count())
+            } else {
+                row_start + line.chars().count().saturating_sub(title.chars().count())
+            };
             self.draw_md_inline(
-                canvas, clip, title, base_x, baseline_y, ctx, theme, color, true, init_state,
+                canvas,
+                clip,
+                title,
+                base_x,
+                row_y,
+                row_h,
+                baseline_y,
+                ctx,
+                theme,
+                color,
+                true,
+                init_state,
+                sel_cols,
+                title_char_offset,
+                sel_bg,
             );
             if level <= 2 && is_last_segment && base_x < max_x_i32 {
                 let ux = base_x.max(clip.0 as i32) as usize;
@@ -476,6 +648,9 @@ impl TerminalRenderer {
             let ux = base_x.max(clip.0 as i32) as usize;
             let uw = (max_x_i32 - base_x).max(0) as usize;
             canvas.fill_rect(clip, ux, row_y + row_h / 2, uw, 1, theme.border_color());
+            if sel_cols.is_some() {
+                canvas.rounded_fill(ux, row_y, uw, row_h, 0, sel_bg);
+            }
             return;
         }
 
@@ -564,21 +739,30 @@ impl TerminalRenderer {
                     }
                     let title_x = icon_cx + cw + 4;
                     let nx = self.draw_md_inline(
-                        canvas, clip, title, title_x, baseline_y, ctx, theme, color, true,
-                        init_state,
+                        canvas, clip, title, title_x, row_y, row_h, baseline_y, ctx, theme, color,
+                        true, init_state, sel_cols, row_start, sel_bg,
                     );
                     if !after_tag.is_empty() {
+                        let after_offset = full_line
+                            .chars()
+                            .count()
+                            .saturating_sub(after_tag.chars().count());
                         self.draw_md_inline(
                             canvas,
                             clip,
                             after_tag,
                             nx + cw,
+                            row_y,
+                            row_h,
                             baseline_y,
                             ctx,
                             theme,
                             theme.foreground,
                             false,
                             init_state,
+                            sel_cols,
+                            after_offset,
+                            sel_bg,
                         );
                     }
                     return;
@@ -594,17 +778,34 @@ impl TerminalRenderer {
             } else {
                 trimmed
             };
+            let text_char_offset = if first_segment {
+                full_line
+                    .chars()
+                    .count()
+                    .saturating_sub(text_to_draw.chars().count())
+            } else {
+                row_start
+                    + line
+                        .chars()
+                        .count()
+                        .saturating_sub(text_to_draw.chars().count())
+            };
             self.draw_md_inline(
                 canvas,
                 clip,
                 text_to_draw,
                 qx,
+                row_y,
+                row_h,
                 baseline_y,
                 ctx,
                 theme,
                 theme.ansi[7],
                 false,
                 init_state,
+                sel_cols,
+                text_char_offset,
+                sel_bg,
             );
             return;
         }
@@ -639,6 +840,9 @@ impl TerminalRenderer {
                         cx += (w + 1) as i32 * cw;
                     }
                     self.draw_md_bar(canvas, clip, cx, row_y + row_h / 4, row_h / 2, theme);
+                }
+                if sel_cols.is_some() {
+                    canvas.rounded_fill(ux, row_y, uw, row_h, 0, sel_bg);
                 }
                 return;
             }
@@ -687,12 +891,17 @@ impl TerminalRenderer {
                     cell_clip,
                     &cell_text,
                     x,
+                    row_y,
+                    row_h,
                     baseline_y,
                     cell_ctx,
                     theme,
                     if header { theme.accent_color() } else { fg },
                     header,
                     (false, false, false, false),
+                    sel_cols,
+                    row_start,
+                    sel_bg,
                 );
 
                 x += col_w as i32 * cw;
@@ -743,14 +952,48 @@ impl TerminalRenderer {
                 } else {
                     trimmed.strip_prefix(prefix).unwrap_or(trimmed)
                 };
+                let rest_char_offset = full_line
+                    .chars()
+                    .count()
+                    .saturating_sub(rest_text.chars().count());
                 self.draw_md_inline(
-                    canvas, clip, rest_text, text_x, baseline_y, ctx, theme, fg, false, init_state,
-                );
+                    canvas,
+                    clip,
+                    rest_text,
+                    text_x,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    ctx,
+                    theme,
+                    fg,
+                    false,
+                    init_state,
+                    sel_cols,
+                    rest_char_offset,
+                    sel_bg,
+                )
             } else {
+                let cont_char_offset =
+                    row_start + line.chars().count().saturating_sub(trimmed.chars().count());
                 self.draw_md_inline(
-                    canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state,
-                );
-            }
+                    canvas,
+                    clip,
+                    trimmed,
+                    text_x,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    ctx,
+                    theme,
+                    fg,
+                    false,
+                    init_state,
+                    sel_cols,
+                    cont_char_offset,
+                    sel_bg,
+                )
+            };
             return;
         }
 
@@ -762,40 +1005,70 @@ impl TerminalRenderer {
             let prefix_len = digits + 2;
             let text_x = base_x + prefix_len as i32 * cw;
             if first_segment {
-                let nx = self.draw_md_inline(
+                let num_nx = self.draw_md_inline(
                     canvas,
                     clip,
                     &trimmed[..digits + 1],
                     base_x,
+                    row_y,
+                    row_h,
                     baseline_y,
                     ctx,
                     theme,
                     theme.accent_color(),
                     true,
                     init_state,
+                    sel_cols,
+                    row_start,
+                    sel_bg,
                 );
                 let rest_text = if trimmed.len() >= prefix_len {
                     &trimmed[prefix_len..]
                 } else {
                     ""
                 };
+                let rest_offset = full_line
+                    .chars()
+                    .count()
+                    .saturating_sub(rest_text.chars().count());
                 self.draw_md_inline(
                     canvas,
                     clip,
                     rest_text,
-                    nx + cw,
+                    num_nx + cw,
+                    row_y,
+                    row_h,
                     baseline_y,
                     ctx,
                     theme,
                     fg,
                     false,
                     init_state,
-                );
+                    sel_cols,
+                    rest_offset,
+                    sel_bg,
+                )
             } else {
+                let cont_offset =
+                    row_start + line.chars().count().saturating_sub(trimmed.chars().count());
                 self.draw_md_inline(
-                    canvas, clip, trimmed, text_x, baseline_y, ctx, theme, fg, false, init_state,
-                );
-            }
+                    canvas,
+                    clip,
+                    trimmed,
+                    text_x,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    ctx,
+                    theme,
+                    fg,
+                    false,
+                    init_state,
+                    sel_cols,
+                    cont_offset,
+                    sel_bg,
+                )
+            };
             return;
         }
 
@@ -809,8 +1082,24 @@ impl TerminalRenderer {
         } else {
             base_x
         };
+        let lead_chars = line.chars().count().saturating_sub(trimmed.chars().count());
+        let text_char_offset = row_start + lead_chars;
         self.draw_md_inline(
-            canvas, clip, trimmed, x, baseline_y, ctx, theme, fg, false, init_state,
+            canvas,
+            clip,
+            trimmed,
+            x,
+            row_y,
+            row_h,
+            baseline_y,
+            ctx,
+            theme,
+            fg,
+            false,
+            init_state,
+            sel_cols,
+            text_char_offset,
+            sel_bg,
         );
     }
 
@@ -838,10 +1127,15 @@ impl TerminalRenderer {
         clip: Clip,
         text: &str,
         mut x: i32,
+        _row_y: usize,
+        _row_h: usize,
         baseline_y: usize,
         ctx: (i32, i32),
         color: Color,
         underline: bool,
+        _sel_range: Option<(usize, usize)>,
+        _char_col_offset: usize,
+        _sel_bg: Color,
     ) -> i32 {
         let (max_x, cw) = ctx;
         let start = x;
@@ -871,9 +1165,14 @@ impl TerminalRenderer {
         clip: Clip,
         alt: &str,
         x: i32,
+        row_y: usize,
+        row_h: usize,
         baseline_y: usize,
         ctx: (i32, i32),
         theme: &Theme,
+        sel_range: Option<(usize, usize)>,
+        char_col_offset: usize,
+        sel_bg: Color,
     ) -> i32 {
         let (_, cw) = ctx;
         let cx = x + cw / 2;
@@ -893,10 +1192,15 @@ impl TerminalRenderer {
             clip,
             alt,
             x + cw * 2,
+            row_y,
+            row_h,
             baseline_y,
             ctx,
             theme.ansi[4],
             true,
+            sel_range,
+            char_col_offset,
+            sel_bg,
         )
     }
 
@@ -909,12 +1213,17 @@ impl TerminalRenderer {
         clip: Clip,
         text: &str,
         mut x: i32,
+        row_y: usize,
+        row_h: usize,
         baseline_y: usize,
         ctx: (i32, i32),
         theme: &Theme,
         base_fg: Color,
         base_bold: bool,
         init_state: (bool, bool, bool, bool),
+        sel_range: Option<(usize, usize)>,
+        char_col_offset: usize,
+        sel_bg: Color,
     ) -> i32 {
         let (max_x, cw) = ctx;
         let chars: Vec<char> = text.chars().collect();
@@ -940,10 +1249,35 @@ impl TerminalRenderer {
                 if let Some((close, end)) = link {
                     let label: String = chars[open + 1..close].iter().collect();
                     if is_img {
-                        x = self.draw_md_image(canvas, clip, &label, x, baseline_y, ctx, theme);
+                        x = self.draw_md_image(
+                            canvas,
+                            clip,
+                            &label,
+                            x,
+                            row_y,
+                            row_h,
+                            baseline_y,
+                            ctx,
+                            theme,
+                            sel_range,
+                            char_col_offset + open + 1,
+                            sel_bg,
+                        );
                     } else {
                         x = self.draw_md_span(
-                            canvas, clip, &label, x, baseline_y, ctx, link_color, true,
+                            canvas,
+                            clip,
+                            &label,
+                            x,
+                            row_y,
+                            row_h,
+                            baseline_y,
+                            ctx,
+                            link_color,
+                            true,
+                            sel_range,
+                            char_col_offset + open + 1,
+                            sel_bg,
                         );
                     }
                     i = end + 1;
@@ -961,8 +1295,20 @@ impl TerminalRenderer {
                         "code" | "kbd" => code = on,
                         "s" | "del" => strike = on,
                         "img" => {
-                            x = self
-                                .draw_md_image(canvas, clip, &tag.alt, x, baseline_y, ctx, theme);
+                            x = self.draw_md_image(
+                                canvas,
+                                clip,
+                                &tag.alt,
+                                x,
+                                row_y,
+                                row_h,
+                                baseline_y,
+                                ctx,
+                                theme,
+                                sel_range,
+                                char_col_offset + i,
+                                sel_bg,
+                            );
                         }
                         _ => {}
                     }
@@ -982,7 +1328,21 @@ impl TerminalRenderer {
                     .position(|c| c.is_whitespace() || matches!(c, ')' | '>' | '"'))
                     .map_or(chars.len(), |p| i + p);
                 let url: String = chars[i..end].iter().collect();
-                x = self.draw_md_span(canvas, clip, &url, x, baseline_y, ctx, link_color, true);
+                x = self.draw_md_span(
+                    canvas,
+                    clip,
+                    &url,
+                    x,
+                    row_y,
+                    row_h,
+                    baseline_y,
+                    ctx,
+                    link_color,
+                    true,
+                    sel_range,
+                    char_col_offset + i,
+                    sel_bg,
+                );
                 i = end;
                 continue;
             }
@@ -1004,9 +1364,13 @@ impl TerminalRenderer {
                     continue;
                 }
                 '*' if !code => {
-                    italic = !italic;
-                    i += 1;
-                    continue;
+                    let is_bullet = (i == 0 || chars[..i].iter().all(|c| c.is_whitespace()))
+                        && chars.get(i + 1) == Some(&' ');
+                    if !is_bullet {
+                        italic = !italic;
+                        i += 1;
+                        continue;
+                    }
                 }
                 // Escape: el siguiente carácter se dibuja tal cual
                 '\\' if !code && chars.get(i + 1).is_some_and(|c| c.is_ascii_punctuation()) => {
@@ -1016,24 +1380,21 @@ impl TerminalRenderer {
             }
             let ch = chars[i];
             let adv = if ch == '\t' { cw * 4 } else { cw };
+            let col = char_col_offset + i;
+            let is_selected = sel_range.is_some_and(|(s, e)| col >= s && col < e);
 
             if code {
                 // Fondo del código en línea
                 let top = baseline_y.saturating_sub((cw * 3 / 2) as usize);
-                canvas.fill_rect(
-                    clip,
-                    x.max(0) as usize,
-                    top,
-                    adv as usize,
-                    (cw * 2) as usize,
-                    code_bg,
-                );
+                let chip_h = (cw * 2) as usize;
+                canvas.fill_rect(clip, x.max(0) as usize, top, adv as usize, chip_h, code_bg);
+                if is_selected {
+                    canvas.rounded_fill(x.max(0) as usize, top, adv as usize, chip_h, 0, sel_bg);
+                }
             }
             if ch != ' ' && ch != '\t' {
                 let (fg, is_bold) = if code {
                     (theme.ansi[3], true)
-                } else if italic {
-                    (theme.ansi[5], bold)
                 } else {
                     (base_fg, bold)
                 };
@@ -1170,6 +1531,18 @@ mod tests {
             md_inline_state_at(line, italic_idx + 2),
             (false, false, true, false)
         );
+
+        // Viñetas no deben confundirse con cursiva
+        let bullet_line = "* Elemento de lista que continúa en la siguiente línea";
+        assert_eq!(
+            md_inline_state_at(bullet_line, 10),
+            (false, false, false, false)
+        );
+        let sub_bullet = "  * Sub-elemento de lista identado";
+        assert_eq!(
+            md_inline_state_at(sub_bullet, 12),
+            (false, false, false, false)
+        );
     }
 
     #[test]
@@ -1191,5 +1564,77 @@ mod tests {
         assert!(fitted_shrunk[1] < 60);
         // Cada columna preserva un mínimo legible
         assert!(fitted_shrunk.iter().all(|&w| w >= 4));
+    }
+
+    #[test]
+    fn test_extract_markdown_image() {
+        // Formato estándar: ![alt](url)
+        assert_eq!(
+            extract_markdown_image("![Diagrama de flujo](./assets/flow.png)"),
+            Some(("Diagrama de flujo".into(), "./assets/flow.png".into()))
+        );
+
+        // Con título opcional: ![alt](url "title")
+        assert_eq!(
+            extract_markdown_image("![Logo](img/logo.png \"Título del logo\")"),
+            Some(("Logo".into(), "img/logo.png".into()))
+        );
+
+        // Envuelto en enlace: [![alt](url)](link)
+        assert_eq!(
+            extract_markdown_image(
+                "[![Build Status](https://img.shields.io/ci.svg)](https://ci.org)"
+            ),
+            Some((
+                "Build Status".into(),
+                "https://img.shields.io/ci.svg".into()
+            ))
+        );
+
+        // Etiqueta HTML <img src="..." alt="..." />
+        assert_eq!(
+            extract_markdown_image(r#"<img src="doc/banner.jpg" alt="Banner principal" />"#),
+            Some(("Banner principal".into(), "doc/banner.jpg".into()))
+        );
+
+        // Etiqueta HTML centrada <p align="center"><img src="..." /></p>
+        assert_eq!(
+            extract_markdown_image(r#"<p align="center"><img src="doc/logo.png" /></p>"#),
+            Some(("".into(), "doc/logo.png".into()))
+        );
+
+        // Imagen en línea dentro de un párrafo: no debe clasificarse como bloque
+        assert_eq!(
+            extract_markdown_image("Texto previo ![icono](icon.png) texto posterior"),
+            None
+        );
+
+        // Texto normal sin imágenes
+        assert_eq!(extract_markdown_image("Solo texto normal"), None);
+        assert_eq!(
+            extract_markdown_image("[Enlace normal](https://example.com)"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_classify_blocks_with_images() {
+        let b = classify_blocks(&lines(
+            "# Título\n![Diagrama](./diag.png)\n```rust\n![no_imagen](code.png)\n```\nFin",
+        ));
+        assert_eq!(
+            b,
+            vec![
+                MdBlock::Text,
+                MdBlock::Image {
+                    alt: "Diagrama".into(),
+                    url: "./diag.png".into(),
+                },
+                MdBlock::FenceOpen("rust".into()),
+                MdBlock::Code("rust".into()),
+                MdBlock::FenceClose,
+                MdBlock::Text,
+            ]
+        );
     }
 }

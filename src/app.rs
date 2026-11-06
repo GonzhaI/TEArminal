@@ -1187,6 +1187,7 @@ impl SpawnCtx<'_> {
             cols as u16,
             rows as u16,
             cwd,
+            Some(self.theme),
             self.proxy.clone(),
         )
         .unwrap_or_else(|e| crate::pty::fatal_spawn_error(shell, &e));

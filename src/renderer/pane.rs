@@ -70,11 +70,10 @@ pub(crate) fn compute_cell_fg(cell: &Cell, theme: &Theme) -> Color {
     };
 
     if cell.dim() {
-        Color::from_rgb(
-            (f32::from(base.r) * 0.65) as u8,
-            (f32::from(base.g) * 0.65) as u8,
-            (f32::from(base.b) * 0.65) as u8,
-        )
+        // Atenuar hacia el fondo de la celda (reduce el contraste tanto en temas claros como oscuros).
+        // Multiplicar por 0.65 oscurecía hacia el negro, lo que en temas claros volvía el texto tenue
+        // más contrastado y notorio que el texto normal.
+        theme.mix(base, bg, 0.40)
     } else {
         base
     }
@@ -89,7 +88,7 @@ impl TerminalRenderer {
         rect_height: usize,
         terminal: &TerminalState,
     ) -> Option<(usize, usize, usize, usize)> {
-        if terminal.scrollback.is_empty() {
+        if !terminal.has_scrollback() {
             return None;
         }
         let history = terminal.scrollback.len();
@@ -196,17 +195,53 @@ impl TerminalRenderer {
                     '▟' => (false, true, true, true),
                     _ => (false, false, false, false),
                 };
-                if tl {
-                    canvas.fill_rect(clip, cell_x, cell_y, w2, h2, color);
-                }
-                if tr {
-                    canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, h2, color);
-                }
-                if bl {
-                    canvas.fill_rect(clip, cell_x, cell_y + h2, w2, rem_h, color);
-                }
-                if br {
-                    canvas.fill_rect(clip, cell_x + w2, cell_y + h2, rem_w, rem_h, color);
+                if tl && tr && bl && br {
+                    canvas.fill_rect(clip, cell_x, cell_y, cw, rh, color);
+                } else if tl && tr {
+                    canvas.fill_rect(clip, cell_x, cell_y, cw, h2, color);
+                    if bl {
+                        canvas.fill_rect(clip, cell_x, cell_y + h2, w2, rem_h, color);
+                    }
+                    if br {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y + h2, rem_w, rem_h, color);
+                    }
+                } else if bl && br {
+                    canvas.fill_rect(clip, cell_x, cell_y + h2, cw, rem_h, color);
+                    if tl {
+                        canvas.fill_rect(clip, cell_x, cell_y, w2, h2, color);
+                    }
+                    if tr {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, h2, color);
+                    }
+                } else if tl && bl {
+                    canvas.fill_rect(clip, cell_x, cell_y, w2, rh, color);
+                    if tr {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, h2, color);
+                    }
+                    if br {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y + h2, rem_w, rem_h, color);
+                    }
+                } else if tr && br {
+                    canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, rh, color);
+                    if tl {
+                        canvas.fill_rect(clip, cell_x, cell_y, w2, h2, color);
+                    }
+                    if bl {
+                        canvas.fill_rect(clip, cell_x, cell_y + h2, w2, rem_h, color);
+                    }
+                } else {
+                    if tl {
+                        canvas.fill_rect(clip, cell_x, cell_y, w2, h2, color);
+                    }
+                    if tr {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y, rem_w, h2, color);
+                    }
+                    if bl {
+                        canvas.fill_rect(clip, cell_x, cell_y + h2, w2, rem_h, color);
+                    }
+                    if br {
+                        canvas.fill_rect(clip, cell_x + w2, cell_y + h2, rem_w, rem_h, color);
+                    }
                 }
                 true
             }
@@ -284,8 +319,8 @@ impl TerminalRenderer {
     }
 
     /// Sextantes (`rows` = 3) y octantes (`rows` = 4): rejilla de 2 columnas x `rows` filas; el bit 0 es
-    /// arriba a la izquierda y se avanza por filas. Las casillas comparten borde exacto, así que no hay
-    /// costuras entre ellas ni entre celdas.
+    /// arriba a la izquierda y se avanza por filas. Las casillas contiguas se agrupan horizontal y verticalmente
+    /// para minimizar las llamadas de dibujo sin alterar los píxeles resultantes.
     #[allow(clippy::too_many_arguments)]
     fn draw_cells(
         &self,
@@ -298,14 +333,38 @@ impl TerminalRenderer {
         color: Color,
     ) {
         let (cw, rh) = (self.char_width, self.row_height);
-        for slot in 0..rows * 2 {
-            if pattern & (1 << slot) == 0 {
+        let mut row = 0;
+        while row < rows {
+            let left = pattern & (1 << (row * 2)) != 0;
+            let right = pattern & (1 << (row * 2 + 1)) != 0;
+            if !left && !right {
+                row += 1;
                 continue;
             }
-            let (col, row) = (slot % 2, slot / 2);
-            let (x0, x1) = (cw * col / 2, cw * (col + 1) / 2);
-            let (y0, y1) = (rh * row / rows, rh * (row + 1) / rows);
-            canvas.fill_rect(clip, cell_x + x0, cell_y + y0, x1 - x0, y1 - y0, color);
+            // Agrupar filas contiguas que tengan exactamente el mismo patrón horizontal
+            let mut end_row = row + 1;
+            while end_row < rows {
+                let next_left = pattern & (1 << (end_row * 2)) != 0;
+                let next_right = pattern & (1 << (end_row * 2 + 1)) != 0;
+                if next_left == left && next_right == right {
+                    end_row += 1;
+                } else {
+                    break;
+                }
+            }
+            let y0 = rh * row / rows;
+            let y1 = rh * end_row / rows;
+            let h = y1 - y0;
+            if left && right {
+                canvas.fill_rect(clip, cell_x, cell_y + y0, cw, h, color);
+            } else if left {
+                let w = cw / 2;
+                canvas.fill_rect(clip, cell_x, cell_y + y0, w, h, color);
+            } else {
+                let w2 = cw / 2;
+                canvas.fill_rect(clip, cell_x + w2, cell_y + y0, cw - w2, h, color);
+            }
+            row = end_row;
         }
     }
 
@@ -951,7 +1010,7 @@ impl TerminalRenderer {
         }
 
         // 6. Scrollbar del panel si tiene historial
-        if !terminal.scrollback.is_empty() {
+        if terminal.has_scrollback() {
             if let Some((thumb_x, thumb_y, thumb_w, thumb_h)) =
                 self.pane_scrollbar_geometry(rect_x, rect_y, rect_w, rect_h, terminal)
             {

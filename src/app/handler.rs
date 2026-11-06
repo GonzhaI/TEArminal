@@ -718,13 +718,20 @@ impl TearminalApp {
         // GIF animado abierto en el visor: despierta en el próximo fotograma y repinta solo si cambió
         // (`shown_frame` lo fija el render; así el repintado no se encadena a sí mismo)
         if !self.occluded {
-            let animated = self
-                .tabs
-                .get(self.active_tab_index)
+            let active_tab = self.tabs.get(self.active_tab_index);
+            let animated = active_tab
                 .and_then(|t| t.file_viewer.as_ref())
                 .and_then(|v| v.image.as_ref())
                 .filter(|img| img.is_animated());
-            if let Some(img) = animated {
+            let md_animated = active_tab
+                .and_then(|t| t.file_viewer.as_ref())
+                .filter(|v| v.render_markdown && v.is_markdown())
+                .and_then(|v| {
+                    let map = v.md_images.borrow();
+                    map.values()
+                        .find_map(|opt| opt.as_ref().filter(|img| img.is_animated()).cloned())
+                });
+            if let Some(img) = animated.or(md_animated.as_ref()) {
                 let (frame, remaining_ms) = img.current();
                 if frame != img.shown_frame.get() {
                     if let Some(w) = &self.window {

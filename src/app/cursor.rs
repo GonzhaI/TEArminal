@@ -893,6 +893,7 @@ impl TearminalApp {
                     needs_redraw = true;
                 }
 
+                let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
                 let lay = crate::renderer::FileViewerLayout::compute(
                     offset,
                     top_offset,
@@ -901,6 +902,7 @@ impl TearminalApp {
                     row_h,
                     char_w,
                     viewer.lines.len(),
+                    show_gutter,
                 );
 
                 let is_over_search_bar = if viewer.search_open {
@@ -978,7 +980,7 @@ impl TearminalApp {
                 }
 
                 if self.viewer_drag_selecting && !viewer.is_binary && !viewer.lines.is_empty() {
-                    let visible_lines = lay.content_h / lay.row_h;
+                    let visible_lines = (lay.content_h / lay.row_h.max(16)).max(1);
                     let total_rows = viewer.rows().len();
 
                     if my < content_y && viewer.scroll_offset > 0 {
@@ -990,12 +992,14 @@ impl TearminalApp {
                         }
                     }
 
-                    let clicked_row = viewer.scroll_offset
-                        + if my < content_y {
-                            0
-                        } else {
-                            (my - content_y) / row_h.max(16)
-                        };
+                    let visual_row = if my < content_y {
+                        0
+                    } else if my >= top_offset + viewer_h {
+                        visible_lines.saturating_sub(1)
+                    } else {
+                        ((my - content_y) / row_h.max(16)).min(visible_lines.saturating_sub(1))
+                    };
+                    let clicked_row = viewer.scroll_offset + visual_row;
                     let (target_line, target_col) = viewer
                         .hit_test(clicked_row, mx, &lay)
                         .unwrap_or((viewer.cursor_line, viewer.cursor_col));
@@ -1006,9 +1010,6 @@ impl TearminalApp {
                     if let Some(start) = self.viewer_drag_start {
                         viewer.selection = Some((start, (target_line, target_col)));
                     }
-                    let content_h =
-                        viewer_h.saturating_sub(crate::renderer::FileViewerLayout::HEADER_H);
-                    let visible_lines = (content_h / row_h.max(16)).max(1);
                     viewer.ensure_cursor_visible(visible_lines);
                     needs_redraw = true;
                 }
@@ -1266,7 +1267,7 @@ impl TearminalApp {
                 if let Some(target_rect) = pane_rects.iter().find(|r| r.pane_id == pid) {
                     if let Some(pane) = active_tab.find_pane_mut(pid) {
                         if let Some(renderer) = &self.renderer {
-                            if !pane.terminal.scrollback.is_empty() {
+                            if pane.terminal.has_scrollback() {
                                 let track_y = target_rect.y + renderer.margin_y;
                                 let track_h =
                                     target_rect.height.saturating_sub(renderer.margin_y * 2);

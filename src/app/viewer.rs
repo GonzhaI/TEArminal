@@ -30,10 +30,12 @@ pub(crate) struct RowRef {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RowsCache {
-    key: (u64, u64, usize, bool, bool),
+    key: (u64, u64, usize, usize, bool, bool),
     rows: Rc<[RowRef]>,
     max_cols_gen: u64,
     max_cols: usize,
+    config: (u64, usize, usize, bool, bool),
+    lines_len: usize,
 }
 
 use unicode_segmentation::UnicodeSegmentation;
@@ -109,6 +111,24 @@ fn md_hanging_indent(line: &str) -> usize {
         return indent;
     }
     0
+}
+
+/// Resuelve una ruta de imagen relativa al documento Markdown actual en el disco local.
+pub(crate) fn resolve_image_path(
+    doc_path: &std::path::Path,
+    src: &str,
+) -> Option<std::path::PathBuf> {
+    let clean = src.split(&['?', '#'][..]).next().unwrap_or(src).trim();
+    if clean.is_empty() || clean.starts_with("http://") || clean.starts_with("https://") {
+        return None;
+    }
+    let decoded = crate::terminal::percent_decode(clean);
+    let p = std::path::Path::new(&decoded);
+    if p.is_absolute() {
+        Some(p.to_path_buf())
+    } else {
+        doc_path.parent().map(|dir| dir.join(p))
+    }
 }
 
 /// Parte `line` en tramos con ancho configurable para el primer tramo y los continuados.
@@ -223,6 +243,10 @@ pub(crate) struct FileViewerState {
     pub hovered_gutter: bool,
     /// Columnas de texto visibles (las fija el render según el ancho real de la pestaña)
     pub visible_cols: usize,
+    /// Altura de fila en píxeles (la sincroniza el render para el cálculo de bloques visuales)
+    pub row_height: usize,
+    /// Imágenes Markdown en caché: mapa de URL -> ViewerImage decodificada
+    pub md_images: RefCell<rustc_hash::FxHashMap<String, Option<Rc<ViewerImage>>>>,
     /// Ajuste de línea (lo sincroniza el render desde la configuración global)
     pub word_wrap: bool,
     /// Líneas plegadas (primera línea de cada región oculta)
@@ -235,6 +259,8 @@ pub(crate) struct FileViewerState {
     pub edit_gen: u64,
     pub fold_gen: u64,
     pub rows_cache: RefCell<Option<RowsCache>>,
+    /// Línea editada recientemente para actualización incremental O(1) de filas visuales
+    pub edited_line: Option<usize>,
     /// Barra flotante de búsqueda interna (`Ctrl + F`)
     pub search_open: bool,
     /// La misma barra, en modo «Ir a línea» (`Ctrl + G`): `search_input` es `línea[:columna]`, sin coincidencias
@@ -344,6 +370,35 @@ impl FileViewerState {
         }
     }
 
+    /// Obtiene o carga de disco una imagen local referenciada en un documento Markdown.
+    pub(crate) fn get_or_load_md_image(&self, src: &str) -> Option<Rc<ViewerImage>> {
+        if let Some(cached) = self.md_images.borrow().get(src) {
+            return cached.clone();
+        }
+        let img = resolve_image_path(&self.path, src)
+            .filter(|p| p.is_file())
+            .and_then(|resolved| {
+                let bytes = std::fs::read(&resolved).ok()?;
+                ViewerImage::decode(&resolved, &bytes)
+            });
+        self.md_images
+            .borrow_mut()
+            .insert(src.to_string(), img.clone());
+        img
+    }
+
+    /// Calcula la cantidad de filas visuales que ocupará una imagen en el visor de Markdown.
+    pub(crate) fn calc_md_image_rows(&self, img_w: u32, img_h: u32) -> usize {
+        let row_h = self.row_height.max(16);
+        let avail_w = (self.visible_cols * 8).clamp(120, 800);
+        let max_h = 360usize;
+        let scale = (avail_w as f32 / img_w as f32)
+            .min(max_h as f32 / img_h as f32)
+            .min(1.0);
+        let display_h = ((img_h as f32 * scale).round() as usize).max(32);
+        (display_h.div_ceil(row_h) + 1).clamp(2, 24)
+    }
+
     /// Filas visuales (ajuste de línea + plegado), en caché mientras no cambien texto, pliegues, ancho ni modo.
     pub(crate) fn rows(&self) -> Rc<[RowRef]> {
         let wrap = self.wrap_active();
@@ -352,26 +407,149 @@ impl FileViewerState {
             self.edit_gen,
             self.fold_gen,
             self.visible_cols,
+            self.row_height,
             wrap,
             is_md_preview,
         );
-        let prev_max_cols = {
+        let config = (
+            self.fold_gen,
+            self.visible_cols,
+            self.row_height,
+            wrap,
+            is_md_preview,
+        );
+
+        // 1. Si la clave coincide exactamente o se puede actualizar de forma incremental
+        let incremental = {
             let borrow = self.rows_cache.borrow();
             if let Some(c) = &*borrow {
                 if c.key == key {
                     return c.rows.clone();
                 }
-                (c.max_cols_gen == self.edit_gen).then_some(c.max_cols)
+                if c.config == config
+                    && c.lines_len == self.lines.len()
+                    && self.folded.is_empty()
+                    && self.edited_line.is_some()
+                {
+                    Some((c.rows.clone(), c.max_cols))
+                } else {
+                    None
+                }
             } else {
                 None
             }
+        };
+
+        // 2. Ruta rápida incremental: si solo se editó una línea existente y la configuración
+        // no cambió (sin pliegues activos ni cambios de tamaño), actualizar solo esa línea en O(1)
+        if let Some((prev_rows, prev_max_cols)) = incremental {
+            let edited_idx = self.edited_line.unwrap_or(0);
+            if edited_idx < self.lines.len() {
+                let r_start = prev_rows.partition_point(|r| r.line < edited_idx);
+                let r_end = prev_rows.partition_point(|r| r.line <= edited_idx);
+
+                let line = &self.lines[edited_idx];
+                let is_table = is_md_preview && line.trim_start().starts_with('|');
+                let is_img = is_md_preview
+                    && crate::renderer::md_preview::extract_markdown_image(line).is_some();
+                let mut line_rows = Vec::with_capacity(2);
+                if is_img {
+                    let img_info = crate::renderer::md_preview::extract_markdown_image(line)
+                        .and_then(|(_, src)| self.get_or_load_md_image(&src));
+                    let img_rows = if let Some(img) = img_info {
+                        self.calc_md_image_rows(img.width, img.height)
+                    } else {
+                        1
+                    };
+                    for r in 0..img_rows {
+                        line_rows.push(RowRef {
+                            line: edited_idx,
+                            start: r,
+                            end: usize::MAX,
+                        });
+                    }
+                } else if wrap && !is_table {
+                    if is_md_preview {
+                        let hanging = md_hanging_indent(line);
+                        let cont_cols = self.visible_cols.saturating_sub(hanging).max(8);
+                        wrap_line_with_indent(
+                            line,
+                            self.visible_cols,
+                            cont_cols,
+                            edited_idx,
+                            &mut line_rows,
+                        );
+                    } else {
+                        wrap_line(line, self.visible_cols, edited_idx, &mut line_rows);
+                    }
+                } else {
+                    line_rows.push(RowRef {
+                        line: edited_idx,
+                        start: 0,
+                        end: usize::MAX,
+                    });
+                }
+
+                let mut updated_rows = prev_rows.to_vec();
+                updated_rows.splice(r_start..r_end, line_rows);
+                if updated_rows.is_empty() {
+                    updated_rows.push(RowRef {
+                        line: 0,
+                        start: 0,
+                        end: usize::MAX,
+                    });
+                }
+
+                let edited_w = line_col_width(line);
+                let max_cols = if edited_w >= prev_max_cols {
+                    edited_w
+                } else {
+                    prev_max_cols
+                };
+
+                let rows: Rc<[RowRef]> = Rc::from(updated_rows);
+                *self.rows_cache.borrow_mut() = Some(RowsCache {
+                    key,
+                    rows: rows.clone(),
+                    max_cols_gen: self.edit_gen,
+                    max_cols,
+                    config,
+                    lines_len: self.lines.len(),
+                });
+                return rows;
+            }
+        }
+
+        // 3. Reconstrucción completa (apertura, redimensionado, cambios multilínea o pliegues)
+        let prev_max_cols = {
+            let borrow = self.rows_cache.borrow();
+            borrow
+                .as_ref()
+                .and_then(|c| (c.max_cols_gen == self.edit_gen).then_some(c.max_cols))
         };
         let mut rows = Vec::with_capacity(self.lines.len());
         let mut i = 0;
         while i < self.lines.len() {
             let line = &self.lines[i];
             let is_table = is_md_preview && line.trim_start().starts_with('|');
-            if wrap && !is_table {
+            let is_img = is_md_preview
+                && crate::renderer::md_preview::extract_markdown_image(line).is_some();
+            if is_img {
+                let img_info = crate::renderer::md_preview::extract_markdown_image(line)
+                    .and_then(|(_, src)| self.get_or_load_md_image(&src));
+                let img_rows = if let Some(img) = img_info {
+                    self.calc_md_image_rows(img.width, img.height)
+                } else {
+                    1
+                };
+                for r in 0..img_rows {
+                    rows.push(RowRef {
+                        line: i,
+                        start: r,
+                        end: usize::MAX,
+                    });
+                }
+            } else if wrap && !is_table {
                 if is_md_preview {
                     let hanging = md_hanging_indent(line);
                     let cont_cols = self.visible_cols.saturating_sub(hanging).max(8);
@@ -411,6 +589,8 @@ impl FileViewerState {
             rows: rows.clone(),
             max_cols_gen: self.edit_gen,
             max_cols,
+            config,
+            lines_len: self.lines.len(),
         });
         rows
     }
@@ -439,6 +619,15 @@ impl FileViewerState {
     ) -> Option<(usize, usize)> {
         let rows = self.rows();
         let row = rows.get(row_idx).or(rows.last())?;
+        if self.render_markdown
+            && self.is_markdown()
+            && self
+                .lines
+                .get(row.line)
+                .is_some_and(|l| crate::renderer::md_preview::extract_markdown_image(l).is_some())
+        {
+            return Some((row.line, 0));
+        }
         let seg = self.row_text(row);
         let scroll_x = if self.wrap_active() {
             0
@@ -447,7 +636,7 @@ impl FileViewerState {
         };
         let mut col = lay.col_at(seg, mx, scroll_x);
         if row.end != usize::MAX {
-            col = col.min(char_count(seg).saturating_sub(1));
+            col = col.min(char_count(seg));
         }
         Some((row.line, row.start + col))
     }
@@ -502,6 +691,7 @@ impl FileViewerState {
             self.selection = None;
         }
         self.fold_gen += 1;
+        self.edited_line = None;
     }
 
     pub(crate) fn fold_all(&mut self) {
@@ -513,6 +703,7 @@ impl FileViewerState {
             .collect();
         self.folded.extend(starts);
         self.fold_gen += 1;
+        self.edited_line = None;
         self.selection = None;
         // si el cursor quedó oculto, sube al encabezado visible más externo que lo contiene
         let hidden_by = self.folded.iter().copied().find(|&s| {
@@ -529,6 +720,7 @@ impl FileViewerState {
         if !self.folded.is_empty() {
             self.folded.clear();
             self.fold_gen += 1;
+            self.edited_line = None;
         }
     }
 
@@ -684,6 +876,7 @@ impl FileViewerState {
                 let end_byte = char_byte_idx(line, c2);
                 line.drain(start_byte..end_byte);
             }
+            self.edited_line = Some(l1);
         } else {
             let prefix_end = char_byte_idx(&self.lines[l1], c1);
             let mut prefix = self.lines[l1][..prefix_end].to_string();
@@ -699,6 +892,7 @@ impl FileViewerState {
             if l1 + 1 < drain_end {
                 self.lines.drain((l1 + 1)..drain_end);
             }
+            self.edited_line = None;
         }
 
         self.cursor_line = l1.min(self.lines.len().saturating_sub(1));
@@ -879,6 +1073,7 @@ impl FileViewerState {
             self.cursor_col = prev.cursor_col;
             self.is_dirty = self.lines != self.original_lines;
             self.edit_gen += 1;
+            self.edited_line = None;
         }
     }
 
@@ -897,6 +1092,7 @@ impl FileViewerState {
             self.cursor_col = next.cursor_col;
             self.is_dirty = self.lines != self.original_lines;
             self.edit_gen += 1;
+            self.edited_line = None;
         }
     }
 
@@ -1120,6 +1316,7 @@ impl FileViewerState {
         self.cursor_col += 1;
         self.clear_selection();
         self.is_dirty = true;
+        self.edited_line = Some(self.cursor_line);
     }
 
     pub(crate) fn insert_text(&mut self, text: &str) {
@@ -1144,6 +1341,7 @@ impl FileViewerState {
             let byte_pos = char_byte_idx(line, self.cursor_col);
             line.insert_str(byte_pos, parts[0]);
             self.cursor_col += char_count(parts[0]);
+            self.edited_line = Some(self.cursor_line);
         } else {
             let line = &self.lines[self.cursor_line];
             let byte_pos = char_byte_idx(line, self.cursor_col);
@@ -1163,6 +1361,7 @@ impl FileViewerState {
                 }
             }
             self.cursor_line += parts.len() - 1;
+            self.edited_line = None;
         }
         self.is_dirty = true;
     }
@@ -1191,6 +1390,7 @@ impl FileViewerState {
         self.lines.insert(self.cursor_line, remainder);
         self.clear_selection();
         self.is_dirty = true;
+        self.edited_line = None;
     }
 
     pub(crate) fn insert_tab(&mut self) {
@@ -1221,6 +1421,7 @@ impl FileViewerState {
                 line.drain(start_byte..end_byte);
                 self.cursor_col -= 1;
                 self.is_dirty = true;
+                self.edited_line = Some(self.cursor_line);
             }
         } else if self.cursor_line > 0 {
             // Unir la línea actual con la anterior
@@ -1230,6 +1431,7 @@ impl FileViewerState {
             self.lines[self.cursor_line].push_str(&cur_line);
             self.cursor_col = prev_len;
             self.is_dirty = true;
+            self.edited_line = None;
         }
     }
 
@@ -1259,11 +1461,13 @@ impl FileViewerState {
                 .map_or(0, str::len);
             line.drain(start_byte..start_byte + g_len);
             self.is_dirty = true;
+            self.edited_line = Some(self.cursor_line);
         } else if self.cursor_line + 1 < self.lines.len() {
             // Unir la línea siguiente a la actual
             let next_line = self.lines.remove(self.cursor_line + 1);
             self.lines[self.cursor_line].push_str(&next_line);
             self.is_dirty = true;
+            self.edited_line = None;
         }
     }
 
@@ -1287,6 +1491,7 @@ impl FileViewerState {
         line.drain(start_byte..end_byte);
         self.cursor_col = target_col;
         self.is_dirty = true;
+        self.edited_line = Some(self.cursor_line);
     }
 
     /// Borrado de palabra hacia la derecha (Ctrl + Delete)
@@ -1309,6 +1514,7 @@ impl FileViewerState {
         let end_byte = char_byte_idx(line, target_col);
         line.drain(start_byte..end_byte);
         self.is_dirty = true;
+        self.edited_line = Some(self.cursor_line);
     }
 
     pub(crate) fn find_word_boundary_left(&self) -> usize {

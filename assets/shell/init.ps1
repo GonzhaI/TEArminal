@@ -4,6 +4,10 @@
 #   - Nada de Get-Command para buscar programas (ver Find-TearminalApp) y los resultados se memoizan.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+if ($env:TEARMINAL_THEME_FG -and $env:TEARMINAL_THEME_BG) {
+    [Console]::Write([char]27 + ']10;' + $env:TEARMINAL_THEME_FG + [char]7)
+    [Console]::Write([char]27 + ']11;' + $env:TEARMINAL_THEME_BG + [char]7)
+}
 Import-Module PSReadLine -ErrorAction SilentlyContinue
 Set-PSReadLineOption -Colors @{
     Command   = ([char]27 + '[32m')
@@ -255,4 +259,8 @@ __axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git r
         }
     }
 }
-Write-Host ([char]27 + '[2J' + [char]27 + '[H') -NoNewline
+function Clear-Host {
+    [Console]::Write([char]27 + '[2J' + [char]27 + '[3J' + [char]27 + '[H')
+}
+
+[Console]::Write([char]27 + '[2J' + [char]27 + '[3J' + [char]27 + '[H')

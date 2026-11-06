@@ -99,6 +99,7 @@ impl TearminalApp {
                                 }
                             }
 
+                            let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
                             let lay = crate::renderer::FileViewerLayout::compute(
                                 offset,
                                 top_offset,
@@ -107,6 +108,7 @@ impl TearminalApp {
                                 row_h,
                                 char_w,
                                 viewer.lines.len(),
+                                show_gutter,
                             );
 
                             // Interacción con la barra flotante de búsqueda (`Ctrl + F`)
@@ -295,6 +297,10 @@ impl TearminalApp {
 
                                     viewer.cursor_line = target_line;
                                     viewer.cursor_col = target_col;
+
+                                    if viewer.search_open {
+                                        viewer.close_search();
+                                    }
 
                                     if is_quick_click && self.viewer_click_count == 1 {
                                         viewer.select_word_at_cursor();

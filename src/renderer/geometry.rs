@@ -665,14 +665,23 @@ impl FileViewerLayout {
         row_height: usize,
         char_width: usize,
         total_lines: usize,
+        show_gutter: bool,
     ) -> Self {
         let row_h = row_height.max(16);
         let char_w = char_width.max(7);
         let content_h = h.saturating_sub(Self::HEADER_H);
-        let digits = total_lines.to_string().len().max(3);
-        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 24;
-        let sep_x = x + gutter_w;
-        let text_x = sep_x + 14;
+        let (gutter_w, sep_x, text_x) = if show_gutter {
+            let digits = total_lines.to_string().len().max(3);
+            let gw = SidebarRects::CARD_INSET + digits * char_w + 24;
+            let sx = x + gw;
+            let tx = sx + 14;
+            (gw, sx, tx)
+        } else {
+            // Modo vista previa (estilo GitHub / documento): sin canaleta de números,
+            // margen de lectura limpio
+            let left_pad = SidebarRects::CARD_INSET + 20;
+            (0, x, x + left_pad)
+        };
         let text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
         Self {
             content_y: y + Self::HEADER_H,

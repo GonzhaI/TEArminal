@@ -108,12 +108,13 @@ struct ImageEntry {
     height: u32,
 }
 
-#[derive(Default)]
 pub(crate) struct Scene {
     pub w: u32,
     pub h: u32,
     pub ops: Vec<Op>,
     glyphs: Vec<Rc<CachedGlyph>>,
+    /// Mapeo O(1) directo para glifos ASCII/Latin-1 (0..512)
+    ascii_glyph_ids: [u32; 512],
     /// Identidad (dirección del `Rc`) -> índice en `glyphs`. Las `Rc` de la tabla viven lo que la
     /// escena, así que la dirección no se reutiliza mientras el mapa la recuerda.
     glyph_ids: FastMap<usize, u32>,
@@ -123,6 +124,22 @@ pub(crate) struct Scene {
     image_bytes: Vec<u8>,
 }
 
+impl Default for Scene {
+    fn default() -> Self {
+        Self {
+            w: 0,
+            h: 0,
+            ops: Vec::new(),
+            glyphs: Vec::new(),
+            ascii_glyph_ids: [u32::MAX; 512],
+            glyph_ids: FastMap::default(),
+            last_glyph: None,
+            images: Vec::new(),
+            image_bytes: Vec::new(),
+        }
+    }
+}
+
 impl Scene {
     /// Vacía la escena conservando la memoria de las tablas y de `ops`.
     pub(crate) fn reset(&mut self, w: u32, h: u32) {
@@ -130,6 +147,7 @@ impl Scene {
         self.h = h;
         self.ops.clear();
         self.glyphs.clear();
+        self.ascii_glyph_ids = [u32::MAX; 512];
         self.glyph_ids.clear();
         self.last_glyph = None;
         self.images.clear();
@@ -169,6 +187,22 @@ impl Scene {
                 return id;
             }
         }
+        let ascii_idx = glyph.ascii_idx as usize;
+        if ascii_idx < 512 {
+            let existing = self.ascii_glyph_ids[ascii_idx];
+            if existing != u32::MAX {
+                let id = GlyphId(existing);
+                self.last_glyph = Some((key, id));
+                return id;
+            }
+            let next = self.glyphs.len() as u32;
+            self.glyphs.push(Rc::clone(glyph));
+            self.ascii_glyph_ids[ascii_idx] = next;
+            let id = GlyphId(next);
+            self.last_glyph = Some((key, id));
+            return id;
+        }
+
         let next = self.glyphs.len() as u32;
         let id = GlyphId(*self.glyph_ids.entry(key).or_insert(next));
         if id.0 == next {

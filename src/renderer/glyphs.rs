@@ -88,11 +88,14 @@ pub(crate) fn is_ligature_candidate(c: char) -> bool {
     )
 }
 
+#[derive(Clone, Default)]
 pub(crate) struct CachedGlyph {
     pub width: usize,
     pub height: usize,
     pub x_offset: i32,
     pub y_offset: i32,
+    /// Índice O(1) en la tabla ASCII/Latin-1 (0..512), o `u16::MAX` para otros glifos
+    pub ascii_idx: u16,
     pub bitmap: Vec<u8>, // Grayscale 8-bit alpha (0-255)
 }
 
@@ -245,6 +248,7 @@ impl TerminalRenderer {
             height: metrics.height,
             x_offset: metrics.xmin,
             y_offset: metrics.ymin,
+            ascii_idx: u16::MAX,
             bitmap,
         }
     }
@@ -256,8 +260,9 @@ impl TerminalRenderer {
         if code < 256 {
             let idx = code as usize + if bold { 256 } else { 0 };
             if self.ascii_cache[idx].is_none() {
-                let glyph = Rc::new(self.rasterize_glyph(c, bold));
-                self.ascii_cache[idx] = Some(glyph);
+                let mut glyph = self.rasterize_glyph(c, bold);
+                glyph.ascii_idx = idx as u16;
+                self.ascii_cache[idx] = Some(Rc::new(glyph));
             }
             if let Some(ref g) = self.ascii_cache[idx] {
                 return g;
@@ -302,6 +307,7 @@ impl TerminalRenderer {
                 height: metrics.height,
                 x_offset: metrics.xmin,
                 y_offset: metrics.ymin,
+                ascii_idx: u16::MAX,
                 bitmap,
             };
             self.ligature_cache.insert((gid, bold), Rc::new(glyph));

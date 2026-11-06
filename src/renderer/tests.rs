@@ -1082,7 +1082,7 @@ fn test_settings_page_scrolls_only_the_content() {
 #[test]
 fn test_file_viewer_layout_columns_and_horizontal_scrollbar() {
     use crate::renderer::FileViewerLayout;
-    let lay = FileViewerLayout::compute(0, 40, 800, 400, 20, 9, 120);
+    let lay = FileViewerLayout::compute(0, 40, 800, 400, 20, 9, 120, true);
     assert!(lay.text_x > lay.sep_x && lay.text_max_x > lay.text_x);
 
     // Clic antes del texto = columna 0; tabulador ocupa 4 celdas; sin scroll y con scroll
@@ -1103,7 +1103,14 @@ fn test_file_viewer_layout_columns_and_horizontal_scrollbar() {
     assert_eq!(start.0, track.0);
     assert_eq!(end.0 + end.2, track.0 + track.2);
     let (_, over) = lay.hscrollbar(50, 500).expect("barra");
+    assert_eq!(over.0 + over.2, track.0 + track.2);
     assert_eq!(over, end, "el scroll sobrante se acota");
+
+    // En modo vista previa Markdown (show_gutter = false): sin gutter, documento estilo GitHub
+    let md_lay = FileViewerLayout::compute(0, 40, 800, 400, 20, 9, 120, false);
+    assert_eq!(md_lay.gutter_w, 0);
+    assert!(md_lay.visible_cols > lay.visible_cols);
+    assert!(md_lay.text_x > 0);
 }
 
 #[test]
@@ -2961,6 +2968,7 @@ fn test_with_offset_equals_offscreen_copy() {
         height: 3,
         x_offset: 0,
         y_offset: 0,
+        ascii_idx: u16::MAX,
         bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
     });
     let rgba: Vec<u8> = vec![
@@ -3036,6 +3044,7 @@ fn test_glyph() -> Rc<CachedGlyph> {
         height: 3,
         x_offset: 0,
         y_offset: 0,
+        ascii_idx: u16::MAX,
         bitmap: vec![0, 64, 128, 255, 255, 200, 100, 1, 10, 0, 255, 77],
     })
 }
@@ -3423,6 +3432,7 @@ mod gpu_atlas {
             height: h,
             x_offset: 0,
             y_offset: 0,
+            ascii_idx: u16::MAX,
             bitmap: (0..w * h).map(fill).collect(),
         })
     }
@@ -3704,6 +3714,7 @@ mod gpu_renderer {
             height: h,
             x_offset: 0,
             y_offset: 0,
+            ascii_idx: u16::MAX,
             bitmap: (0..w * h).map(fill).collect(),
         })
     }
@@ -4664,6 +4675,7 @@ mod gpu_renderer {
             height: 6,
             x_offset: 0,
             y_offset: 0,
+            ascii_idx: u16::MAX,
             bitmap: vec![255; 10],
         });
         let mut c = test_support::new_canvas(w, h);
@@ -5205,4 +5217,267 @@ fn test_syntax_multiline_blocks_and_language_spec() {
     // Caché hit: mismo path y gen devuelven el mismo Rc
     let cached = renderer.get_syntax_multiline_blocks(path, 1, &lines, spec_rs);
     assert!(std::rc::Rc::ptr_eq(&blocks, &cached));
+}
+
+#[test]
+fn test_compute_cell_fg_dim_in_light_and_dark_themes() {
+    use crate::terminal::Cell;
+    use crate::theme::{contrast_ratio, Theme};
+
+    let dark_theme = Theme::from_name(Theme::DEFAULT_DARK);
+    let light_theme = Theme::from_name(Theme::DEFAULT_LIGHT);
+
+    let normal_cell = Cell::from('a');
+
+    let dim_cell = Cell {
+        c: 'a',
+        flags: Cell::FLAG_DIM,
+        ..Cell::default()
+    };
+
+    // 1. Tema oscuro: el texto atenuado (dim) debe tener menor contraste contra el fondo
+    let dark_normal_fg = crate::renderer::pane::compute_cell_fg(&normal_cell, &dark_theme);
+    let dark_dim_fg = crate::renderer::pane::compute_cell_fg(&dim_cell, &dark_theme);
+    assert_eq!(dark_normal_fg, dark_theme.foreground);
+    let dark_normal_cr = contrast_ratio(dark_normal_fg, dark_theme.background);
+    let dark_dim_cr = contrast_ratio(dark_dim_fg, dark_theme.background);
+    assert!(
+        dark_dim_cr < dark_normal_cr,
+        "En tema oscuro, el texto tenue ({dark_dim_cr}) debe tener menor contraste que el texto normal ({dark_normal_cr})"
+    );
+
+    // 2. Tema claro: el texto atenuado (dim) debe atenuarse hacia el fondo claro (aclararse),
+    // no oscurecerse hacia el negro, para no verse más notorio que el texto escrito por el usuario.
+    let light_normal_fg = crate::renderer::pane::compute_cell_fg(&normal_cell, &light_theme);
+    let light_dim_fg = crate::renderer::pane::compute_cell_fg(&dim_cell, &light_theme);
+    assert_eq!(light_normal_fg, light_theme.foreground);
+    let light_normal_cr = contrast_ratio(light_normal_fg, light_theme.background);
+    let light_dim_cr = contrast_ratio(light_dim_fg, light_theme.background);
+    assert!(
+        light_dim_cr < light_normal_cr,
+        "En tema claro, el texto tenue ({light_dim_cr}) debe tener menor contraste que el texto normal ({light_normal_cr})"
+    );
+    // En tema claro, atenuar debe acercarse al fondo (luminancia mayor que el texto normal)
+    assert!(
+        light_dim_fg.r > light_normal_fg.r
+            && light_dim_fg.g > light_normal_fg.g
+            && light_dim_fg.b > light_normal_fg.b,
+        "En tema claro, los canales RGB del texto tenue deben ser más claros que el texto normal"
+    );
+
+    // 3. Predicciones inline de PSReadLine (\x1b[97;2;3m -> ansi[15] + DIM)
+    let ps_prediction_cell = Cell {
+        c: 'x',
+        fg: light_theme.ansi[15],
+        flags: Cell::FLAG_DIM,
+        ..Cell::default()
+    };
+    let pred_fg = crate::renderer::pane::compute_cell_fg(&ps_prediction_cell, &light_theme);
+    let pred_cr = contrast_ratio(pred_fg, light_theme.background);
+    assert!(
+        pred_cr < light_normal_cr,
+        "La sugerencia de PowerShell ({pred_cr}) debe ser más tenue que el comando escrito ({light_normal_cr})"
+    );
+}
+
+#[test]
+fn test_toml_syntax_highlighting() {
+    let config = TearminalConfig::load_or_default();
+    let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+    let theme = Theme::default();
+    let clip = (0, 0, 800, 600);
+
+    // 1. Cabecera de sección [profile.default]
+    let mut canvas = Canvas::new();
+    canvas.begin(800, 600);
+    renderer.render_highlighted_line(
+        &mut canvas,
+        clip,
+        "[profile.default]",
+        0,
+        16,
+        800,
+        8,
+        &theme,
+        "toml",
+        false,
+    );
+    let glyph_colors: Vec<Color> = canvas
+        .scene()
+        .ops
+        .iter()
+        .filter_map(|op| match *op {
+            scene::Op::Glyph { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glyph_colors.len(), 17); // "[profile.default]" tiene 17 caracteres
+    for (i, c) in glyph_colors.iter().enumerate() {
+        assert_eq!(
+            *c, theme.ansi[5],
+            "el carácter {i} de '[profile.default]' debe ser magenta de cabecera"
+        );
+    }
+
+    // 2. Clave kebab-case: fail-fast = false
+    let mut canvas2 = Canvas::new();
+    canvas2.begin(800, 600);
+    renderer.render_highlighted_line(
+        &mut canvas2,
+        clip,
+        "fail-fast = false",
+        0,
+        16,
+        800,
+        8,
+        &theme,
+        "toml",
+        false,
+    );
+    let glyph_colors2: Vec<Color> = canvas2
+        .scene()
+        .ops
+        .iter()
+        .filter_map(|op| match *op {
+            scene::Op::Glyph { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect();
+    // 'fail-fast' tiene 9 caracteres; todos deben ser theme.ansi[4] (azul de propiedad), incluido el guión '-'
+    assert!(glyph_colors2.len() >= 9);
+    for (i, c) in glyph_colors2.iter().take(9).enumerate() {
+        assert_eq!(
+            *c, theme.ansi[4],
+            "el carácter {i} de 'fail-fast' debe ser azul de propiedad"
+        );
+    }
+}
+
+#[test]
+fn test_render_md_line_italic_color_and_code_selection() {
+    let config = TearminalConfig::load_or_default();
+    let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+    let theme = Theme::default();
+    let clip = (0, 0, 800, 600);
+    let sel_bg = Color::from_rgba(100, 150, 255, 70);
+
+    // 1. Texto en cursiva (*Spaces*): no debe usar theme.ansi[5] (magenta/rosa), sino theme.foreground
+    let mut canvas = Canvas::new();
+    canvas.begin(800, 600);
+    renderer.render_md_line(
+        &mut canvas,
+        clip,
+        "Texto con *Spaces* y más",
+        "Texto con *Spaces* y más",
+        0,
+        true,
+        &crate::renderer::md_preview::MdBlock::Text,
+        0,
+        0,
+        18,
+        14,
+        800,
+        8,
+        &theme,
+        None,
+        sel_bg,
+    );
+    let glyph_colors: Vec<Color> = canvas
+        .scene()
+        .ops
+        .iter()
+        .filter_map(|op| match *op {
+            scene::Op::Glyph { color, .. } => Some(color),
+            _ => None,
+        })
+        .collect();
+    // Ningún glifo de texto debe ser theme.ansi[5]
+    for (i, c) in glyph_colors.iter().enumerate() {
+        assert_ne!(
+            *c, theme.ansi[5],
+            "el glifo {i} no debe estar coloreado de rosa/magenta"
+        );
+    }
+
+    // 2. Fragmento de código en línea `SHFileOperationW` dentro de una selección
+    let mut canvas2 = Canvas::new();
+    canvas2.begin(800, 600);
+    let line = "Usa `SHFileOperationW` para papelera";
+    renderer.render_md_line(
+        &mut canvas2,
+        clip,
+        line,
+        line,
+        0,
+        true,
+        &crate::renderer::md_preview::MdBlock::Text,
+        0,
+        0,
+        18,
+        14,
+        800,
+        8,
+        &theme,
+        Some((0, line.len())),
+        sel_bg,
+    );
+
+    // Debe contener tanto rectángulos de fondo de chip de código como rectángulos de sel_bg encima
+    let sel_rects_count = canvas2
+        .scene()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, scene::Op::Rounded { color, .. } if *color == sel_bg))
+        .count();
+    assert!(
+        sel_rects_count > 0,
+        "debe existir tinte de selección sel_bg sobre los caracteres seleccionados"
+    );
+}
+
+#[test]
+fn test_markdown_preview_github_style_no_gutter_and_no_newline_selection() {
+    let config = TearminalConfig::load_or_default();
+    let mut renderer = crate::renderer::TerminalRenderer::new(&config, 1.0);
+    let theme = Theme::default();
+    let clip = (0, 0, 800, 600);
+    let sel_bg = Color::from_rgba(100, 150, 255, 70);
+
+    // 1. Línea vacía "" con selección activa (entre dos líneas seleccionadas): no debe dibujar ningún rectángulo
+    let mut canvas = Canvas::new();
+    canvas.begin(800, 600);
+    renderer.render_md_line(
+        &mut canvas,
+        clip,
+        "",
+        "",
+        0,
+        true,
+        &crate::renderer::md_preview::MdBlock::Text,
+        24,
+        0,
+        18,
+        14,
+        800,
+        8,
+        &theme,
+        Some((0, 0)),
+        sel_bg,
+    );
+    let sel_rects_empty = canvas
+        .scene()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, scene::Op::Rounded { color, .. } | scene::Op::Fill { color, .. } if *color == sel_bg))
+        .count();
+    assert_eq!(
+        sel_rects_empty, 0,
+        "una línea vacía en vista previa Markdown nunca debe dibujar bloques de selección flotantes"
+    );
+
+    // 2. Comprobar que el layout de vista previa Markdown no tiene canaleta
+    let md_lay = crate::renderer::FileViewerLayout::compute(0, 40, 800, 400, 20, 9, 50, false);
+    assert_eq!(md_lay.gutter_w, 0);
+    assert_eq!(md_lay.sep_x, 0);
+    assert!(md_lay.text_x >= 20);
 }

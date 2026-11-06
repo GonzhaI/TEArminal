@@ -10,6 +10,7 @@ pub(crate) use performer::clean_listing;
 
 pub(crate) use cell::*;
 pub(crate) use kitty::*;
+pub(crate) use performer::percent_decode;
 use performer::Performer;
 
 use crate::theme::{Color, Theme};
@@ -321,11 +322,23 @@ impl TerminalState {
                     }
                 }
                 // Si no coincide con un color ANSI indexado y cambiamos entre modo claro y oscuro,
-                // verificamos si el color pierde contraste contra el nuevo fondo (ej. texto blanco sobre fondo claro).
+                // verificamos si el color pierde contraste contra el fondo efectivo (ej. texto blanco sobre fondo claro).
                 if !matched && is_mode_switch {
-                    let cr = crate::theme::contrast_ratio(cell.fg, self.theme.background);
+                    let effective_bg =
+                        if cell.bg == Color::TRANSPARENT || cell.bg == old_theme.background {
+                            self.theme.background
+                        } else {
+                            cell.bg
+                        };
+                    let cr = crate::theme::contrast_ratio(cell.fg, effective_bg);
                     if cr < 2.2 {
-                        cell.fg = self.theme.foreground;
+                        if effective_bg != self.theme.background
+                            && crate::theme::luminance(effective_bg) < 0.3
+                        {
+                            cell.fg = Color::from_rgb(255, 255, 255);
+                        } else {
+                            cell.fg = self.theme.foreground;
+                        }
                     }
                 }
             }
@@ -1094,8 +1107,16 @@ impl TerminalState {
         }
     }
 
+    /// Devuelve verdadero si existe historial de desplazamiento con contenido visible o imágenes.
+    /// Evita barras de desplazamiento fantasma cuando el historial está vacío o solo contiene líneas en blanco.
+    #[inline]
+    pub(crate) fn has_scrollback(&self) -> bool {
+        !self.scrollback.is_empty()
+            && (self.scrollback.iter().any(|r| !r.is_empty()) || !self.images.is_empty())
+    }
+
     pub(crate) fn scroll_up(&mut self, lines: usize) {
-        if self.is_alt_screen {
+        if self.is_alt_screen || !self.has_scrollback() {
             return;
         }
         let max_offset = self.scrollback.len();
@@ -1182,13 +1203,28 @@ impl TerminalState {
                 let shift = (self.cursor_y + 1).saturating_sub(new_rows);
                 for _ in 0..shift {
                     if let Some(r) = self.grid.pop_front() {
-                        if self.scrollback.len() >= self.max_scrollback {
-                            self.scrollback.pop_front();
-                            self.shift_images_after_eviction();
-                        }
-                        self.scrollback.push_back(r);
-                        if self.scroll_offset > 0 {
-                            self.scroll_offset = (self.scroll_offset + 1).min(self.max_scrollback);
+                        let used = r
+                            .iter()
+                            .rposition(|last| {
+                                !(last.c == ' '
+                                    && last.bg == Color::TRANSPARENT
+                                    && (last.flags
+                                        & (Cell::FLAG_UNDERLINE
+                                            | Cell::FLAG_STRIKETHROUGH
+                                            | Cell::FLAG_INVERSE))
+                                        == 0)
+                            })
+                            .map_or(0, |i| i + 1);
+                        if self.max_scrollback > 0 {
+                            if self.scrollback.len() >= self.max_scrollback {
+                                self.scrollback.pop_front();
+                                self.shift_images_after_eviction();
+                            }
+                            self.scrollback.push_back(r[..used].to_vec());
+                            if self.scroll_offset > 0 {
+                                self.scroll_offset =
+                                    (self.scroll_offset + 1).min(self.max_scrollback);
+                            }
                         }
                     }
                     if !self.alt_grid.is_empty() {

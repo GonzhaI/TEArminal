@@ -391,6 +391,8 @@ impl TerminalRenderer {
         }
 
         let total_lines = viewer.lines.len();
+        let is_md_rendered = viewer.render_markdown && is_markdown;
+        let show_gutter = !is_md_rendered;
         let lay = crate::renderer::geometry::FileViewerLayout::compute(
             x,
             y,
@@ -399,30 +401,46 @@ impl TerminalRenderer {
             self.row_height,
             self.char_width,
             total_lines,
+            show_gutter,
         );
         let (row_h, char_w, gutter_w, sep_x) = (lay.row_h, lay.char_w, lay.gutter_w, lay.sep_x);
         let visible_lines = content_h / row_h;
         let max_scroll_x = viewer.max_scroll_x();
         let scroll_x = viewer.scroll_offset_x.min(max_scroll_x);
 
-        // Fondo sutil del gutter
-        canvas.fill_rect(
-            clip,
-            x,
-            content_y,
-            gutter_w,
-            content_h,
-            theme.mix(theme.background, theme.foreground, 0.03),
-        );
+        // Fondo sutil del gutter (solo si el gutter está activo)
+        if gutter_w > 0 {
+            canvas.fill_rect(
+                clip,
+                x,
+                content_y,
+                gutter_w,
+                content_h,
+                theme.mix(theme.background, theme.foreground, 0.03),
+            );
 
-        // Línea vertical separadora del gutter
-        canvas.fill_rect(clip, sep_x, content_y, 1, content_h, theme.chrome_line());
+            // Línea vertical separadora del gutter
+            canvas.fill_rect(clip, sep_x, content_y, 1, content_h, theme.chrome_line());
+        }
 
         let baseline_offset = ((row_h as f32 * 0.76) as usize).max(char_w);
 
-        let gutter_clip: Clip = (x, content_y, sep_x, content_y + content_h);
+        let gutter_clip: Clip = if gutter_w > 0 {
+            (x, content_y, sep_x, content_y + content_h)
+        } else {
+            (0, 0, 0, 0)
+        };
         let text_max_x = lay.text_max_x;
-        let text_clip: Clip = (sep_x + 1, content_y, text_max_x, content_y + content_h);
+        let text_clip: Clip = (
+            if gutter_w > 0 {
+                sep_x + 1
+            } else {
+                lay.text_x.saturating_sub(12)
+            },
+            content_y,
+            text_max_x,
+            content_y + content_h,
+        );
 
         let md_blocks = (viewer.render_markdown && is_markdown).then(|| {
             if let Some((ref path, gen, ref blocks)) = self.md_blocks_cache {
@@ -472,7 +490,9 @@ impl TerminalRenderer {
         let tab_adv = (char_w * 4) as i32;
         let indent_unit = viewer.indent_unit();
         let guide_color = theme.mix(theme.background, theme.foreground, 0.10);
+        let is_md_rendered = viewer.render_markdown && is_markdown;
 
+        let mut last_drawn_img_line: Option<usize> = None;
         for (row_idx, row) in rows
             .iter()
             .enumerate()
@@ -486,10 +506,11 @@ impl TerminalRenderer {
             let line_idx = row.line;
             let first_segment = row.start == 0;
             let is_last_segment = row.end == usize::MAX;
-            let is_cursor_line = !viewer.is_binary && line_idx == viewer.cursor_line;
+            let is_cursor_line =
+                !viewer.is_binary && !is_md_rendered && line_idx == viewer.cursor_line;
             let baseline_y = row_y + baseline_offset;
             let seg = viewer.row_text(row);
-            let cur_x = (sep_x + 14) as i32 - (scroll_x * char_w) as i32;
+            let cur_x = lay.text_x as i32 - (scroll_x * char_w) as i32;
 
             // Línea actual: banda de 3 % de tinta, apenas perceptible sobre el lienzo.
             if is_cursor_line {
@@ -504,28 +525,37 @@ impl TerminalRenderer {
             }
 
             // Indicador de Git en el gutter si la línea fue modificada, añadida o eliminada
-            if let Some(git_status) = viewer.get_line_git_diff_status(line_idx) {
-                let git_color = match git_status {
-                    crate::app::GitLineStatus::Added => theme.ansi[2], // Verde
-                    crate::app::GitLineStatus::Modified => theme.ansi[3], // Amarillo
-                    crate::app::GitLineStatus::Deleted => theme.ansi[1], // Rojo
-                };
-                if git_status == crate::app::GitLineStatus::Deleted {
-                    canvas.fill_rect(gutter_clip, sep_x.saturating_sub(4), row_y, 4, 3, git_color);
-                } else {
-                    canvas.fill_rect(
-                        gutter_clip,
-                        sep_x.saturating_sub(3),
-                        row_y,
-                        3,
-                        row_h,
-                        git_color,
-                    );
+            if gutter_w > 0 {
+                if let Some(git_status) = viewer.get_line_git_diff_status(line_idx) {
+                    let git_color = match git_status {
+                        crate::app::GitLineStatus::Added => theme.ansi[2], // Verde
+                        crate::app::GitLineStatus::Modified => theme.ansi[3], // Amarillo
+                        crate::app::GitLineStatus::Deleted => theme.ansi[1], // Rojo
+                    };
+                    if git_status == crate::app::GitLineStatus::Deleted {
+                        canvas.fill_rect(
+                            gutter_clip,
+                            sep_x.saturating_sub(4),
+                            row_y,
+                            4,
+                            3,
+                            git_color,
+                        );
+                    } else {
+                        canvas.fill_rect(
+                            gutter_clip,
+                            sep_x.saturating_sub(3),
+                            row_y,
+                            3,
+                            row_h,
+                            git_color,
+                        );
+                    }
                 }
             }
 
             // Número de línea (solo en la primera fila de cada línea) y flecha de plegado
-            if first_segment {
+            if gutter_w > 0 && first_segment {
                 let mut num_buf = [0u8; 20];
                 let mut n = line_idx + 1;
                 let mut pos = num_buf.len();
@@ -625,13 +655,26 @@ impl TerminalRenderer {
                 }
             }
 
+            let line_sel_cols: Option<(usize, usize)> =
+                if let Some(((l1, c1), (l2, c2))) = selection {
+                    if line_idx >= l1 && line_idx <= l2 {
+                        let col_start = if line_idx == l1 { c1 } else { 0 };
+                        let col_end = if line_idx == l2 { c2 } else { usize::MAX };
+                        Some((col_start, col_end))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
             // Selección: rectángulo sin bordes redondeados (filas contiguas sin huecos) y marcas de
-            // espacios y tabuladores dentro de lo seleccionado para poder contar la sangría
+            // espacios y tabuladores dentro de lo seleccionado para poder contar la sangría (en modo código)
             let mut marks: smallvec::SmallVec<[(i32, bool); 32]> = smallvec::SmallVec::new();
             if let Some(((l1, c1), (l2, c2))) = selection {
                 if line_idx >= l1 && line_idx <= l2 {
                     let full_line = viewer.lines.get(line_idx).map(|s| s.as_str()).unwrap_or("");
-                    let mut acc = if !first_segment && viewer.render_markdown && is_markdown {
+                    let mut acc = if !first_segment && is_md_rendered {
                         cur_x
                             + crate::renderer::md_preview::md_continuation_indent(full_line, char_w)
                     } else {
@@ -651,18 +694,15 @@ impl TerminalRenderer {
                         if (line_idx > l1 || col >= c1) && (line_idx < l2 || col < c2) {
                             sx.get_or_insert(acc);
                             ex = acc + adv;
-                            match g {
-                                " " => marks.push((acc + adv / 2, false)),
-                                "\t" => marks.push((acc, true)),
-                                _ => {}
+                            if !is_md_rendered {
+                                match g {
+                                    " " => marks.push((acc + adv / 2, false)),
+                                    "\t" => marks.push((acc, true)),
+                                    _ => {}
+                                }
                             }
                         }
                         acc += adv;
-                    }
-                    // El salto de línea también está seleccionado en todas las líneas menos la última
-                    if is_last_segment && line_idx < l2 {
-                        sx.get_or_insert(acc);
-                        ex = acc + char_w as i32;
                     }
                     if let Some(sx) = sx {
                         let draw_sx = sx.max(text_clip.0 as i32) as usize;
@@ -724,24 +764,53 @@ impl TerminalRenderer {
                         if draw_ex > draw_sx {
                             let is_active = Some(m_idx) == viewer.search_active_idx;
                             let match_bg = if is_active {
-                                theme.mix(theme.background, theme.accent_color(), 0.65)
+                                Color::from_rgba(
+                                    theme.accent_color().r(),
+                                    theme.accent_color().g(),
+                                    theme.accent_color().b(),
+                                    130,
+                                )
                             } else {
-                                theme.mix(theme.background, theme.ansi[3], 0.35)
+                                Color::from_rgba(
+                                    theme.ansi[3].r(),
+                                    theme.ansi[3].g(),
+                                    theme.ansi[3].b(),
+                                    70,
+                                )
                             };
-                            canvas.fill_rect(
-                                text_clip,
+                            canvas.rounded_fill(
                                 draw_sx,
                                 row_y,
                                 draw_ex - draw_sx,
                                 row_h,
+                                2,
                                 match_bg,
                             );
+                            if is_active {
+                                canvas.rounded_stroke(
+                                    draw_sx,
+                                    row_y,
+                                    draw_ex - draw_sx,
+                                    row_h,
+                                    2,
+                                    theme.accent_color(),
+                                );
+                            }
                         }
                     }
                 }
             }
 
             match md_blocks.as_ref().and_then(|b| b.get(line_idx)) {
+                Some(crate::renderer::md_preview::MdBlock::Image { alt, url }) => {
+                    if last_drawn_img_line != Some(line_idx) {
+                        last_drawn_img_line = Some(line_idx);
+                        self.render_md_image_block(
+                            canvas, text_clip, viewer, row.start, alt, url, cur_x, row_y, row_h,
+                            text_max_x, theme,
+                        );
+                    }
+                }
                 Some(block) => self.render_md_line(
                     canvas,
                     text_clip,
@@ -757,6 +826,8 @@ impl TerminalRenderer {
                     text_max_x,
                     char_w,
                     theme,
+                    line_sel_cols,
+                    sel_bg,
                 ),
                 None => self.render_highlighted_line(
                     canvas,
@@ -1157,6 +1228,7 @@ impl TerminalRenderer {
             );
             sbs_lay.hscrollbar(max_x, viewer.scroll_offset_x)
         } else {
+            let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
             let lay = crate::renderer::geometry::FileViewerLayout::compute(
                 x,
                 y,
@@ -1165,8 +1237,92 @@ impl TerminalRenderer {
                 row_height,
                 char_width,
                 viewer.lines.len(),
+                show_gutter,
             );
             lay.hscrollbar(max_x, viewer.scroll_offset_x)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_md_image_block(
+        &mut self,
+        canvas: &mut Canvas,
+        clip: Clip,
+        viewer: &FileViewerState,
+        row_segment: usize,
+        alt: &str,
+        url: &str,
+        cur_x: i32,
+        row_y: usize,
+        row_h: usize,
+        text_max_x: usize,
+        theme: &Theme,
+    ) {
+        let block_top_y = row_y as i32 - (row_segment * row_h) as i32;
+        let opt_img = viewer.get_or_load_md_image(url);
+
+        if let Some(img) = opt_img {
+            let img_rows = viewer.calc_md_image_rows(img.width, img.height);
+            let total_block_h = img_rows * row_h;
+            let pad_x = 8i32;
+
+            let start_x = cur_x.max(clip.0 as i32 + pad_x);
+            let avail_w = (text_max_x as i32 - start_x - pad_x).max(64) as usize;
+            let max_w = avail_w.min(img.width as usize).min(800);
+            let max_h = total_block_h.saturating_sub(8).max(32);
+
+            let scale = (max_w as f32 / img.width as f32)
+                .min(max_h as f32 / img.height as f32)
+                .min(1.0);
+            let draw_w = ((img.width as f32 * scale).round() as usize).max(1);
+            let draw_h = ((img.height as f32 * scale).round() as usize).max(1);
+
+            let img_dst_x = start_x;
+            let img_dst_y = block_top_y + (total_block_h.saturating_sub(draw_h) / 2) as i32;
+
+            // Dibujo de la imagen con renderizado limpio en su relación de aspecto
+            let (frame, _) = img.current();
+            img.shown_frame.set(frame);
+            canvas.image(
+                clip,
+                crate::renderer::scene::ImageRef {
+                    rgba: &img.frames[frame].rgba_data,
+                    width: img.width,
+                    height: img.height,
+                },
+                (img_dst_x, img_dst_y, draw_w, draw_h),
+            );
+        } else {
+            // Fallback elegante: icono + texto alternativo + aviso de ruta no disponible
+            let fallback_text = if alt.is_empty() { url } else { alt };
+            let baseline_y =
+                (block_top_y + (row_h as f32 * 0.76) as i32).max(clip.1 as i32) as usize;
+            let cx = cur_x + 10;
+            if cx > clip.0 as i32
+                && cx < clip.2 as i32
+                && baseline_y >= clip.1
+                && baseline_y <= clip.3
+            {
+                self.draw_lucide_icon(
+                    canvas,
+                    crate::ui::LucideIcon::Image,
+                    cx as usize,
+                    baseline_y.saturating_sub(4),
+                    12.0,
+                    theme.ansi[3],
+                );
+            }
+            let label = format!("{fallback_text} ({url})");
+            self.draw_ui_text(
+                canvas,
+                &label,
+                (cx + 18) as usize,
+                baseline_y,
+                text_max_x,
+                theme.ansi[8],
+                12.0,
+                false,
+            );
         }
     }
 }

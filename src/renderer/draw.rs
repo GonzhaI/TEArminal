@@ -142,6 +142,7 @@ impl TerminalRenderer {
                         height: metrics.height,
                         x_offset: metrics.xmin,
                         y_offset: metrics.ymin,
+                        ascii_idx: u16::MAX,
                         bitmap,
                     }),
                     metrics.advance_width,
@@ -366,6 +367,7 @@ impl TerminalRenderer {
                     height: metrics.height,
                     x_offset: metrics.xmin,
                     y_offset: metrics.ymin,
+                    ascii_idx: u16::MAX,
                     bitmap,
                 })
             });

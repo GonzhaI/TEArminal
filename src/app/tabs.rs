@@ -315,6 +315,7 @@ impl TearminalApp {
             cols as u16,
             rows as u16,
             cwd.as_deref(),
+            Some(&self.theme),
             self.proxy.clone(),
         ) {
             Ok(p) => p,
@@ -565,6 +566,7 @@ impl TearminalApp {
                     ssh.remote_dir.as_deref(),
                     cols as u16,
                     rows as u16,
+                    Some(&self.theme),
                     self.proxy.clone(),
                 )
                 .map_err(|e| {
@@ -584,6 +586,7 @@ impl TearminalApp {
                 cols as u16,
                 rows as u16,
                 cwd_ref,
+                Some(&self.theme),
                 self.proxy.clone(),
             ) {
                 Ok(p) => (p, None),
@@ -657,6 +660,7 @@ impl TearminalApp {
             cols as u16,
             rows as u16,
             cwd.as_deref(),
+            Some(&self.theme),
             self.proxy.clone(),
         ) {
             Ok(pty) => {
