@@ -18,7 +18,7 @@ const CRUMB_ROOM: usize = 43;
 const STATUS_LABEL_SIZE: f32 = 10.5;
 
 impl TerminalRenderer {
-    /// Renderiza la barra de estado informativa inferior (Status Bar) con tipografía Inter e iconos Lucide
+    /// Renderiza la barra de estado informativa inferior (Status Bar) con tipografía Barlow e iconos Lucide
     #[cfg(test)]
     pub(crate) fn render_status_bar(
         &mut self,
@@ -311,7 +311,7 @@ impl TerminalRenderer {
                 cur_x,
                 baseline,
                 text_limit,
-                theme.accent_color(),
+                theme.accent_text(),
                 tokens::DETAIL,
                 true,
             );
@@ -333,7 +333,7 @@ impl TerminalRenderer {
                 ub_x + 18,
                 baseline,
                 ub_x + ub_w,
-                theme.accent_color(),
+                theme.accent_text(),
                 tokens::MICRO + 0.5,
                 false,
             );
@@ -535,7 +535,7 @@ impl TerminalRenderer {
                 track_y,
                 StatusBarRects::METER_TRACK_W,
                 StatusBarRects::METER_TRACK_H,
-                3,
+                tokens::RADIUS_ROW,
                 theme.chrome_line(),
             );
             let fill = ((meter.percent.clamp(0.0, 100.0) / 100.0)
@@ -561,7 +561,7 @@ impl TerminalRenderer {
                     track_y,
                     fill.max(3),
                     StatusBarRects::METER_TRACK_H,
-                    3,
+                    tokens::RADIUS_ROW,
                     color,
                 );
             }
@@ -791,7 +791,7 @@ impl TerminalRenderer {
             let (_, name, brand) = Self::status_bar_badge_info(u.kind, None, None, theme);
 
             // Cabecera: barra de color + agente + modelo + plan/modo a la derecha
-            canvas.rounded_fill(pad_x, cur_y + 3, 2, 14, 1, brand);
+            canvas.rounded_fill(pad_x, cur_y + 3, 2, 14, tokens::RADIUS_ROW, brand);
             let name_end = self.draw_ui_text_tracked(
                 canvas,
                 &name,
@@ -866,11 +866,18 @@ impl TerminalRenderer {
                     true,
                 );
                 let bar_y = cur_y + 15;
-                canvas.rounded_fill(bar_x, bar_y, bar_w, 3, 1, theme.chrome_line());
+                canvas.rounded_fill(
+                    bar_x,
+                    bar_y,
+                    bar_w,
+                    3,
+                    tokens::RADIUS_ROW,
+                    theme.chrome_line(),
+                );
                 let fill_w = ((bar_w as f32 * lim.percent / 100.0).round() as usize)
                     .clamp(usize::from(lim.percent > 0.2) * 4, bar_w);
                 if fill_w > 0 {
-                    canvas.rounded_fill(bar_x, bar_y, fill_w, 3, 1, bar_fg);
+                    canvas.rounded_fill(bar_x, bar_y, fill_w, 3, tokens::RADIUS_ROW, bar_fg);
                 }
                 let reset = lim.resets_in_secs().map_or_else(
                     || "Sin fecha de reinicio".to_string(),

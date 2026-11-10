@@ -1379,14 +1379,31 @@ fn test_pane_content_keeps_clear_of_the_content_card() {
 /// Escenas de referencia de la interfaz, en orden fijo, grabadas (sin rasterizar): `(nombre, lienzo)`.
 /// `build_scenes` las dibuja en la GPU (WARP); los tests de escenas de `gpu_scenes` leen `canvas.scene()`.
 pub(super) fn build_recorded_scenes(w: usize, h: usize) -> Vec<(&'static str, Canvas)> {
+    let mut scenes = build_recorded_scenes_themed(w, h, crate::theme::Theme::default());
+    // Dos escenas con Latte (el tema claro del diseño) completan el golden de Frappé.
+    let light = crate::theme::Theme::from_name(crate::theme::Theme::DEFAULT_LIGHT);
+    for (name, canvas) in build_recorded_scenes_themed(w, h, light) {
+        match name {
+            "tabs-superiores" => scenes.push(("tabs-superiores-latte", canvas)),
+            "visor" => scenes.push(("visor-latte", canvas)),
+            _ => {}
+        }
+    }
+    scenes
+}
+
+/// Las escenas con el tema dado (los golden usan el de por defecto: Frappé).
+pub(super) fn build_recorded_scenes_themed(
+    w: usize,
+    h: usize,
+    theme: crate::theme::Theme,
+) -> Vec<(&'static str, Canvas)> {
     use crate::renderer::{SettingsPageState, SidebarTabItem};
     /// Ancho del panel izquierdo: las escenas lo llaman como el panel lateral anterior.
     const SIDEBAR_WIDTH: usize = crate::renderer::SpacesPanelRects::WIDTH;
-    use crate::theme::Theme;
 
     let mut cfg = TearminalConfig::default();
     cfg.appearance.show_dimensions = true;
-    let theme = Theme::default();
     let mut r = TerminalRenderer::new(&cfg, 1.0);
     let status_h = crate::renderer::StatusBarRects::BAR_H;
     let top_h = crate::renderer::TopTabBarRects::HEIGHT;
@@ -2278,7 +2295,12 @@ fn preview_ui_scenes() {
     std::fs::create_dir_all(&out).unwrap();
     let (w, h) = (1440usize, 900usize);
 
-    for (name, buf) in build_scenes(w, h) {
+    // `TEARMINAL_PREVIEW_THEME="Catppuccin Latte"` previsualiza otro tema; los golden usan siempre Frappé.
+    let theme = std::env::var("TEARMINAL_PREVIEW_THEME")
+        .map(|name| crate::theme::Theme::from_name(&name))
+        .unwrap_or_default();
+    for (name, canvas) in build_recorded_scenes_themed(w, h, theme) {
+        let buf = canvas.snapshot();
         let mut data = format!("P6\n{} {}\n255\n", w, h).into_bytes();
         for px in &buf {
             data.push(((px >> 16) & 0xFF) as u8);
@@ -5480,4 +5502,150 @@ fn test_markdown_preview_github_style_no_gutter_and_no_newline_selection() {
     assert_eq!(md_lay.gutter_w, 0);
     assert_eq!(md_lay.sep_x, 0);
     assert!(md_lay.text_x >= 20);
+}
+
+/// La tarjeta con foco lleva contorno de acento y una cruz de 11 px en cada esquina, que sobresale 6 px del
+/// borde interior; sin foco no hay mira y el contorno es el normal. Con Frappé y con Latte.
+#[test]
+fn test_framed_card_draws_focus_marks_only_when_focused() {
+    let (w, h) = (80usize, 70usize);
+    let inset = SidebarRects::CARD_INSET;
+    for name in [Theme::DEFAULT_DARK, Theme::DEFAULT_LIGHT] {
+        let theme = Theme::from_name(name);
+        let accent = theme.accent_color().to_u32_xrgb();
+        let frame = theme.bar_bg().to_u32_xrgb();
+        let draw = |focused: bool| {
+            test_support::with_canvas(w, h, |c| {
+                c.clear(theme.background);
+                TerminalRenderer::draw_framed_card(c, (0, 0, w, h), focused, &theme);
+            })
+        };
+        let focused = draw(true);
+        let at = |buf: &[u32], x: usize, y: usize| buf[y * w + x];
+        let (left, top, right, bottom) = (inset, inset, w - inset - 1, h - inset - 1);
+        // Contorno de acento: esquinas rectas, así que la esquina misma es del contorno.
+        assert_eq!(at(&focused, left, top), accent, "{name}: esquina");
+        assert_eq!(
+            at(&focused, w / 2, top),
+            accent,
+            "{name}: contorno superior"
+        );
+        // Brazos que sobresalen 6 px (la esquina y 5 más) en las cuatro esquinas.
+        for (x, y) in [
+            (left - 5, top),
+            (left, top - 5),
+            (right + 5, top),
+            (right, top - 5),
+            (left - 5, bottom),
+            (left, bottom + 5),
+            (right + 5, bottom),
+            (right, bottom + 5),
+        ] {
+            assert_eq!(at(&focused, x, y), accent, "{name}: brazo en ({x}, {y})");
+        }
+        // Más allá de la cruz y en diagonal, el marco sigue intacto.
+        assert_eq!(
+            at(&focused, left - 6, top),
+            frame,
+            "{name}: fuera del brazo"
+        );
+        assert_eq!(at(&focused, left - 3, top - 3), frame, "{name}: diagonal");
+
+        let plain = draw(false);
+        assert_eq!(
+            at(&plain, left - 5, top),
+            frame,
+            "{name}: sin foco no hay mira"
+        );
+        assert_eq!(
+            at(&plain, w / 2, top),
+            theme.card_outline().to_u32_xrgb(),
+            "{name}: contorno normal sin foco"
+        );
+    }
+}
+
+/// Forma y tipografía del diseño: esquinas rectas, escala diferenciada y una cara por función.
+#[test]
+fn test_visual_base_shape_and_type_scale() {
+    assert_eq!(tokens::RADIUS_CARD, 0);
+    assert_eq!(tokens::RADIUS_CONTROL, 0);
+    assert_eq!(tokens::RADIUS_ROW, 0);
+    let scale = [
+        tokens::MICRO,
+        tokens::DETAIL,
+        tokens::TITLE,
+        tokens::BODY,
+        tokens::DISPLAY,
+    ];
+    assert!(scale.windows(2).all(|pair| pair[0] < pair[1]));
+    // 0,14 em de tracking sobre el rótulo de 11 px.
+    assert!((tokens::TRACKING - 0.14 * tokens::MICRO).abs() < 0.1);
+
+    let config = TearminalConfig::default();
+    let r = TerminalRenderer::new(&config, 1.0);
+    let sample = "Rediseño de interfaz";
+    // Los tamaños se respetan: el rótulo pequeño mide menos que el cuerpo y el título grande, más.
+    let micro = r.measure_ui_text(sample, tokens::MICRO, false);
+    let body = r.measure_ui_text(sample, tokens::BODY, false);
+    let display = r.measure_ui_text(sample, tokens::DISPLAY, false);
+    assert!(micro < body && body < display, "{micro} {body} {display}");
+    // Nada baja de `MICRO`.
+    assert_eq!(
+        r.measure_ui_text(sample, 9.0, false),
+        r.measure_ui_text(sample, tokens::MICRO, false)
+    );
+    // Barlow SemiBold es más ancha que Medium; Plex Mono tiene ancho fijo y Barlow no.
+    assert!(r.measure_ui_text(sample, tokens::BODY, true) > body);
+    assert_eq!(
+        r.measure_mono_text("iiii", tokens::DETAIL, false),
+        r.measure_mono_text("MMMM", tokens::DETAIL, false)
+    );
+    assert_ne!(
+        r.measure_ui_text("iiii", tokens::DETAIL, false),
+        r.measure_ui_text("MMMM", tokens::DETAIL, false)
+    );
+}
+
+/// Las fuentes embebidas cubren el español y la puntuación habitual de la interfaz.
+#[test]
+fn test_embedded_ui_fonts_cover_spanish_text() {
+    let config = TearminalConfig::default();
+    let r = TerminalRenderer::new(&config, 1.0);
+    let text = r"ÁÉÍÓÚÜÑáéíóúüñ¿¡«»…—–€%#@/\|<>[]{}~^`0123456789";
+    for (name, font) in [
+        ("Barlow Medium", &r.body_font),
+        ("Barlow SemiBold", &r.body_strong_font),
+        ("Barlow Semi Condensed", &r.label_font),
+        ("IBM Plex Mono", &r.mono_font),
+    ] {
+        for c in text.chars() {
+            assert!(font.has_glyph(c), "{name} no tiene {c:?}");
+        }
+    }
+}
+
+/// Los rótulos con tracking se dibujan siempre en mayúsculas, sea cual sea el texto recibido.
+#[test]
+fn test_tracked_labels_are_uppercase() {
+    let config = TearminalConfig::default();
+    let mut r = TerminalRenderer::new(&config, 1.0);
+    let theme = Theme::default();
+    let end_of = |r: &mut TerminalRenderer, text: &str| {
+        let mut canvas = test_support::new_canvas(400, 40);
+        canvas.clear(theme.background);
+        r.draw_ui_text_tracked(
+            &mut canvas,
+            text,
+            10,
+            24,
+            390,
+            theme.text_muted(),
+            tokens::MICRO,
+            true,
+            tokens::TRACKING,
+        )
+    };
+    assert_eq!(end_of(&mut r, "interfaz"), end_of(&mut r, "INTERFAZ"));
+    assert_eq!(end_of(&mut r, "tipografía"), end_of(&mut r, "TIPOGRAFÍA"));
 }

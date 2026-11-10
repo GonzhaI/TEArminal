@@ -646,7 +646,7 @@ impl TerminalRenderer {
                 item_y + 6,
                 2,
                 item_h.saturating_sub(12),
-                1,
+                tokens::RADIUS_ROW,
                 bar,
             );
         }
@@ -814,7 +814,14 @@ impl TerminalRenderer {
             } else {
                 theme.chrome_line_strong()
             };
-            canvas.rounded_fill(x + 12, y + 6, 2, h.saturating_sub(12), 1, bar);
+            canvas.rounded_fill(
+                x + 12,
+                y + 6,
+                2,
+                h.saturating_sub(12),
+                tokens::RADIUS_ROW,
+                bar,
+            );
         }
     }
 }

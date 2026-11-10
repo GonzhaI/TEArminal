@@ -79,7 +79,7 @@ impl TerminalRenderer {
                     r.1,
                     r.2.saturating_sub(8),
                     r.3,
-                    3,
+                    tokens::RADIUS_ROW,
                     theme.accent_soft(30),
                 );
             }

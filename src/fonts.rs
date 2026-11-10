@@ -87,7 +87,7 @@ mod tests {
         if let Ok(mono) = std::fs::read(fonts.join("consola.ttf")) {
             assert_eq!(monospace_family(&mono).as_deref(), Some("Consolas"));
         }
-        let prop = include_bytes!("../assets/fonts/Inter-500.ttf");
+        let prop = include_bytes!("../assets/fonts/Barlow-500.ttf");
         assert!(monospace_family(prop).is_none());
     }
 

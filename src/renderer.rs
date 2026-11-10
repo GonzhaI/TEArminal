@@ -33,8 +33,9 @@ mod top_bar;
 
 use draw::Clip;
 use glyphs::{
-    font_settings, FastMap, EMBEDDED_INTER_MEDIUM, EMBEDDED_INTER_SEMIBOLD,
-    EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
+    font_settings, FastMap, UiFace, EMBEDDED_BARLOW_MEDIUM, EMBEDDED_BARLOW_SEMIBOLD,
+    EMBEDDED_BARLOW_SEMI_CONDENSED, EMBEDDED_JETBRAINS_REGULAR, EMBEDDED_LUCIDE,
+    EMBEDDED_PLEX_MONO,
 };
 
 pub(crate) use blocks::BlockCardButton;
@@ -64,8 +65,10 @@ pub(crate) struct TerminalRenderer {
     fallback_symbols: OnceCell<Option<fontdue::Font>>,
     fallback_emoji: OnceCell<Option<fontdue::Font>>,
     fallback_cjk: OnceCell<Option<fontdue::Font>>,
-    pub inter_font: fontdue::Font,
-    pub inter_semibold_font: fontdue::Font,
+    body_font: fontdue::Font,
+    body_strong_font: fontdue::Font,
+    label_font: fontdue::Font,
+    mono_font: fontdue::Font,
     pub lucide_font: fontdue::Font,
     pub font_size: f32,
     pub ui_font_size: f32,
@@ -75,9 +78,9 @@ pub(crate) struct TerminalRenderer {
     pub baseline_y: usize,
     glyph_cache: FastMap<(char, bool), Rc<CachedGlyph>>,
     ascii_cache: Box<[Option<Rc<CachedGlyph>>; 512]>,
-    ui_glyph_cache: FastMap<(char, u32, bool), (Rc<CachedGlyph>, f32)>, // (c, size_bits, semibold) -> (glyph, advance)
-    ui_advance_cache: RefCell<FastMap<(char, u32, bool), f32>>, // medición de texto sin rasterizar
-    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>,    // (c, size_bits) -> glyph
+    ui_glyph_cache: FastMap<(char, u32, UiFace), (Rc<CachedGlyph>, f32)>, // (c, size_bits, cara) -> (glyph, advance)
+    ui_advance_cache: RefCell<FastMap<(char, u32, UiFace), f32>>, // medición de texto sin rasterizar
+    icon_glyph_cache: FastMap<(char, u32), Rc<CachedGlyph>>,      // (c, size_bits) -> glyph
     pub margin_x: usize,
     pub margin_y: usize,
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
@@ -108,11 +111,14 @@ impl TerminalRenderer {
             rustybuzz::Face::from_slice(EMBEDDED_JETBRAINS_REGULAR, 0)
         };
 
-        let inter_font = fontdue::Font::from_bytes(EMBEDDED_INTER_MEDIUM, font_settings())
-            .unwrap_or_else(|_| regular_font.clone());
-        let inter_semibold_font =
-            fontdue::Font::from_bytes(EMBEDDED_INTER_SEMIBOLD, font_settings())
-                .unwrap_or_else(|_| regular_font.clone());
+        let ui_font = |bytes: &'static [u8]| {
+            fontdue::Font::from_bytes(bytes, font_settings())
+                .unwrap_or_else(|_| regular_font.clone())
+        };
+        let body_font = ui_font(EMBEDDED_BARLOW_MEDIUM);
+        let body_strong_font = ui_font(EMBEDDED_BARLOW_SEMIBOLD);
+        let label_font = ui_font(EMBEDDED_BARLOW_SEMI_CONDENSED);
+        let mono_font = ui_font(EMBEDDED_PLEX_MONO);
         let lucide_font = fontdue::Font::from_bytes(EMBEDDED_LUCIDE, font_settings())
             .unwrap_or_else(|_| regular_font.clone());
 
@@ -124,8 +130,10 @@ impl TerminalRenderer {
             fallback_symbols: OnceCell::new(),
             fallback_emoji: OnceCell::new(),
             fallback_cjk: OnceCell::new(),
-            inter_font,
-            inter_semibold_font,
+            body_font,
+            body_strong_font,
+            label_font,
+            mono_font,
             lucide_font,
             font_size: 0.0,
             ui_font_size: 0.0,

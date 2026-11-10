@@ -296,7 +296,7 @@ impl TerminalRenderer {
                 None => theme.accent_color(),
             };
             let icon_x = card.card.0 + 20;
-            canvas.rounded_fill(icon_x, cy - 7, 14, 14, 7, status);
+            canvas.rounded_fill(icon_x, cy - 7, 14, 14, tokens::RADIUS_ROW, status);
             match block.exit_code {
                 Some(0) => self.draw_lucide_icon(
                     canvas,
@@ -315,7 +315,14 @@ impl TerminalRenderer {
                     theme.background,
                 ),
                 None => {
-                    canvas.rounded_fill(icon_x + 4, cy - 3, 6, 6, 3, theme.background);
+                    canvas.rounded_fill(
+                        icon_x + 4,
+                        cy - 3,
+                        6,
+                        6,
+                        tokens::RADIUS_ROW,
+                        theme.background,
+                    );
                 }
             }
 
@@ -339,7 +346,7 @@ impl TerminalRenderer {
                     explain.1,
                     explain.2,
                     explain.3,
-                    5,
+                    tokens::RADIUS_ROW,
                     theme.accent_soft(56),
                 );
                 let exp_w = self.measure_ui_text("Explicar", tokens::BODY, true);
@@ -359,7 +366,7 @@ impl TerminalRenderer {
                     exp_start + 20,
                     btn_base,
                     explain.0 + explain.2 - 4,
-                    theme.accent_color(),
+                    theme.accent_text(),
                     tokens::BODY,
                     true,
                 );
@@ -368,7 +375,7 @@ impl TerminalRenderer {
                     ignore.1,
                     ignore.2,
                     ignore.3,
-                    5,
+                    tokens::RADIUS_ROW,
                     theme.chrome_bg_elevated(),
                 );
                 let ign_w = self.measure_ui_text("Ignorar", tokens::BODY, false);
@@ -443,8 +450,8 @@ impl TerminalRenderer {
         theme: &Theme,
     ) {
         let (x, y, w, h) = rect;
-        canvas.rounded_fill(x, y, w, h, 5, theme.chrome_bg());
-        canvas.rounded_stroke(x, y, w, h, 5, theme.chrome_line());
+        canvas.rounded_fill(x, y, w, h, tokens::RADIUS_ROW, theme.chrome_bg());
+        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_ROW, theme.chrome_line());
         self.draw_lucide_icon(
             canvas,
             icon,

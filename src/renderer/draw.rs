@@ -1,4 +1,4 @@
-//! Primitivas de dibujo sobre el `Canvas`: texto de terminal, texto de UI (Inter), iconos y barras de scroll.
+//! Primitivas de dibujo sobre el `Canvas`: texto de terminal, texto de UI (Barlow y Plex Mono), iconos y barras de scroll.
 
 use super::*;
 
@@ -34,52 +34,70 @@ impl TerminalRenderer {
     #[inline]
     pub(crate) fn centered_baseline(&self, center_y: usize) -> usize {
         let cap_h = self
-            .inter_font
+            .body_font
             .metrics('M', self.ui_font_size.max(6.0))
             .height;
         center_y + cap_h.div_ceil(2)
     }
 
-    /// Fuente proporcional de UI (Inter Medium / SemiBold) con fallback del sistema si falta el glifo.
-    fn ui_font_for(&self, c: char, semibold: bool) -> &fontdue::Font {
-        if semibold && self.inter_semibold_font.has_glyph(c) {
-            &self.inter_semibold_font
-        } else if self.inter_font.has_glyph(c) {
-            &self.inter_font
+    /// Fuente de una cara de la interfaz, sin sustituciones.
+    fn ui_face_font(&self, face: UiFace) -> &fontdue::Font {
+        match face {
+            UiFace::Body => &self.body_font,
+            UiFace::BodyStrong => &self.body_strong_font,
+            UiFace::Label => &self.label_font,
+            UiFace::Mono => &self.mono_font,
+        }
+    }
+
+    /// Fuente de UI para `c`: la de la cara pedida, luego Barlow y, si falta el glifo, los iconos Nerd o el
+    /// fallback del sistema.
+    fn ui_font_for(&self, c: char, face: UiFace) -> &fontdue::Font {
+        let primary = self.ui_face_font(face);
+        if primary.has_glyph(c) {
+            primary
+        } else if self.body_font.has_glyph(c) {
+            &self.body_font
         } else if matches!(c as u32, 0xE000..=0xF8FF | 0xF0000..) && self.nerd_font(c).has_glyph(c)
         {
             // Iconos de archivo y de lenguaje (`ui::file_icons`): de la fuente Nerd embebida, no de una del sistema
             self.nerd_font(c)
         } else if let Some(fb) = self.fallback_font_for(c) {
             fb
-        } else if semibold {
-            &self.inter_semibold_font
         } else {
-            &self.inter_font
+            primary
         }
     }
 
-    /// Mide el ancho en píxeles de un texto de UI (Inter Medium/SemiBold)
-    pub(crate) fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
-        self.measure_ui_text_tracked(text, size_px, semibold, 0.0)
+    /// Tamaño físico en píxeles de un texto de UI de `size_px` lógicos (los tokens de `tokens.rs`).
+    /// `BODY` es la referencia: coincide con `ui_font_size`. Ningún texto baja de `MICRO`.
+    fn ui_text_px(&self, size_px: f32) -> f32 {
+        (size_px.max(tokens::MICRO) * self.ui_font_size / tokens::BODY).max(6.0)
     }
 
-    /// Mide texto con tracking adicional entre caracteres (micro-etiquetas en mayúsculas).
-    pub(crate) fn measure_ui_text_tracked(
-        &self,
-        text: &str,
-        _size_px: f32,
-        semibold: bool,
-        tracking: f32,
-    ) -> usize {
-        let effective_size = self.ui_font_size.max(6.0);
+    /// Cara de cuerpo según el énfasis.
+    fn body_face(semibold: bool) -> UiFace {
+        if semibold {
+            UiFace::BodyStrong
+        } else {
+            UiFace::Body
+        }
+    }
+
+    /// Mide el ancho en píxeles de un texto de UI (Barlow Medium/SemiBold)
+    pub(crate) fn measure_ui_text(&self, text: &str, size_px: f32, semibold: bool) -> usize {
+        self.measure_run(text, size_px, Self::body_face(semibold), 0.0)
+    }
+
+    fn measure_run(&self, text: &str, size_px: f32, face: UiFace, tracking: f32) -> usize {
+        let effective_size = self.ui_text_px(size_px);
         let size_bits = effective_size.to_bits();
         let mut cache = self.ui_advance_cache.borrow_mut();
         let width: f32 = text
             .chars()
             .map(|c| {
-                *cache.entry((c, size_bits, semibold)).or_insert_with(|| {
-                    self.ui_font_for(c, semibold)
+                *cache.entry((c, size_bits, face)).or_insert_with(|| {
+                    self.ui_font_for(c, face)
                         .metrics(c, effective_size)
                         .advance_width
                 })
@@ -89,7 +107,7 @@ impl TerminalRenderer {
         (width + gaps * tracking * self.ui_scale_ratio()).round() as usize
     }
 
-    /// Dibuja texto de UI utilizando la tipografía Inter (Medium como peso base y SemiBold en énfasis)
+    /// Dibuja texto de UI con Barlow (Medium como peso base y SemiBold en énfasis)
     pub(crate) fn draw_ui_text(
         &mut self,
         canvas: &mut Canvas,
@@ -101,12 +119,20 @@ impl TerminalRenderer {
         size_px: f32,
         semibold: bool,
     ) -> usize {
-        self.draw_ui_text_tracked(
-            canvas, text, start_x, baseline_y, max_x, color, size_px, semibold, 0.0,
+        self.draw_run(
+            canvas,
+            text,
+            start_x,
+            baseline_y,
+            max_x,
+            color,
+            size_px,
+            Self::body_face(semibold),
+            0.0,
         )
     }
 
-    /// Igual que `draw_ui_text`, con separación extra entre caracteres.
+    /// Dibuja un rótulo: mayúsculas en Barlow Semi Condensed con separación extra entre caracteres.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_ui_text_tracked(
         &mut self,
@@ -116,12 +142,38 @@ impl TerminalRenderer {
         baseline_y: usize,
         max_x: usize,
         color: Color,
-        _size_px: f32,
-        semibold: bool,
+        size_px: f32,
+        _semibold: bool,
+        tracking: f32,
+    ) -> usize {
+        self.draw_run(
+            canvas,
+            &text.to_uppercase(),
+            start_x,
+            baseline_y,
+            max_x,
+            color,
+            size_px,
+            UiFace::Label,
+            tracking,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_run(
+        &mut self,
+        canvas: &mut Canvas,
+        text: &str,
+        start_x: usize,
+        baseline_y: usize,
+        max_x: usize,
+        color: Color,
+        size_px: f32,
+        face: UiFace,
         tracking: f32,
     ) -> usize {
         let (buf_width, buf_height) = canvas.size();
-        let effective_size = self.ui_font_size.max(6.0);
+        let effective_size = self.ui_text_px(size_px);
         let size_bits = effective_size.to_bits();
         let tracking_px = tracking * self.ui_scale_ratio();
         let mut cur_x = start_x as f32;
@@ -132,8 +184,8 @@ impl TerminalRenderer {
                 break;
             }
 
-            let key = (c, size_bits, semibold);
-            let font = self.ui_font_for(c, semibold);
+            let key = (c, size_bits, face);
+            let font = self.ui_font_for(c, face);
             let (glyph, advance) = cache.entry(key).or_insert_with(|| {
                 let (metrics, bitmap) = font.rasterize(c, effective_size);
                 (
@@ -235,12 +287,12 @@ impl TerminalRenderer {
         }
     }
 
-    /// Mide un valor del chrome con la fuente de interfaz Inter.
-    pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, bold: bool) -> usize {
-        self.measure_ui_text(text, size_px, bold)
+    /// Mide un dato del chrome (ruta, rama, dimensión, atajo o versión) con IBM Plex Mono.
+    pub(crate) fn measure_mono_text(&self, text: &str, size_px: f32, _bold: bool) -> usize {
+        self.measure_run(text, size_px, UiFace::Mono, 0.0)
     }
 
-    /// Dibuja un valor del chrome (ruta, rama, dimensión, atajo o versión) con la fuente de interfaz Inter.
+    /// Dibuja un dato del chrome (ruta, rama, dimensión, atajo o versión) con IBM Plex Mono.
     pub(crate) fn draw_mono_text(
         &mut self,
         canvas: &mut Canvas,
@@ -250,10 +302,18 @@ impl TerminalRenderer {
         max_x: usize,
         color: Color,
         size_px: f32,
-        bold: bool,
+        _bold: bool,
     ) -> usize {
-        self.draw_ui_text(
-            canvas, text, start_x, baseline_y, max_x, color, size_px, bold,
+        self.draw_run(
+            canvas,
+            text,
+            start_x,
+            baseline_y,
+            max_x,
+            color,
+            size_px,
+            UiFace::Mono,
+            0.0,
         )
     }
 
@@ -318,10 +378,10 @@ impl TerminalRenderer {
             y,
             w,
             h,
-            3,
+            tokens::RADIUS_ROW,
             theme.mix(theme.background, theme.foreground, 0.07),
         );
-        canvas.rounded_stroke(x, y, w, h, 3, theme.chrome_line());
+        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_ROW, theme.chrome_line());
         let baseline = self.centered_baseline(y + h / 2);
         let tx = x + w.saturating_sub(text_w) / 2;
         self.draw_mono_text(
@@ -422,13 +482,27 @@ impl TerminalRenderer {
         }
         let hover = theme.surface_hover();
         let track_bg = Color::from_rgba(hover.r(), hover.g(), hover.b(), 100);
-        canvas.rounded_fill(track.0, track.1, track.2, track.3, 3, track_bg);
+        canvas.rounded_fill(
+            track.0,
+            track.1,
+            track.2,
+            track.3,
+            tokens::RADIUS_ROW,
+            track_bg,
+        );
         let thumb_color = if is_hovered {
             theme.accent_color()
         } else {
             theme.ansi[8]
         };
-        canvas.rounded_fill(thumb.0, thumb.1, thumb.2, thumb.3, 3, thumb_color);
+        canvas.rounded_fill(
+            thumb.0,
+            thumb.1,
+            thumb.2,
+            thumb.3,
+            tokens::RADIUS_ROW,
+            thumb_color,
+        );
     }
 
     /// Dibuja el contenido de un `TextInput` (texto, placeholder, selección de fondo y cursor parpadeante).
@@ -472,7 +546,14 @@ impl TerminalRenderer {
 
         if text.is_empty() && is_active {
             if cursor_visible {
-                canvas.rounded_fill(text_start_x, cur_y, 2, cur_h, 1, cursor_color);
+                canvas.rounded_fill(
+                    text_start_x,
+                    cur_y,
+                    2,
+                    cur_h,
+                    tokens::RADIUS_ROW,
+                    cursor_color,
+                );
             }
             self.draw_ui_text(
                 canvas,
@@ -506,7 +587,7 @@ impl TerminalRenderer {
             if sel_w > 0 {
                 let sel_h = 18.min(box_h.saturating_sub(2)).max(14);
                 let sel_y = box_y + (box_h.saturating_sub(sel_h)) / 2;
-                canvas.rounded_fill(sel_x, sel_y, sel_w, sel_h, 3, sel_bg);
+                canvas.rounded_fill(sel_x, sel_y, sel_w, sel_h, tokens::RADIUS_ROW, sel_bg);
             }
 
             // Dibujar los tramos de texto: antes, seleccionado (en sel_fg) y después
@@ -566,7 +647,7 @@ impl TerminalRenderer {
         if is_active && cursor_visible {
             let cur_offset = self.measure_ui_text(&text[..input.cursor], tokens::BODY, true);
             let cur_x = (text_start_x + cur_offset).min(text_max_x);
-            canvas.rounded_fill(cur_x, cur_y, 2, cur_h, 1, cursor_color);
+            canvas.rounded_fill(cur_x, cur_y, 2, cur_h, tokens::RADIUS_ROW, cursor_color);
         }
     }
 }

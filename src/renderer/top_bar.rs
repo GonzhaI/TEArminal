@@ -349,9 +349,9 @@ impl TerminalRenderer {
                 theme.bar_bg()
             };
             let (x, y) = (cx.saturating_sub(5), cy.saturating_sub(4));
-            canvas.rounded_stroke(x + 3, y, 8, 8, 2, max_fg);
-            canvas.rounded_fill(x, y + 3, 8, 8, 2, bg);
-            canvas.rounded_stroke(x, y + 3, 8, 8, 2, max_fg);
+            canvas.rounded_stroke(x + 3, y, 8, 8, tokens::RADIUS_ROW, max_fg);
+            canvas.rounded_fill(x, y + 3, 8, 8, tokens::RADIUS_ROW, bg);
+            canvas.rounded_stroke(x, y + 3, 8, 8, tokens::RADIUS_ROW, max_fg);
         } else {
             self.draw_lucide_icon(canvas, crate::ui::LucideIcon::Square, cx, cy, 12.0, max_fg);
         }

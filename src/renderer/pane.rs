@@ -380,7 +380,7 @@ impl TerminalRenderer {
     ) {
         let (x, y, w, h) = rect;
         if hovered {
-            canvas.rounded_fill(x, y, w, h, 4, theme.surface_hover());
+            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_ROW, theme.surface_hover());
         }
         let fg = if hovered {
             theme.foreground
@@ -392,6 +392,35 @@ impl TerminalRenderer {
 
     /// Cabecera de un panel dividido (38 px): icono, título, subtítulo atenuado, acciones
     /// (dividir · maximizar · cerrar) y línea de acento en el panel enfocado.
+    /// Tarjeta del panel o del contenido sobre el marco: fondo, contorno de 1 px y, con foco, contorno de
+    /// acento y marca de mira (cruces de acento en las cuatro esquinas). `region` es la de la tarjeta, con su
+    /// recorte `SidebarRects::CARD_INSET`.
+    pub(crate) fn draw_framed_card(
+        canvas: &mut Canvas,
+        region: Rect,
+        focused: bool,
+        theme: &Theme,
+    ) {
+        let outline = if focused {
+            theme.accent_color()
+        } else {
+            theme.card_outline()
+        };
+        canvas.outlined_card(
+            region,
+            SidebarRects::CARD_INSET,
+            SidebarRects::CARD_RADIUS,
+            theme.bar_bg(),
+            outline,
+        );
+        if !focused {
+            return;
+        }
+        for (x, y, w, h) in FocusMarkRects::compute(region) {
+            Self::draw_rect(canvas, x, y, w, h, theme.accent_color());
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_pane_header(
         &mut self,
