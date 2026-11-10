@@ -1,4 +1,4 @@
-﻿//! Geometría compartida entre el dibujo y la detección de clics/hover (una sola fuente de verdad).
+//! Geometría compartida entre el dibujo y la detección de clics/hover (una sola fuente de verdad).
 
 mod modals;
 mod settings;
@@ -880,7 +880,7 @@ impl FocusMarkRects {
     pub(crate) const OUTWARD: usize = 6;
 
     /// Ocho rectángulos (x, y, ancho, alto): el brazo horizontal y el vertical de cada esquina, de la tarjeta
-    /// cuya región (con recorte) es egion.
+    /// cuya región (con recorte) es `region`.
     pub(crate) fn compute(region: Rect) -> [Rect; 8] {
         let (x, y, w, h) = region;
         let inset = SidebarRects::CARD_INSET;

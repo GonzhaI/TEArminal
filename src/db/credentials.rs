@@ -195,7 +195,11 @@ mod tests {
 
     #[test]
     fn credential_manager_roundtrip() {
-        let id = format!("test{}", std::process::id());
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let id = format!("test_{}_{}", std::process::id(), ts);
         let kind = SecretKind::DbPassword;
         let secret = Secret::new("contraseña ñandú \u{1F511}");
         // Si el entorno no tiene Administrador de credenciales (sesión sin perfil), no hay nada que probar
