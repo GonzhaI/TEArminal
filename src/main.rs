@@ -5,6 +5,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app;
 mod config;
+mod db;
 mod explorer;
 mod fonts;
 mod json;
@@ -24,6 +25,10 @@ use config::TearminalConfig;
 use winit::event_loop::EventLoop;
 
 fn main() -> Result<()> {
+    // 0. `ssh.exe` nos lanza como SSH_ASKPASS para pedir la frase de paso de la llave de un túnel de datos:
+    //    responder y salir, sin tocar configuración ni ventanas
+    db::askpass::run_if_requested();
+
     // 1. Cargar configuración de TEArminal
     let config = TearminalConfig::load_or_default();
 
