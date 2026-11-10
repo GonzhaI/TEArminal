@@ -23,7 +23,7 @@ pub(crate) struct AiLimit {
 }
 
 impl AiLimit {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn resets_in_secs(&self) -> Option<u64> {
         let left = self.resets_at?.saturating_sub(now_unix_secs());
         (left > 0).then_some(left)
@@ -190,7 +190,7 @@ impl AiUsageSnapshot {
 
 impl AiAgentUsage {
     /// Hay tokens registrados localmente (Aider, Copilot y Ollama no dejan transcripciones)
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn has_tokens(&self) -> bool {
         self.window_5h.total_tokens() > 0 || self.session.total_tokens() > 0
     }
@@ -937,7 +937,7 @@ pub(crate) fn format_tokens(n: u64) -> String {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn format_duration(secs: u64) -> String {
     let days = secs / 86400;
     let hours = (secs % 86400) / 3600;

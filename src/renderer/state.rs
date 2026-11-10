@@ -14,18 +14,6 @@ pub(crate) enum SessionStatus {
     Failed,
 }
 
-impl SessionStatus {
-    #[allow(dead_code)]
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "En espera",
-            Self::Running => "En curso",
-            Self::Done => "Terminó",
-            Self::Failed => "Falló",
-        }
-    }
-}
-
 /// Límite real de la cuenta mostrado como medidor en la barra de estado.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct StatusMeter {
@@ -67,7 +55,6 @@ pub(crate) struct SidebarTabItem {
 }
 
 #[inline]
-#[allow(dead_code)]
 pub(crate) fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     let h = haystack.as_bytes();
     let n = needle.as_bytes();

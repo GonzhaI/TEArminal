@@ -618,11 +618,21 @@ impl<'a> Perform for Performer<'a> {
                         if user_host.contains('@') {
                             if let Some(clean_dir) = crate::pty::safe_remote_dir(rest.trim()) {
                                 // Sin sesión SSH (p. ej. el título `user@host: /ruta` de WSL) la ruta no existe en
-                                // Windows: no es un directorio local
+                                // Windows: no es un directorio local. Si OSC 7 ya informó de una ruta canónica (`/home/x`),
+                                // no pisarla con `~` ni rutas abreviadas del título PS1.
                                 if let Some(ref mut sess) = self.state.ssh_session {
-                                    sess.remote_dir = Some(clean_dir.to_string());
-                                    if let Some(dir) = accept_cwd(clean_dir) {
-                                        self.state.current_dir = Some(dir);
+                                    let keep_existing = (self.state.remote_at_prompt
+                                        && sess.remote_dir.is_some())
+                                        || (!clean_dir.starts_with('/')
+                                            && sess
+                                                .remote_dir
+                                                .as_deref()
+                                                .is_some_and(|d| d.starts_with('/')));
+                                    if !keep_existing {
+                                        sess.remote_dir = Some(clean_dir.to_string());
+                                        if let Some(dir) = accept_cwd(clean_dir) {
+                                            self.state.current_dir = Some(dir);
+                                        }
                                     }
                                 }
                             }
@@ -698,6 +708,8 @@ impl<'a> Perform for Performer<'a> {
                         }
                         self.state.ssh_session = None;
                         self.state.remote_integration = false;
+                        self.state.remote_at_prompt = false;
+                        self.state.remote_file_parts.clear();
                         self.state.current_dir = None;
                     }
                 } else if p1.starts_with(b"TearminalAgent=start") {
@@ -799,6 +811,11 @@ impl<'a> Perform for Performer<'a> {
                             }
                         }
                     }
+                } else if let Some(id) = p1.strip_prefix(b"TearminalFile=") {
+                    if self.state.ssh_session.is_some() {
+                        let id = String::from_utf8_lossy(id);
+                        self.handle_remote_file(&id, &params[2..]);
+                    }
                 } else {
                     self.handle_iterm2_image(&params[1..]);
                 }
@@ -821,27 +838,26 @@ impl<'a> Perform for Performer<'a> {
                         ("", path_part)
                     };
                     let decoded_path = percent_decode(path);
-                    if !host.is_empty()
-                        && host != "localhost"
-                        && host != "127.0.0.1"
-                        && crate::pty::is_safe_ssh_destination(host)
+                    let is_win_drive = decoded_path.starts_with('/')
+                        && decoded_path
+                            .as_bytes()
+                            .get(1)
+                            .is_some_and(u8::is_ascii_alphabetic)
+                        && decoded_path.as_bytes().get(2) == Some(&b':');
+                    if !is_win_drive
+                        && (host.is_empty() || crate::pty::is_safe_ssh_destination(host))
                     {
-                        // Host remoto vía OSC 7 (el directorio solo se guarda si es seguro de reutilizar)
+                        // Host remoto vía OSC 7 (el directorio solo se guarda si es seguro de reutilizar).
+                        // Solo actualiza una sesión ya autenticada (`TearminalSSH=start`): OSC 7 no puede crearla,
+                        // pero sí acepta `localhost` o host vacío cuando el servidor remoto se llama así.
                         let remote_dir =
                             crate::pty::safe_remote_dir(&decoded_path).map(str::to_string);
-                        // Solo actualiza una sesión ya autenticada (`TearminalSSH=start`): OSC 7 no puede crearla
                         if let Some(sess) = &mut self.state.ssh_session {
                             sess.remote_dir = remote_dir;
                         }
                     }
                     // En Windows `/C:/ruta` requiere quitar la barra inicial; en Unix `/home/x` la conserva
-                    let trimmed = if decoded_path.starts_with('/')
-                        && decoded_path
-                            .as_bytes()
-                            .get(1)
-                            .is_some_and(u8::is_ascii_alphabetic)
-                        && decoded_path.as_bytes().get(2) == Some(&b':')
-                    {
+                    let trimmed = if is_win_drive {
                         &decoded_path[1..]
                     } else {
                         &decoded_path
@@ -1153,6 +1169,80 @@ impl<'a> Performer<'a> {
         }
     }
 
+    fn handle_remote_file(&mut self, id: &str, params: &[&[u8]]) {
+        const MAX_REMOTE_FILE_BYTES: usize = crate::ssh::MAX_FILE_BYTES + 1;
+        const MAX_REMOTE_FILE_INFLIGHT: usize = 32;
+
+        if id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return;
+        }
+        let mut part: Option<&[u8]> = None;
+        let mut status: Option<&str> = None;
+        let mut hex_data: Option<&[u8]> = None;
+        for p in params {
+            if let Some(v) = p.strip_prefix(b"part=") {
+                part = Some(v);
+            } else if let Some(v) = p.strip_prefix(b"status=") {
+                status = std::str::from_utf8(v).ok();
+            } else if let Some(v) = p.strip_prefix(b"data=") {
+                hex_data = Some(v);
+            }
+        }
+        if let Some(b64) = part {
+            use base64::prelude::*;
+            if !self.state.remote_file_parts.contains_key(id)
+                && self.state.remote_file_parts.len() >= MAX_REMOTE_FILE_INFLIGHT
+            {
+                return;
+            }
+            let asm = self
+                .state
+                .remote_file_parts
+                .entry(id.to_string())
+                .or_default();
+            if !asm.overflow {
+                let clean: Vec<u8> = b64
+                    .iter()
+                    .copied()
+                    .filter(|b| !b.is_ascii_whitespace())
+                    .collect();
+                match BASE64_STANDARD.decode(&clean) {
+                    Ok(chunk) if asm.data.len() + chunk.len() <= MAX_REMOTE_FILE_BYTES => {
+                        asm.data.extend_from_slice(&chunk);
+                    }
+                    _ => {
+                        asm.data.clear();
+                        asm.overflow = true;
+                    }
+                }
+            }
+        }
+        if let Some(st) = status {
+            let asm = self.state.remote_file_parts.remove(id).unwrap_or_default();
+            let (status, mut data) = if asm.overflow {
+                ("overflow".to_string(), Vec::new())
+            } else {
+                (st.trim().to_string(), asm.data)
+            };
+            if data.is_empty() && !asm.overflow {
+                if let Some(h) = hex_data {
+                    if h.len() <= MAX_REMOTE_FILE_BYTES * 2 {
+                        if let Some(d) = hex_decode(h) {
+                            data = d;
+                        }
+                    }
+                }
+            }
+            if self.state.remote_file_results.len() < MAX_REMOTE_FILE_INFLIGHT {
+                self.state.remote_file_results.push(RemoteFileResult {
+                    id: id.to_string(),
+                    status,
+                    data,
+                });
+            }
+        }
+    }
+
     fn handle_osc_52(&mut self, params: &[&[u8]]) {
         let total = params.iter().map(|p| p.len() + 1).sum::<usize>();
         let mut full = Vec::with_capacity(total);
@@ -1275,5 +1365,22 @@ pub(crate) fn clean_listing(text: &str) -> Vec<String> {
         })
         .take(MAX_ENTRIES)
         .map(String::from)
+        .collect()
+}
+
+fn hex_decode(hex: &[u8]) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    let val = |b: u8| match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    };
+    hex.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| Some((val(c[0])? << 4) | val(c[1])?))
         .collect()
 }

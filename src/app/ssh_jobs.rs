@@ -56,6 +56,10 @@ pub(super) enum SshDone {
         lines: Option<Vec<String>>,
         is_new_file: bool,
     },
+    GitAction {
+        path: PathBuf,
+        is_discard: bool,
+    },
 }
 
 fn remote_path_string(path: &Path) -> String {
@@ -108,6 +112,33 @@ impl TearminalApp {
                 path,
                 lines,
                 is_new_file,
+            }
+        });
+    }
+
+    /// Ejecuta en un hilo en segundo plano una acción de Git (Stage, Unstage, Discard) sin bloquear la UI
+    pub(super) fn spawn_git_action(
+        &self,
+        repo_root: PathBuf,
+        path: PathBuf,
+        action: crate::renderer::GitActionKind,
+        is_untracked: bool,
+    ) {
+        self.spawn_ssh(move || {
+            match action {
+                crate::renderer::GitActionKind::Stage => {
+                    let _ = crate::explorer::git_stage_file(&repo_root, &path);
+                }
+                crate::renderer::GitActionKind::Unstage => {
+                    let _ = crate::explorer::git_unstage_file(&repo_root, &path);
+                }
+                crate::renderer::GitActionKind::Discard => {
+                    let _ = crate::explorer::git_discard_file(&repo_root, &path, is_untracked);
+                }
+            }
+            SshDone::GitAction {
+                path,
+                is_discard: action == crate::renderer::GitActionKind::Discard,
             }
         });
     }
@@ -210,28 +241,36 @@ impl TearminalApp {
         });
     }
 
+    /// Lanza en un hilo de fondo un listado remoto fuera de banda mediante `SshConnection`
+    pub(super) fn spawn_ssh_listing(&self, req: RemoteLsReq) {
+        self.spawn_ssh(move || {
+            let result = match ssh::SafeSshDestination::parse(&req.dest) {
+                Ok(safe_dest) => {
+                    let conn = ssh::SshConnection::new(safe_dest)
+                        .with_identity_file(req.identity_file.clone())
+                        .with_port(req.port)
+                        .with_timeout(4);
+                    match conn.authenticate(None) {
+                        Ok(auth_conn) => match req.expand {
+                            None => auth_conn.list_root(&req.dir),
+                            Some(_) => auth_conn.list_dir(&req.dir),
+                        },
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(format!("destino SSH no válido: {e}")),
+            };
+            SshDone::Listing(Box::new(SshListingDone { req, result }))
+        });
+    }
+
     /// Lanza los listados y consultas git que el explorador pidió (llamar tras cada ronda de eventos)
     pub(super) fn pump_explorer_ssh(&mut self) {
         for req in self.file_explorer.take_ssh_requests() {
-            self.spawn_ssh(move || {
-                let result = match ssh::SafeSshDestination::parse(&req.dest) {
-                    Ok(safe_dest) => {
-                        let conn = ssh::SshConnection::new(safe_dest)
-                            .with_identity_file(req.identity_file.clone())
-                            .with_port(req.port)
-                            .with_timeout(4);
-                        match conn.authenticate(None) {
-                            Ok(auth_conn) => match req.expand {
-                                None => auth_conn.list_root(&req.dir),
-                                Some(_) => auth_conn.list_dir(&req.dir),
-                            },
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => Err(format!("destino SSH no válido: {e}")),
-                };
-                SshDone::Listing(Box::new(SshListingDone { req, result }))
-            });
+            if req.expand.is_some() && self.remote_list(&req) {
+                continue;
+            }
+            self.spawn_ssh_listing(req);
         }
         if let Some((repo_root, changes_only)) = self.file_explorer.take_git_status_request() {
             let spawned = self.spawn_ssh(move || {
@@ -281,6 +320,15 @@ impl TearminalApp {
                         .filter(|s| s.destination == req.dest);
                     if let (Some(session), Some(branch)) = (session, branch) {
                         session.remote_git_branch = Some(branch);
+                    }
+                    if self.file_explorer.remote_expand_all {
+                        match self.file_explorer.next_remote_dir_to_expand() {
+                            Some(idx) => {
+                                self.file_explorer.toggle_expand(idx);
+                                self.pump_explorer_ssh();
+                            }
+                            None => self.file_explorer.remote_expand_all = false,
+                        }
                     }
                 }
                 SshDone::Save(save) => {
@@ -359,6 +407,11 @@ impl TearminalApp {
                             }
                         }
                     }
+                }
+                SshDone::GitAction { path, is_discard } => {
+                    self.file_explorer.refresh_git_status();
+                    self.sync_viewer_on_git_action(&path, is_discard);
+                    self.pump_explorer_ssh();
                 }
             }
         }

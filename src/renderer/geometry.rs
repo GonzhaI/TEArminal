@@ -1,5 +1,13 @@
 //! Geometría compartida entre el dibujo y la detección de clics/hover (una sola fuente de verdad).
 
+mod modals;
+mod settings;
+mod viewer;
+
+pub(crate) use modals::*;
+pub(crate) use settings::*;
+pub(crate) use viewer::*;
+
 /// Rectángulo (x, y, ancho, alto) en píxeles
 pub(crate) type Rect = (usize, usize, usize, usize);
 
@@ -83,7 +91,6 @@ impl TopTabBarRects {
 
     /// `width` es el ancho de la ventana y `left_x` el borde izquierdo de la barra (ancho del panel de
     /// Spaces); las pestañas empiezan alineadas con la tarjeta de contenido.
-    #[allow(dead_code)]
     pub(crate) fn compute(width: usize, left_x: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
@@ -166,755 +173,6 @@ impl TopTabBarRects {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SettingsPageRects {
-    pub nav_appearance: (usize, usize, usize, usize),
-    pub nav_terminal: (usize, usize, usize, usize),
-    pub nav_shortcuts: (usize, usize, usize, usize),
-    pub nav_about: (usize, usize, usize, usize),
-
-    pub theme_slot_dark_btn: (usize, usize, usize, usize),
-    pub theme_slot_light_btn: (usize, usize, usize, usize),
-    pub theme_search_box: (usize, usize, usize, usize),
-    pub theme_list: (usize, usize, usize, usize),
-    pub theme_mode_system_btn: (usize, usize, usize, usize),
-    pub theme_mode_dark_btn: (usize, usize, usize, usize),
-    pub theme_mode_light_btn: (usize, usize, usize, usize),
-
-    pub font_minus_btn: (usize, usize, usize, usize),
-    pub font_plus_btn: (usize, usize, usize, usize),
-    pub font_value_box: (usize, usize, usize, usize),
-    /// Selector de la familia tipográfica instalada: anterior, siguiente y el nombre entre ambos
-    pub font_family_prev_btn: (usize, usize, usize, usize),
-    pub font_family_next_btn: (usize, usize, usize, usize),
-    pub ui_font_minus_btn: (usize, usize, usize, usize),
-    pub ui_font_plus_btn: (usize, usize, usize, usize),
-    pub ui_font_value_box: (usize, usize, usize, usize),
-    pub spacing_minus_btn: (usize, usize, usize, usize),
-    pub spacing_plus_btn: (usize, usize, usize, usize),
-    pub spacing_value_box: (usize, usize, usize, usize),
-    pub opacity_minus_btn: (usize, usize, usize, usize),
-    pub opacity_plus_btn: (usize, usize, usize, usize),
-    pub opacity_value_box: (usize, usize, usize, usize),
-
-    pub cursor_blink_btn: (usize, usize, usize, usize),
-    pub cursor_shape_block_btn: (usize, usize, usize, usize),
-    pub cursor_shape_beam_btn: (usize, usize, usize, usize),
-    pub cursor_shape_underline_btn: (usize, usize, usize, usize),
-    pub shell_pwsh_btn: (usize, usize, usize, usize),
-    pub shell_powershell_btn: (usize, usize, usize, usize),
-    pub shell_cmd_btn: (usize, usize, usize, usize),
-    pub scrollback_minus_btn: (usize, usize, usize, usize),
-    pub scrollback_plus_btn: (usize, usize, usize, usize),
-    pub scrollback_value_box: (usize, usize, usize, usize),
-    pub shell_integration_btn: (usize, usize, usize, usize),
-    pub copy_on_select_btn: (usize, usize, usize, usize),
-    pub status_bar_toggle_btn: (usize, usize, usize, usize),
-    pub show_dimensions_btn: (usize, usize, usize, usize),
-    pub file_explorer_toggle_btn: (usize, usize, usize, usize),
-    pub restore_session_btn: (usize, usize, usize, usize),
-    pub auto_save_btn: (usize, usize, usize, usize),
-    pub word_wrap_btn: (usize, usize, usize, usize),
-    pub ssh_integration_btn: (usize, usize, usize, usize),
-    pub osc52_btn: (usize, usize, usize, usize),
-    pub ligatures_btn: (usize, usize, usize, usize),
-    pub ai_limits_btn: (usize, usize, usize, usize),
-    pub auto_check_updates_btn: (usize, usize, usize, usize),
-    pub keep_awake_off_btn: (usize, usize, usize, usize),
-    pub keep_awake_agent_btn: (usize, usize, usize, usize),
-    pub keep_awake_active_btn: (usize, usize, usize, usize),
-    pub open_file_btn: (usize, usize, usize, usize),
-    pub reset_defaults_btn: (usize, usize, usize, usize),
-    pub search_box: (usize, usize, usize, usize),
-    pub term_reset_btn: (usize, usize, usize, usize),
-    /// Acciones editoriales de «Acerca de» (no comparten rectángulo con Terminal)
-    pub about_open_file_btn: (usize, usize, usize, usize),
-    pub about_reset_btn: (usize, usize, usize, usize),
-    pub card_w: usize,
-    pub content_x: usize,
-}
-
-impl SettingsPageRects {
-    /// Y (relativa a la página) donde empieza el contenido desplazable, bajo el encabezado y la navegación.
-    pub(crate) const CONTENT_TOP: usize = 100;
-    /// Filas visibles de la lista de temas, alto de cada una y alto de su tarjeta
-    pub(crate) const THEME_ROWS: usize = 7;
-    pub(crate) const THEME_ROW_H: usize = 30;
-    pub(crate) const THEME_CARD_H: usize = 428;
-    pub(crate) const INTERFACE_CARD_H: usize = 170;
-    pub(crate) const TYPOGRAPHY_CARD_H: usize = 320;
-    /// Alto de la tarjeta «Comportamiento del terminal»
-    pub(crate) const TERMINAL_CARD_H: usize = 738;
-    pub(crate) const TERMINAL_ROW_H: usize = 28;
-    pub(crate) const DISK_CARD_H: usize = 118;
-    pub(crate) const SHORTCUTS_CARD_H: usize = 392;
-    pub(crate) const ABOUT_CARD_H: usize = 328;
-
-    /// Alto total del contenido desplazable de una sección (desde `CONTENT_TOP`).
-    pub(crate) fn content_height(section: super::state::SettingsSection) -> usize {
-        use super::state::SettingsSection::*;
-        match section {
-            Appearance => 1012,
-            Terminal => 894,
-            Shortcuts => 424,
-            About => 360,
-        }
-    }
-
-    /// Máximo desplazamiento vertical para un viewport de `viewport_h` píxeles.
-    pub(crate) fn max_scroll(section: super::state::SettingsSection, viewport_h: usize) -> usize {
-        Self::content_height(section).saturating_sub(viewport_h)
-    }
-
-    /// Pista y pulgar de la barra de scroll de Ajustes (compartidos por dibujo, clic y arrastre)
-    pub(crate) fn scrollbar(
-        section: super::state::SettingsSection,
-        page_y: usize,
-        win_w: usize,
-        viewport_h: usize,
-        scroll: usize,
-    ) -> Option<(Rect, Rect)> {
-        ScrollbarRects::vertical(
-            win_w,
-            page_y + Self::CONTENT_TOP,
-            viewport_h.saturating_sub(SidebarRects::CARD_INSET + 4),
-            Self::content_height(section),
-            viewport_h,
-            scroll,
-        )
-    }
-
-    #[allow(dead_code)]
-    /// Ancho de la columna de navegación lateral del modal.
-    pub(crate) const NAV_W: usize = 184;
-    pub(crate) const MODAL_MAX_W: usize = 980;
-    pub(crate) const MODAL_MAX_H: usize = 680;
-
-    /// Región `(x, y, w, h)` del modal de Ajustes: centrado en la ventana, con margen a los bordes.
-    pub(crate) fn modal_region(win_w: usize, win_h: usize) -> Rect {
-        let w = Self::MODAL_MAX_W.min(win_w.saturating_sub(80));
-        let h = Self::MODAL_MAX_H.min(win_h.saturating_sub(120));
-        (
-            (win_w.saturating_sub(w)) / 2,
-            (win_h.saturating_sub(h)) / 2,
-            w,
-            h,
-        )
-    }
-
-    /// Geometría del modal: columna de navegación a la izquierda (`NAV_W`) y el contenido de la página
-    /// en el resto. `page_*` son la esquina y el tamaño del modal.
-    pub(crate) fn compute_modal(
-        page_x: usize,
-        page_y: usize,
-        page_w: usize,
-        page_h: usize,
-    ) -> Self {
-        let mut r = Self::compute(
-            page_x + Self::NAV_W,
-            page_y,
-            page_w.saturating_sub(Self::NAV_W),
-            page_h,
-        );
-        let (x, w) = (page_x + 12, Self::NAV_W - 24);
-        let row = |i: usize| (x, page_y + 76 + i * 38, w, 34);
-        r.nav_appearance = row(0);
-        r.nav_terminal = row(1);
-        r.nav_shortcuts = row(2);
-        r.nav_about = row(3);
-        r
-    }
-
-    pub(crate) fn compute(page_x: usize, page_y: usize, page_w: usize, _page_h: usize) -> Self {
-        let max_card_w = 980;
-        let side_padding = ((page_w as f32 * 0.05) as usize).clamp(24, 72);
-        let card_w = (page_w.saturating_sub(side_padding * 2))
-            .min(max_card_w)
-            .max(460);
-        let margin_x = if page_w > card_w {
-            (page_w - card_w) / 2
-        } else {
-            side_padding
-        };
-        let content_x = page_x + margin_x;
-        let search_w = 216.min(card_w / 3);
-        let reset_w = 148;
-        let reset_defaults_btn = (
-            content_x + card_w.saturating_sub(reset_w),
-            page_y + 26,
-            reset_w,
-            30,
-        );
-        let search_box = (
-            reset_defaults_btn.0.saturating_sub(search_w + 12),
-            page_y + 26,
-            search_w,
-            30,
-        );
-
-        let nav_y = page_y + 92;
-        let nav_h = 34;
-
-        let nav_w = card_w / 4;
-        let nav_appearance = (content_x, nav_y, nav_w, nav_h);
-        let nav_terminal = (content_x + nav_w, nav_y, nav_w, nav_h);
-        let nav_shortcuts = (content_x + nav_w * 2, nav_y, nav_w, nav_h);
-        let nav_about = (content_x + nav_w * 3, nav_y, nav_w, nav_h);
-
-        let card_y = page_y + Self::CONTENT_TOP;
-
-        // Buscador y lista desplazable de temas
-        let slot_w = card_w.saturating_sub(52) / 2;
-        let theme_slot_dark_btn = (content_x + 20, card_y + 50, slot_w, 30);
-        let theme_slot_light_btn = (content_x + 32 + slot_w, card_y + 50, slot_w, 30);
-        let theme_search_box = (content_x + 20, card_y + 92, card_w.saturating_sub(40), 32);
-        let theme_list = (
-            content_x + 20,
-            card_y + 138,
-            card_w.saturating_sub(40),
-            Self::THEME_ROWS * Self::THEME_ROW_H,
-        );
-
-        // Tarjeta 2: Modo y Disposición de Pestañas
-        let card2_y = card_y + Self::THEME_CARD_H + 14;
-        let label_col_w = (card_w as f32 * 0.36).clamp(195.0, 250.0) as usize;
-        let ctrl_x = content_x + 20 + label_col_w;
-        let ctrl_w = card_w.saturating_sub(label_col_w + 40);
-
-        // 3 botones para Modo de color (Sistema, Oscuro, Claro)
-        let btn3_w = (ctrl_w.saturating_sub(16)) / 3;
-        let theme_mode_system_btn = (ctrl_x, card2_y + 48, btn3_w, 30);
-        let theme_mode_dark_btn = (ctrl_x + btn3_w + 8, card2_y + 48, btn3_w, 30);
-        let theme_mode_light_btn = (ctrl_x + (btn3_w + 8) * 2, card2_y + 48, btn3_w, 30);
-
-        // Tarjeta 3: Tipografía y ventana (Font Size, UI Font Size, Spacing)
-        let card3_y = card2_y + Self::INTERFACE_CARD_H + 14;
-        let step_btn_w = 30;
-        let step_span = 150;
-        let font_family_prev_btn = (ctrl_x, card3_y + 50, step_btn_w, 30);
-        let font_family_next_btn = (
-            (ctrl_x + step_span).max((content_x + card_w).saturating_sub(20 + step_btn_w)),
-            card3_y + 50,
-            step_btn_w,
-            30,
-        );
-        let font_minus_btn = (ctrl_x, card3_y + 92, step_btn_w, 30);
-        let font_plus_btn = (ctrl_x + step_span, card3_y + 92, step_btn_w, 30);
-
-        let ui_font_minus_btn = (ctrl_x, card3_y + 134, step_btn_w, 30);
-        let ui_font_plus_btn = (ctrl_x + step_span, card3_y + 134, step_btn_w, 30);
-
-        let spacing_minus_btn = (ctrl_x, card3_y + 176, step_btn_w, 30);
-        let spacing_plus_btn = (ctrl_x + step_span, card3_y + 176, step_btn_w, 30);
-
-        // La opacidad pertenece a «Interfaz», no a tipografía.
-        let opacity_minus_btn = (ctrl_x, card2_y + 98, step_btn_w, 30);
-        let opacity_plus_btn = (ctrl_x + step_span, card2_y + 98, step_btn_w, 30);
-
-        let font_value_box = (
-            font_minus_btn.0 + font_minus_btn.2 + 4,
-            font_minus_btn.1,
-            font_plus_btn
-                .0
-                .saturating_sub(font_minus_btn.0 + font_minus_btn.2 + 8),
-            font_minus_btn.3,
-        );
-        let ui_font_value_box = (
-            ui_font_minus_btn.0 + ui_font_minus_btn.2 + 4,
-            ui_font_minus_btn.1,
-            ui_font_plus_btn
-                .0
-                .saturating_sub(ui_font_minus_btn.0 + ui_font_minus_btn.2 + 8),
-            ui_font_minus_btn.3,
-        );
-        let spacing_value_box = (
-            spacing_minus_btn.0 + spacing_minus_btn.2 + 4,
-            spacing_minus_btn.1,
-            spacing_plus_btn
-                .0
-                .saturating_sub(spacing_minus_btn.0 + spacing_minus_btn.2 + 8),
-            spacing_minus_btn.3,
-        );
-        let opacity_value_box = (
-            opacity_minus_btn.0 + opacity_minus_btn.2 + 4,
-            opacity_minus_btn.1,
-            opacity_plus_btn
-                .0
-                .saturating_sub(opacity_minus_btn.0 + opacity_minus_btn.2 + 8),
-            opacity_minus_btn.3,
-        );
-
-        // Terminal: tres grupos (Entrada · Shell · Interfaz) con filas de 28 px
-        let toggle_w = 180;
-        let row_h = Self::TERMINAL_ROW_H;
-        let cursor_blink_btn = (ctrl_x, card_y + 72, toggle_w, row_h);
-        let cursor_shape_block_btn = (ctrl_x, card_y + 106, btn3_w, row_h);
-        let cursor_shape_beam_btn = (ctrl_x + btn3_w + 8, card_y + 106, btn3_w, row_h);
-        let cursor_shape_underline_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 106, btn3_w, row_h);
-        let copy_on_select_btn = (ctrl_x, card_y + 140, toggle_w, row_h);
-        let word_wrap_btn = (ctrl_x, card_y + 174, toggle_w, row_h);
-
-        let shell_pwsh_btn = (ctrl_x, card_y + 230, btn3_w, row_h);
-        let shell_powershell_btn = (ctrl_x + btn3_w + 8, card_y + 230, btn3_w, row_h);
-        let shell_cmd_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 230, btn3_w, row_h);
-        let scrollback_minus_btn = (ctrl_x, card_y + 264, step_btn_w, row_h);
-        let scrollback_plus_btn = (ctrl_x + step_span, card_y + 264, step_btn_w, row_h);
-        let scrollback_value_box = (
-            scrollback_minus_btn.0 + scrollback_minus_btn.2 + 4,
-            scrollback_minus_btn.1,
-            scrollback_plus_btn
-                .0
-                .saturating_sub(scrollback_minus_btn.0 + scrollback_minus_btn.2 + 8),
-            scrollback_minus_btn.3,
-        );
-        let shell_integration_btn = (ctrl_x, card_y + 298, toggle_w, row_h);
-        let ssh_integration_btn = (ctrl_x, card_y + 332, toggle_w, row_h);
-        let osc52_btn = (ctrl_x, card_y + 366, toggle_w, row_h);
-        let ligatures_btn = (ctrl_x, card_y + 400, toggle_w, row_h);
-
-        let status_bar_toggle_btn = (ctrl_x, card_y + 456, toggle_w, row_h);
-        let show_dimensions_btn = (ctrl_x, card_y + 490, toggle_w, row_h);
-        let file_explorer_toggle_btn = (ctrl_x, card_y + 524, toggle_w, row_h);
-        let restore_session_btn = (ctrl_x, card_y + 558, toggle_w, row_h);
-        let auto_save_btn = (ctrl_x, card_y + 592, toggle_w, row_h);
-        let ai_limits_btn = (ctrl_x, card_y + 626, toggle_w, row_h);
-        let auto_check_updates_btn = (ctrl_x, card_y + 660, toggle_w, row_h);
-        let keep_awake_off_btn = (ctrl_x, card_y + 694, btn3_w, row_h);
-        let keep_awake_agent_btn = (ctrl_x + btn3_w + 8, card_y + 694, btn3_w, row_h);
-        let keep_awake_active_btn = (ctrl_x + (btn3_w + 8) * 2, card_y + 694, btn3_w, row_h);
-
-        let cfg_y = card_y + Self::TERMINAL_CARD_H + 14;
-        let cfg_btn_w = (card_w.saturating_sub(50)) / 2;
-        let open_file_btn = (content_x + 20, cfg_y + 46, cfg_btn_w, 32);
-        let term_reset_btn = (content_x + 30 + cfg_btn_w, cfg_y + 46, cfg_btn_w, 32);
-
-        // About: acciones propias, al pie de la tarjeta editorial
-        let about_y = card_y + Self::ABOUT_CARD_H.saturating_sub(60);
-        let about_open_file_btn = (content_x + 20, about_y, 190, 32);
-        let about_reset_btn = (content_x + 220, about_y, 190, 32);
-
-        Self {
-            nav_appearance,
-            nav_terminal,
-            nav_shortcuts,
-            nav_about,
-            theme_slot_dark_btn,
-            theme_slot_light_btn,
-            theme_search_box,
-            theme_list,
-            theme_mode_system_btn,
-            theme_mode_dark_btn,
-            theme_mode_light_btn,
-            font_minus_btn,
-            font_plus_btn,
-            font_value_box,
-            font_family_prev_btn,
-            font_family_next_btn,
-            ui_font_minus_btn,
-            ui_font_plus_btn,
-            ui_font_value_box,
-            spacing_minus_btn,
-            spacing_plus_btn,
-            spacing_value_box,
-            opacity_minus_btn,
-            opacity_plus_btn,
-            opacity_value_box,
-            cursor_blink_btn,
-            cursor_shape_block_btn,
-            cursor_shape_beam_btn,
-            cursor_shape_underline_btn,
-            shell_pwsh_btn,
-            shell_powershell_btn,
-            shell_cmd_btn,
-            scrollback_minus_btn,
-            scrollback_plus_btn,
-            scrollback_value_box,
-            shell_integration_btn,
-            copy_on_select_btn,
-            status_bar_toggle_btn,
-            show_dimensions_btn,
-            file_explorer_toggle_btn,
-            restore_session_btn,
-            auto_save_btn,
-            word_wrap_btn,
-            ssh_integration_btn,
-            osc52_btn,
-            ligatures_btn,
-            ai_limits_btn,
-            auto_check_updates_btn,
-            keep_awake_off_btn,
-            keep_awake_agent_btn,
-            keep_awake_active_btn,
-            open_file_btn,
-            reset_defaults_btn,
-            search_box,
-            term_reset_btn,
-            about_open_file_btn,
-            about_reset_btn,
-            card_w,
-            content_x,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        rect_contains(rect, mx, my)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct FileViewerHeaderRects {
-    pub mode_btn: (usize, usize, usize, usize),
-    pub md_btn: Option<(usize, usize, usize, usize)>,
-    /// «Cambios»: abre el diff contra HEAD (solo si el archivo está en un repo)
-    pub diff_btn: Option<(usize, usize, usize, usize)>,
-    /// Selector de modo de diff (Lado a lado / Unificado), visible mientras el diff está activo
-    pub diff_mode_btn: Option<(usize, usize, usize, usize)>,
-}
-
-impl FileViewerHeaderRects {
-    #[allow(dead_code)]
-    pub(crate) fn compute(
-        x: usize,
-        y: usize,
-        w: usize,
-        _h: usize,
-        is_markdown: bool,
-        has_diff: bool,
-        is_diff: bool,
-    ) -> Self {
-        let mut right_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 12);
-        let btn_y = y
-            + SidebarRects::CARD_INSET
-            + (FileViewerLayout::HEADER_H.saturating_sub(SidebarRects::CARD_INSET + 24)) / 2;
-
-        // 1. Botón Vista previa / Código si es .md (icono + texto)
-        let md_btn = if is_markdown {
-            let md_w = 136;
-            let md_x = right_x.saturating_sub(md_w);
-            right_x = md_x.saturating_sub(8);
-            Some((md_x, btn_y, md_w, 24))
-        } else {
-            None
-        };
-
-        // 2. Botón Lectura / Edición (icono + texto; el atajo Ctrl+E va en la ayuda del menú)
-        let mode_w = 104;
-        let mode_x = right_x.saturating_sub(mode_w);
-        let mode_btn = (mode_x, btn_y, mode_w, 24);
-
-        // 3. Botón Cambios (diff antes vs ahora), a la izquierda del de modo
-        let diff_btn = has_diff.then(|| {
-            let diff_w = 108;
-            (mode_x.saturating_sub(8 + diff_w), btn_y, diff_w, 24)
-        });
-
-        // 4. Selector de modo (Lado a lado / Unificado), solo cuando el diff está abierto
-        let diff_mode_btn = if is_diff && has_diff {
-            diff_btn.map(|d_btn| {
-                let diff_mode_w = 118;
-                (
-                    d_btn.0.saturating_sub(8 + diff_mode_w),
-                    btn_y,
-                    diff_mode_w,
-                    24,
-                )
-            })
-        } else {
-            None
-        };
-
-        Self {
-            mode_btn,
-            md_btn,
-            diff_btn,
-            diff_mode_btn,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        rect_contains(rect, mx, my)
-    }
-}
-
-/// Geometría del área de texto del visor de archivos (una sola fuente para dibujo, clics y scroll).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct FileViewerLayout {
-    pub content_y: usize,
-    pub content_h: usize,
-    pub row_h: usize,
-    pub char_w: usize,
-    pub gutter_w: usize,
-    pub sep_x: usize,
-    /// X del primer carácter de cada línea (con scroll horizontal 0)
-    pub text_x: usize,
-    pub text_max_x: usize,
-    pub visible_cols: usize,
-}
-
-impl FileViewerLayout {
-    pub(crate) const HEADER_H: usize = 42;
-
-    #[allow(dead_code)]
-    pub(crate) fn compute(
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        row_height: usize,
-        char_width: usize,
-        total_lines: usize,
-        show_gutter: bool,
-    ) -> Self {
-        let row_h = row_height.max(16);
-        let char_w = char_width.max(7);
-        let content_h = h.saturating_sub(Self::HEADER_H);
-        let (gutter_w, sep_x, text_x) = if show_gutter {
-            let digits = total_lines.to_string().len().max(3);
-            let gw = SidebarRects::CARD_INSET + digits * char_w + 24;
-            let sx = x + gw;
-            let tx = sx + 14;
-            (gw, sx, tx)
-        } else {
-            // Modo vista previa (estilo GitHub / documento): sin canaleta de números,
-            // margen de lectura limpio
-            let left_pad = SidebarRects::CARD_INSET + 20;
-            (0, x, x + left_pad)
-        };
-        let text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
-        Self {
-            content_y: y + Self::HEADER_H,
-            content_h,
-            row_h,
-            char_w,
-            gutter_w,
-            sep_x,
-            text_x,
-            text_max_x,
-            visible_cols: (text_max_x.saturating_sub(text_x) / char_w).max(1),
-        }
-    }
-
-    /// Columna (índice de grafema) de la línea bajo la coordenada X, con el scroll horizontal aplicado.
-    pub(crate) fn col_at(&self, line: &str, mx: usize, scroll_x: usize) -> usize {
-        if mx < self.text_x {
-            return 0;
-        }
-        let rel_x = (mx - self.text_x) + scroll_x * self.char_w;
-        let mut acc = 0;
-        use unicode_segmentation::UnicodeSegmentation;
-        for (ci, g) in line.graphemes(true).enumerate() {
-            let adv = if g == "\t" {
-                self.char_w * 4
-            } else {
-                use unicode_width::UnicodeWidthStr;
-                self.char_w * g.width().max(1)
-            };
-            if acc + adv / 2 >= rel_x {
-                return ci;
-            }
-            acc += adv;
-        }
-        line.graphemes(true).count()
-    }
-
-    /// Pista y pulgar de la barra horizontal; `None` si todo el ancho cabe. `max_scroll` = `FileViewerState::max_scroll_x`.
-    pub(crate) fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
-        if max_scroll == 0 || self.content_h < 32 {
-            return None;
-        }
-        let track_x = self.sep_x + 8;
-        let track_w = self.text_max_x.saturating_sub(track_x);
-        let track_h = ScrollbarRects::WIDTH;
-        let track_y = (self.content_y + self.content_h)
-            .saturating_sub(track_h + 4 + SidebarRects::CARD_INSET);
-        let total = max_scroll + self.visible_cols;
-        let thumb_w = (track_w * self.visible_cols / total).clamp(24.min(track_w), track_w);
-        let travel = track_w - thumb_w;
-        let thumb_x = track_x + travel * scroll_x.min(max_scroll) / max_scroll;
-        Some((
-            (track_x, track_y, track_w, track_h),
-            (thumb_x, track_y, thumb_w, track_h),
-        ))
-    }
-}
-
-/// Geometría para el visor de diff lado a lado (dos columnas sincronizadas: base HEAD vs disco).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct SideBySideLayout {
-    pub col_header_y: usize,
-    pub col_header_h: usize,
-    pub content_y: usize,
-    pub content_h: usize,
-    pub row_h: usize,
-    pub char_w: usize,
-    // Columna izquierda (HEAD / Base)
-    pub left_x: usize,
-    pub left_w: usize,
-    pub left_gutter_w: usize,
-    pub left_sep_x: usize,
-    pub left_text_x: usize,
-    pub left_text_max_x: usize,
-    // Separador central
-    pub divider_x: usize,
-    // Columna derecha (Disco / Actual)
-    pub right_x: usize,
-    pub right_w: usize,
-    pub right_gutter_w: usize,
-    pub right_sep_x: usize,
-    pub right_text_x: usize,
-    pub right_text_max_x: usize,
-    pub visible_cols: usize,
-}
-
-impl SideBySideLayout {
-    pub(crate) const COL_HEADER_H: usize = 28;
-
-    pub(crate) fn compute(
-        x: usize,
-        y: usize,
-        w: usize,
-        h: usize,
-        row_height: usize,
-        char_width: usize,
-        total_lines: usize,
-    ) -> Self {
-        let row_h = row_height.max(16);
-        let char_w = char_width.max(7);
-        let col_header_y = y + FileViewerLayout::HEADER_H;
-        let col_header_h = Self::COL_HEADER_H;
-        let content_y = col_header_y + col_header_h;
-        let content_h = h.saturating_sub(FileViewerLayout::HEADER_H + col_header_h);
-
-        let half_w = w.saturating_sub(1) / 2;
-        let left_x = x;
-        let left_w = half_w;
-        let divider_x = x + half_w;
-        let right_x = divider_x + 1;
-        let right_w = (x + w).saturating_sub(right_x);
-
-        let digits = total_lines.to_string().len().max(3);
-        let gutter_w = SidebarRects::CARD_INSET + digits * char_w + 20;
-
-        let left_gutter_w = gutter_w.min(left_w / 3);
-        let left_sep_x = left_x + left_gutter_w;
-        let left_text_x = left_sep_x + 8;
-        let left_text_max_x = divider_x.saturating_sub(4);
-
-        let right_gutter_w = gutter_w.min(right_w / 3);
-        let right_sep_x = right_x + right_gutter_w;
-        let right_text_x = right_sep_x + 8;
-        let right_text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
-
-        let visible_cols = (left_text_max_x.saturating_sub(left_text_x) / char_w).max(1);
-
-        Self {
-            col_header_y,
-            col_header_h,
-            content_y,
-            content_h,
-            row_h,
-            char_w,
-            left_x,
-            left_w,
-            left_gutter_w,
-            left_sep_x,
-            left_text_x,
-            left_text_max_x,
-            divider_x,
-            right_x,
-            right_w,
-            right_gutter_w,
-            right_sep_x,
-            right_text_x,
-            right_text_max_x,
-            visible_cols,
-        }
-    }
-
-    /// Pista y pulgar de la barra horizontal sincronizada; `None` si todo cabe.
-    pub(crate) fn hscrollbar(&self, max_scroll: usize, scroll_x: usize) -> Option<(Rect, Rect)> {
-        if max_scroll == 0 || self.content_h < 32 {
-            return None;
-        }
-        let track_x = self.left_text_x;
-        let track_w = self.right_text_max_x.saturating_sub(track_x);
-        let track_h = ScrollbarRects::WIDTH;
-        let track_y = (self.content_y + self.content_h)
-            .saturating_sub(track_h + 4 + SidebarRects::CARD_INSET);
-        let total = max_scroll + self.visible_cols;
-        let thumb_w = (track_w * self.visible_cols / total).clamp(24.min(track_w), track_w);
-        let travel = track_w - thumb_w;
-        let thumb_x = track_x + travel * scroll_x.min(max_scroll) / max_scroll;
-        Some((
-            (track_x, track_y, track_w, track_h),
-            (thumb_x, track_y, thumb_w, track_h),
-        ))
-    }
-}
-
-/// Rectángulos de la barra flotante de búsqueda interna en el visor de archivos (`Ctrl + F`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct FileViewerSearchRects {
-    pub bar: (usize, usize, usize, usize),
-    pub input: (usize, usize, usize, usize),
-    pub text_start_x: usize,
-    pub counter: (usize, usize, usize, usize),
-    pub prev_btn: (usize, usize, usize, usize),
-    pub next_btn: (usize, usize, usize, usize),
-    pub close_btn: (usize, usize, usize, usize),
-}
-
-impl FileViewerSearchRects {
-    pub(crate) fn compute(lay: &FileViewerLayout) -> Self {
-        let max_w = lay.text_max_x.saturating_sub(lay.sep_x);
-        let bar_w = 296.min(max_w).max(180);
-        let bar_h: usize = 32;
-        let bar_x = lay.text_max_x.saturating_sub(bar_w + 8);
-        let bar_y = lay.content_y + 8;
-        let bar = (bar_x, bar_y, bar_w, bar_h);
-
-        let input_x = bar_x + 28;
-        let input_w = if bar_w >= 296 {
-            110
-        } else {
-            bar_w.saturating_sub(186)
-        };
-        let input = (input_x, bar_y + 4, input_w, 24);
-        let text_start_x = input_x + 4;
-
-        let counter_x = input_x + input_w + 4;
-        let counter_w = 48;
-        let counter = (counter_x, bar_y + 4, counter_w, 24);
-
-        let btn_y = bar_y + (bar_h.saturating_sub(22)) / 2;
-        let prev_x = counter_x + counter_w + 2;
-        let prev_btn = (prev_x, btn_y, 22, 22);
-
-        let next_x = prev_x + 22 + 2;
-        let next_btn = (next_x, btn_y, 22, 22);
-
-        let close_x = next_x + 22 + 6;
-        let close_btn = (close_x, btn_y, 22, 22);
-
-        Self {
-            bar,
-            input,
-            text_start_x,
-            counter,
-            prev_btn,
-            next_btn,
-            close_btn,
-        }
-    }
-
-    #[inline]
-    pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
-        rect_contains(rect, mx, my)
-    }
-}
-
 /// Geometría de la barra lateral: riel de ajustes y columna de sesiones (una sola fuente para dibujo,
 /// clic, hover y arrastre).
 ///
@@ -926,6 +184,7 @@ pub(crate) struct SidebarRects;
 impl SidebarRects {
     pub(crate) const WIDTH: usize = 328;
     /// Ancho del riel (solo lleva el botón de ajustes); la columna de sesiones ocupa el resto.
+    #[cfg(test)]
     pub(crate) const RAIL_W: usize = 60;
     pub(crate) const TOP: usize = 38;
     /// Marco del panel de pestañas superiores: margen y radio de la tarjeta (`Canvas::card`).
@@ -935,41 +194,30 @@ impl SidebarRects {
     /// dentro de la tarjeta y alinea los bordes de todas las secciones.
     pub(crate) const PAD_R: usize = 20;
     /// Margen derecho de las filas de sesión: el recorte de la tarjeta del panel más 8 px de aire.
+    #[cfg(test)]
     pub(crate) const ROW_PAD_R: usize = Self::CARD_INSET + 8;
     /// Título, rama y carpeta.
+    #[cfg(test)]
     pub(crate) const HEADER_H: usize = 66;
     /// Y de la primera fila.
+    #[cfg(test)]
     pub(crate) const LIST_START_Y: usize = Self::TOP + Self::HEADER_H + 8;
+    #[cfg(test)]
     pub(crate) const TAB_ITEM_H: usize = 48;
+    #[cfg(test)]
     pub(crate) const TAB_SPACING: usize = 2;
     /// X de las filas de sesión (junto al riel).
+    #[cfg(test)]
     pub(crate) const PAD_X: usize = Self::RAIL_W + 8;
-    pub(crate) const PLUS_SIZE: usize = 28;
-
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn plus_btn() -> Rect {
-        Self::plus_btn_with_width(Self::WIDTH)
-    }
-
-    /// Rectángulo del botón «+» para un ancho de panel dado.
-    #[inline]
-    pub(crate) fn plus_btn_with_width(panel_w: usize) -> Rect {
-        (
-            panel_w.saturating_sub(Self::PLUS_SIZE + 10),
-            Self::TOP + 8,
-            Self::PLUS_SIZE,
-            Self::PLUS_SIZE,
-        )
-    }
 
     /// Rectángulo del explorador alojado bajo la lista de sesiones.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn explorer_rect_after(usable_h: usize, list_end: usize) -> Rect {
         Self::explorer_rect_after_with_width(Self::WIDTH, usable_h, list_end)
     }
 
     /// Rectángulo del explorador alojado bajo la lista de sesiones para un ancho de panel dado.
+    #[cfg(test)]
     pub(crate) fn explorer_rect_after_with_width(
         panel_w: usize,
         usable_h: usize,
@@ -987,6 +235,7 @@ impl SidebarRects {
     }
 
     /// Y absoluta de la fila `vis_idx` (índice dentro de la ventana visible).
+    #[cfg(test)]
     #[inline]
     pub(crate) fn row_y(vis_idx: usize) -> usize {
         Self::LIST_START_Y + vis_idx * (Self::TAB_ITEM_H + Self::TAB_SPACING)
@@ -999,13 +248,14 @@ impl SidebarRects {
     }
 
     /// Rectángulo de la fila `idx` de la lista, dado el desplazamiento actual.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub(crate) fn tab_rect(idx: usize, scroll_offset: usize) -> Rect {
         Self::tab_rect_with_width(idx, scroll_offset, Self::WIDTH)
     }
 
     /// Rectángulo de la fila `idx` de la lista para un ancho de panel dado.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn tab_rect_with_width(idx: usize, scroll_offset: usize, panel_w: usize) -> Rect {
         (
@@ -1245,7 +495,7 @@ pub(crate) struct FilesPanelRects;
 
 impl FilesPanelRects {
     /// Rectángulo del explorador alojado: el interior de la tarjeta del panel (sin su margen), hasta el fondo.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn explorer_rect(usable_h: usize) -> Rect {
         Self::explorer_rect_with_width(SidebarRects::WIDTH, usable_h)
     }
@@ -1346,7 +596,7 @@ pub(crate) struct StatusBarRects {
 
 impl StatusBarRects {
     pub(crate) const BAR_H: usize = 28;
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) const POPUP_W: usize = 392;
     /// Margen derecho del grupo de estado (las dimensiones cierran la barra).
     pub(crate) const RIGHT_PAD: usize = 14;
@@ -1358,21 +608,8 @@ impl StatusBarRects {
     /// Ancho mínimo que debe quedar para la ruta y la rama: por debajo, los medidores no se dibujan.
     pub(crate) const MIN_CONTENT_W: usize = 200;
 
-    /// Rectángulos de la barra de estado para un ancho de etiqueta `label_w` (en px),
-    /// incluyendo el indicador opcional de nueva versión disponible
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) fn compute(
-        width: usize,
-        height: usize,
-        label_w: usize,
-        update_w: Option<usize>,
-    ) -> Self {
-        Self::compute_full(width, height, label_w, update_w, 0, 0, 0)
-    }
-
     /// Como `compute_full`, con `keep_awake_w = 0`.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn compute_with_status(
         width: usize,
         height: usize,
@@ -1455,7 +692,7 @@ impl StatusBarRects {
     }
 
     /// Rectángulo del menú flotante de consumo encima de la barra de estado.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn popup_rect(width: usize, height: usize, popup_h: usize) -> Rect {
         let w = Self::POPUP_W.min(width.saturating_sub(16));
         let x = width.saturating_sub(w + 10);
@@ -1505,7 +742,7 @@ impl StatusBarRects {
     }
 
     /// Mantiene abierto el menú flotante si el ratón está en el badge, en la tarjeta o en el puente de 6px entre ambos.
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub(crate) fn inside_badge_or_popup(mx: usize, my: usize, badge: Rect, popup: Rect) -> bool {
         let bridge = (popup.0, popup.1, popup.2, popup.3 + 8);
@@ -1543,15 +780,10 @@ impl PaneHeaderRects {
     pub(crate) const HEIGHT: usize = 38;
     /// Línea inferior que separa la cabecera del terminal
     pub(crate) const BORDER: usize = 1;
-    /// Lo que hay que descontar del hueco del panel para obtener el área del terminal (sin padding de tarjeta)
-    #[allow(dead_code)]
-    pub(crate) const CONTENT_OFFSET: usize = Self::HEIGHT + Self::BORDER;
     pub(crate) const BTN: usize = 26;
     pub(crate) const BTN_GAP: usize = 10;
     pub(crate) const PAD_RIGHT: usize = 18;
-    /// Centro del icono y comienzo del título, relativos al borde izquierdo del panel
-    #[allow(dead_code)]
-    pub(crate) const ICON_X: usize = 24;
+    /// Comienzo del título, relativo al borde izquierdo del panel
     pub(crate) const TEXT_X: usize = 20;
 
     /// Margen superior del hueco si la cabecera coincide con el borde superior de la tarjeta de contenido.
@@ -1576,7 +808,6 @@ impl PaneHeaderRects {
         Self::header_total_h(y) + Self::BORDER
     }
 
-    #[allow(dead_code)]
     pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {
         let pad = Self::top_pad(y);
         let right = x + w;
@@ -1634,278 +865,5 @@ impl PaneHeaderRects {
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
         rect_contains(rect, mx, my)
-    }
-}
-
-impl SettingsPageRects {
-    /// Rectángulo de la fila `i` (0..THEME_ROWS) de la lista de temas
-    pub(crate) fn theme_row(&self, i: usize) -> (usize, usize, usize, usize) {
-        let l = self.theme_list;
-        (l.0, l.1 + i * Self::THEME_ROW_H, l.2, Self::THEME_ROW_H)
-    }
-
-    /// Fila de la lista de temas bajo el ratón, si hay alguna
-    pub(crate) fn theme_row_at(&self, mx: usize, my: usize) -> Option<usize> {
-        Self::inside(mx, my, self.theme_list).then(|| (my - self.theme_list.1) / Self::THEME_ROW_H)
-    }
-}
-
-/// Elemento del modal «Añadir máquina» bajo el ratón.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MachineHover {
-    /// Fila de la lista de hosts de `~/.ssh/config`
-    Row(usize),
-    Input,
-    /// Botón «Añadir» del campo `usuario@host`
-    TypedAdd,
-}
-
-/// Geometría del modal «Añadir máquina», centrado en la ventana. La comparten dibujo, clic y hover.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct MachineModalRects {
-    pub card: Rect,
-    /// Filas de hosts (las `MAX_ROWS` primeras) y su botón «Añadir»
-    pub rows: Vec<Rect>,
-    pub row_buttons: Vec<Rect>,
-    pub list_label_y: usize,
-    pub typed_label_y: usize,
-    pub input: Rect,
-    pub add_btn: Rect,
-    pub error_y: usize,
-}
-
-impl MachineModalRects {
-    pub(crate) const W: usize = 560;
-    pub(crate) const PAD: usize = 20;
-    const HEAD_H: usize = 88;
-    pub(crate) const ROW_H: usize = 40;
-    pub(crate) const MAX_ROWS: usize = 5;
-
-    pub(crate) fn compute(win_w: usize, win_h: usize, host_count: usize) -> Self {
-        let w = Self::W.min(win_w.saturating_sub(32));
-        let n = host_count.min(Self::MAX_ROWS);
-        let list_block = if n > 0 { 26 + n * Self::ROW_H + 14 } else { 0 };
-        let h = Self::HEAD_H + list_block + 8 + 26 + 36 + 24 + 14;
-        let x = (win_w.saturating_sub(w)) / 2;
-        let y = (win_h.saturating_sub(h)) / 2;
-        let list_label_y = y + Self::HEAD_H;
-        let rows_y = list_label_y + 26;
-        let rows: Vec<Rect> = (0..n)
-            .map(|i| {
-                (
-                    x + Self::PAD - 8,
-                    rows_y + i * Self::ROW_H,
-                    w - 2 * Self::PAD + 16,
-                    Self::ROW_H,
-                )
-            })
-            .collect();
-        let row_buttons = rows
-            .iter()
-            .map(|r| (r.0 + r.2 - 8 - 76, r.1 + (Self::ROW_H - 28) / 2, 76, 28))
-            .collect();
-        let typed_label_y = y + Self::HEAD_H + list_block + 8;
-        let input = (
-            x + Self::PAD,
-            typed_label_y + 26,
-            w.saturating_sub(2 * Self::PAD + 100),
-            36,
-        );
-        let add_btn = (input.0 + input.2 + 8, input.1, 92, 36);
-        Self {
-            card: (x, y, w, h),
-            rows,
-            row_buttons,
-            list_label_y,
-            typed_label_y,
-            input,
-            add_btn,
-            error_y: input.1 + 36 + 6,
-        }
-    }
-
-    pub(crate) fn inside(mx: usize, my: usize, r: Rect) -> bool {
-        rect_contains(r, mx, my)
-    }
-
-    pub(crate) fn hit(&self, mx: usize, my: usize) -> Option<MachineHover> {
-        if let Some(i) = self.rows.iter().position(|r| Self::inside(mx, my, *r)) {
-            Some(MachineHover::Row(i))
-        } else if Self::inside(mx, my, self.add_btn) {
-            Some(MachineHover::TypedAdd)
-        } else if Self::inside(mx, my, self.input) {
-            Some(MachineHover::Input)
-        } else {
-            None
-        }
-    }
-}
-
-/// Geometría de la paleta de comandos y búsqueda central (Ctrl + K, WP5).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) struct PaletteRects {
-    pub(crate) card: Rect,
-    pub(crate) input: Rect,
-    pub(crate) divider_y: usize,
-    pub(crate) list: Rect,
-    pub(crate) items_count: usize,
-    pub(crate) item_h: usize,
-    pub(crate) scrollbar: Option<(Rect, Rect)>,
-}
-
-impl PaletteRects {
-    pub(crate) const WIDTH: usize = 560;
-    pub(crate) const INPUT_H: usize = 46;
-    pub(crate) const ITEM_H: usize = 40;
-    pub(crate) const MAX_VISIBLE: usize = 8;
-    pub(crate) const CARD_RADIUS: usize = super::tokens::RADIUS_CONTROL;
-
-    #[allow(dead_code)]
-    #[allow(dead_code)]
-    pub(crate) fn compute(win_w: usize, win_h: usize, items_count: usize) -> Self {
-        Self::compute_with_scroll(win_w, win_h, items_count, 0)
-    }
-
-    pub(crate) fn compute_with_scroll(
-        win_w: usize,
-        win_h: usize,
-        items_count: usize,
-        scroll_offset: usize,
-    ) -> Self {
-        Self::compute_with_scroll_offset_y(win_w, win_h, items_count, scroll_offset, 0)
-    }
-
-    pub(crate) fn compute_with_scroll_offset_y(
-        win_w: usize,
-        win_h: usize,
-        items_count: usize,
-        scroll_offset: usize,
-        offset_y: isize,
-    ) -> Self {
-        let card_w = Self::WIDTH.min(win_w.saturating_sub(40));
-        let card_x = (win_w.saturating_sub(card_w)) / 2;
-        let card_y = (54.min(win_h / 6) as isize + offset_y).max(0) as usize;
-        let visible_items = items_count.min(Self::MAX_VISIBLE);
-        let list_h = visible_items * Self::ITEM_H;
-        let card_h = Self::INPUT_H
-            + if visible_items > 0 {
-                list_h + 8
-            } else if items_count == 0 {
-                44
-            } else {
-                0
-            };
-
-        let card = (card_x, card_y, card_w, card_h);
-        let input = (card_x, card_y, card_w, Self::INPUT_H);
-        let divider_y = card_y + Self::INPUT_H;
-        let list = (card_x, divider_y + 4, card_w, list_h);
-
-        let scrollbar = if items_count > Self::MAX_VISIBLE {
-            ScrollbarRects::vertical(
-                card_x + card_w,
-                divider_y + 6,
-                list_h.saturating_sub(4),
-                items_count,
-                Self::MAX_VISIBLE,
-                scroll_offset,
-            )
-        } else {
-            None
-        };
-
-        Self {
-            card,
-            input,
-            divider_y,
-            list,
-            items_count,
-            item_h: Self::ITEM_H,
-            scrollbar,
-        }
-    }
-
-    pub(crate) fn item_rect(&self, idx: usize) -> Rect {
-        let y = self.list.1 + idx * self.item_h;
-        let w = if self.scrollbar.is_some() {
-            self.card.2.saturating_sub(26)
-        } else {
-            self.card.2.saturating_sub(12)
-        };
-        (self.card.0 + 6, y, w, self.item_h)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn item_at(&self, mx: usize, my: usize) -> Option<usize> {
-        self.item_at_with_offset(mx, my, 0)
-    }
-
-    pub(crate) fn item_at_with_offset(
-        &self,
-        mx: usize,
-        my: usize,
-        scroll_offset: usize,
-    ) -> Option<usize> {
-        if let Some((track, _)) = self.scrollbar {
-            let right = self.card.0 + self.card.2;
-            if ScrollbarRects::hit(track, right, mx, my) {
-                return None;
-            }
-        }
-        let (lx, ly, lw, lh) = self.list;
-        let list_w = if self.scrollbar.is_some() {
-            lw.saturating_sub(26)
-        } else {
-            lw
-        };
-        if mx >= lx && mx < lx + list_w && my >= ly && my < ly + lh {
-            let visual_idx = (my - ly) / self.item_h;
-            if visual_idx < self.items_count.min(Self::MAX_VISIBLE) {
-                let real_idx = scroll_offset + visual_idx;
-                if real_idx < self.items_count {
-                    return Some(real_idx);
-                }
-            }
-        }
-        None
-    }
-
-    #[inline]
-    pub(crate) fn inside(mx: usize, my: usize, rect: Rect) -> bool {
-        rect_contains(rect, mx, my)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_side_by_side_layout_gutter_width_and_no_clipping() {
-        let char_w = 9;
-        let row_h = 18;
-        let lay = SideBySideLayout::compute(0, 0, 1000, 800, row_h, char_w, 1500);
-        assert!(lay.left_gutter_w >= SidebarRects::CARD_INSET + 4 * char_w + 20);
-
-        let num_w = 4 * char_w;
-        let num_x = lay.left_sep_x.saturating_sub(num_w + 10);
-        assert!(
-            num_x >= lay.left_x + SidebarRects::CARD_INSET,
-            "num_x ({num_x}) no debe colisionar con el borde izquierdo del card ({})",
-            lay.left_x + SidebarRects::CARD_INSET
-        );
-    }
-
-    #[test]
-    fn test_side_by_side_layout_hscrollbar() {
-        let char_w = 9;
-        let row_h = 18;
-        let lay = SideBySideLayout::compute(0, 0, 1000, 800, row_h, char_w, 100);
-        assert!(lay.hscrollbar(0, 0).is_none());
-        let (track, thumb) = lay.hscrollbar(50, 0).expect("hscrollbar presente");
-        assert!(track.2 > 0);
-        assert_eq!(thumb.0, track.0);
-        let (_, thumb_end) = lay.hscrollbar(50, 50).expect("hscrollbar al final");
-        assert!(thumb_end.0 > thumb.0);
     }
 }

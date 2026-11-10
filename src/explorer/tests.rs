@@ -223,12 +223,6 @@ fn test_file_explorer_pin_toggle() {
     assert!(explorer.is_pinned);
     explorer.toggle_pinned();
     assert!(!explorer.is_pinned);
-
-    let (px, py, pw, ph) = FileExplorer::pin_btn_rect(100, 50, 260);
-    assert_eq!(pw, 24);
-    assert_eq!(ph, 24);
-    assert_eq!(py, 57);
-    assert_eq!(px, 100 + 260 - 66);
 }
 
 #[test]

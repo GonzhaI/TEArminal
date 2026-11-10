@@ -36,7 +36,7 @@ impl UpdateInstaller<Unverified> {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub(crate) fn path(&self) -> &std::path::Path {
         &self.path
@@ -61,7 +61,6 @@ impl UpdateInstaller<Unverified> {
 }
 
 impl UpdateInstaller<Verified> {
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn path(&self) -> &std::path::Path {
         &self.path

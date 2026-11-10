@@ -18,7 +18,6 @@ pub(crate) enum TextInputKeyResult {
     Changed,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct TextInput {
     pub text: String,
@@ -32,7 +31,6 @@ pub(crate) struct TextInput {
     redo_stack: Vec<(String, usize)>,
 }
 
-#[allow(dead_code)]
 impl TextInput {
     pub(crate) fn new(initial: impl Into<String>) -> Self {
         let text = initial.into();
@@ -90,10 +88,6 @@ impl TextInput {
         &self.text
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.text.is_empty()
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.text.len()
     }
@@ -106,6 +100,7 @@ impl TextInput {
         self.is_dragging = false;
     }
 
+    #[cfg(test)]
     pub(crate) fn set_text(&mut self, s: impl Into<String>) {
         self.push_undo();
         self.text = s.into();

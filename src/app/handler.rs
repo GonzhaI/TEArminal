@@ -81,6 +81,7 @@ impl TearminalApp {
                 if should_update_title {
                     self.update_window_title();
                 }
+                self.process_remote_results();
                 if redraw && !self.occluded {
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -563,6 +564,7 @@ impl TearminalApp {
     pub(super) fn tick(&mut self) -> Option<Instant> {
         // 1. Drenar salida de ConPTY de todos los paneles antes de comprobar salidas
         let mut got_bytes = false;
+        let mut active_got_bytes = false;
         let mut has_more_pty_data = false;
         let active_idx = self.active_tab_index;
         let osc52 = self.config.terminal.osc52;
@@ -596,12 +598,21 @@ impl TearminalApp {
                 got_bytes = true;
                 if idx != active_idx {
                     tab.has_unread = true;
+                } else {
+                    active_got_bytes = true;
                 }
             }
         }
 
-        if got_bytes && self.config.terminal.keep_awake == KeepAwakeMode::Agent {
-            self.update_keep_awake();
+        if active_got_bytes {
+            self.sync_file_explorer_root();
+            self.update_window_title();
+        }
+        if got_bytes {
+            self.process_remote_results();
+            if self.config.terminal.keep_awake == KeepAwakeMode::Agent {
+                self.update_keep_awake();
+            }
         }
 
         // 2. Revisar si algún panel tiene su proceso terminado (tras haber consumido toda su salida)
@@ -904,6 +915,10 @@ impl TearminalApp {
 
         if has_more_pty_data {
             earliest(&mut wake, now);
+        }
+
+        if let Some(deadline) = self.expire_remote_requests() {
+            earliest(&mut wake, deadline);
         }
 
         // Renderizado sincronizado (DEC 2026): timeout de seguridad para repintar si la app retuvo el fotograma más de 200 ms

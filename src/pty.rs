@@ -54,11 +54,100 @@ pub(crate) fn ensure_init_script_on_disk_in(dir: &std::path::Path) -> Option<std
     Some(path)
 }
 
-impl Drop for PtyManager {
-    /// Cerrar un panel/pestaña (o la ventana) debe terminar siempre el shell. Soltar el ConPTY por sí solo
-    /// cierra su consola, pero no alcanza a un shell que aún está arrancando: sobrevivía como proceso huérfano
-    /// (cada `pwsh` ocupa ~100 MB). `TerminateProcess` sobre un proceso ya terminado es inofensivo.
+/// Manejador de Windows Job Object para asegurar la terminación atómica a nivel de kernel
+/// del shell y de todos sus procesos hijos (ej. `node`, `python`, `ping`, `cargo`) al cerrar
+/// el panel o la terminal.
+#[cfg(target_os = "windows")]
+struct PtyJobObject {
+    handle: windows_sys::Win32::Foundation::HANDLE,
+}
+
+#[cfg(target_os = "windows")]
+unsafe impl Send for PtyJobObject {}
+#[cfg(target_os = "windows")]
+unsafe impl Sync for PtyJobObject {}
+
+#[cfg(target_os = "windows")]
+impl PtyJobObject {
+    fn new() -> Option<Self> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+        };
+
+        // SAFETY: llamada Win32 estándar para crear un Job Object anónimo
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle == 0 || handle == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags =
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK;
+            let ok = SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 {
+                CloseHandle(handle);
+                return None;
+            }
+            Some(Self { handle })
+        }
+    }
+
+    fn assign_process(&self, pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+
+        // SAFETY: abre el proceso con los permisos requeridos para asociarlo al Job Object
+        unsafe {
+            let h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+            if h == 0 || h == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let ok = AssignProcessToJobObject(self.handle, h) != 0;
+            CloseHandle(h);
+            ok
+        }
+    }
+
+    fn terminate(&self) {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: TerminateJobObject liquida atómicamente a nivel de kernel todos los procesos del job
+        unsafe {
+            TerminateJobObject(self.handle, 1);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for PtyJobObject {
     fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        self.terminate();
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
+impl Drop for PtyManager {
+    /// Cerrar un panel/pestaña (o la ventana) debe terminar siempre el shell y todos sus procesos hijos.
+    /// Mediante Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), el kernel de Windows liquida
+    /// atómicamente el árbol completo de procesos (evitando procesos huérfanos como `ping`, `node`, `ssh` o `cargo`).
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        if let Some(ref job) = self.job {
+            job.terminate();
+        }
         let _ = self.child.kill();
     }
 }
@@ -112,12 +201,19 @@ fn random_token() -> String {
         .unwrap_or_default()
 }
 
+/// Identificador aleatorio de 64 bits (16 hex) para peticiones en banda (`TearminalFile`).
+pub(crate) fn random_id() -> Option<String> {
+    random_bytes().map(|b| b[..8].iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Pila reducida: estos hilos solo copian bytes (el defecto de 2 MB se reserva por hilo)
 const THREAD_STACK: usize = 256 * 1024;
 
 pub(crate) struct PtyManager {
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     child: Box<dyn Child + Send + Sync>,
+    #[cfg(target_os = "windows")]
+    job: Option<PtyJobObject>,
     to_pty_tx: Sender<Vec<u8>>,
     from_pty_rx: Receiver<Vec<u8>>,
     /// Hay un `PtyData` en vuelo: el lector no encola otro hasta que el consumidor vacíe el canal.
@@ -321,9 +417,20 @@ impl PtyManager {
 
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
 
+        #[cfg(target_os = "windows")]
+        let job = PtyJobObject::new();
+        #[cfg(target_os = "windows")]
+        if let Some(ref j) = job {
+            if let Some(pid) = child.process_id() {
+                j.assign_process(pid);
+            }
+        }
+
         Ok(Self {
             master: Arc::new(Mutex::new(pair.master)),
             child,
+            #[cfg(target_os = "windows")]
+            job,
             to_pty_tx,
             from_pty_rx,
             output_pending,
@@ -394,9 +501,20 @@ impl PtyManager {
 
         let (to_pty_tx, from_pty_rx, output_pending) = spawn_io_threads(&*pair.master, id, proxy)?;
 
+        #[cfg(target_os = "windows")]
+        let job = PtyJobObject::new();
+        #[cfg(target_os = "windows")]
+        if let Some(ref j) = job {
+            if let Some(pid) = child.process_id() {
+                j.assign_process(pid);
+            }
+        }
+
         Ok(Self {
             master: Arc::new(Mutex::new(pair.master)),
             child,
+            #[cfg(target_os = "windows")]
+            job,
             to_pty_tx,
             from_pty_rx,
             output_pending,
@@ -1052,11 +1170,12 @@ mod tests {
         let ps_code = format!(
             ". '{}'; $script:TearminalApps['ssh'] = '{}'; ssh user@example.com; ssh -o ServerAliveInterval=60 user@example.com",
             script_path.display(),
-            mock_ssh.display().to_string().replace('\\', "/")
+            mock_ssh.display()
         );
 
         let mut cmd = std::process::Command::new("powershell.exe");
         crate::app::platform::hide_console(&mut cmd);
+        cmd.env_remove("TEARMINAL_SSH_INTEGRATION");
         let out = cmd.args(["-NoProfile", "-Command", &ps_code]).output();
         let _ = std::fs::remove_dir_all(&tmp);
 

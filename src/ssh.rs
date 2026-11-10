@@ -80,7 +80,6 @@ impl SafeSshDestination {
         }
     }
 
-    #[allow(dead_code)]
     #[inline]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
@@ -172,7 +171,7 @@ impl SafeRemoteDir {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     #[inline]
     pub(crate) fn as_str(&self) -> &str {
         &self.0
@@ -226,7 +225,6 @@ pub(crate) struct SshConnection<State = Unauthenticated> {
     _state: PhantomData<State>,
 }
 
-#[allow(dead_code)]
 impl SshConnection<Unauthenticated> {
     /// Inicia una conexión en estado `Unauthenticated`.
     /// Requiere un `SafeSshDestination` ("Parse, don't validate").
@@ -279,8 +277,8 @@ impl SshConnection<Unauthenticated> {
     }
 }
 
-#[allow(dead_code)]
 impl SshConnection<Authenticated> {
+    #[cfg(test)]
     #[inline]
     pub(crate) fn destination(&self) -> &SafeSshDestination {
         &self.destination
@@ -344,6 +342,7 @@ impl SshConnection<Authenticated> {
     }
 
     /// Cierra la sesión activa y devuelve la conexión al estado `Unauthenticated`.
+    #[cfg(test)]
     pub(crate) fn disconnect(self) -> SshConnection<Unauthenticated> {
         SshConnection {
             destination: self.destination,
@@ -377,9 +376,21 @@ pub(crate) fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Entre comillas simples para una ruta remota, dejando `~` o `~/` fuera de las comillas para que el
+/// shell POSIX expanda `$HOME` cuando el directorio proviene del título `OSC 0` (`user@host: ~`).
+pub(crate) fn quote_path(s: &str) -> String {
+    if s == "~" {
+        "~".to_string()
+    } else if let Some(rest) = s.strip_prefix("~/") {
+        format!("~/{}", quote(rest))
+    } else {
+        quote(s)
+    }
+}
+
 /// Primeros `MAX_FILE_BYTES + 1` bytes del archivo: el remoto nunca envía más de lo que TEArminal va a leer
 pub(crate) fn read_file_cmd(path: &str) -> String {
-    format!("head -c {} -- {}", MAX_FILE_BYTES + 1, quote(path))
+    format!("head -c {} -- {}", MAX_FILE_BYTES + 1, quote_path(path))
 }
 
 /// Guarda lo que llega por stdin (`len` bytes) en `path` sin dejarlo a medias: se recibe entero en un temporal
@@ -388,7 +399,7 @@ pub(crate) fn read_file_cmd(path: &str) -> String {
 pub(crate) fn write_file_cmd(path: &str, len: usize) -> String {
     let script = format!(
         r#"t=$(mktemp) && cat >"$t" && [ "$(wc -c <"$t")" -eq {len} ] && cat "$t" >{}; s=$?; rm -f "$t"; exit $s"#,
-        quote(path)
+        quote_path(path)
     );
     format!("sh -c {}", quote(&script))
 }
@@ -397,7 +408,7 @@ pub(crate) fn write_file_cmd(path: &str, len: usize) -> String {
 pub(crate) fn root_listing_cmd(dir: &str) -> String {
     format!(
         "cd {} 2>/dev/null && pwd && (git rev-parse --abbrev-ref HEAD 2>/dev/null || true) && echo '---' && ls -1ap | head -{}",
-        quote(dir),
+        quote_path(dir),
         LISTING_ENTRIES
     )
 }
@@ -405,7 +416,7 @@ pub(crate) fn root_listing_cmd(dir: &str) -> String {
 pub(crate) fn dir_listing_cmd(dir: &str) -> String {
     format!(
         "cd {} 2>/dev/null && ls -1ap | head -{}",
-        quote(dir),
+        quote_path(dir),
         LISTING_ENTRIES
     )
 }
@@ -446,28 +457,6 @@ pub(crate) fn run_safe(
 
     cmd.args(["--", dest.as_str(), remote_cmd]);
     run_command(cmd, stdin, max_out)
-}
-
-/// Ejecuta `remote_cmd` en `dest`. Parsea y valida el destino en la frontera antes de ejecutar.
-#[allow(dead_code)]
-pub(crate) fn run(
-    dest: &str,
-    remote_cmd: &str,
-    connect_timeout: u32,
-    stdin: Option<&[u8]>,
-    max_out: usize,
-) -> Result<Output, String> {
-    let safe = SafeSshDestination::parse(dest)
-        .map_err(|e| format!("destino SSH no válido: {dest:?} ({e})"))?;
-    run_safe(
-        &safe,
-        None,
-        None,
-        remote_cmd,
-        connect_timeout,
-        stdin,
-        max_out,
-    )
 }
 
 pub(crate) fn run_command(
@@ -709,8 +698,8 @@ mod tests {
 
     #[test]
     fn test_run_rejects_unsafe_destination() {
-        assert!(run("-oProxyCommand=calc", "true", 3, None, 10).is_err());
-        assert!(run("x; calc", "true", 3, None, 10).is_err());
+        assert!(SafeSshDestination::parse("-oProxyCommand=calc").is_err());
+        assert!(SafeSshDestination::parse("x; calc").is_err());
     }
 
     /// Una salida enorme se corta al tope (no se acumula en memoria) y stdin llega al proceso
@@ -803,6 +792,17 @@ mod tests {
         // Transición de regreso a Unauthenticated mediante disconnect
         let disconnected: SshConnection<Unauthenticated> = auth_conn.disconnect();
         let _ = disconnected;
+    }
+
+    #[test]
+    fn test_quote_path_expands_tilde_and_quotes_rest() {
+        assert_eq!(quote_path("~"), "~");
+        assert_eq!(quote_path("~/proyecto/src"), "~/'proyecto/src'");
+        assert_eq!(quote_path("~/mi carpeta/a'b"), r"~/'mi carpeta/a'\''b'");
+        assert_eq!(quote_path("/home/user/dir"), "'/home/user/dir'");
+        assert!(read_file_cmd("~/archivo.txt").ends_with("-- ~/'archivo.txt'"));
+        assert!(dir_listing_cmd("~/subcarpeta").starts_with("cd ~/'subcarpeta' 2>/dev/null"));
+        assert!(root_listing_cmd("~").starts_with("cd ~ 2>/dev/null"));
     }
 
     use proptest::prelude::*;

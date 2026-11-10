@@ -559,7 +559,11 @@ impl TearminalApp {
 
         // Coordenadas relativas a paneles en la terminal activa
         if !is_settings_active && self.tabs[self.active_tab_index].file_viewer.is_none() {
-            let bypass = self.modifiers.shift_key();
+            let (ctrl_pressed, shift_pressed, _, _, _) = self.physical_modifiers();
+            if !ctrl_pressed {
+                self.hovered_file_cache = None;
+            }
+            let bypass = shift_pressed;
             let pane_rects = self.active_tab_pane_rects(win_w, win_h);
             let active_tab = &mut self.tabs[self.active_tab_index];
             let active_pane_id = active_tab.active_pane_id;
@@ -660,7 +664,7 @@ impl TearminalApp {
                         }
                         if !pane.terminal.is_mouse_reporting_active() || bypass {
                             let mut is_link = false;
-                            if self.modifiers.control_key() {
+                            if ctrl_pressed {
                                 if let Some(renderer) = &self.renderer {
                                     let term_x = mx.saturating_sub(rect.x);
                                     let term_y = my.saturating_sub(rect.y);
@@ -678,6 +682,41 @@ impl TearminalApp {
                                     {
                                         new_url_span = Some((pane.id, global_line, sc, ec));
                                         is_link = true;
+                                    } else if pane.terminal.ssh_session.is_none() {
+                                        if let Some(candidate) =
+                                            pane.terminal.file_path_candidate_at(col, global_line)
+                                        {
+                                            let span_key = (
+                                                pane.id,
+                                                global_line,
+                                                candidate.start_col,
+                                                candidate.end_col,
+                                            );
+                                            let exists = match self.hovered_file_cache {
+                                                Some((pid, l, sc, ec, cached))
+                                                    if (pid, l, sc, ec) == span_key =>
+                                                {
+                                                    cached
+                                                }
+                                                _ => {
+                                                    let root = &self.file_explorer.root_dir;
+                                                    let cwd = pane.terminal.current_dir.as_deref();
+                                                    let found = Self::resolve_terminal_file_path(
+                                                        root, cwd, &candidate,
+                                                    )
+                                                    .is_some();
+                                                    self.hovered_file_cache = Some((
+                                                        span_key.0, span_key.1, span_key.2,
+                                                        span_key.3, found,
+                                                    ));
+                                                    found
+                                                }
+                                            };
+                                            if exists {
+                                                new_url_span = Some(span_key);
+                                                is_link = true;
+                                            }
+                                        }
                                     }
                                 }
                             }

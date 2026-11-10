@@ -254,6 +254,7 @@ impl TearminalApp {
                             .or_else(|| self.file_explorer.actual_index_for_visible(drag.idx));
                         if let Some(real_idx) = real_idx {
                             self.file_explorer.toggle_expand(real_idx);
+                            self.pump_explorer_ssh();
                             if self.file_explorer.is_filtering() {
                                 self.file_explorer.update_filter();
                             }
@@ -616,7 +617,8 @@ impl TearminalApp {
         win_h: usize,
     ) {
         // 3. Clics en paneles de terminal activa
-        let bypass = self.modifiers.shift_key();
+        let (ctrl_pressed, shift_pressed, _, _, _) = self.physical_modifiers();
+        let bypass = shift_pressed;
         let pane_rects = self.active_tab_pane_rects(win_w, win_h);
         let active_tab = &mut self.tabs[self.active_tab_index];
 
@@ -861,12 +863,35 @@ impl TearminalApp {
                                     let global_line =
                                         pane.terminal.visible_line_start() + row_in_view;
 
-                                    // 1. Ctrl+Click en enlace externo: abrir en el navegador
-                                    if self.modifiers.control_key() {
+                                    // 1. Ctrl+Click en enlace externo (navegador) o ruta de archivo (visor interno)
+                                    if ctrl_pressed {
                                         if let Some(url) = pane.terminal.url_at(col, global_line) {
                                             crate::app::platform::shell_open_url(&url);
                                             self.drag_start = None;
                                             return;
+                                        }
+                                        if pane.terminal.ssh_session.is_none() {
+                                            if let Some(candidate) = pane
+                                                .terminal
+                                                .file_path_candidate_at(col, global_line)
+                                            {
+                                                let root = &self.file_explorer.root_dir;
+                                                let cwd = pane.terminal.current_dir.as_deref();
+                                                if let Some(resolved) =
+                                                    Self::resolve_terminal_file_path(
+                                                        root, cwd, &candidate,
+                                                    )
+                                                {
+                                                    self.open_file_in_viewer_at(
+                                                        &resolved,
+                                                        true,
+                                                        candidate.line,
+                                                        candidate.col,
+                                                    );
+                                                    self.drag_start = None;
+                                                    return;
+                                                }
+                                            }
                                         }
                                     }
 
@@ -970,5 +995,124 @@ impl TearminalApp {
             (_, true, ..) => Some(South),
             _ => None,
         }
+    }
+
+    /// Comprueba si una ruta apunta a un archivo local seguro (descarta rutas UNC/SMB como `\\host\share`
+    /// o `//host/share` que en Windows bloquean el hilo y filtran hashes NTLMv2 por SMB).
+    fn is_safe_local_file(path: &std::path::Path) -> bool {
+        let s = path.as_os_str().to_string_lossy();
+        if s.starts_with(r"\\") || s.starts_with("//") {
+            return false;
+        }
+        if path.components().any(|c| {
+            matches!(
+                c,
+                std::path::Component::Prefix(pr)
+                    if matches!(
+                        pr.kind(),
+                        std::path::Prefix::UNC(..)
+                            | std::path::Prefix::VerbatimUNC(..)
+                            | std::path::Prefix::DeviceNS(_)
+                    )
+            )
+        }) {
+            return false;
+        }
+        path.is_file()
+    }
+
+    /// Resuelve un candidato de ruta de archivo a una ruta existente en el disco local
+    pub(crate) fn resolve_terminal_file_path(
+        root_dir: &std::path::Path,
+        cwd: Option<&std::path::Path>,
+        candidate: &crate::terminal::FilePathCandidate,
+    ) -> Option<std::path::PathBuf> {
+        let raw = candidate.raw_path.trim().trim_matches(['"', '\'', '`']);
+        if raw.is_empty() || raw.starts_with(r"\\") || raw.starts_with("//") {
+            return None;
+        }
+        // Bloquear `file://host/share` (UNC remoto); solo se admite `file:///ruta/local`
+        if raw.starts_with("file://") && !raw.starts_with("file:///") {
+            return None;
+        }
+
+        let cleaned = raw.strip_prefix("file:///").unwrap_or(raw);
+        if cleaned.is_empty() || cleaned.starts_with(r"\\") || cleaned.starts_with("//") {
+            return None;
+        }
+
+        let path = std::path::Path::new(cleaned);
+
+        // 1. Ruta absoluta existente
+        if path.is_absolute() && Self::is_safe_local_file(path) {
+            return Some(path.to_path_buf());
+        }
+
+        // 2. Relativa a pane.terminal.current_dir
+        if let Some(dir) = cwd {
+            let candidate_path = dir.join(path);
+            if Self::is_safe_local_file(&candidate_path) {
+                return Some(candidate_path);
+            }
+        }
+
+        // 3. Relativa a la raíz del explorador de proyectos
+        let candidate_path = root_dir.join(path);
+        if Self::is_safe_local_file(&candidate_path) {
+            return Some(candidate_path);
+        }
+
+        // 4. Si path comienza con '/' o '\' en Windows, probar dentro de la raíz del explorador
+        let trimmed_leading = cleaned.trim_start_matches(['/', '\\']);
+        if trimmed_leading != cleaned && !trimmed_leading.is_empty() {
+            let candidate_path = root_dir.join(trimmed_leading);
+            if Self::is_safe_local_file(&candidate_path) {
+                return Some(candidate_path);
+            }
+        }
+
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::FilePathCandidate;
+
+    fn dummy_candidate(raw: &str) -> FilePathCandidate {
+        FilePathCandidate {
+            raw_path: raw.to_string(),
+            line: None,
+            col: None,
+            start_col: 0,
+            end_col: raw.len(),
+        }
+    }
+
+    #[test]
+    fn resolve_terminal_file_path_rejects_unc_and_remote_file_uris() {
+        let root = std::env::temp_dir();
+        for unsafe_path in [
+            r"\\attacker.example.com\share\secret.txt",
+            "//attacker.example.com/share/secret.txt",
+            "file://attacker.example.com/share/secret.txt",
+            r"file:///\\attacker.example.com\share\secret.txt",
+            "file://///attacker.example.com/share/secret.txt",
+        ] {
+            let cand = dummy_candidate(unsafe_path);
+            assert!(
+                TearminalApp::resolve_terminal_file_path(&root, None, &cand).is_none(),
+                "debe rechazar ruta UNC/remota insegura: {unsafe_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_terminal_file_path_resolves_existing_local_file() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let cand = dummy_candidate("Cargo.toml");
+        let resolved = TearminalApp::resolve_terminal_file_path(&root, None, &cand);
+        assert_eq!(resolved, Some(root.join("Cargo.toml")));
     }
 }

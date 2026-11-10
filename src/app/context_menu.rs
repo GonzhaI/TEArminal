@@ -1139,6 +1139,7 @@ impl TearminalApp {
                     if item.is_dir {
                         if let Some(real_idx) = self.file_explorer.actual_index_for_visible(i) {
                             self.file_explorer.toggle_expand(real_idx);
+                            self.pump_explorer_ssh();
                             if self.file_explorer.is_filtering() {
                                 self.file_explorer.update_filter();
                             }
@@ -1168,7 +1169,10 @@ impl TearminalApp {
             }
             MenuAction::ExplorerDelete => self.delete_explorer_selection(),
             MenuAction::ExplorerCollapseAll => self.file_explorer.collapse_all(),
-            MenuAction::ExplorerExpandAll => self.file_explorer.expand_all(),
+            MenuAction::ExplorerExpandAll => {
+                self.file_explorer.expand_all();
+                self.pump_explorer_ssh();
+            }
             MenuAction::ExplorerRefresh => {
                 self.file_explorer.refresh();
                 self.pump_explorer_ssh();

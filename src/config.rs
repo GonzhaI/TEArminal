@@ -26,17 +26,12 @@ pub(crate) struct AppearanceConfig {
     pub(crate) theme_light: String,
     #[serde(default = "default_line_spacing")]
     pub(crate) line_spacing: f32,
-    #[serde(default = "default_tab_layout")]
-    pub(crate) tab_layout: String,
     #[serde(default = "default_theme_mode")]
     pub(crate) theme_mode: String,
     #[serde(default = "default_true")]
     pub(crate) show_status_bar: bool,
     #[serde(default = "default_false")]
     pub(crate) show_file_explorer: bool,
-    /// Lado de la ventana donde va el panel de navegación: "left" | "right".
-    #[serde(default = "default_panel_side")]
-    pub(crate) panel_side: String,
     /// Muestra las dimensiones de la rejilla (columnas × filas) en la esquina inferior derecha.
     #[serde(default = "default_false")]
     pub(crate) show_dimensions: bool,
@@ -116,7 +111,7 @@ pub(crate) enum KeepAwakeMode {
 
 impl KeepAwakeMode {
     /// Pasa cíclicamente al siguiente modo: Apagado -> Agente -> Activo -> Apagado.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn next(self) -> Self {
         match self {
             Self::Off => Self::Agent,
@@ -134,13 +129,12 @@ impl KeepAwakeMode {
         }
     }
 
-    /// Descripción explicativa para menús y configuración.
-    #[allow(dead_code)]
+    /// Descripción del modo para el selector emergente de la barra de estado.
     pub(crate) fn description(self) -> &'static str {
         match self {
-            Self::Off => "Ajustes por defecto del dispositivo",
-            Self::Agent => "Pantalla encendida cuando un agente trabaja",
-            Self::Active => "Pantalla siempre encendida",
+            Self::Off => "Suspensión habitual del sistema",
+            Self::Agent => "Evita suspensión con agentes activos",
+            Self::Active => "Mantiene pantalla encendida siempre",
         }
     }
 }
@@ -171,14 +165,6 @@ fn default_false() -> bool {
 
 fn default_explorer_width() -> usize {
     crate::explorer::FILE_EXPLORER_WIDTH
-}
-
-fn default_panel_side() -> String {
-    "left".to_string()
-}
-
-fn default_tab_layout() -> String {
-    "horizontal".to_string()
 }
 
 fn default_theme_mode() -> String {
@@ -241,11 +227,9 @@ impl Default for TearminalConfig {
                 theme: crate::theme::Theme::DEFAULT_DARK.to_string(),
                 theme_light: crate::theme::Theme::DEFAULT_LIGHT.to_string(),
                 line_spacing: 1.0,
-                tab_layout: "horizontal".to_string(),
                 theme_mode: "dark".to_string(),
                 show_status_bar: true,
                 show_file_explorer: false,
-                panel_side: default_panel_side(),
                 show_dimensions: false,
                 panel_width: None,
             },

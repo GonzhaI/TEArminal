@@ -159,7 +159,6 @@ fn test_settings_reset_to_defaults() {
     app.config.appearance.font_size = 22.0;
     app.config.appearance.window_opacity = 0.65;
     app.config.appearance.theme = "Nord".to_string();
-    app.config.appearance.tab_layout = "vertical".to_string();
     app.config.terminal.cursor_blink = false;
 
     // Restablecer valores por defecto
@@ -174,7 +173,6 @@ fn test_settings_reset_to_defaults() {
         app.config.appearance.theme,
         crate::theme::Theme::DEFAULT_DARK
     );
-    assert_eq!(app.config.appearance.tab_layout, "horizontal");
     assert!(app.config.terminal.cursor_blink);
 }
 
@@ -1778,20 +1776,30 @@ fn test_git_quick_actions_in_changes_view() {
     assert!(app.file_explorer.items[0].is_unstaged);
     assert!(!app.file_explorer.items[0].is_staged);
 
-    // Stage rápido
+    let wait_git_job = |app: &mut TearminalApp| {
+        if let Ok(done) = app.ssh_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            let _ = app.ssh_tx.send(done);
+            app.process_ssh_results();
+        }
+    };
+
+    // Stage rápido (asíncrono en hilo worker)
     app.execute_git_action(&tracked, crate::renderer::GitActionKind::Stage, false);
+    wait_git_job(&mut app);
     assert_eq!(app.file_explorer.items.len(), 1);
     assert!(app.file_explorer.items[0].is_staged);
     assert!(!app.file_explorer.items[0].is_unstaged);
 
     // Unstage rápido
     app.execute_git_action(&tracked, crate::renderer::GitActionKind::Unstage, false);
+    wait_git_job(&mut app);
     assert_eq!(app.file_explorer.items.len(), 1);
     assert!(app.file_explorer.items[0].is_unstaged);
     assert!(!app.file_explorer.items[0].is_staged);
 
     // Discard rápido
     app.execute_git_action(&tracked, crate::renderer::GitActionKind::Discard, false);
+    wait_git_job(&mut app);
     assert_eq!(app.file_explorer.items.len(), 0);
     assert_eq!(
         std::fs::read_to_string(&tracked)
@@ -2760,9 +2768,8 @@ fn test_sync_fs_watcher_behavior() {
 fn test_border_resize_direction_all_edges() {
     use winit::window::ResizeDirection::*;
     let (w, h) = (1000, 700);
-    for layout in ["horizontal", "vertical"] {
-        let mut config = TearminalConfig::default();
-        config.appearance.tab_layout = layout.to_string();
+    for _ in 0..2 {
+        let config = TearminalConfig::default();
         let app = TearminalApp::new(config, None);
         let dir = |x, y| app.compute_border_resize_direction(x, y, w, h);
 
@@ -3065,7 +3072,6 @@ fn test_explorer_docks_right_and_spaces_panel_reserves_the_left() {
 #[test]
 fn test_top_tabs_panel_shows_and_hides_the_explorer_with_it() {
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.config.appearance.tab_layout = "horizontal".to_string();
 
     app.sidebar_visible = true;
     app.file_explorer.visible = true;
@@ -4072,4 +4078,32 @@ fn test_windows_canonical_shortcuts() {
     );
     assert!(handled_close_split);
     assert_eq!(app.tabs[app.active_tab_index].panes.len(), 1);
+}
+
+#[test]
+fn test_terminal_ctrl_click_opens_file_path() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    app.file_explorer.root_dir = root;
+
+    let candidate = crate::terminal::FilePathCandidate {
+        raw_path: "Cargo.toml".to_string(),
+        line: Some(5),
+        col: Some(2),
+        start_col: 0,
+        end_col: 10,
+    };
+
+    let resolved =
+        TearminalApp::resolve_terminal_file_path(&app.file_explorer.root_dir, None, &candidate);
+    assert!(resolved.is_some(), "Cargo.toml debe existir y resolverse");
+    let path = resolved.unwrap();
+    assert!(path.ends_with("Cargo.toml"));
+
+    // Abrir el archivo con posicionamiento de línea
+    app.open_file_in_viewer_at(&path, true, candidate.line, candidate.col);
+    let active_tab = &app.tabs[app.active_tab_index];
+    let viewer = active_tab.file_viewer.as_ref().expect("debe ser un visor");
+    assert_eq!(viewer.cursor_line, 4); // 0-based index para línea 5
+    assert_eq!(viewer.cursor_col, 1); // 0-based index para col 2
 }

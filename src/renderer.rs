@@ -83,7 +83,6 @@ pub(crate) struct TerminalRenderer {
     /// Las barras de scroll solo se ven mientras se hace scroll (el hover las muestra siempre)
     pub scrollbars_awake: bool,
     pub ligatures: bool,
-    #[allow(dead_code)]
     pub show_dimensions: bool,
     pub(crate) hovered_url_span: Option<(usize, usize, usize)>,
     pub(crate) cursor_visual: Option<(f32, f32)>,

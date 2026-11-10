@@ -123,16 +123,12 @@ impl From<(String, String)> for RemoteSshSession {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(crate) struct FileExplorer {
     pub root_dir: PathBuf,
     pub items: Vec<ExplorerItem>,
     pub scroll_offset: usize,
     pub hovered_index: Option<usize>,
-    pub hovered_back_btn: bool,
-    pub hovered_forward_btn: bool,
-    pub hovered_up_btn: bool,
     pub selected_index: Option<usize>,
     pub selected_path: Option<PathBuf>,
     pub visible: bool,
@@ -145,8 +141,6 @@ pub(crate) struct FileExplorer {
     /// «Expandir todo» remoto en curso: cada listado recibido dispara la petición de la siguiente carpeta
     pub remote_expand_all: bool,
     pub is_focused: bool,
-    pub last_click_item: Option<usize>,
-    pub last_click_time: std::time::Instant,
     pub history: Vec<PathBuf>,
     pub history_index: usize,
     pub git_statuses: FxHashMap<PathBuf, GitStatusInfo>,
@@ -160,7 +154,6 @@ pub(crate) struct FileExplorer {
     pub changes_only: bool,
     /// Fija el explorador en el directorio actual (evita sincronizar con el cwd de la terminal)
     pub is_pinned: bool,
-    pub hovered_pin_btn: bool,
     pub remote_session: Option<RemoteSshSession>,
     pub error_message: Option<String>,
     /// Nombre en edición (nuevo archivo/carpeta o renombrar): ver `explorer/edit.rs`
@@ -281,28 +274,6 @@ impl FileExplorer {
         }
     }
 
-    /// Botón «Cambios» del encabezado (compartido por dibujo y clics): x, y, ancho, alto
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn changes_btn_rect(
-        panel_x: usize,
-        panel_y: usize,
-        panel_w: usize,
-    ) -> (usize, usize, usize, usize) {
-        (panel_x + panel_w.saturating_sub(36), panel_y + 7, 24, 24)
-    }
-
-    /// Botón «Fijar» (Pin) del encabezado (compartido por dibujo y clics): x, y, ancho, alto
-    #[allow(dead_code)]
-    #[inline]
-    pub(crate) fn pin_btn_rect(
-        panel_x: usize,
-        panel_y: usize,
-        panel_w: usize,
-    ) -> (usize, usize, usize, usize) {
-        (panel_x + panel_w.saturating_sub(66), panel_y + 7, 24, 24)
-    }
-
     /// Calcula la geometría del panel acoplado del explorador de archivos.
     #[inline]
     pub(crate) fn panel_geometry(
@@ -330,7 +301,7 @@ impl FileExplorer {
     }
 
     /// Ancho que deja el borde izquierdo del panel bajo el ratón en `mx`
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn set_width_from_edge(&mut self, mx: usize, win_w: usize) {
         self.width = Self::clamp_width(win_w.saturating_sub(mx), win_w);
     }
@@ -365,9 +336,6 @@ impl FileExplorer {
             items: Vec::new(),
             scroll_offset: 0,
             hovered_index: None,
-            hovered_back_btn: false,
-            hovered_forward_btn: false,
-            hovered_up_btn: false,
             selected_index: None,
             selected_path: None,
             visible,
@@ -382,8 +350,6 @@ impl FileExplorer {
             git_status_req: None,
             git_status_running: false,
             is_focused: false,
-            last_click_item: None,
-            last_click_time: std::time::Instant::now(),
             history: vec![root_dir],
             history_index: 0,
             git_statuses: FxHashMap::default(),
@@ -392,7 +358,6 @@ impl FileExplorer {
             git_root: None,
             changes_only: false,
             is_pinned: false,
-            hovered_pin_btn: false,
             remote_session: None,
             error_message: None,
             edit: None,
@@ -409,7 +374,7 @@ impl FileExplorer {
     }
 
     /// Alterna el estado de fijado del explorador
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn toggle_pinned(&mut self) {
         self.is_pinned = !self.is_pinned;
     }
@@ -421,7 +386,6 @@ impl FileExplorer {
     }
 
     /// Siguiente carpeta remota sin abrir para «Expandir todo» (3 niveles, 1 000 entradas como máximo)
-    #[allow(dead_code)]
     pub(crate) fn next_remote_dir_to_expand(&self) -> Option<usize> {
         const MAX_ITEMS: usize = 1000;
         const MAX_DEPTH: usize = 3;
@@ -478,16 +442,24 @@ impl FileExplorer {
         let base = dir.to_string_lossy().trim_end_matches('/').to_string();
         let children = Self::remote_items(&base, depth + 1, names);
         self.items.splice(idx + 1..idx + 1, children);
+        self.apply_statuses_to_items();
+        if self.is_filtering() {
+            self.update_filter();
+        }
     }
 
     /// Cierra todas las carpetas abiertas y deja solo el primer nivel
     pub(crate) fn collapse_all(&mut self) {
+        self.remote_expand_all = false;
         self.items.retain(|i| i.depth == 0);
         for item in &mut self.items {
             item.is_expanded = false;
         }
         self.scroll_offset = 0;
         self.selected_index = None;
+        if self.is_filtering() {
+            self.update_filter();
+        }
     }
 
     /// Abre todas las carpetas locales (hasta 4 niveles y 2 000 entradas; sin `.git`, `target`, etc.)
@@ -496,6 +468,10 @@ impl FileExplorer {
         const MAX_DEPTH: usize = 4;
         const SKIP: [&str; 5] = [".git", "target", "node_modules", ".cargo", "dist"];
         if self.remote_session.is_some() {
+            self.remote_expand_all = true;
+            if let Some(idx) = self.next_remote_dir_to_expand() {
+                self.toggle_expand(idx);
+            }
             return;
         }
         while self.items.len() < MAX_ITEMS {
@@ -650,7 +626,6 @@ impl FileExplorer {
 
     /// Muestra el listado de la carpeta remota recibido por el terminal (OSC 1337 TearminalLs).
     /// No hace nada si ya está aplicado, así que puede llamarse tras cada ráfaga de salida.
-    #[allow(dead_code)]
     pub(crate) fn set_remote_listing(&mut self, session: RemoteSshSession, names: &[String]) {
         let same = self.inband_remote && self.remote_session.as_ref() == Some(&session);
         self.cached_remote_names = names.to_vec();
@@ -676,7 +651,6 @@ impl FileExplorer {
         }
     }
 
-    #[allow(dead_code)]
     fn listing_names_match(&self, names: &[String]) -> bool {
         // Solo cuenta la raíz: las carpetas expandidas (profundidad > 0) no deben invalidar el listado
         let roots: Vec<&ExplorerItem> = self.items.iter().filter(|i| i.depth == 0).collect();

@@ -144,7 +144,7 @@ pub(crate) fn git_head_result(path: &Path) -> GitHeadResult {
 
 /// Contenido de `path` en `HEAD`, base para marcar en el visor lo que cambió.
 /// `None` si el archivo no está versionado en el repo (untracked) o fuera de un repo.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn git_head_lines(path: &Path) -> Option<Vec<String>> {
     match git_head_result(path) {
         GitHeadResult::Lines(lines) => Some(lines),

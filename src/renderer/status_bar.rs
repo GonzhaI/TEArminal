@@ -55,7 +55,7 @@ impl TerminalRenderer {
         label_w + 26
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn render_status_bar_with_ai(
         &mut self,
         canvas: &mut Canvas,
@@ -650,12 +650,12 @@ impl TerminalRenderer {
     }
 
     /// Alto de una fila de límite: etiqueta + barra + reinicio
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) const LIMIT_ROW_H: usize = 38;
 
     /// Alto del bloque de un agente: cabecera + límites reales + (ventana 5h y sesión, o un aviso si no
     /// hay tokens) + hueco
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn ai_agent_block_height(usage: &crate::app::AiAgentUsage, limits: usize) -> usize {
         let tokens = if usage.has_tokens() {
             16 + 18 + 16 + 18
@@ -666,7 +666,7 @@ impl TerminalRenderer {
     }
 
     /// Alto dinámico en píxeles de la tarjeta flotante de consumo de IA.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn ai_usage_popup_height(snapshot: &crate::app::AiUsageSnapshot) -> usize {
         let mut h = 14; // padding superior
         h += 20; // cabecera: icono + título
@@ -702,7 +702,7 @@ impl TerminalRenderer {
 
     /// Renderiza el menú flotante de consumo de IA: un bloque por agente de la pestaña (cada uno con su
     /// color, modelo y ventanas), el total de 24 h y los agentes configurados.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn render_ai_usage_popup(
         &mut self,
         canvas: &mut Canvas,

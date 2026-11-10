@@ -4,12 +4,14 @@
 
 mod cell;
 pub(crate) mod kitty;
+mod links;
 pub(crate) mod performer;
 pub(crate) mod search;
 pub(crate) use performer::clean_listing;
 
 pub(crate) use cell::*;
 pub(crate) use kitty::*;
+pub(crate) use links::*;
 pub(crate) use performer::percent_decode;
 use performer::Performer;
 
@@ -24,24 +26,6 @@ pub(crate) const OSC_BUF_SIZE: usize = 128 * 1024;
 /// Codepoint base en el plano de uso privado Unicode para mapear índices de grafemas complejos en celdas.
 pub(crate) const GRAPHEME_BASE_CODEPOINT: u32 = 0x0010_0000;
 type OscParser = Parser<OSC_BUF_SIZE>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum CursorShape {
-    #[default]
-    Block,
-    Beam,
-    Underline,
-}
-
-impl CursorShape {
-    pub(crate) fn from_str_name(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "beam" | "bar" | "line" => CursorShape::Beam,
-            "underline" => CursorShape::Underline,
-            _ => CursorShape::Block,
-        }
-    }
-}
 
 pub(crate) struct TerminalState {
     pub cols: usize,
@@ -88,6 +72,10 @@ pub(crate) struct TerminalState {
     pub remote_integration: bool,
     /// El prompt remoto está esperando entrada (llega `TearminalGit` en cada prompt; Enter lo apaga)
     pub remote_at_prompt: bool,
+    /// Respuestas de archivo/carpeta remotas completas (`OSC 1337;TearminalFile=<id>;status=...`) listas para la app
+    pub remote_file_results: Vec<RemoteFileResult>,
+    /// Trozos (`part=`) recibidos por `id` a la espera del paquete final con `status=`
+    pub(super) remote_file_parts: FxHashMap<String, RemoteFileAsm>,
 
     // Bracketed paste dinámico negociado con agentes (?2004h / ?2004l)
     pub bracketed_paste_mode: bool,
@@ -191,6 +179,8 @@ impl TerminalState {
             window_title: None,
             remote_integration: false,
             remote_at_prompt: false,
+            remote_file_results: Vec::new(),
+            remote_file_parts: FxHashMap::default(),
             bracketed_paste_mode: false,
             cursor_key_mode: false,
             mouse_reporting_normal: false,
@@ -247,132 +237,6 @@ impl TerminalState {
         true
     }
 
-    /// Notificación de esquema de color (`CSI ?997;Ps n`, 1 = oscuro, 2 = claro): respuesta a
-    /// `CSI ?996n` y aviso de cambio de tema con el modo 2031 activo.
-    pub(crate) fn color_scheme_report_bytes(&self) -> Vec<u8> {
-        let code = if self.theme.is_dark() { 1 } else { 2 };
-        format!("\x1b[?997;{code}n").into_bytes()
-    }
-
-    /// Actualiza el tema de la terminal migrando coherentemente el estado del emulador y las celdas
-    /// existentes en la rejilla, historial y pantalla alternativa.
-    pub(crate) fn update_theme(&mut self, new_theme: Theme) {
-        if self.theme == new_theme {
-            return;
-        }
-        let old_theme = std::mem::replace(&mut self.theme, new_theme);
-
-        // 1. Actualizar colores activos de escritura
-        if self.current_fg == old_theme.foreground || self.current_fg == Color::TRANSPARENT {
-            self.current_fg = self.theme.foreground;
-        } else {
-            for i in 0..16 {
-                if self.current_fg == old_theme.ansi[i] {
-                    self.current_fg = self.theme.ansi[i];
-                    break;
-                }
-            }
-        }
-
-        if self.current_bg == old_theme.background || self.current_bg == Color::TRANSPARENT {
-            self.current_bg = Color::TRANSPARENT;
-        } else {
-            for i in 0..16 {
-                if self.current_bg == old_theme.ansi[i] {
-                    self.current_bg = self.theme.ansi[i];
-                    break;
-                }
-            }
-        }
-
-        // 2. Mapear colores de subrayado si coincidían
-        for col in &mut self.underline_colors {
-            if *col == old_theme.foreground {
-                *col = self.theme.foreground;
-            } else {
-                for i in 0..16 {
-                    if *col == old_theme.ansi[i] {
-                        *col = self.theme.ansi[i];
-                        break;
-                    }
-                }
-            }
-        }
-
-        // 3. Mapear celdas en grid, scrollback y alt_grid
-        let is_mode_switch = old_theme.is_dark() != self.theme.is_dark();
-        let remap_cell = |cell: &mut Cell| {
-            // Foreground
-            if cell.fg == old_theme.foreground || cell.fg == Color::TRANSPARENT {
-                cell.fg = self.theme.foreground;
-            } else {
-                let mut matched = false;
-                for i in 0..16 {
-                    if cell.fg == old_theme.ansi[i] {
-                        let new_col = self.theme.ansi[i];
-                        if is_mode_switch
-                            && crate::theme::contrast_ratio(new_col, self.theme.background) < 2.0
-                        {
-                            cell.fg = self.theme.foreground;
-                        } else {
-                            cell.fg = new_col;
-                        }
-                        matched = true;
-                        break;
-                    }
-                }
-                // Si no coincide con un color ANSI indexado y cambiamos entre modo claro y oscuro,
-                // verificamos si el color pierde contraste contra el fondo efectivo (ej. texto blanco sobre fondo claro).
-                if !matched && is_mode_switch {
-                    let effective_bg =
-                        if cell.bg == Color::TRANSPARENT || cell.bg == old_theme.background {
-                            self.theme.background
-                        } else {
-                            cell.bg
-                        };
-                    let cr = crate::theme::contrast_ratio(cell.fg, effective_bg);
-                    if cr < 2.2 {
-                        if effective_bg != self.theme.background
-                            && crate::theme::luminance(effective_bg) < 0.3
-                        {
-                            cell.fg = Color::from_rgb(255, 255, 255);
-                        } else {
-                            cell.fg = self.theme.foreground;
-                        }
-                    }
-                }
-            }
-
-            // Background
-            if cell.bg == old_theme.background {
-                cell.bg = Color::TRANSPARENT;
-            } else if cell.bg != Color::TRANSPARENT {
-                for i in 0..16 {
-                    if cell.bg == old_theme.ansi[i] {
-                        cell.bg = self.theme.ansi[i];
-                        break;
-                    }
-                }
-            }
-        };
-
-        for row in &mut self.grid {
-            for cell in row {
-                remap_cell(cell);
-            }
-        }
-        for row in &mut self.scrollback {
-            for cell in row {
-                remap_cell(cell);
-            }
-        }
-        for row in &mut self.alt_grid {
-            for cell in row {
-                remap_cell(cell);
-            }
-        }
-    }
-
     /// El marcador trae el token de este panel (comparación en tiempo constante). Un token vacío nunca vale.
     pub(crate) fn pane_token_matches(&self, token: &str) -> bool {
         let (a, b) = (self.pane_token.as_bytes(), token.as_bytes());
@@ -384,6 +248,13 @@ impl TerminalState {
     /// El usuario pulsó Enter: lo que se escriba ya no llega a un prompt sino a un programa
     pub(crate) fn note_enter_sent(&mut self) {
         self.remote_at_prompt = false;
+    }
+
+    /// Petición al manejador readline (`bind -x`) del bash remoto: `\e[1337~` la dispara sin hacer eco ni
+    /// tocar la línea de edición y el manejador lee `op id payload\n` con `read -r`. El salto de línea no pasa por
+    /// `note_enter_sent`: el prompt sigue activo al terminar.
+    pub(crate) fn remote_request_bytes(op: &str, id: &str, payload: &str) -> Vec<u8> {
+        format!("\x1b[1337~{op} {id} {payload}\n").into_bytes()
     }
 
     pub(crate) fn is_mouse_reporting_active(&self) -> bool {
@@ -428,118 +299,6 @@ impl TerminalState {
         }
     }
 
-    pub(crate) fn register_hyperlink(&mut self, url: &str) -> u16 {
-        // Rechazar URLs vacías, excesivamente largas (> 2048) o con caracteres de control
-        if url.is_empty()
-            || url.len() > 2048
-            || url.chars().any(|c| (c as u32) < 0x20 || c == '\x7f')
-        {
-            return 0;
-        }
-
-        if let Some(&id) = self.hyperlink_map.get(url) {
-            return id;
-        }
-        if self.hyperlinks.len() < (Cell::HYPERLINK_MASK as usize) {
-            let id = (self.hyperlinks.len() + 1) as u16;
-            let boxed: Box<str> = url.into();
-            self.hyperlink_map.insert(boxed.clone(), id);
-            self.hyperlinks.push(boxed);
-            id
-        } else {
-            0
-        }
-    }
-
-    pub(crate) fn hyperlink_of(&self, cell: &Cell) -> Option<&str> {
-        let h_id = cell.raw_hyperlink_id();
-        if h_id == 0 {
-            None
-        } else {
-            let idx = (h_id as usize) - 1;
-            self.hyperlinks.get(idx).map(|s| &**s)
-        }
-    }
-
-    pub(crate) fn register_underline_color(&mut self, color: Color) -> u8 {
-        let key = color.to_u32_xrgb();
-        if let Some(&id) = self.underline_color_map.get(&key) {
-            return id;
-        }
-        if self.underline_colors.len() < (Cell::UNDERLINE_COLOR_MASK as usize) {
-            let id = (self.underline_colors.len() + 1) as u8;
-            self.underline_color_map.insert(key, id);
-            self.underline_colors.push(color);
-            id
-        } else {
-            self.underline_colors.len() as u8
-        }
-    }
-
-    pub(crate) fn underline_color_of(&self, cell: &Cell) -> Option<Color> {
-        let u_id = cell.underline_color_id();
-        if u_id == 0 {
-            None
-        } else {
-            let idx = (u_id as usize) - 1;
-            self.underline_colors.get(idx).copied()
-        }
-    }
-
-    pub(crate) fn append_cell_text(&self, cell: &Cell, out: &mut String) {
-        if cell.is_grapheme() {
-            if let Some(s) = self.grapheme_of(cell) {
-                out.push_str(s);
-                return;
-            }
-        }
-        out.push(cell.c);
-    }
-
-    pub(crate) fn append_row_text(&self, row: &[Cell], buf: &mut String) {
-        for cell in row.iter().filter(|c| c.width > 0) {
-            self.append_cell_text(cell, buf);
-        }
-    }
-
-    pub(crate) fn row_text_to_string(&self, row: &[Cell]) -> String {
-        let mut s = String::with_capacity(row.len());
-        self.append_row_text(row, &mut s);
-        s
-    }
-
-    pub(crate) fn get_last_output_text(&self) -> Option<String> {
-        let block = self.command_blocks.last()?;
-        let start = block.output_start?;
-        let end = block
-            .output_end
-            .unwrap_or_else(|| self.current_global_line());
-        if start > end {
-            return None;
-        }
-
-        let line_count = (end + 1).saturating_sub(start);
-        let mut lines = Vec::with_capacity(line_count);
-        let mut line_buf = String::with_capacity(self.cols.max(80));
-        for line_idx in start..=end {
-            if let Some(row) = self.get_buffer_line(line_idx) {
-                line_buf.clear();
-                self.append_row_text(row, &mut line_buf);
-                let trimmed = line_buf.trim_end();
-                if !trimmed.is_empty() {
-                    lines.push(trimmed.to_string());
-                }
-            }
-        }
-
-        let text = lines.join("\n").trim().to_string();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
-    }
-
     #[inline]
     pub(crate) fn total_buffer_lines(&self) -> usize {
         if self.is_alt_screen {
@@ -559,24 +318,6 @@ impl TerminalState {
             let grid_idx = line_idx - self.scrollback.len();
             self.grid.get(grid_idx).map(|r| r.as_slice())
         }
-    }
-
-    pub(crate) fn selection_ordered(&self) -> Option<((usize, usize), (usize, usize))> {
-        let sel = self.selection?;
-        let (mut p1, mut p2) = (sel.start, sel.end);
-        if p1.1 > p2.1 || (p1.1 == p2.1 && p1.0 > p2.0) {
-            std::mem::swap(&mut p1, &mut p2);
-        }
-        if p1 == p2 {
-            None
-        } else {
-            Some((p1, p2))
-        }
-    }
-
-    #[inline]
-    pub(crate) fn has_selection(&self) -> bool {
-        self.selection_ordered().is_some()
     }
 
     pub(crate) fn visible_line_start(&self) -> usize {
@@ -1249,338 +990,6 @@ impl TerminalState {
         self.scroll_region_bottom = new_rows.saturating_sub(1);
         self.cursor_x = self.cursor_x.min(new_cols.saturating_sub(1));
         self.cursor_y = self.cursor_y.min(new_rows.saturating_sub(1));
-    }
-
-    // `y` se usa como número de línea global en el buffer
-    #[allow(clippy::needless_range_loop)]
-    pub(crate) fn copy_selection_text(&self) -> Option<String> {
-        let (p1, p2) = self.selection_ordered()?;
-
-        let total_lines = self.total_buffer_lines();
-        if total_lines == 0 {
-            return None;
-        }
-
-        let max_line = total_lines.saturating_sub(1);
-        let end_line = p2.1.min(max_line);
-        let num_lines = (end_line + 1).saturating_sub(p1.1);
-        let mut result = String::with_capacity(num_lines * (self.cols.max(80) + 1));
-        let mut line_buf = String::with_capacity(self.cols.max(80));
-
-        for y in p1.1..=end_line {
-            let Some(row) = self.get_buffer_line(y) else {
-                continue;
-            };
-            let line_used = row
-                .iter()
-                .rposition(|cell| {
-                    !(cell.c == ' '
-                        && cell.bg == Color::TRANSPARENT
-                        && (cell.flags
-                            & (Cell::FLAG_UNDERLINE
-                                | Cell::FLAG_STRIKETHROUGH
-                                | Cell::FLAG_INVERSE))
-                            == 0)
-                })
-                .map_or(0, |i| i + 1);
-
-            let x_start = if y == p1.1 { p1.0 } else { 0 };
-            let x_end = if y == p2.1 {
-                p2.0.min(row.len().saturating_sub(1))
-            } else {
-                line_used.saturating_sub(1)
-            };
-
-            line_buf.clear();
-            if x_start <= x_end && x_start < row.len() {
-                for x in x_start..=x_end {
-                    if x < row.len() && row[x].width > 0 {
-                        self.append_cell_text(&row[x], &mut line_buf);
-                    }
-                }
-            }
-            result.push_str(line_buf.trim_end());
-            if y < p2.1 {
-                result.push('\n');
-            }
-        }
-
-        if result.is_empty() {
-            None
-        } else {
-            Some(result)
-        }
-    }
-
-    /// Extrae la URL y el rango de columnas `(url, start_col, end_col)` de un hipervínculo
-    /// (explícito OSC 8 o reconocido por patrón de texto plano) bajo (col, global_line).
-    pub(crate) fn url_and_span_at(
-        &self,
-        col: usize,
-        global_line: usize,
-    ) -> Option<(String, usize, usize)> {
-        let row = self.get_buffer_line(global_line)?;
-        if row.is_empty() || col >= row.len() {
-            return None;
-        }
-
-        // 1. Enlace explícito OSC 8 en la celda
-        let link_id = row[col].raw_hyperlink_id();
-        if link_id > 0 {
-            if let Some(url) = self.hyperlink_of(&row[col]) {
-                let mut start_col = col;
-                while start_col > 0 && row[start_col - 1].raw_hyperlink_id() == link_id {
-                    start_col -= 1;
-                }
-                let mut end_col = col;
-                while end_col + 1 < row.len() && row[end_col + 1].raw_hyperlink_id() == link_id {
-                    end_col += 1;
-                }
-                return Some((url.to_string(), start_col, end_col));
-            }
-        }
-
-        // 2. Reconocimiento de URLs en texto plano (http://, https://, localhost:PORT, 127.0.0.1:PORT)
-        Self::find_plain_url_in_row(row, col)
-    }
-
-    fn find_plain_url_in_row(row: &[Cell], col: usize) -> Option<(String, usize, usize)> {
-        let mut chars = Vec::with_capacity(row.len());
-        let mut char_to_col = Vec::with_capacity(row.len());
-
-        for (c_idx, cell) in row.iter().enumerate() {
-            if cell.width == 0 {
-                continue;
-            }
-            chars.push(cell.c);
-            char_to_col.push(c_idx);
-        }
-
-        if chars.is_empty() {
-            return None;
-        }
-
-        let n = chars.len();
-        let mut i = 0;
-        while i < n {
-            // Un enlace solo puede empezar si es el inicio o el carácter anterior no es alfanumérico ni delimitador interno
-            if i > 0 {
-                let prev = chars[i - 1];
-                if prev.is_alphanumeric() || prev == '/' || prev == '.' || prev == '@' {
-                    i += 1;
-                    continue;
-                }
-            }
-
-            let mut prefix_len = 0;
-            let mut is_local = false;
-
-            if Self::chars_match(&chars[i..], "https://") {
-                prefix_len = 8;
-            } else if Self::chars_match(&chars[i..], "http://") {
-                prefix_len = 7;
-            } else if Self::chars_match(&chars[i..], "localhost:") {
-                let rest = &chars[i + 10..];
-                if rest.first().is_some_and(|c| c.is_ascii_digit()) {
-                    prefix_len = 10;
-                    is_local = true;
-                }
-            } else if Self::chars_match(&chars[i..], "127.0.0.1:") {
-                let rest = &chars[i + 10..];
-                if rest.first().is_some_and(|c| c.is_ascii_digit()) {
-                    prefix_len = 10;
-                    is_local = true;
-                }
-            }
-
-            if prefix_len == 0 {
-                i += 1;
-                continue;
-            }
-
-            // Extender hasta el final de la URL
-            let mut j = i + prefix_len;
-            while j < n {
-                let c = chars[j];
-                if c.is_whitespace()
-                    || (c as u32) <= 32
-                    || c == '"'
-                    || c == '\''
-                    || c == '`'
-                    || c == '<'
-                    || c == '>'
-                {
-                    break;
-                }
-                j += 1;
-            }
-
-            // Recortar signos de puntuación finales si no están balanceados
-            while j > i + prefix_len {
-                let last = chars[j - 1];
-                if last == '.'
-                    || last == ','
-                    || last == ';'
-                    || last == ':'
-                    || last == '!'
-                    || last == '?'
-                {
-                    j -= 1;
-                } else if last == ')' {
-                    let open_count = chars[i..j].iter().filter(|&&c| c == '(').count();
-                    let close_count = chars[i..j].iter().filter(|&&c| c == ')').count();
-                    if close_count > open_count {
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                } else if last == ']' {
-                    let open_count = chars[i..j].iter().filter(|&&c| c == '[').count();
-                    let close_count = chars[i..j].iter().filter(|&&c| c == ']').count();
-                    if close_count > open_count {
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                } else if last == '}' {
-                    let open_count = chars[i..j].iter().filter(|&&c| c == '{').count();
-                    let close_count = chars[i..j].iter().filter(|&&c| c == '}').count();
-                    if close_count > open_count {
-                        j -= 1;
-                    } else {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            if j > i + prefix_len {
-                let start_col = char_to_col[i];
-                let end_col = char_to_col[j - 1];
-                if col >= start_col && col <= end_col {
-                    let matched_str: String = chars[i..j].iter().collect();
-                    let url = if is_local {
-                        format!("http://{matched_str}")
-                    } else {
-                        matched_str
-                    };
-                    return Some((url, start_col, end_col));
-                }
-                i = j;
-            } else {
-                i += prefix_len;
-            }
-        }
-
-        None
-    }
-
-    #[inline]
-    fn chars_match(slice: &[char], prefix: &str) -> bool {
-        if slice.len() < prefix.len() {
-            return false;
-        }
-        prefix
-            .chars()
-            .zip(slice)
-            .all(|(p, &c)| p.eq_ignore_ascii_case(&c))
-    }
-
-    /// Extrae la URL del hipervínculo (OSC 8 o regex de texto plano) bajo (col, global_line), si existe.
-    pub(crate) fn url_at(&self, col: usize, global_line: usize) -> Option<String> {
-        self.url_and_span_at(col, global_line).map(|(s, _, _)| s)
-    }
-
-    /// Selecciona la palabra o bloque delimitado bajo la columna `col` en `global_line`.
-    pub(crate) fn select_word_at(&mut self, col: usize, global_line: usize) {
-        let Some(row) = self.get_buffer_line(global_line) else {
-            self.selection = None;
-            return;
-        };
-        if row.is_empty() {
-            self.selection = None;
-            return;
-        }
-        let col = col.min(row.len().saturating_sub(1));
-        let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
-        let is_ws_char = |c: char| c == ' ' || c == '\t';
-
-        let target_char = row[col].c;
-        let target_is_word = is_word_char(target_char);
-        let target_is_ws = is_ws_char(target_char);
-
-        let mut start_col = col;
-        while start_col > 0 {
-            let prev_c = row[start_col - 1].c;
-            if target_is_ws {
-                if !is_ws_char(prev_c) {
-                    break;
-                }
-            } else if target_is_word {
-                if !is_word_char(prev_c) {
-                    break;
-                }
-            } else if is_word_char(prev_c) || is_ws_char(prev_c) {
-                break;
-            }
-            start_col -= 1;
-        }
-
-        let mut end_col = col;
-        while end_col + 1 < row.len() {
-            let next_c = row[end_col + 1].c;
-            if target_is_ws {
-                if !is_ws_char(next_c) {
-                    break;
-                }
-            } else if target_is_word {
-                if !is_word_char(next_c) {
-                    break;
-                }
-            } else if is_word_char(next_c) || is_ws_char(next_c) {
-                break;
-            }
-            end_col += 1;
-        }
-
-        self.selection = Some(SelectionRange {
-            start: (start_col, global_line),
-            end: (end_col, global_line),
-        });
-    }
-
-    /// Selecciona toda la línea visible ocupada en `global_line`.
-    pub(crate) fn select_line_at(&mut self, global_line: usize) {
-        let Some(row) = self.get_buffer_line(global_line) else {
-            self.selection = None;
-            return;
-        };
-        if row.is_empty() {
-            self.selection = None;
-            return;
-        }
-        let line_used = row
-            .iter()
-            .rposition(|cell| {
-                !(cell.c == ' '
-                    && cell.bg == Color::TRANSPARENT
-                    && (cell.flags
-                        & (Cell::FLAG_UNDERLINE | Cell::FLAG_STRIKETHROUGH | Cell::FLAG_INVERSE))
-                        == 0)
-            })
-            .map_or(0, |i| i + 1);
-
-        let end_col = if line_used > 0 {
-            line_used.saturating_sub(1)
-        } else {
-            0
-        };
-
-        self.selection = Some(SelectionRange {
-            start: (0, global_line),
-            end: (end_col, global_line),
-        });
     }
 }
 

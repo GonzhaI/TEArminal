@@ -395,3 +395,194 @@ pub(crate) fn unified_diff(base: &[String], cur: &[String], ctx: usize) -> Vec<S
     }
     out
 }
+
+impl super::viewer::FileViewerState {
+    pub(crate) fn is_diff(&self) -> bool {
+        self.diff_mode != DiffMode::None || self.diff_stash.is_some()
+    }
+
+    pub(crate) fn is_side_by_side(&self) -> bool {
+        self.diff_mode == DiffMode::SideBySide
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_unified_diff(&self) -> bool {
+        self.diff_mode == DiffMode::Unified || self.diff_stash.is_some()
+    }
+
+    /// Indica si el visor puede mostrar diff (tiene versión base en HEAD, es un archivo nuevo de Git, o ya está en diff)
+    pub(crate) fn has_diff_capability(&self) -> bool {
+        self.git_base.is_some() || self.git_new_file || self.is_diff()
+    }
+
+    pub(crate) fn side_by_side_rows(&self) -> Rc<[SideBySideRow]> {
+        if let Some((gen, ref rows)) = *self.side_by_side_cache.borrow() {
+            if gen == self.edit_gen {
+                return Rc::clone(rows);
+            }
+        }
+        let empty = Vec::new();
+        let base = if let Some(base) = &self.git_base {
+            base
+        } else if self.git_new_file {
+            &empty
+        } else {
+            &self.original_lines
+        };
+        let rows: Rc<[SideBySideRow]> = Rc::from(compute_side_by_side(base, &self.lines));
+        *self.side_by_side_cache.borrow_mut() = Some((self.edit_gen, Rc::clone(&rows)));
+        rows
+    }
+
+    pub(crate) fn side_by_side_stats(&self) -> (usize, usize) {
+        let rows = self.side_by_side_rows();
+        let mut dels = 0;
+        let mut adds = 0;
+        for r in rows.iter() {
+            match r.left.kind {
+                DiffCellKind::Deleted | DiffCellKind::Modified => dels += 1,
+                _ => {}
+            }
+            match r.right.kind {
+                DiffCellKind::Added | DiffCellKind::Modified => adds += 1,
+                _ => {}
+            }
+        }
+        (dels, adds)
+    }
+
+    pub(crate) fn total_display_rows(&self) -> usize {
+        if self.is_side_by_side() {
+            self.side_by_side_rows().len()
+        } else {
+            self.rows().len()
+        }
+    }
+
+    /// Alterna el modo de visualización del diff (Lado a lado <-> Unificado)
+    pub(crate) fn toggle_diff_mode(&mut self) {
+        if self.diff_mode == DiffMode::SideBySide {
+            self.apply_unified_diff();
+            self.diff_mode = DiffMode::Unified;
+        } else if self.diff_mode == DiffMode::Unified || self.diff_stash.is_some() {
+            self.restore_unified_diff();
+            self.diff_mode = DiffMode::SideBySide;
+        } else {
+            self.diff_mode = DiffMode::SideBySide;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
+    }
+
+    fn ensure_git_marks(&self) {
+        let mut cache = self.git_marks.borrow_mut();
+        if cache.as_ref().map(|c| c.0) != Some(self.edit_gen) {
+            let base = self.git_base.as_ref().unwrap_or(&self.original_lines);
+            let marks = diff_marks(base, &self.lines);
+            let has_changes = marks.iter().any(Option::is_some);
+            *cache = Some((self.edit_gen, has_changes, Rc::from(marks)));
+        }
+    }
+
+    /// El texto (el real, aunque se esté viendo el diff) difiere de `HEAD`
+    pub(crate) fn has_git_changes(&self) -> bool {
+        let Some(base) = &self.git_base else {
+            return false;
+        };
+        if let Some(st) = &self.diff_stash {
+            return base != &st.lines;
+        }
+        self.ensure_git_marks();
+        self.git_marks.borrow().as_ref().is_some_and(|c| c.1)
+    }
+
+    /// Alterna entre el archivo y su visor de cambios (por defecto modo Lado a lado)
+    pub(crate) fn toggle_diff(&mut self) {
+        if self.is_diff() {
+            if self.diff_stash.is_some() {
+                self.restore_unified_diff();
+            }
+            self.diff_mode = DiffMode::None;
+        } else {
+            self.diff_mode = DiffMode::SideBySide;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
+    }
+
+    /// Alterna directamente el diff unificado (mantiene retrocompatibilidad y pruebas)
+    #[cfg(test)]
+    pub(crate) fn toggle_unified_diff(&mut self) {
+        if self.diff_stash.is_some() {
+            self.restore_unified_diff();
+            self.diff_mode = DiffMode::None;
+        } else {
+            self.apply_unified_diff();
+            self.diff_mode = DiffMode::Unified;
+        }
+        self.edit_gen = self.edit_gen.wrapping_add(1);
+        self.fold_gen = self.fold_gen.wrapping_add(1);
+    }
+
+    fn apply_unified_diff(&mut self) {
+        if self.diff_stash.is_some() {
+            return;
+        }
+        let empty = Vec::new();
+        let base = if let Some(base) = &self.git_base {
+            base
+        } else if self.git_new_file {
+            &empty
+        } else {
+            &self.original_lines
+        };
+        let mut diff = unified_diff(base, &self.lines, 3);
+        if diff.is_empty() {
+            diff.push("Sin cambios respecto a HEAD".to_string());
+        }
+        self.diff_stash = Some(Box::new(DiffStash {
+            lines: std::mem::replace(&mut self.lines, diff),
+            original_lines: Vec::new(),
+            cursor_line: std::mem::take(&mut self.cursor_line),
+            cursor_col: std::mem::take(&mut self.cursor_col),
+            scroll_offset: std::mem::take(&mut self.scroll_offset),
+            scroll_offset_x: std::mem::take(&mut self.scroll_offset_x),
+            selection: self.selection.take(),
+            folded: std::mem::take(&mut self.folded),
+            render_markdown: std::mem::replace(&mut self.render_markdown, false),
+        }));
+        let shown = self.lines.clone();
+        if let Some(st) = self.diff_stash.as_mut() {
+            st.original_lines = std::mem::replace(&mut self.original_lines, shown);
+        }
+    }
+
+    fn restore_unified_diff(&mut self) {
+        if let Some(st) = self.diff_stash.take() {
+            let st = *st;
+            self.lines = st.lines;
+            self.original_lines = st.original_lines;
+            self.cursor_line = st.cursor_line;
+            self.cursor_col = st.cursor_col;
+            self.scroll_offset = st.scroll_offset;
+            self.scroll_offset_x = st.scroll_offset_x;
+            self.selection = st.selection;
+            self.folded = st.folded;
+            self.render_markdown = st.render_markdown;
+        }
+    }
+
+    pub(crate) fn get_line_git_diff_status(&self, line_idx: usize) -> Option<GitLineStatus> {
+        if self.is_diff() {
+            return None;
+        }
+        self.ensure_git_marks();
+        self.git_marks
+            .borrow()
+            .as_ref()?
+            .2
+            .get(line_idx)
+            .copied()
+            .flatten()
+    }
+}

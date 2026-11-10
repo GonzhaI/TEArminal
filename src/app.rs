@@ -22,6 +22,7 @@ mod machine;
 mod palette;
 pub(crate) mod platform;
 mod redraw;
+mod remote_files;
 mod settings;
 mod shell_context;
 mod shell_profiles;
@@ -30,6 +31,7 @@ mod ssh_jobs;
 mod tabs;
 pub(crate) mod viewer;
 pub(crate) mod viewer_diff;
+mod viewer_editor;
 pub(crate) mod viewer_image;
 mod wheel;
 
@@ -124,6 +126,8 @@ pub(crate) struct TearminalApp {
     hovered_pane_header: Option<PaneId>,
     /// Rango de hipervínculo bajo el ratón con Ctrl pulsado `(pane_id, global_line, start_col, end_col)`
     pub(crate) hovered_url_span: Option<(PaneId, usize, usize, usize)>,
+    /// Caché del último candidato de archivo bajo el ratón `(pane_id, global_line, start_col, end_col, existe)`
+    pub(crate) hovered_file_cache: Option<(PaneId, usize, usize, usize, bool)>,
     pub settings_page_state: SettingsPageState,
     /// Fuentes monoespaciadas instaladas (se leen en un hilo al abrir Ajustes) y su escaneo en curso
     installed_fonts: Option<Vec<crate::fonts::InstalledFont>>,
@@ -156,6 +160,8 @@ pub(crate) struct TearminalApp {
     /// Resultados de los hilos SSH (`ssh_jobs`); cada hilo envía el suyo y avisa con `TearminalEvent::SshDone`
     ssh_tx: std::sync::mpsc::Sender<ssh_jobs::SshDone>,
     ssh_rx: std::sync::mpsc::Receiver<ssh_jobs::SshDone>,
+    /// Peticiones de archivo/carpeta remotas en curso por la propia sesión SSH (`remote_files`)
+    pending_remote: Vec<remote_files::PendingRemote>,
     /// Instante a partir del cual se aplica el tamaño final de rejilla al PTY (antirrebote)
     resize_deadline: Option<Instant>,
     is_focused: bool,
@@ -819,6 +825,7 @@ impl TearminalApp {
             hovered_pane_btn: None,
             hovered_pane_header: None,
             hovered_url_span: None,
+            hovered_file_cache: None,
             settings_page_state: SettingsPageState::default(),
             installed_fonts: None,
             font_scan: None,
@@ -844,6 +851,7 @@ impl TearminalApp {
             cursor_on: true,
             ssh_tx,
             ssh_rx,
+            pending_remote: Vec::new(),
             resize_deadline: None,
             is_focused: true,
             scrollbar_drag: None,

@@ -1,4 +1,4 @@
-# Inicialización de PowerShell para TEArminal. Se embebe con include_str! en src/pty.rs y se ejecuta con
+﻿# Inicialización de PowerShell para TEArminal. Se embebe con include_str! en src/pty.rs y se ejecuta con
 # `powershell -NoExit -Command <este script>`. Reglas de rendimiento (se ejecuta en CADA prompt / comando):
 #   - Nada de procesos externos en `prompt` (un `git rev-parse` cuesta ~40 ms; leer .git/HEAD, ~2 ms).
 #   - Nada de Get-Command para buscar programas (ver Find-TearminalApp) y los resultados se memoizan.
@@ -157,6 +157,7 @@ Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction Silently
 function ssh {
     $rawArgs = $args
     $dest = ''
+    $loginUser = ''
     $identity = ''
     $port = ''
     $posCount = 0
@@ -180,16 +181,23 @@ function ssh {
                 $port = [string]$rawArgs[$i]
                 continue
             }
+            if ($arg -eq '-l' -and ($i + 1 -lt $rawArgs.Count)) {
+                $i++
+                $loginUser = [string]$rawArgs[$i]
+                continue
+            }
             if ($arg -in $optWithArg -and ($i + 1 -lt $rawArgs.Count)) { $i++ }
             continue
         }
         if (-not $dest) { $dest = $arg }
         $posCount++
     }
-    if (-not $dest) { $dest = 'remote' }
+    if (-not $dest) { $dest = 'remote' } elseif ($loginUser -and -not $dest.Contains('@')) { $dest = "$loginUser@$dest" }
     if ($identity) {
         try {
-            if (Test-Path -LiteralPath $identity) {
+            if (Test-Path -Path $identity) {
+                $identity = (Resolve-Path -Path $identity).ProviderPath
+            } elseif (Test-Path -LiteralPath $identity) {
                 $identity = (Resolve-Path -LiteralPath $identity).ProviderPath
             }
         } catch { }
@@ -220,7 +228,7 @@ function ssh {
     foreach ($a in $rawArgs) { if ($a -cin @('-N', '-T', '-W', '-O', '-f', '-V', '-G', '-Q', '-t', '-tt')) { $integrate = $false } }
     if ($integrate) {
         $hook = @'
-__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);if [ -r . ];then __axl=$(ls -1Ap 2>/dev/null|head -n 500|base64 2>/dev/null|tr -d '\r\n');__axl=${__axl:-EMPTY};else __axl="-";fi;if git rev-parse --is-inside-work-tree >/dev/null 2>&1;then __axs=$(git --no-optional-locks status --porcelain -z 2>/dev/null|head -c 65536|base64 2>/dev/null|tr -d '\r\n');__axs=${__axs:-EMPTY};else __axs="-";fi;printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007\033]1337;TearminalLs=%s\007\033]1337;TearminalGitStatus=%s\007' "${__axp:--}" "${HOSTNAME:-host}" "${__axq// /%20}" "$__axl" "$__axs";
+__tearminal_req(){ local o i a f c d;IFS=" " read -r o i a;f=$(shopt -u patsub_replacement 2>/dev/null;printf %b "${a//\%/\\x}");case $f in "~")f=$HOME;;"~/"*)f="$HOME/${f#*/}";;esac;case $o in get)if [ ! -e "$f" ];then printf '\033]1337;TearminalFile=%s;status=enoent\007' "$i";elif [ -d "$f" ];then printf '\033]1337;TearminalFile=%s;status=eisdir\007' "$i";elif [ ! -r "$f" ];then printf '\033]1337;TearminalFile=%s;status=eacces\007' "$i";else while IFS= read -r -n 32768 d||[ -n "$d" ];do [ -n "$d" ]&&printf '\033]1337;TearminalFile=%s;part=%s\007' "$i" "$d";done < <(head -c 10485761 -- "$f" 2>/dev/null|base64|tr -d '\r\n');printf '\033]1337;TearminalFile=%s;status=ok\007' "$i";fi;;ls)if [ -d "$f" ]&&[ -r "$f" ];then while IFS= read -r -n 32768 d||[ -n "$d" ];do [ -n "$d" ]&&printf '\033]1337;TearminalFile=%s;part=%s\007' "$i" "$d";done < <(ls -1Ap -- "$f" 2>/dev/null|head -n 5000|base64 2>/dev/null|tr -d '\r\n');printf '\033]1337;TearminalFile=%s;status=ok\007' "$i";else printf '\033]1337;TearminalFile=%s;status=err\007' "$i";fi;;put)IFS=" " read -r f a <<<"$a";f=$(shopt -u patsub_replacement 2>/dev/null;printf %b "${f//\%/\\x}");case $f in "~")f=$HOME;;"~/"*)f="$HOME/${f#*/}";;esac;c="$f.tearminal.$i.tmp";while IFS= read -r d;do [ "$d" = . ]&&break;printf %s "$d";done 2>/dev/null|base64 -d >"$c" 2>/dev/null;if [ -f "$c" ]&&[ "$(wc -c <"$c" 2>/dev/null)" -eq "$a" ] 2>/dev/null&&mv -f -- "$c" "$f" 2>/dev/null;then printf '\033]1337;TearminalFile=%s;status=ok\007' "$i";else rm -f -- "$c" 2>/dev/null;printf '\033]1337;TearminalFile=%s;status=err\007' "$i";fi;;esac;};bind -x '"\e[1337~":__tearminal_req' 2>/dev/null;__axq=${PWD//\%/%25};__axp=$(git symbolic-ref --short -q HEAD 2>/dev/null||git rev-parse --short HEAD 2>/dev/null);if [ -r . ];then __axl=$(ls -1Ap 2>/dev/null|head -n 500|base64 2>/dev/null|tr -d '\r\n');__axl=${__axl:-EMPTY};else __axl="-";fi;if git rev-parse --is-inside-work-tree >/dev/null 2>&1;then __axs=$(git --no-optional-locks status --porcelain -z 2>/dev/null|head -c 65536|base64 2>/dev/null|tr -d '\r\n');__axs=${__axs:-EMPTY};else __axs="-";fi;printf '\033]1337;TearminalGit=%s\007\033]7;file://%s%s\007\033]1337;TearminalLs=%s\007\033]1337;TearminalGitStatus=%s\007' "${__axp:--}" "${HOSTNAME:-host}" "${__axq// /%20}" "$__axl" "$__axs";
 '@
         $q = { param($t) "'" + $t.Replace("'", "'\''") + "'" }
         $script = 'case $SHELL in */bash) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + ';; */zsh) export PROMPT_COMMAND=' + (& $q $hook.Trim()) + '; precmd() { eval "$PROMPT_COMMAND"; };; esac;cat /run/motd.dynamic /etc/motd 2>/dev/null;case $SHELL in */bash|*/zsh) exec "$SHELL" -l;; *) exec ${SHELL:-/bin/sh};; esac'

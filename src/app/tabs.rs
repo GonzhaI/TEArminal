@@ -43,7 +43,10 @@ impl TearminalApp {
                             remote_dir: rdir.clone(),
                             identity_file: ssh.identity_file.clone(),
                             port: ssh.port,
-                            is_inband: pane.terminal.remote_integration,
+                            is_inband: pane.terminal.remote_integration
+                                && (pane.terminal.remote_at_prompt
+                                    || ssh.remote_listing.is_some()
+                                    || ssh.remote_dir.is_none()),
                         };
                         self.file_explorer
                             .set_remote_session(Some(remote_sess.clone()));
@@ -77,6 +80,17 @@ impl TearminalApp {
     /// Abre un archivo en una pestaña de visor. Sin `pin` es una vista previa que la siguiente vista previa
     /// reemplaza (un clic en el explorador); con `pin` (doble clic, Enter) queda fija.
     pub(crate) fn open_file_in_viewer(&mut self, path: &std::path::Path, pin: bool) {
+        self.open_file_in_viewer_at(path, pin, None, None);
+    }
+
+    /// Abre un archivo en una pestaña de visor posicionando opcionalmente el cursor en `(line, col)`.
+    pub(crate) fn open_file_in_viewer_at(
+        &mut self,
+        path: &std::path::Path,
+        pin: bool,
+        line: Option<usize>,
+        col: Option<usize>,
+    ) {
         if let Some(rem) = self.file_explorer.remote_session.clone() {
             // Modo remoto: verificar si ya existe una pestaña con este archivo remoto
             if let Some(pos) = self.tabs.iter().position(|t| {
@@ -88,12 +102,27 @@ impl TearminalApp {
                     .unwrap_or(false)
             }) {
                 self.tabs[pos].is_preview &= !pin;
+                if let Some(v) = self.tabs[pos].file_viewer.as_mut() {
+                    if let Some(target_line) = line {
+                        v.cursor_line = target_line
+                            .saturating_sub(1)
+                            .min(v.lines.len().saturating_sub(1));
+                        v.cursor_col = col.map(|c| c.saturating_sub(1)).unwrap_or(0);
+                        v.selection = None;
+                        v.ensure_cursor_visible(25);
+                    }
+                }
                 self.switch_to_tab(pos);
                 return;
             }
 
-            // Lectura remota consolidada fuera de banda mediante SshConnection
-            self.ssh_open_file(&rem.destination, path, pin);
+            if self.pin_pending_remote_open(&rem.destination, path, pin) {
+                return;
+            }
+            // Vía rápida en banda por el propio panel SSH; si no está en el prompt, respaldo por SshConnection
+            if !self.remote_open(&rem.destination, path, pin) {
+                self.ssh_open_file(&rem.destination, path, pin);
+            }
             return;
         }
 
@@ -125,6 +154,14 @@ impl TearminalApp {
                 if self.file_explorer.changes_only {
                     v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
                 }
+                if let Some(target_line) = line {
+                    v.cursor_line = target_line
+                        .saturating_sub(1)
+                        .min(v.lines.len().saturating_sub(1));
+                    v.cursor_col = col.map(|c| c.saturating_sub(1)).unwrap_or(0);
+                    v.selection = None;
+                    v.ensure_cursor_visible(25);
+                }
             }
             self.switch_to_tab(pos);
             return;
@@ -138,6 +175,14 @@ impl TearminalApp {
             }
             if self.file_explorer.changes_only {
                 v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
+            }
+            if let Some(target_line) = line {
+                v.cursor_line = target_line
+                    .saturating_sub(1)
+                    .min(v.lines.len().saturating_sub(1));
+                v.cursor_col = col.map(|c| c.saturating_sub(1)).unwrap_or(0);
+                v.selection = None;
+                v.ensure_cursor_visible(25);
             }
         }
         let fetch_git_base = !cfg!(test)
@@ -372,6 +417,7 @@ impl TearminalApp {
 
         self.tabs.remove(index);
         self.tab_history.retain(|&id| id != closed_id);
+        self.prune_pending_remote();
         self.prune_spaces();
         if self.tabs.is_empty() {
             crate::logger::log("No quedan pestañas activas: cerrando la ventana");
@@ -510,6 +556,7 @@ impl TearminalApp {
         }
         self.tabs.retain(|t| t.id == id);
         self.tab_history.retain(|&tid| tid == id);
+        self.prune_pending_remote();
         self.prune_spaces();
         self.active_tab_index = 0;
         self.last_terminal_tab_index = 0;
@@ -690,6 +737,7 @@ impl TearminalApp {
                     tab_to_close = Some(idx);
                 } else {
                     tab.close_pane(pane_id);
+                    self.prune_pending_remote();
                     self.recompute_grid_for_all_tabs();
                     self.update_window_title();
                     self.save_session();
@@ -931,7 +979,7 @@ impl TearminalApp {
         }
         pane.terminal.note_enter_sent();
         // Ctrl+U limpia lo que hubiera escrito en la línea antes de lanzar el cd
-        let cmd = format!("\x15cd -- {}\r", crate::ssh::quote(dir));
+        let cmd = format!("\x15cd -- {}\r", crate::ssh::quote_path(dir));
         pane.pty.write_input(cmd.as_bytes());
         true
     }
@@ -946,19 +994,7 @@ impl TearminalApp {
         let Some(repo_root) = self.file_explorer.git_root.clone() else {
             return;
         };
-        match action {
-            crate::renderer::GitActionKind::Stage => {
-                let _ = crate::explorer::git_stage_file(&repo_root, path);
-            }
-            crate::renderer::GitActionKind::Unstage => {
-                let _ = crate::explorer::git_unstage_file(&repo_root, path);
-            }
-            crate::renderer::GitActionKind::Discard => {
-                let _ = crate::explorer::git_discard_file(&repo_root, path, is_untracked);
-            }
-        }
-        self.file_explorer.refresh_git_status();
-        self.sync_viewer_on_git_action(path, action == crate::renderer::GitActionKind::Discard);
+        self.spawn_git_action(repo_root, path.to_path_buf(), action, is_untracked);
     }
 
     /// Sincroniza cualquier pestaña de visor abierta sobre el archivo tras una acción de Git

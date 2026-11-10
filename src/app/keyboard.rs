@@ -972,6 +972,7 @@ impl TearminalApp {
                 }
                 Key::Named(NamedKey::ArrowLeft) => {
                     self.file_explorer.handle_arrow_left(max_visible);
+                    self.pump_explorer_ssh();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -981,6 +982,7 @@ impl TearminalApp {
                     if let Some(path) = self.file_explorer.handle_arrow_right(max_visible) {
                         self.open_file_in_viewer(&path, true);
                     }
+                    self.pump_explorer_ssh();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -990,6 +992,7 @@ impl TearminalApp {
                     if let Some(path) = self.file_explorer.handle_enter(max_visible) {
                         self.open_file_in_viewer(&path, true);
                     }
+                    self.pump_explorer_ssh();
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
@@ -1003,7 +1006,10 @@ impl TearminalApp {
                     };
                     match remote_parent {
                         Some(parent) => {
-                            self.remote_cd(&parent);
+                            if !self.remote_cd(&parent) {
+                                self.file_explorer.navigate_up();
+                                self.pump_explorer_ssh();
+                            }
                         }
                         None => self.file_explorer.navigate_up(),
                     }

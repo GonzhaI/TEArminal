@@ -1956,3 +1956,43 @@ fn test_phantom_scrollback_prevention_and_has_scrollback() {
     assert_eq!(term.scrollback.len(), 0);
     assert_eq!(term.scroll_offset, 0);
 }
+
+#[test]
+fn test_file_path_candidate_recognition() {
+    let mut term = TerminalState::new(80, 24, 1000, Theme::default());
+
+    // Fila 0: error de compilador con línea y columna
+    term.process_bytes(b"error: --> src/main.rs:142:5\r\n");
+    // Fila 1: ruta absoluta Windows y con sufijo
+    term.process_bytes(b"log at C:\\Users\\user\\test.log:50\r\n");
+    // Fila 2: formato con paréntesis y comillas
+    term.process_bytes(b"trace in 'tests/integration.rs(30,12)'\r\n");
+    // Fila 3: texto común sin rutas
+    term.process_bytes(b"let mut x = 42; // some code\r\n");
+
+    // En fila 0, hacer clic en "src/main.rs:142:5"
+    let c0 = term
+        .file_path_candidate_at(15, 0)
+        .expect("candidato a ruta");
+    assert_eq!(c0.raw_path, "src/main.rs");
+    assert_eq!(c0.line, Some(142));
+    assert_eq!(c0.col, Some(5));
+
+    // En fila 1, hacer clic en "C:\Users\user\test.log:50"
+    let c1 = term.file_path_candidate_at(10, 1).expect("ruta windows");
+    assert_eq!(c1.raw_path, "C:\\Users\\user\\test.log");
+    assert_eq!(c1.line, Some(50));
+    assert_eq!(c1.col, None);
+
+    // En fila 2, hacer clic dentro de las comillas en 'tests/integration.rs(30,12)'
+    let c2 = term
+        .file_path_candidate_at(15, 2)
+        .expect("ruta entre comillas con parentesis");
+    assert_eq!(c2.raw_path, "tests/integration.rs");
+    assert_eq!(c2.line, Some(30));
+    assert_eq!(c2.col, Some(12));
+
+    // En fila 3, hacer clic en palabras comunes no debe reconocerlas como ruta
+    assert!(term.file_path_candidate_at(2, 3).is_none());
+    assert!(term.file_path_candidate_at(9, 3).is_none());
+}

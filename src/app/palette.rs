@@ -65,11 +65,6 @@ impl PaletteState {
         s
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn query(&self) -> &str {
-        self.input.text()
-    }
-
     pub(crate) fn update_filter(&mut self) {
         let q = self.input.text().trim().to_lowercase();
         if q.is_empty() {
