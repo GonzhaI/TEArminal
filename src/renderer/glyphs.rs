@@ -14,10 +14,32 @@ pub(super) const EMBEDDED_NERD_ICONS: [&[u8]; 2] = [
     include_bytes!("../../assets/fonts/JetBrainsMono-Regular-NerdMd.ttf"), // U+F0000.. (Material Design)
 ];
 
-pub(super) const EMBEDDED_INTER_MEDIUM: &[u8] = include_bytes!("../../assets/fonts/Inter-500.ttf");
+// Fuentes de la interfaz (OFL, reducidas a Latin con `pyftsubset`): Barlow para el texto, Barlow Semi
+// Condensed para los rótulos en mayúsculas e IBM Plex Mono para rutas, atajos y datos.
+pub(super) const EMBEDDED_BARLOW_MEDIUM: &[u8] =
+    include_bytes!("../../assets/fonts/Barlow-500.ttf");
 
-pub(super) const EMBEDDED_INTER_SEMIBOLD: &[u8] =
-    include_bytes!("../../assets/fonts/Inter-600.ttf");
+pub(super) const EMBEDDED_BARLOW_SEMIBOLD: &[u8] =
+    include_bytes!("../../assets/fonts/Barlow-600.ttf");
+
+pub(super) const EMBEDDED_BARLOW_SEMI_CONDENSED: &[u8] =
+    include_bytes!("../../assets/fonts/BarlowSemiCondensed-600.ttf");
+
+pub(super) const EMBEDDED_PLEX_MONO: &[u8] =
+    include_bytes!("../../assets/fonts/IBMPlexMono-400.ttf");
+
+/// Cara tipográfica de la interfaz (DISENO §3.2). Es parte de la clave de las cachés de glifos y avances.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum UiFace {
+    /// Barlow Medium: cuerpo de la interfaz.
+    Body,
+    /// Barlow SemiBold: títulos y énfasis.
+    BodyStrong,
+    /// Barlow Semi Condensed SemiBold: rótulos en mayúsculas con tracking.
+    Label,
+    /// IBM Plex Mono: rutas, atajos, SQL y otros datos.
+    Mono,
+}
 
 pub(super) const EMBEDDED_LUCIDE: &[u8] = include_bytes!("../../assets/fonts/lucide.ttf");
 

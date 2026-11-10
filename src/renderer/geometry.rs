@@ -1876,6 +1876,40 @@ impl PaletteRects {
     }
 }
 
+/// Marca de mira de la tarjeta con foco (DISENO §3.3): una cruz de 11 px centrada en cada esquina del borde
+/// interior de la tarjeta, de modo que sobresale 6 px (la esquina más 5) hacia fuera; cabe en el recorte
+/// `SidebarRects::CARD_INSET`. Las cruces son de 1 px de grosor.
+pub(crate) struct FocusMarkRects;
+
+impl FocusMarkRects {
+    /// Largo de cada brazo completo de la cruz.
+    pub(crate) const LENGTH: usize = 11;
+    /// Cuánto sobresale la cruz de la esquina, contando el píxel de la esquina.
+    pub(crate) const OUTWARD: usize = 6;
+
+    /// Ocho rectángulos `(x, y, ancho, alto)`: el brazo horizontal y el vertical de cada esquina, de la tarjeta
+    /// cuya región (con recorte) es `region`.
+    pub(crate) fn compute(region: Rect) -> [Rect; 8] {
+        let (x, y, w, h) = region;
+        let inset = SidebarRects::CARD_INSET;
+        let (left, top) = (x + inset, y + inset);
+        let right = (x + w).saturating_sub(inset + 1).max(left);
+        let bottom = (y + h).saturating_sub(inset + 1).max(top);
+        let reach = Self::OUTWARD - 1;
+        let corner = |cx: usize, cy: usize| {
+            [
+                (cx.saturating_sub(reach), cy, Self::LENGTH, 1),
+                (cx, cy.saturating_sub(reach), 1, Self::LENGTH),
+            ]
+        };
+        let [a, b] = corner(left, top);
+        let [c, d] = corner(right, top);
+        let [e, f] = corner(left, bottom);
+        let [g, i] = corner(right, bottom);
+        [a, b, c, d, e, f, g, i]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1907,5 +1941,41 @@ mod tests {
         assert_eq!(thumb.0, track.0);
         let (_, thumb_end) = lay.hscrollbar(50, 50).expect("hscrollbar al final");
         assert!(thumb_end.0 > thumb.0);
+    }
+
+    #[test]
+    fn test_focus_marks_are_11px_crosses_centered_on_each_corner() {
+        let region = (100, 50, 400, 300);
+        let marks = FocusMarkRects::compute(region);
+        let inset = SidebarRects::CARD_INSET;
+        let (left, top) = (100 + inset, 50 + inset);
+        let (right, bottom) = (100 + 400 - inset - 1, 50 + 300 - inset - 1);
+        // Esquina superior izquierda: brazo horizontal y vertical de 11 px con centro en la esquina.
+        assert_eq!(marks[0], (left - 5, top, 11, 1));
+        assert_eq!(marks[1], (left, top - 5, 1, 11));
+        // Esquina inferior derecha.
+        assert_eq!(marks[6], (right - 5, bottom, 11, 1));
+        assert_eq!(marks[7], (right, bottom - 5, 1, 11));
+        // Sobresalen 6 px de la esquina (esquina incluida) y nunca salen de la región recortada.
+        for (x, y, w, h) in marks {
+            assert!(
+                x >= 100 && y >= 50,
+                "la mira sale por arriba o la izquierda"
+            );
+            assert!(
+                x + w <= 100 + 400 && y + h <= 50 + 300,
+                "la mira sale de la región"
+            );
+            assert!(w == 11 && h == 1 || w == 1 && h == 11);
+        }
+        assert_eq!(left - marks[0].0 + 1, FocusMarkRects::OUTWARD);
+    }
+
+    #[test]
+    fn test_focus_marks_survive_tiny_regions() {
+        // Sin pánico ni desbordes con regiones menores que el recorte.
+        let marks = FocusMarkRects::compute((0, 0, 3, 3));
+        assert_eq!(marks.len(), 8);
+        let _ = FocusMarkRects::compute((0, 0, 0, 0));
     }
 }

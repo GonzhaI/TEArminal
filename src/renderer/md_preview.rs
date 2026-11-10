@@ -499,7 +499,7 @@ impl TerminalRenderer {
                         clip.0 + 28,
                         baseline_y,
                         max_x,
-                        theme.accent_color(),
+                        theme.accent_text(),
                         10.5,
                         true,
                     );

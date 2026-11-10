@@ -167,6 +167,12 @@ pub(crate) fn luminance(c: Color) -> f32 {
     0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
 }
 
+/// Contraste mínimo del acento frente al fondo (componentes de interfaz, WCAG 1.4.11).
+const ACCENT_MIN_CONTRAST: f32 = 3.0;
+
+/// Contraste mínimo (WCAG AA) del texto de la interfaz sobre su superficie.
+const TEXT_MIN_CONTRAST: f32 = 4.5;
+
 /// Mayor diferencia por canal entre dos colores (0-255).
 fn max_channel_diff(a: Color, b: Color) -> u8 {
     a.r.abs_diff(b.r)
@@ -180,12 +186,13 @@ pub(crate) fn contrast_ratio(a: Color, b: Color) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// Acento de interfaz: el primer color del tema que sea legible sobre su fondo.
-/// La UI nunca inventa un color fuera de la paleta, pero tampoco hereda un azul ilegible.
+/// Acento de interfaz: el primer color del tema que se distinga de su fondo (3:1, contraste de componentes
+/// WCAG: así el azul de Latte, 4.4:1, sigue siendo el acento). Para texto en acento, `Theme::accent_text`.
+/// La UI nunca inventa un color fuera de la paleta, pero tampoco hereda un azul invisible.
 fn ui_accent_for(background: Color, foreground: Color, ansi: &[Color; 16]) -> Color {
     [ansi[4], ansi[6], ansi[2], ansi[5], foreground]
         .into_iter()
-        .find(|c| contrast_ratio(*c, background) >= 4.5)
+        .find(|c| contrast_ratio(*c, background) >= ACCENT_MIN_CONTRAST)
         .unwrap_or(foreground)
 }
 
@@ -321,20 +328,20 @@ impl Theme {
 
     /// Fondo del chrome (barras, pestañas inactivas). Un paso hacia el texto, nunca un gris ajeno.
     pub(crate) fn chrome_bg(&self) -> Color {
-        self.mix(self.background, self.foreground, 0.045)
+        self.mantle()
     }
 
-    /// Marco de la ventana (barras, estado y margen de las tarjetas): un paso hacia la sombra, para que
-    /// el chrome se separe de la tarjeta de contenido. Un fondo casi negro no puede oscurecerse más:
+    /// `crust` del diseño: marco de la ventana (barras, riel, estado y margen de las tarjetas), un paso hacia
+    /// la sombra para que el chrome se separe de la tarjeta de contenido. En oscuro mezcla 26 % hacia negro y en
+    /// claro 11 % hacia el texto (calibrado con Frappé y Latte). Un fondo casi negro no puede oscurecerse más:
     /// ahí el marco se aclara un poco hacia el texto.
     pub(crate) fn bar_bg(&self) -> Color {
-        let black = Color::from_rgb(0, 0, 0);
-        if self.is_light() {
-            return self.mix(self.background, black, 0.07);
-        }
         let bg = self.background;
+        if self.is_light() {
+            return self.mix(bg, self.foreground, 0.11);
+        }
         if bg.r.max(bg.g).max(bg.b) >= 24 {
-            return self.mix(bg, black, 0.26);
+            return self.mix(bg, Color::from_rgb(0, 0, 0), 0.26);
         }
         // Fondo casi negro: se aclara hacia el texto lo justo para que el marco se note.
         let mut frame = bg;
@@ -345,6 +352,101 @@ impl Theme {
             }
         }
         frame
+    }
+
+    /// `crust` del diseño (alias de `bar_bg`).
+    pub(crate) fn crust(&self) -> Color {
+        self.bar_bg()
+    }
+
+    /// `mantle` del diseño: barras, paneles y cabeceras, entre la tarjeta y `crust`.
+    pub(crate) fn mantle(&self) -> Color {
+        self.mix(self.background, self.crust(), 0.55)
+    }
+
+    /// Superficies `s0`, `s1` y `s2` del diseño (`level` 0..=2): superficie, línea y línea fuerte. Pasos
+    /// hacia el texto calibrados con Frappé (11/22/33 %) y Latte (20/30/40 %).
+    pub(crate) fn surface_level(&self, level: usize) -> Color {
+        const DARK: [f32; 3] = [0.11, 0.22, 0.33];
+        const LIGHT: [f32; 3] = [0.20, 0.30, 0.40];
+        let steps = if self.is_light() { LIGHT } else { DARK };
+        self.mix(
+            self.background,
+            self.foreground,
+            steps[level.min(steps.len() - 1)],
+        )
+    }
+
+    /// Acerca `color` al texto hasta alcanzar `min_ratio`:1 sobre `on` (o hasta el propio texto si ni así
+    /// llega). Solo para texto: los rellenos conservan el color crudo del tema.
+    fn with_min_contrast(&self, color: Color, on: Color, min_ratio: f32) -> Color {
+        for step in 0..=20 {
+            let candidate = self.mix(color, self.foreground, step as f32 / 20.0);
+            if contrast_ratio(candidate, on) >= min_ratio {
+                return candidate;
+            }
+        }
+        self.foreground
+    }
+
+    /// Color de texto legible (`TEXT_MIN_CONTRAST`:1) para `color` sobre `on`.
+    pub(crate) fn readable(&self, color: Color, on: Color) -> Color {
+        self.with_min_contrast(color, on, TEXT_MIN_CONTRAST)
+    }
+
+    /// Texto sobre el acento: `crust`, el fondo o el texto, el primero que alcance `TEXT_MIN_CONTRAST`:1.
+    #[allow(dead_code)] // lo consumen botones primarios y chips activos (F1–F6)
+    pub(crate) fn on_accent(&self) -> Color {
+        let accent = self.ui_accent;
+        let candidates = [self.crust(), self.background, self.foreground];
+        candidates
+            .into_iter()
+            .find(|c| contrast_ratio(*c, accent) >= TEXT_MIN_CONTRAST)
+            .unwrap_or_else(|| {
+                candidates
+                    .into_iter()
+                    .max_by(|a, b| {
+                        contrast_ratio(*a, accent).total_cmp(&contrast_ratio(*b, accent))
+                    })
+                    .unwrap_or(self.foreground)
+            })
+    }
+
+    /// Verde del tema (conectado, añadido, correcto).
+    #[allow(dead_code)] // semánticos del diseño, consumidos por F1–F6
+    pub(crate) fn green(&self) -> Color {
+        self.ansi[2]
+    }
+
+    /// Amarillo del tema (aviso, staging, modificado).
+    #[allow(dead_code)]
+    pub(crate) fn yellow(&self) -> Color {
+        self.ansi[3]
+    }
+
+    /// Rojo del tema (producción, peligro, borrado).
+    #[allow(dead_code)]
+    pub(crate) fn red(&self) -> Color {
+        self.ansi[1]
+    }
+
+    /// Malva (agente de IA, palabras clave SQL): los temas traen el magenta como rosa (Catppuccin: `f4b8e4`),
+    /// así que se acerca al azul para que sea violeta, como en el diseño.
+    #[allow(dead_code)]
+    pub(crate) fn mauve(&self) -> Color {
+        self.mix(self.ansi[5], self.ansi[4], 0.5)
+    }
+
+    /// Cian del tema (visor).
+    #[allow(dead_code)]
+    pub(crate) fn teal(&self) -> Color {
+        self.ansi[6]
+    }
+
+    /// Durazno (números, MySQL): los temas no lo traen, así que es la mitad entre rojo y amarillo.
+    #[allow(dead_code)]
+    pub(crate) fn peach(&self) -> Color {
+        self.mix(self.ansi[1], self.ansi[3], 0.5)
     }
 
     /// Contorno de 1 px de las tarjetas, los chips y las cápsulas: el hairline que separa regiones
@@ -364,29 +466,32 @@ impl Theme {
         line
     }
 
-    /// Superficie elevada: filas activas, tarjetas, menús.
+    /// Superficie elevada (`s0`): filas activas, tarjetas, menús.
     pub(crate) fn chrome_bg_elevated(&self) -> Color {
-        self.mix(self.background, self.foreground, 0.08)
+        self.surface_level(0)
     }
 
     /// Hairline de 1 px para separar regiones.
     pub(crate) fn chrome_line(&self) -> Color {
-        self.mix(self.background, self.foreground, 0.12)
+        self.surface_level(1)
     }
 
     /// Hairline con más presencia (foco, bordes de controles).
     pub(crate) fn chrome_line_strong(&self) -> Color {
-        self.mix(self.background, self.foreground, 0.22)
+        self.surface_level(2)
     }
 
-    /// Texto secundario legible (mezcla de texto y fondo).
+    /// Texto secundario `sub1` (11 % hacia el fondo), con el suelo de contraste sobre la tarjeta.
     pub(crate) fn text_secondary(&self) -> Color {
-        self.mix(self.foreground, self.background, 0.28)
+        let color = self.mix(self.foreground, self.background, 0.11);
+        self.with_min_contrast(color, self.background, TEXT_MIN_CONTRAST)
     }
 
-    /// Texto terciario: metadatos que se leen, no decoración.
+    /// Texto terciario `sub0` (22 % hacia el fondo): metadatos que se leen, no decoración. Mismo suelo de
+    /// contraste que `sub1`.
     pub(crate) fn text_muted(&self) -> Color {
-        self.mix(self.foreground, self.background, 0.48)
+        let color = self.mix(self.foreground, self.background, 0.22);
+        self.with_min_contrast(color, self.background, TEXT_MIN_CONTRAST)
     }
 
     /// Relleno translúcido del acento para estados seleccionados.
@@ -412,12 +517,17 @@ impl Theme {
 
     /// Color de superficie para estados hover.
     pub(crate) fn surface_hover(&self) -> Color {
-        self.mix(self.background, self.foreground, 0.12)
+        self.surface_level(1)
     }
 
     /// Color de acento de interfaz primario.
     pub(crate) fn accent_color(&self) -> Color {
         self.ui_accent
+    }
+
+    /// El acento como color de texto sobre la tarjeta: con el suelo de contraste de `readable`.
+    pub(crate) fn accent_text(&self) -> Color {
+        self.readable(self.ui_accent, self.background)
     }
 
     /// Resuelve índices de 256 colores estándar ANSI
@@ -589,5 +699,172 @@ mod tests {
         assert!(!Theme::search("solarized dark").is_empty());
         assert_eq!(Theme::search("frappe"), vec!["Catppuccin Frappe"]);
         assert!(Theme::search("zzzz").is_empty());
+    }
+
+    fn hex_color(hex: &str) -> Color {
+        let v = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
+        Color::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+    }
+
+    /// Los tokens derivados reproducen los de Frappé y Latte del diseño (DISENO §3.1) con ±3 por canal.
+    /// Los hexadecimales del diseño solo viven aquí.
+    #[test]
+    fn test_ui_tokens_match_the_design_on_catppuccin() {
+        let cases = [
+            (
+                Theme::DEFAULT_DARK,
+                [
+                    ("mantle", "#292c3c"),
+                    ("crust", "#232634"),
+                    ("s0", "#414559"),
+                    ("s1", "#51576d"),
+                    ("s2", "#626880"),
+                    ("sub1", "#b5bfe2"),
+                    ("sub0", "#a5adce"),
+                    ("blue", "#8caaee"),
+                    ("green", "#a6d189"),
+                    ("yellow", "#e5c890"),
+                    ("red", "#e78284"),
+                    ("teal", "#81c8be"),
+                ],
+            ),
+            (
+                Theme::DEFAULT_LIGHT,
+                [
+                    ("mantle", "#e6e9ef"),
+                    ("crust", "#dce0e8"),
+                    ("s0", "#ccd0da"),
+                    ("s1", "#bcc0cc"),
+                    ("s2", "#acb0be"),
+                    ("sub1", "#5c5f77"),
+                    // El diseño da 4.37:1 para `sub0` en Latte: el suelo de 4.5:1 lo oscurece un poco.
+                    ("sub0", "#6c6f85"),
+                    ("blue", "#1e66f5"),
+                    ("green", "#40a02b"),
+                    ("yellow", "#df8e1d"),
+                    ("red", "#d20f39"),
+                    ("teal", "#179299"),
+                ],
+            ),
+        ];
+        for (name, expected) in cases {
+            let t = Theme::from_name(name);
+            for (token, hex) in expected {
+                let actual = match token {
+                    "mantle" => t.mantle(),
+                    "crust" => t.crust(),
+                    "s0" => t.surface_level(0),
+                    "s1" => t.surface_level(1),
+                    "s2" => t.surface_level(2),
+                    "sub1" => t.text_secondary(),
+                    "sub0" => t.text_muted(),
+                    "blue" => t.accent_color(),
+                    "green" => t.green(),
+                    "yellow" => t.yellow(),
+                    "red" => t.red(),
+                    _ => t.teal(),
+                };
+                let want = hex_color(hex);
+                assert!(
+                    max_channel_diff(actual, want) <= 3,
+                    "{name} {token}: {actual:?} se aleja de {hex}"
+                );
+            }
+            // Los métodos de siempre apuntan a los tokens del diseño.
+            assert_eq!(t.chrome_bg(), t.mantle());
+            assert_eq!(t.bar_bg(), t.crust());
+            assert_eq!(t.chrome_bg_elevated(), t.surface_level(0));
+            assert_eq!(t.chrome_line(), t.surface_level(1));
+            assert_eq!(t.chrome_line_strong(), t.surface_level(2));
+        }
+    }
+
+    /// Mauve y durazno no existen en los temas: se derivan de su magenta, azul, rojo y amarillo.
+    #[test]
+    fn test_peach_and_mauve_are_derived_from_the_palette() {
+        for name in [Theme::DEFAULT_DARK, Theme::DEFAULT_LIGHT] {
+            let t = Theme::from_name(name);
+            assert_eq!(t.peach(), t.mix(t.ansi[1], t.ansi[3], 0.5));
+            assert_eq!(t.mauve(), t.mix(t.ansi[5], t.ansi[4], 0.5));
+            // El malva se separa del rosa de la paleta y el durazno del rojo.
+            assert_ne!(t.mauve(), t.ansi[5]);
+            assert_ne!(t.peach(), t.red());
+        }
+    }
+
+    /// En los 817 temas: las superficies se alejan del fondo de forma estrictamente creciente y `mantle`
+    /// queda entre la tarjeta y `crust`.
+    #[test]
+    fn test_surface_hierarchy_in_every_theme() {
+        let dist = |a: Color, b: Color| max_channel_diff(a, b);
+        for name in Theme::names() {
+            let t = Theme::from_name(name);
+            let bg = t.background;
+            assert!(
+                dist(t.surface_level(0), bg) <= dist(t.surface_level(1), bg)
+                    && dist(t.surface_level(1), bg) <= dist(t.surface_level(2), bg),
+                "{name}: s0..s2 no crecen"
+            );
+            assert!(
+                dist(t.mantle(), bg) <= dist(t.crust(), bg),
+                "{name}: mantle no queda entre la tarjeta y crust"
+            );
+        }
+    }
+
+    /// En los 817 temas el texto secundario y los colores `readable` alcanzan 4.5:1 sobre la tarjeta, salvo
+    /// que el propio texto del tema no llegue (entonces se quedan en el texto, lo más contrastado posible).
+    #[test]
+    fn test_text_tokens_meet_the_contrast_floor_in_every_theme() {
+        for name in Theme::names() {
+            let t = Theme::from_name(name);
+            let bg = t.background;
+            let reachable = contrast_ratio(t.foreground, bg) >= TEXT_MIN_CONTRAST;
+            let mut texts = vec![t.text_secondary(), t.text_muted()];
+            texts.extend(
+                [
+                    t.red(),
+                    t.green(),
+                    t.yellow(),
+                    t.mauve(),
+                    t.teal(),
+                    t.peach(),
+                ]
+                .map(|c| t.readable(c, bg)),
+            );
+            for text in texts {
+                if reachable {
+                    assert!(
+                        contrast_ratio(text, bg) >= TEXT_MIN_CONTRAST,
+                        "{name}: texto {text:?} sin contraste suficiente"
+                    );
+                } else {
+                    assert!(contrast_ratio(text, bg) >= contrast_ratio(t.background, bg));
+                }
+            }
+            // El texto sobre el acento es el candidato de mayor contraste si ninguno llega a 4.5:1.
+            let on = contrast_ratio(t.on_accent(), t.ui_accent);
+            let best = [t.crust(), t.background, t.foreground]
+                .into_iter()
+                .map(|c| contrast_ratio(c, t.ui_accent))
+                .fold(0.0_f32, f32::max);
+            assert!(
+                on >= TEXT_MIN_CONTRAST.min(best),
+                "{name}: on_accent ilegible"
+            );
+        }
+    }
+
+    /// `readable` no toca un color que ya contrasta y acerca al texto el que no.
+    #[test]
+    fn test_readable_only_moves_colors_that_fail() {
+        let t = Theme::from_name(Theme::DEFAULT_LIGHT);
+        let on = t.background;
+        // En Latte el rojo ya pasa; el amarillo y el verde no.
+        assert_eq!(t.readable(t.red(), on), t.red());
+        for c in [t.yellow(), t.green()] {
+            assert!(contrast_ratio(c, on) < TEXT_MIN_CONTRAST);
+            assert!(contrast_ratio(t.readable(c, on), on) >= TEXT_MIN_CONTRAST);
+        }
     }
 }

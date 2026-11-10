@@ -459,25 +459,12 @@ fn draw_full_scene(
         p.sidebar_visible,
         p.panel_right,
     );
-    let terminal_focused =
-        !file_explorer.is_focused && !active_tab.is_settings && active_tab.file_viewer.is_none();
-    let outline = |_focused: bool| theme.card_outline();
+    // La tarjeta con foco lleva contorno de acento y marca de mira; la otra, el contorno normal.
+    let content_focused = !file_explorer.is_focused && !active_tab.is_settings;
     if let Some(region) = cards.panel {
-        canvas.outlined_card(
-            region,
-            SidebarRects::CARD_INSET,
-            SidebarRects::CARD_RADIUS,
-            theme.bar_bg(),
-            outline(file_explorer.is_focused),
-        );
+        TerminalRenderer::draw_framed_card(canvas, region, file_explorer.is_focused, theme);
     }
-    canvas.outlined_card(
-        cards.content,
-        SidebarRects::CARD_INSET,
-        SidebarRects::CARD_RADIUS,
-        theme.bar_bg(),
-        outline(terminal_focused),
-    );
+    TerminalRenderer::draw_framed_card(canvas, cards.content, content_focused, theme);
 
     if file_explorer.visible {
         renderer.render_file_explorer_hover_overlay(

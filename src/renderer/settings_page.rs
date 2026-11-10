@@ -789,8 +789,15 @@ impl TerminalRenderer {
             let chips_x = chip_right - 8 * (chip_w + 3);
             for (k, c) in chips.enumerate() {
                 let cx = chips_x + k * (chip_w + 3);
-                canvas.rounded_fill(cx, r.1 + 8, chip_w, 14, 2, c);
-                canvas.rounded_stroke(cx, r.1 + 8, chip_w, 14, 2, theme.chrome_line());
+                canvas.rounded_fill(cx, r.1 + 8, chip_w, 14, tokens::RADIUS_ROW, c);
+                canvas.rounded_stroke(
+                    cx,
+                    r.1 + 8,
+                    chip_w,
+                    14,
+                    tokens::RADIUS_ROW,
+                    theme.chrome_line(),
+                );
             }
             if is_current {
                 self.draw_lucide_icon(
@@ -818,7 +825,14 @@ impl TerminalRenderer {
             let thumb_h = (l.3 * SettingsPageRects::THEME_ROWS / matches.len()).max(18);
             let max_first = matches.len() - SettingsPageRects::THEME_ROWS;
             let thumb_y = l.1 + first * (l.3 - thumb_h) / max_first;
-            canvas.rounded_fill(l.0 + l.2 - 4, thumb_y, 3, thumb_h, 1, theme.border_color());
+            canvas.rounded_fill(
+                l.0 + l.2 - 4,
+                thumb_y,
+                3,
+                thumb_h,
+                tokens::RADIUS_ROW,
+                theme.border_color(),
+            );
         }
 
         self.draw_ui_text(
@@ -842,7 +856,7 @@ impl TerminalRenderer {
         let start_x = content_x + pad_x + extra / 2;
         for (i, &ansi_color) in theme.ansi.iter().take(16).enumerate() {
             let sx = start_x + i * (swatch_w + gap);
-            canvas.rounded_fill(sx, swatch_y, swatch_w, 16, 2, ansi_color);
+            canvas.rounded_fill(sx, swatch_y, swatch_w, 16, tokens::RADIUS_ROW, ansi_color);
         }
 
         // Tarjeta 2: Interfaz (modo y opacidad)
@@ -1024,7 +1038,7 @@ impl TerminalRenderer {
             preview.0 + 18,
             self.centered_baseline(preview.1 + preview.3 / 2),
             preview.0 + 54,
-            theme.accent_color(),
+            theme.accent_text(),
             self.font_size,
             true,
         );
@@ -1514,7 +1528,7 @@ impl TerminalRenderer {
             right.saturating_sub(version_w),
             card_y + 74,
             right,
-            theme.accent_color(),
+            theme.accent_text(),
             tokens::DETAIL,
             false,
         );
@@ -1574,7 +1588,7 @@ impl TerminalRenderer {
                 right.saturating_sub(120),
                 card_y + 52,
                 right,
-                theme.accent_color(),
+                theme.accent_text(),
                 tokens::MICRO,
                 false,
             );

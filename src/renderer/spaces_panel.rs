@@ -239,7 +239,7 @@ impl TerminalRenderer {
             by,
             badge,
             badge,
-            tokens::RADIUS_ROW - 2,
+            tokens::RADIUS_ROW.saturating_sub(2),
             theme.ansi[item.color_index()],
         );
         let letter = item
@@ -287,7 +287,7 @@ impl TerminalRenderer {
                 input_y,
                 input_w,
                 input_h,
-                tokens::RADIUS_ROW - 2,
+                tokens::RADIUS_ROW.saturating_sub(2),
                 theme.surface_bg(),
             );
             canvas.rounded_stroke(
@@ -295,7 +295,7 @@ impl TerminalRenderer {
                 input_y,
                 input_w,
                 input_h,
-                tokens::RADIUS_ROW - 2,
+                tokens::RADIUS_ROW.saturating_sub(2),
                 theme.accent_color(),
             );
             self.render_text_input_content(

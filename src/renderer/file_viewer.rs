@@ -783,7 +783,7 @@ impl TerminalRenderer {
                                 row_y,
                                 draw_ex - draw_sx,
                                 row_h,
-                                2,
+                                tokens::RADIUS_ROW,
                                 match_bg,
                             );
                             if is_active {
@@ -792,7 +792,7 @@ impl TerminalRenderer {
                                     row_y,
                                     draw_ex - draw_sx,
                                     row_h,
-                                    2,
+                                    tokens::RADIUS_ROW,
                                     theme.accent_color(),
                                 );
                             }
@@ -878,7 +878,7 @@ impl TerminalRenderer {
                             row_y + 2,
                             chip_w,
                             row_h.saturating_sub(4),
-                            4,
+                            tokens::RADIUS_ROW,
                             theme.accent_soft(28),
                         );
                         self.draw_ui_text(
@@ -1154,7 +1154,7 @@ impl TerminalRenderer {
         bg: Color,
         _baseline: usize,
     ) {
-        canvas.rounded_fill(rect.0, rect.1, rect.2, rect.3, 4, bg);
+        canvas.rounded_fill(rect.0, rect.1, rect.2, rect.3, tokens::RADIUS_ROW, bg);
         let cy = rect.1 + rect.3 / 2;
         let text_w = self.measure_ui_text(label, tokens::DETAIL, true);
         let content_w = 22 + text_w;
