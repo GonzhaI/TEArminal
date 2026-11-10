@@ -36,6 +36,11 @@ windows-sys = { version = "0.52", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Power",
+    # Módulo de datos: Administrador de credenciales y ACL de archivos .pem / llaves
+    "Win32_Security_Credentials",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Memory",
 ] }
 
 # DirectX 11 y DXGI para renderizado por GPU nativo en Windows 11 (DirectFlip)
@@ -76,6 +81,26 @@ rustc-hash = "2.1"
 
 # Asignador global de memoria de alto rendimiento (Microsoft Research)
 mimalloc = { version = "0.1", default-features = false }
+
+# Módulo de bases de datos (feature `db`): PostgreSQL, MySQL/MariaDB y SQL Server sobre un único runtime de tokio
+# creado de forma perezosa (en reposo es un hilo bloqueado, 0 % de CPU). TLS con rustls + ring (sin cmake ni nasm);
+# SQL Server usa Schannel (tiberius no admite el proveedor de rustls sin arrastrar aws-lc).
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "time", "io-util", "sync", "macros"], optional = true }
+futures-util = { version = "0.3", default-features = false, optional = true }
+tokio-util = { version = "0.7", default-features = false, features = ["compat"], optional = true }
+tokio-postgres = { version = "0.7", optional = true }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"], optional = true }
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "rustls-tls", "tls12", "ring"], optional = true }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "native-tls"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+webpki-roots = { version = "1", optional = true }
+x509-parser = { version = "0.18", default-features = false, optional = true }
+pkcs8 = { version = "0.11", features = ["encryption", "std"], optional = true }
+ring = { version = "0.17", optional = true }
+
+[features]
+default = ["db"]
+db = ["dep:tokio", "dep:futures-util", "dep:tokio-util", "dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:mysql_async", "dep:tiberius", "dep:rustls", "dep:webpki-roots", "dep:x509-parser", "dep:pkcs8", "dep:ring"]
 
 # Optimización para binarios de producción (GitHub Releases)
 [profile.release]
