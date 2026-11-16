@@ -20,6 +20,8 @@ pub(crate) struct StatusMeter {
     pub(crate) label: String,
     /// Consumido, `0.0..=100.0`.
     pub(crate) percent: f32,
+    /// Umbral de alerta visual configurado por el usuario (F8): al alcanzarlo el medidor se pinta en rojo.
+    pub(crate) alert_at: Option<f32>,
 }
 
 /// Cabecera de la columna de sesiones: título, rama y carpeta de la sesión a la vista.
@@ -69,6 +71,8 @@ pub(crate) enum SettingsSection {
     #[default]
     Appearance,
     Terminal,
+    Database,
+    Performance,
     Shortcuts,
     About,
 }
@@ -95,6 +99,7 @@ pub(crate) enum EditingSettingField {
     ScrollbackLines,
     ThemeSearch,
     GeneralSearch,
+    AgentProfiles,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,11 +154,73 @@ pub(crate) struct SettingsPageState {
     /// Texto del buscador de temas y primera fila visible de la lista filtrada
     pub theme_search_input: crate::ui::TextInput,
     pub theme_filter: String,
-    pub filtered_themes: Vec<&'static str>,
+    pub filtered_themes: Vec<String>,
     pub theme_scroll: usize,
     /// Ranura que edita la lista de temas: `false` = oscuro, `true` = claro
     pub theme_slot_light: bool,
     pub hovered_theme_slot: Option<usize>,
+    pub hovered_db: Option<HoveredDbControl>,
+    pub hovered_perf: Option<HoveredPerfControl>,
+    pub agent_profiles_input: crate::ui::TextInput,
+    pub editing_shortcut: Option<crate::config::ShortcutAction>,
+    pub hovered_shortcut_idx: Option<usize>,
+    pub hovered_shortcuts_reset: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoveredDbControl {
+    ProdReadOnly,
+    WriteWindowMinus,
+    WriteWindowPlus,
+    WriteWindowBox,
+    WrittenConfirmation,
+    WarnNoWhere,
+    EnforceTransaction,
+    BackupOriginalRows,
+    WarnUnsafePem,
+    CertWarnDaysMinus,
+    CertWarnDaysPlus,
+    CertWarnDaysBox,
+    CertsFolder,
+    PageSizeMinus,
+    PageSizePlus,
+    PageSizeBox,
+    QueryTimeoutMinus,
+    QueryTimeoutPlus,
+    QueryTimeoutBox,
+    QueryRowLimitMinus,
+    QueryRowLimitPlus,
+    QueryRowLimitBox,
+    SlowQueryThresholdMinus,
+    SlowQueryThresholdPlus,
+    SlowQueryThresholdBox,
+    Autocomplete,
+    SavePasswords,
+    SaveQueryHistory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoveredPerfControl {
+    ShowCpu,
+    ShowRam,
+    ShowGpu,
+    ShowDisk,
+    ShowNet,
+    SampleIntervalMinus,
+    SampleIntervalPlus,
+    SampleIntervalBox,
+    EnableAlerts,
+    CpuThresholdMinus,
+    CpuThresholdPlus,
+    CpuThresholdBox,
+    RamThresholdMinus,
+    RamThresholdPlus,
+    RamThresholdBox,
+    DiskThresholdMinus,
+    DiskThresholdPlus,
+    DiskThresholdBox,
+    AgentProfilesBox,
+    AgentProfilesReset,
 }
 
 impl SettingsPageState {
@@ -201,7 +268,11 @@ impl SettingsPageState {
             || self.hovered_reset_defaults
             || self.hovered_search_box
             || self.hovered_scrollbar
-            || self.hovered_theme_slot.is_some();
+            || self.hovered_theme_slot.is_some()
+            || self.hovered_db.is_some()
+            || self.hovered_perf.is_some()
+            || self.hovered_shortcut_idx.is_some()
+            || self.hovered_shortcuts_reset;
         if changed {
             self.hovered_section = None;
             self.hovered_theme = None;
@@ -245,6 +316,10 @@ impl SettingsPageState {
             self.hovered_search_box = false;
             self.hovered_scrollbar = false;
             self.hovered_theme_slot = None;
+            self.hovered_db = None;
+            self.hovered_perf = None;
+            self.hovered_shortcut_idx = None;
+            self.hovered_shortcuts_reset = false;
         }
         changed
     }
@@ -301,10 +376,16 @@ impl Default for SettingsPageState {
             setting_input_buffer: String::new(),
             theme_search_input: crate::ui::TextInput::default(),
             theme_filter: String::new(),
-            filtered_themes: crate::theme::Theme::names().collect(),
+            filtered_themes: crate::theme::Theme::search_all(""),
             theme_scroll: 0,
             theme_slot_light: false,
             hovered_theme_slot: None,
+            hovered_db: None,
+            hovered_perf: None,
+            agent_profiles_input: crate::ui::TextInput::default(),
+            editing_shortcut: None,
+            hovered_shortcut_idx: None,
+            hovered_shortcuts_reset: false,
         }
     }
 }

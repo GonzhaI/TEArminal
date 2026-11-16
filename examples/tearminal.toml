@@ -28,3 +28,33 @@ osc52 = true                     # permite que los programas de la terminal escr
 ligatures = true                 # activa ligaduras de programación tipográficas (->, !=, ==, =>...)
 auto_check_updates = true        # comprueba automáticamente si hay nuevas versiones al iniciar
 ai_limits = true                 # cuotas de Claude: usa la sesión de ~/.claude/.credentials.json (solo lectura) para pedirlas a api.anthropic.com; false = no se lee ni se llama
+
+[database]
+prod_read_only = true                     # abre conexiones PROD en solo lectura por defecto (la escritura caduca)
+write_window_minutes = 10                 # duración de la escritura habilitada en PROD (en minutos)
+written_confirmation = true               # exige teclear el nombre de la conexión antes de aplicar en PROD
+warn_no_where = true                      # avisa antes de ejecutar DELETE o UPDATE sin cláusula WHERE
+enforce_transaction = true                # ejecuta cambios en una transacción explícita (rollback si algo falla)
+backup_original_rows = true               # guarda copia local de las filas originales antes de aplicar cambios
+warn_unsafe_pem_permissions = true        # comprueba permisos Windows y avisa si una clave .pem es legible por otros
+cert_warn_days = 30                       # días de antelación para avisar de certificados TLS por vencer
+certs_folder = "~/.tearminal/certs"       # carpeta de certificados .pem (solo ruta, nunca se copia el contenido)
+page_size = 50                            # filas por página en la vista de datos de tablas
+query_timeout_seconds = 30                # tiempo máximo de espera para una consulta SQL antes de cancelarla
+query_row_limit = 10000                   # límite máximo de filas devueltas para prevenir sobrecarga de memoria
+slow_query_threshold_ms = 300             # umbral en milisegundos para marcar una consulta como lenta
+autocomplete = true                       # autocompletado de tablas y columnas basado en el esquema leído
+save_passwords_in_credential_manager = true # credenciales en el Administrador de Windows (nunca en archivos de texto)
+save_query_history = true                 # guarda historial de consultas (solo texto SQL y duración, sin valores)
+
+[performance]
+show_cpu = true                           # medidor de uso total de CPU en la barra de estado
+show_ram = true                           # medidor de memoria RAM ocupada en la barra de estado
+show_gpu = true                           # medidor de GPU 3D en la barra de estado
+show_disk = true                          # medidor de espacio en disco usado en la barra de estado
+show_net = false                          # medidor de actividad de red en la barra de estado
+sample_interval_ms = 2000                 # intervalo de muestreo del monitor del sistema en milisegundos (2 s)
+enable_alerts = false                     # alertas visuales cuando un recurso supera el umbral crítico
+cpu_alert_threshold = 90                  # umbral porcentual para alerta de CPU (0-100)
+ram_alert_threshold = 90                  # umbral porcentual para alerta de RAM (0-100)
+disk_alert_threshold = 90                 # umbral porcentual para alerta de Disco (0-100)

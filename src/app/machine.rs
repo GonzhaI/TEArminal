@@ -77,7 +77,7 @@ pub(crate) fn parse_ssh_config(text: &str) -> Vec<SshHost> {
 }
 
 /// Hosts del `~/.ssh/config` del usuario (vacío si no existe o no se puede leer).
-fn read_user_ssh_hosts() -> Vec<SshHost> {
+pub(crate) fn read_user_ssh_hosts() -> Vec<SshHost> {
     let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) else {
         return Vec::new();
     };
@@ -148,6 +148,7 @@ impl TearminalApp {
         {
             pane.pty.write_input(format!("ssh {dest}\r").as_bytes());
         }
+        self.sync_known_remote_sources();
         self.machine_modal = None;
         self.save_session();
         self.request_redraw();

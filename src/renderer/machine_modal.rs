@@ -23,20 +23,39 @@ impl TerminalRenderer {
         let pad = MachineModalRects::PAD;
         let right = x + w - pad;
 
-        canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CARD, theme.background);
+        // 1. Tarjeta con fondo mantle y contorno fuerte
+        canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CARD, theme.mantle());
         canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CARD, theme.chrome_line_strong());
 
-        // Título, atajo de cierre y descripción
-        let title_base = self.centered_baseline(y + 32);
-        self.draw_ui_text(
+        // 2. Franja superior tintada (estilo común de diálogo F4)
+        let header_h = 40;
+        let blue = theme.accent_color();
+        let tint_bg = theme.mix(theme.mantle(), blue, 0.16);
+        let clip: Clip = (0, 0, width, height);
+        canvas.fill_rect(clip, x, y, w, header_h, tint_bg);
+        canvas.fill_rect(clip, x, y + header_h - 1, w, 1, theme.chrome_line());
+
+        // Ícono, título y botón de cierre en la franja
+        let header_cy = y + header_h / 2;
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Server,
+            x + 18,
+            header_cy,
+            15.0,
+            blue,
+        );
+        let title_base = self.centered_baseline(header_cy);
+        self.draw_ui_text_tracked(
             canvas,
             "Añadir una máquina",
-            x + pad,
+            x + 38,
             title_base,
             right - 40,
             theme.foreground,
             tokens::TITLE,
             true,
+            tokens::TRACKING,
         );
         let esc_w = self.measure_ui_text("Esc", tokens::MICRO, false);
         self.draw_ui_text(
@@ -45,32 +64,35 @@ impl TerminalRenderer {
             right - esc_w,
             title_base,
             right,
-            theme.text_muted(),
+            theme.text_secondary(),
             tokens::MICRO,
             false,
         );
+
+        // 3. Descripción
         self.draw_ui_text(
             canvas,
             "Un VPS, un Mac mini o un equipo en casa, por ssh.",
             x + pad,
-            self.centered_baseline(y + 62),
+            self.centered_baseline(y + 60),
             right,
             theme.text_secondary(),
-            tokens::DETAIL,
+            tokens::BODY,
             false,
         );
 
-        // Hosts de la configuración de ssh
+        // 4. Hosts de la configuración de ssh
         if !rects.rows.is_empty() {
-            self.draw_ui_text(
+            self.draw_ui_text_tracked(
                 canvas,
                 "Desde tu ssh config",
                 x + pad,
                 self.centered_baseline(rects.list_label_y + 8),
                 right,
                 theme.text_muted(),
-                tokens::DETAIL,
-                false,
+                tokens::MICRO,
+                true,
+                tokens::TRACKING,
             );
         }
         for (i, ((row, btn), (alias, target))) in rects
@@ -81,16 +103,22 @@ impl TerminalRenderer {
             .enumerate()
         {
             let is_hovered = hovered == Some(MachineHover::Row(i)) || selected == Some(i);
-            if is_hovered {
-                canvas.rounded_fill(
-                    row.0,
-                    row.1,
-                    row.2,
-                    row.3,
-                    tokens::RADIUS_ROW,
-                    theme.surface_hover(),
-                );
-            }
+            // Tarjeta de host
+            let row_bg = if is_hovered {
+                theme.surface_hover()
+            } else {
+                theme.chrome_bg()
+            };
+            canvas.fill_rect(clip, row.0, row.1, row.2, row.3, row_bg);
+            canvas.rounded_stroke(
+                row.0,
+                row.1,
+                row.2,
+                row.3,
+                tokens::RADIUS_ROW,
+                theme.chrome_line(),
+            );
+
             let cy = row.1 + row.3 / 2;
             let base = self.centered_baseline(cy);
             self.draw_lucide_icon(
@@ -111,7 +139,7 @@ impl TerminalRenderer {
                 tokens::BODY,
                 true,
             );
-            self.draw_ui_text(
+            self.draw_mono_text(
                 canvas,
                 target,
                 alias_end + 10,
@@ -124,31 +152,32 @@ impl TerminalRenderer {
             self.draw_machine_button(canvas, *btn, "Añadir", is_hovered, true, theme);
         }
 
-        // Campo `usuario@host`
-        self.draw_ui_text(
+        // 5. Campo `usuario@host`
+        self.draw_ui_text_tracked(
             canvas,
             "O escribe cómo llega ssh",
             x + pad,
             self.centered_baseline(rects.typed_label_y + 10),
             right,
             theme.text_muted(),
-            tokens::DETAIL,
-            false,
+            tokens::MICRO,
+            true,
+            tokens::TRACKING,
         );
         let (ix, iy, iw, ih) = rects.input;
-        canvas.rounded_fill(
+        canvas.fill_rect(clip, ix, iy, iw, ih, theme.chrome_bg());
+        canvas.rounded_stroke(
             ix,
             iy,
             iw,
             ih,
-            tokens::RADIUS_ROW,
-            theme.mix(theme.background, theme.foreground, 0.04),
+            tokens::RADIUS_CONTROL,
+            theme.chrome_line_strong(),
         );
-        canvas.rounded_stroke(ix, iy, iw, ih, tokens::RADIUS_ROW, theme.accent_color());
         self.render_text_input_content(
             canvas,
             input,
-            ix + 14,
+            ix + 12,
             self.centered_baseline(iy + ih / 2),
             ix + iw - 10,
             iy,

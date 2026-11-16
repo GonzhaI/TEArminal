@@ -271,6 +271,79 @@ pub(crate) struct FileViewerState {
     pub hovered_search_prev: bool,
     pub hovered_search_next: bool,
     pub hovered_search_close: bool,
+    pub hovered_prev_change: bool,
+    pub hovered_next_change: bool,
+    pub hovered_stage_file: bool,
+    pub hovered_reload_disk: bool,
+    pub hovered_keep_mine: bool,
+    pub is_staged: bool,
+}
+
+impl FileViewerState {
+    /// Comprueba si el archivo en disco cambió externamente respecto al momento de apertura/guardado
+    pub(crate) fn has_external_disk_change(&self) -> bool {
+        if self.remote_destination.is_some() {
+            return false;
+        }
+        let Some(disk_mtime) = self.disk_mtime else {
+            return false;
+        };
+        std::fs::metadata(&self.path)
+            .and_then(|m| m.modified())
+            .map(|now| now != disk_mtime)
+            .unwrap_or(false)
+    }
+
+    /// Salta al cambio siguiente en el diff
+    pub(crate) fn jump_to_next_change(&mut self) {
+        let Some(base) = self.git_base.as_deref() else {
+            return;
+        };
+        let hunks = crate::app::viewer_diff::diff_hunks(base, &self.lines);
+        if hunks.is_empty() {
+            return;
+        }
+        if let Some(h) = hunks.iter().find(|h| h.c > self.cursor_line) {
+            self.cursor_line = h.c;
+            self.cursor_col = 0;
+            self.ensure_cursor_visible(25);
+        } else if let Some(first) = hunks.first() {
+            self.cursor_line = first.c;
+            self.cursor_col = 0;
+            self.ensure_cursor_visible(25);
+        }
+    }
+
+    /// Salta al cambio anterior en el diff
+    pub(crate) fn jump_to_prev_change(&mut self) {
+        let Some(base) = self.git_base.as_deref() else {
+            return;
+        };
+        let hunks = crate::app::viewer_diff::diff_hunks(base, &self.lines);
+        if hunks.is_empty() {
+            return;
+        }
+        if let Some(h) = hunks.iter().rev().find(|h| h.c < self.cursor_line) {
+            self.cursor_line = h.c;
+            self.cursor_col = 0;
+            self.ensure_cursor_visible(25);
+        } else if let Some(last) = hunks.last() {
+            self.cursor_line = last.c;
+            self.cursor_col = 0;
+            self.ensure_cursor_visible(25);
+        }
+    }
+
+    /// Devuelve `(añadidos, eliminados)` calculados a partir de los hunks de diff contra HEAD
+    pub(crate) fn diff_stats(&self) -> (usize, usize) {
+        let Some(base) = self.git_base.as_deref() else {
+            return (0, 0);
+        };
+        let hunks = crate::app::viewer_diff::diff_hunks(base, &self.lines);
+        let add = hunks.iter().map(|h| h.add).sum();
+        let del = hunks.iter().map(|h| h.del).sum();
+        (add, del)
+    }
 }
 
 /// Texto de un archivo tal como lo ve el visor, más lo necesario para escribirlo igual que se leyó

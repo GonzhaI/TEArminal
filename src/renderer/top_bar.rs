@@ -36,59 +36,8 @@ impl TerminalRenderer {
         self.draw_lucide_icon(canvas, icon, x + w / 2, y + h / 2, icon_size, fg);
     }
 
-    /// Píldora de la barra superior: icono y etiqueta; la activa lleva relleno, el hover un tono más suave.
-    fn draw_top_pill(
-        &mut self,
-        canvas: &mut Canvas,
-        rect: Rect,
-        icon: crate::ui::LucideIcon,
-        label: &str,
-        active: bool,
-        hovered: bool,
-        theme: &Theme,
-    ) {
-        let (x, y, w, h) = rect;
-        if w == 0 || h == 0 {
-            return;
-        }
-        if active {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_bg());
-        } else if hovered {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_hover());
-        }
-        let fg = if active || hovered {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        self.draw_lucide_icon(canvas, icon, x + 15, y + h / 2, 14.0, fg);
-        let baseline = self.centered_baseline(y + h / 2);
-        self.draw_ui_text(
-            canvas,
-            label,
-            x + 29,
-            baseline,
-            x + w - 6,
-            fg,
-            tokens::BODY,
-            active,
-        );
-    }
-
-    /// Chip de pestaña dentro de su `tab_rect`, recortado 4 px por arriba y por abajo: la activa lleva el
-    /// color de la tarjeta de contenido (con el que se funde y sobre el que el texto ya tiene el contraste
-    /// del propio tema) y contorno; una inactiva solo relleno al pasar el ratón.
-    fn draw_tab_chip(canvas: &mut Canvas, r: Rect, active: bool, hovered: bool, theme: &Theme) {
-        let (x, y, w, h) = (r.0, r.1 + 4, r.2, r.3.saturating_sub(8));
-        if active {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.background);
-            canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_CONTROL, theme.card_outline());
-        } else if hovered {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_CONTROL, theme.surface_hover());
-        }
-    }
-
-    /// Renderiza la barra horizontal de pestañas: franja plana, pestañas y regla de acento.
+    /// Renderiza la barra horizontal superior (DISENO §4):
+    /// Nombre «TEARMINAL» sobre riel + panel contextual, pestañas, botón `+`, buscador 290×26 y controles de ventana.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_top_tab_bar(
         &mut self,
@@ -97,14 +46,11 @@ impl TerminalRenderer {
         hovered_tab: Option<usize>,
         hovered_close: Option<usize>,
         hovered_new_tab: bool,
-        hovered_files: bool,
-        hovered_changes: bool,
+        hovered_search: bool,
         hovered_win_min: bool,
         hovered_win_max: bool,
         hovered_win_close: bool,
         is_maximized: bool,
-        explorer_visible: bool,
-        changes_active: bool,
         left_x: usize,
         theme: &Theme,
     ) {
@@ -116,60 +62,47 @@ impl TerminalRenderer {
         let rects = TopTabBarRects::compute(width, left_x, tabs.len());
         let bar_h = rects.bar_h;
 
-        // 1. Franja superior: a la derecha del panel de Spaces, que ocupa todo el alto.
-        Self::draw_rect(
-            canvas,
-            left_x,
-            0,
-            width.saturating_sub(left_x),
-            bar_h,
-            theme.bar_bg(),
-        );
+        // 1. Fondo completo de la barra superior y línea inferior divisoria
+        Self::draw_rect(canvas, 0, 0, width, bar_h, theme.bar_bg());
+        Self::draw_rect(canvas, 0, bar_h - 1, width, 1, theme.chrome_line());
 
-        // 2. Chip activo animado (si hay animación activa) o estático por pestaña
-        let anim_active_drawn = if let Some((ix, iw)) = self.tab_indicator_visual {
-            let active_y = 4;
-            let active_h = bar_h.saturating_sub(8);
-            let rx = ix.round() as usize;
-            let rw = iw.round() as usize;
-            canvas.rounded_fill(
-                rx,
-                active_y,
-                rw,
-                active_h,
-                tokens::RADIUS_CONTROL,
-                theme.background,
+        // 2. Título de marca «TEARMINAL» (DISENO §4)
+        if left_x > 0 {
+            Self::draw_rect(canvas, left_x - 1, 0, 1, bar_h, theme.chrome_line());
+            let brand_base = self.centered_baseline(bar_h / 2);
+            self.draw_ui_text(
+                canvas,
+                "TEARMINAL",
+                16,
+                brand_base,
+                left_x.saturating_sub(12),
+                theme.foreground,
+                tokens::TITLE,
+                true,
             );
-            canvas.rounded_stroke(
-                rx,
-                active_y,
-                rw,
-                active_h,
-                tokens::RADIUS_CONTROL,
-                theme.card_outline(),
-            );
-            true
-        } else {
-            false
-        };
+        }
 
         // 3. Pestañas
+        let tabs_limit = if rects.search_btn.2 > 0 {
+            rects.search_btn.0
+        } else {
+            rects.win_min_btn.0
+        };
         for (pos, tab) in tabs.iter().enumerate() {
             let idx = tab.index;
             let r = rects.tab_rect(pos);
-            if r.0 + r.2 > rects.plus_btn.0 {
+            if r.0 >= tabs_limit {
                 break;
             }
             let is_hovered = hovered_tab == Some(idx);
 
-            if anim_active_drawn {
-                if !tab.is_active && is_hovered {
-                    Self::draw_tab_chip(canvas, r, false, true, theme);
-                }
-            } else {
-                Self::draw_tab_chip(canvas, r, tab.is_active, is_hovered, theme);
+            if tab.is_active {
+                // Pestaña activa: fondo base y barra superior de 2px blue (DISENO §3.3)
+                Self::draw_rect(canvas, r.0, 0, r.2, bar_h - 1, theme.background);
+                Self::draw_rect(canvas, r.0, 0, r.2, 2, theme.accent_color());
+            } else if is_hovered {
+                Self::draw_rect(canvas, r.0, 0, r.2, bar_h - 1, theme.surface_hover());
             }
-
             let show_close = rects.tab_w >= 76 && (tab.is_active || is_hovered);
 
             let text_color = if tab.is_active {
@@ -179,26 +112,42 @@ impl TerminalRenderer {
             } else {
                 theme.text_muted()
             };
-            let mut title_x = r.0 + 14;
+
+            let title_max = r.0 + r.2.saturating_sub(if show_close { 32 } else { 12 });
+            let mut title_x = if r.2 < 36 {
+                r.0 + (r.2.saturating_sub(8)) / 2
+            } else {
+                r.0 + 12
+            };
+
+            // Punto de estado o icono de archivo
             if let Some(path) = &tab.file_path {
-                self.draw_file_icon(
-                    canvas,
-                    path,
-                    title_x + 6,
-                    r.1 + r.3 / 2,
-                    tokens::BODY,
-                    theme,
-                );
-                title_x += 20;
+                if title_x + 12 < r.0 + r.2 {
+                    self.draw_file_icon(
+                        canvas,
+                        path,
+                        title_x + 6,
+                        r.1 + r.3 / 2,
+                        tokens::BODY,
+                        theme,
+                    );
+                    title_x += 20;
+                }
+            } else if title_x + 8 < r.0 + r.2 {
+                let dot_color = if tab.is_active {
+                    theme.accent_color()
+                } else {
+                    theme.text_muted()
+                };
+                let dot_y = (bar_h.saturating_sub(8)) / 2;
+                Self::draw_rect(canvas, title_x, dot_y, 8, 8, dot_color);
+                title_x += 16;
             }
-            let title_max = r.0 + r.2 - if show_close { 34 } else { 14 };
-            // El prefijo «ssh: » y el usuario son del título de la sesión, no de la pestaña: la
-            // barra muestra solo el destino («staging-01»), como en el bosquejo.
             let title = match tab.title.strip_prefix("ssh: ") {
                 Some(target) => target.rsplit('@').next().unwrap_or(target),
                 None => tab.title.as_str(),
             };
-            let tab_base = self.centered_baseline(r.1 + (r.3 / 2));
+            let tab_base = self.centered_baseline(bar_h / 2);
             let title_end = self.draw_ui_text(
                 canvas,
                 title,
@@ -206,9 +155,10 @@ impl TerminalRenderer {
                 tab_base,
                 title_max,
                 text_color,
-                tokens::TITLE,
+                tokens::BODY,
                 tab.is_active,
             );
+
             if tab.is_preview {
                 Self::draw_rect(
                     canvas,
@@ -224,7 +174,7 @@ impl TerminalRenderer {
                 self.draw_mono_text(
                     canvas,
                     &badge,
-                    title_end + 7,
+                    title_end + 6,
                     tab_base,
                     title_max,
                     theme.text_muted(),
@@ -237,12 +187,12 @@ impl TerminalRenderer {
                 let close_r = rects.close_btn_rect(pos);
                 let is_close_hovered = hovered_close == Some(idx);
                 if is_close_hovered {
-                    canvas.rounded_fill(
+                    Self::draw_rect(
+                        canvas,
                         close_r.0,
                         close_r.1,
                         close_r.2,
                         close_r.3,
-                        tokens::RADIUS_ROW,
                         theme.surface_hover(),
                     );
                 }
@@ -259,9 +209,12 @@ impl TerminalRenderer {
                     },
                 );
             }
+
+            // Línea separadora derecha de cada pestaña
+            Self::draw_rect(canvas, r.0 + r.2 - 1, 0, 1, bar_h, theme.chrome_line());
         }
 
-        // 4. Nueva pestaña
+        // 4. Nueva pestaña (+)
         self.draw_chrome_action(
             canvas,
             rects.plus_btn,
@@ -272,25 +225,51 @@ impl TerminalRenderer {
             theme,
         );
 
-        // 5. Píldoras de la tarjeta derecha: Files y Changes (la activa, con relleno).
-        self.draw_top_pill(
-            canvas,
-            rects.files_btn,
-            crate::ui::LucideIcon::File,
-            "Archivos",
-            explorer_visible && !changes_active,
-            hovered_files,
-            theme,
-        );
-        self.draw_top_pill(
-            canvas,
-            rects.changes_btn,
-            crate::ui::LucideIcon::GitBranch,
-            "Cambios",
-            explorer_visible && changes_active,
-            hovered_changes,
-            theme,
-        );
+        // 5. Buscador de 290×26 px («Buscar o ejecutar… Ctrl+K»)
+        let (sx, sy, sw, sh) = rects.search_btn;
+        if sw > 0 {
+            let search_border = if hovered_search {
+                theme.accent_color()
+            } else {
+                theme.chrome_line()
+            };
+            Self::draw_rect(canvas, sx, sy, sw, sh, theme.background);
+            Self::draw_rect(canvas, sx, sy, sw, 1, search_border);
+            Self::draw_rect(canvas, sx, sy + sh - 1, sw, 1, search_border);
+            Self::draw_rect(canvas, sx, sy, 1, sh, search_border);
+            Self::draw_rect(canvas, sx + sw - 1, sy, 1, sh, search_border);
+
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::Search,
+                sx + 15,
+                sy + sh / 2,
+                13.0,
+                theme.text_muted(),
+            );
+            let search_base = self.centered_baseline(sy + sh / 2);
+            self.draw_ui_text(
+                canvas,
+                "Buscar o ejecutar…",
+                sx + 28,
+                search_base,
+                sx + sw - 60,
+                theme.text_muted(),
+                tokens::BODY,
+                false,
+            );
+            let mono_w = self.measure_mono_text("Ctrl+K", tokens::MICRO, false);
+            self.draw_mono_text(
+                canvas,
+                "Ctrl+K",
+                sx + sw - 10 - mono_w,
+                search_base,
+                sx + sw - 6,
+                theme.text_muted(),
+                tokens::MICRO,
+                false,
+            );
+        }
 
         // 6. Controles de ventana
         self.draw_window_controls(

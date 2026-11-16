@@ -325,10 +325,10 @@ mod tests {
     #[test]
     fn real_file_can_be_locked_down_and_a_shared_one_is_detected() {
         let path = temp_key("acl");
-        let grant = Command::new("icacls.exe")
-            .arg(&path)
-            .args(["/grant", "*S-1-1-0:(R)"])
-            .output();
+        let mut cmd = Command::new("icacls.exe");
+        cmd.arg(&path).args(["/grant", "*S-1-1-0:(R)"]);
+        crate::app::platform::hide_console(&mut cmd);
+        let grant = cmd.output();
         let Ok(grant) = grant else { return };
         if !grant.status.success() {
             return; // sin icacls o sin permiso para cambiar la ACL: no hay nada que comprobar

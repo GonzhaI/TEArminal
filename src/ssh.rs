@@ -706,6 +706,7 @@ mod tests {
     #[test]
     fn test_run_command_caps_stdout_and_pipes_stdin() {
         let mut cmd = Command::new("powershell.exe");
+        crate::app::platform::hide_console(&mut cmd);
         cmd.args([
             "-NoProfile",
             "-Command",
@@ -717,6 +718,7 @@ mod tests {
         assert_eq!(out.stdout.len(), 1001);
 
         let mut cmd = Command::new("powershell.exe");
+        crate::app::platform::hide_console(&mut cmd);
         cmd.args([
             "-NoProfile",
             "-Command",

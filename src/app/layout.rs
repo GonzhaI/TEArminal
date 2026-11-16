@@ -76,6 +76,12 @@ impl std::ops::AddAssign<usize> for TabId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GridPreset {
+    TwoByTwo,
+    OnePlusTwo,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum SplitDirection {
     #[default]
@@ -181,6 +187,56 @@ pub(crate) struct PaneRect {
     pub(crate) has_buttons: bool,
 }
 
+/// Estado de conexión perdida y reconexión periódica de un panel SSH (pantalla 03 / Ssh.dc.html).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SshReconnectState {
+    pub(crate) host: String,
+    pub(crate) destination: String,
+    pub(crate) attempt: u32,
+    pub(crate) max_attempts: u32,
+    pub(crate) countdown_seconds: u32,
+    pub(crate) last_tick: Instant,
+    pub(crate) remote_dir: Option<String>,
+    pub(crate) is_reconnecting: bool,
+}
+
+impl SshReconnectState {
+    pub(crate) fn new(destination: String, remote_dir: Option<String>) -> Self {
+        let host = destination
+            .rsplit('@')
+            .next()
+            .unwrap_or(&destination)
+            .to_string();
+        Self {
+            host,
+            destination,
+            attempt: 1,
+            max_attempts: 5,
+            countdown_seconds: 5,
+            last_tick: Instant::now(),
+            remote_dir,
+            is_reconnecting: false,
+        }
+    }
+
+    /// Subtítulo explicativo según el estado de la reconexión (Ssh.dc.html).
+    pub(crate) fn subtitle(&self) -> String {
+        if self.is_reconnecting {
+            format!("Reconectando con {}…", self.host)
+        } else if self.attempt > self.max_attempts {
+            format!(
+                "No se pudo reconectar tras {} intentos. La sesión y el directorio se recuperan al reconectar.",
+                self.max_attempts
+            )
+        } else {
+            format!(
+                "Reintento {} de {} en {} s. La sesión y el directorio se recuperan al reconectar.",
+                self.attempt, self.max_attempts, self.countdown_seconds
+            )
+        }
+    }
+}
+
 pub(crate) struct TerminalPane {
     pub(crate) id: PaneId,
     pub(crate) pty: PtyManager,
@@ -193,6 +249,8 @@ pub(crate) struct TerminalPane {
     pub(crate) last_cursor_time: Instant,
     pub(crate) scroll_visual_offset: f32,
     pub(crate) last_scroll_time: Instant,
+    /// Estado de reconexión si la conexión SSH cayó inesperadamente (Ssh.dc.html)
+    pub(crate) ssh_reconnect: Option<SshReconnectState>,
 }
 
 impl TerminalPane {
@@ -216,6 +274,7 @@ impl TerminalPane {
             last_cursor_time: now,
             scroll_visual_offset: 0.0,
             last_scroll_time: now,
+            ssh_reconnect: None,
         }
     }
 
@@ -393,6 +452,14 @@ impl TerminalPane {
         self.cached_git_branch.clone()
     }
 
+    /// Fija el estado de reconexión de un panel cuya conexión SSH cayó (Ssh.dc.html).
+    #[allow(dead_code)]
+    pub(crate) fn set_ssh_disconnected(&mut self, destination: &str, remote_dir: Option<String>) {
+        let mut rec = SshReconnectState::new(destination.to_string(), remote_dir);
+        rec.countdown_seconds = 4;
+        self.ssh_reconnect = Some(rec);
+    }
+
     /// El panel corre un agente de IA (✧): lo avisa el wrapper del shell o el título de la ventana.
     pub(crate) fn is_agent_pane(&self) -> bool {
         self.terminal.agent_running || self.terminal.active_ai_agent() != AiAgentStatus::None
@@ -401,6 +468,9 @@ impl TerminalPane {
     /// Título de la cabecera del panel: el título que el shell puso a su ventana (el del agente) y,
     /// si no hay, el de la pestaña.
     pub(crate) fn header_title(&self, tab_title: &str) -> String {
+        if let Some(ref rec) = self.ssh_reconnect {
+            return rec.host.clone();
+        }
         let raw = self
             .terminal
             .window_title
@@ -412,6 +482,9 @@ impl TerminalPane {
 
     /// Subtítulo atenuado de la cabecera: destino SSH, carpeta del proyecto o el comando en marcha.
     pub(crate) fn header_subtitle(&self) -> Option<String> {
+        if self.ssh_reconnect.is_some() {
+            return None;
+        }
         if let Some(ssh) = self.terminal.ssh_session.as_ref().filter(|s| s.is_active) {
             return Some(ssh.destination.clone());
         }
@@ -485,7 +558,10 @@ pub(crate) struct TerminalTab {
     pub(crate) layout: PaneNode,
     pub(crate) has_unread: bool,
     pub(crate) is_settings: bool,
+    pub(crate) is_system_monitor: bool,
     pub(crate) file_viewer: Option<FileViewerState>,
+    pub(crate) is_database: bool,
+    pub(crate) db_tab: Option<DbTabState>,
     /// Pestaña de vista previa (un clic en el explorador): la siguiente vista previa la reemplaza hasta que se fije
     pub(crate) is_preview: bool,
     /// Panel maximizado: ocupa todo el área y el resto del reparto queda oculto (solo mientras es el activo)
@@ -506,7 +582,10 @@ impl TerminalTab {
             layout,
             has_unread: false,
             is_settings: false,
+            is_system_monitor: false,
             file_viewer: None,
+            is_database: false,
+            db_tab: None,
             is_preview: false,
             zoomed_pane: None,
             space: SpaceId(0),
@@ -529,7 +608,10 @@ impl TerminalTab {
             layout,
             has_unread: false,
             is_settings: false,
+            is_system_monitor: false,
             file_viewer: None,
+            is_database: false,
+            db_tab: None,
             is_preview: false,
             zoomed_pane: None,
             space: SpaceId(0),
@@ -545,7 +627,48 @@ impl TerminalTab {
             layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: true,
+            is_system_monitor: false,
             file_viewer: None,
+            is_database: false,
+            db_tab: None,
+            is_preview: false,
+            zoomed_pane: None,
+            space: SpaceId(0),
+        }
+    }
+
+    pub(crate) fn new_system_monitor(id: TabId) -> Self {
+        Self {
+            id,
+            title: "Sistema".to_string(),
+            panes: Vec::new(),
+            active_pane_id: PaneId(0),
+            layout: PaneNode::Leaf(PaneId(0)),
+            has_unread: false,
+            is_settings: false,
+            is_system_monitor: true,
+            file_viewer: None,
+            is_database: false,
+            db_tab: None,
+            is_preview: false,
+            zoomed_pane: None,
+            space: SpaceId(0),
+        }
+    }
+
+    pub(crate) fn new_database(id: TabId, config: &crate::config::DatabaseConfig) -> Self {
+        Self {
+            id,
+            title: "Datos".to_string(),
+            panes: Vec::new(),
+            active_pane_id: PaneId(0),
+            layout: PaneNode::Leaf(PaneId(0)),
+            has_unread: false,
+            is_settings: false,
+            is_system_monitor: false,
+            file_viewer: None,
+            is_database: true,
+            db_tab: Some(DbTabState::from_config(config)),
             is_preview: false,
             zoomed_pane: None,
             space: SpaceId(0),
@@ -685,6 +808,12 @@ impl TerminalTab {
             hovered_search_prev: false,
             hovered_search_next: false,
             hovered_search_close: false,
+            hovered_prev_change: false,
+            hovered_next_change: false,
+            hovered_stage_file: false,
+            hovered_reload_disk: false,
+            hovered_keep_mine: false,
+            is_staged: false,
         };
 
         Self {
@@ -695,7 +824,10 @@ impl TerminalTab {
             layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: false,
+            is_system_monitor: false,
             file_viewer: Some(viewer),
+            is_database: false,
+            db_tab: None,
             is_preview: false,
             zoomed_pane: None,
             space: SpaceId(0),
@@ -830,6 +962,12 @@ impl TerminalTab {
             hovered_search_prev: false,
             hovered_search_next: false,
             hovered_search_close: false,
+            hovered_prev_change: false,
+            hovered_next_change: false,
+            hovered_stage_file: false,
+            hovered_reload_disk: false,
+            hovered_keep_mine: false,
+            is_staged: false,
         };
 
         Self {
@@ -840,7 +978,10 @@ impl TerminalTab {
             layout: PaneNode::Leaf(PaneId(0)),
             has_unread: false,
             is_settings: false,
+            is_system_monitor: false,
             file_viewer: Some(viewer),
+            is_database: false,
+            db_tab: None,
             is_preview: false,
             zoomed_pane: None,
             space: SpaceId(0),
@@ -850,6 +991,15 @@ impl TerminalTab {
     pub(crate) fn display_title(&self) -> String {
         if self.is_settings {
             return "Ajustes".to_string();
+        }
+        if self.is_system_monitor {
+            return "Sistema".to_string();
+        }
+        if self.is_database {
+            if let Some(ref db) = self.db_tab {
+                return format!("Datos: {}", db.active_connection_name);
+            }
+            return "Datos".to_string();
         }
         if let Some(ref viewer) = self.file_viewer {
             if viewer.is_dirty {
@@ -1199,6 +1349,84 @@ impl TerminalTab {
         self.active_pane_id = new_pane_id;
         // El panel nuevo debe verse: dividir con uno maximizado restauraría un reparto oculto
         self.zoomed_pane = None;
+    }
+
+    /// Reorganiza los paneles existentes y los extras en un diseño predefinido (`2x2` o `1+2`).
+    pub(crate) fn apply_grid_preset(&mut self, preset: GridPreset, extra_panes: Vec<TerminalPane>) {
+        self.panes.extend(extra_panes);
+        let ids: Vec<PaneId> = self.panes.iter().map(|p| p.id).collect();
+        self.layout = Self::build_grid_tree(&ids, preset);
+        self.zoomed_pane = None;
+    }
+
+    fn build_grid_tree(ids: &[PaneId], preset: GridPreset) -> PaneNode {
+        match preset {
+            GridPreset::TwoByTwo => {
+                if ids.len() >= 4 {
+                    let top = PaneNode::Split {
+                        direction: SplitDirection::Vertical,
+                        ratio: 0.5,
+                        first: Box::new(PaneNode::Leaf(ids[0])),
+                        second: Box::new(PaneNode::Leaf(ids[1])),
+                    };
+                    let bottom = PaneNode::Split {
+                        direction: SplitDirection::Vertical,
+                        ratio: 0.5,
+                        first: Box::new(PaneNode::Leaf(ids[2])),
+                        second: Box::new(PaneNode::Leaf(ids[3])),
+                    };
+                    let mut root = PaneNode::Split {
+                        direction: SplitDirection::Horizontal,
+                        ratio: 0.5,
+                        first: Box::new(top),
+                        second: Box::new(bottom),
+                    };
+                    for &extra in &ids[4..] {
+                        root = PaneNode::Split {
+                            direction: SplitDirection::Vertical,
+                            ratio: 0.75,
+                            first: Box::new(root),
+                            second: Box::new(PaneNode::Leaf(extra)),
+                        };
+                    }
+                    root
+                } else {
+                    Self::build_grid_tree(ids, GridPreset::OnePlusTwo)
+                }
+            }
+            GridPreset::OnePlusTwo => match ids.len() {
+                0 => PaneNode::Leaf(PaneId(0)),
+                1 => PaneNode::Leaf(ids[0]),
+                2 => PaneNode::Split {
+                    direction: SplitDirection::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(PaneNode::Leaf(ids[0])),
+                    second: Box::new(PaneNode::Leaf(ids[1])),
+                },
+                _ => {
+                    let mut right = PaneNode::Split {
+                        direction: SplitDirection::Horizontal,
+                        ratio: 0.5,
+                        first: Box::new(PaneNode::Leaf(ids[1])),
+                        second: Box::new(PaneNode::Leaf(ids[2])),
+                    };
+                    for &extra in &ids[3..] {
+                        right = PaneNode::Split {
+                            direction: SplitDirection::Horizontal,
+                            ratio: 0.5,
+                            first: Box::new(right),
+                            second: Box::new(PaneNode::Leaf(extra)),
+                        };
+                    }
+                    PaneNode::Split {
+                        direction: SplitDirection::Vertical,
+                        ratio: 0.5,
+                        first: Box::new(PaneNode::Leaf(ids[0])),
+                        second: Box::new(right),
+                    }
+                }
+            },
+        }
     }
 
     /// Maximiza `pane_id` (ocupa todo el área) o restaura el reparto si ya estaba maximizado.

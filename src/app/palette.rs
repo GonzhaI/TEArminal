@@ -400,7 +400,7 @@ impl TearminalApp {
         items.push(PaletteItem {
             category: PaletteCategory::Command,
             title: "Dividir panel horizontalmente".to_string(),
-            subtitle: "Ctrl+Shift+D".to_string(),
+            subtitle: "Alt+Shift+D".to_string(),
             icon: LucideIcon::Rows2,
             file: None,
             action: PaletteAction::Execute(MenuAction::SplitHorizontal),
@@ -408,10 +408,26 @@ impl TearminalApp {
         items.push(PaletteItem {
             category: PaletteCategory::Command,
             title: "Dividir panel verticalmente".to_string(),
-            subtitle: "Alt+Shift+D".to_string(),
+            subtitle: "Alt+Shift+V".to_string(),
             icon: LucideIcon::Columns2,
             file: None,
             action: PaletteAction::Execute(MenuAction::SplitVertical),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Diseño en cuadrícula 2×2".to_string(),
+            subtitle: "4 paneles".to_string(),
+            icon: LucideIcon::Columns2,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::ApplyGrid2x2),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Diseño 1 principal + 2 divididos".to_string(),
+            subtitle: "3 paneles".to_string(),
+            icon: LucideIcon::Rows2,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::ApplyGrid1Plus2),
         });
         items.push(PaletteItem {
             category: PaletteCategory::Command,
@@ -439,11 +455,59 @@ impl TearminalApp {
         });
         items.push(PaletteItem {
             category: PaletteCategory::Command,
-            title: "Mostrar u ocultar explorador de archivos".to_string(),
-            subtitle: "Ctrl+B".to_string(),
+            title: "Alternar panel lateral".to_string(),
+            subtitle: "Ctrl+B / Ctrl+Shift+B".to_string(),
+            icon: LucideIcon::PanelLeft,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::ToggleSidebar),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Módulo: Espacios".to_string(),
+            subtitle: String::new(),
+            icon: LucideIcon::SquareTerminal,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::SwitchModule(
+                crate::config::AppModule::Spaces,
+            )),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Módulo: Archivos".to_string(),
+            subtitle: "Ctrl+Shift+E".to_string(),
             icon: LucideIcon::Folder,
             file: None,
-            action: PaletteAction::Execute(MenuAction::ToggleExplorer),
+            action: PaletteAction::Execute(MenuAction::SwitchModule(
+                crate::config::AppModule::Files,
+            )),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Módulo: Control de código (Git)".to_string(),
+            subtitle: "Ctrl+Shift+G".to_string(),
+            icon: LucideIcon::GitBranch,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::SwitchModule(crate::config::AppModule::Git)),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Módulo: Bases de datos".to_string(),
+            subtitle: "Ctrl+Shift+D".to_string(),
+            icon: LucideIcon::Database,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::SwitchModule(
+                crate::config::AppModule::Data,
+            )),
+        });
+        items.push(PaletteItem {
+            category: PaletteCategory::Command,
+            title: "Módulo: Sistema".to_string(),
+            subtitle: "Ctrl+Shift+M".to_string(),
+            icon: LucideIcon::Sliders,
+            file: None,
+            action: PaletteAction::Execute(MenuAction::SwitchModule(
+                crate::config::AppModule::System,
+            )),
         });
         items.push(PaletteItem {
             category: PaletteCategory::Command,
@@ -472,7 +536,7 @@ impl TearminalApp {
         items.push(PaletteItem {
             category: PaletteCategory::Command,
             title: "Alternar vista previa Markdown".to_string(),
-            subtitle: "Ctrl+Shift+M".to_string(),
+            subtitle: String::new(),
             icon: LucideIcon::Eye,
             file: None,
             action: PaletteAction::Execute(MenuAction::ViewerTogglePreview),

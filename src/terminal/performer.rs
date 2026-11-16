@@ -135,8 +135,7 @@ impl<'a> Perform for Performer<'a> {
                         1002 => self.state.mouse_reporting_button_event = true,
                         1003 => self.state.mouse_reporting_any_event = true,
                         1006 => self.state.mouse_reporting_sgr = true,
-                        // Reporte de foco (\x1b[I, \x1b[O)
-                        1004 => self.state.focus_event_reporting = true,
+                        // Modo 1004 (Focus reporting) omitido: Windows ConPTY no reenvía CSI I / CSI O de forma fiable.
                         // Renderizado sincronizado (DEC 2026 anti-flicker)
                         2026 => {
                             self.state.sync_update_mode = true;
@@ -161,8 +160,7 @@ impl<'a> Perform for Performer<'a> {
                         1002 => self.state.mouse_reporting_button_event = false,
                         1003 => self.state.mouse_reporting_any_event = false,
                         1006 => self.state.mouse_reporting_sgr = false,
-                        // Desactivar reporte de foco
-                        1004 => self.state.focus_event_reporting = false,
+                        // Modo 1004 omitido intencionadamente en Windows ConPTY
                         // Finalizar renderizado sincronizado
                         2026 => {
                             self.state.sync_update_mode = false;

@@ -152,6 +152,14 @@ function gemini   { Invoke-TearminalAgent 'gemini' $args }
 function opencode { Invoke-TearminalAgent 'opencode' $args }
 function aider    { Invoke-TearminalAgent 'aider' $args }
 Set-Alias -Name claude-code -Value claude -Option AllScope -ErrorAction SilentlyContinue
+if ($env:TEARMINAL_AGENT_PROFILES) {
+    foreach ($rawAgent in $env:TEARMINAL_AGENT_PROFILES.Split(',')) {
+        $agentName = $rawAgent.Trim().ToLowerInvariant()
+        if ($agentName -match '^[a-z0-9][a-z0-9._-]{0,63}$' -and -not (Test-Path "Function:\$agentName")) {
+            Set-Item -Path "Function:\global:$agentName" -Value ([scriptblock]::Create("Invoke-TearminalAgent '$agentName' `$args"))
+        }
+    }
+}
 
 # ssh: señaliza inicio/fin de sesión a TEArminal (OSC 1337) para clonar paneles y detectar el host remoto
 function ssh {

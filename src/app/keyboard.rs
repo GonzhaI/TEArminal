@@ -1,6 +1,7 @@
 //! Entrada de teclado.
 
 use super::*;
+use crate::ui::text_input::TextInputKeyResult;
 
 impl TearminalApp {
     /// Teclado: atajos de la aplicación y traducción de teclas a bytes para el PTY con soporte de eventos Kitty.
@@ -133,11 +134,11 @@ impl TearminalApp {
             return;
         }
 
-        if self.handle_key_explorer_inputs(&logical_key, physical_key, &text) {
+        if self.handle_key_explorer_inputs(&logical_key, physical_key, &text, ctrl) {
             return;
         }
 
-        if self.handle_key_settings(&logical_key, physical_key, &text, ctrl, shift) {
+        if self.handle_key_settings(&logical_key, physical_key, &text, ctrl, shift, alt) {
             return;
         }
 
@@ -146,6 +147,10 @@ impl TearminalApp {
         }
 
         if self.handle_key_file_viewer(&logical_key, physical_key, &text, ctrl, shift, alt) {
+            return;
+        }
+
+        if self.handle_key_database(&logical_key, physical_key, &text, ctrl, shift, alt) {
             return;
         }
 
@@ -222,6 +227,12 @@ impl TearminalApp {
             return true;
         }
 
+        // Con un diálogo modal abierto (F4), interceptar teclado por completo
+        if self.active_dialog.is_some() {
+            self.handle_dialog_key(logical_key, physical_key, text);
+            return true;
+        }
+
         // Con el modal «Añadir máquina» abierto, interceptar teclado por completo
         if self.machine_modal.is_some() {
             self.handle_machine_key(logical_key, physical_key, text);
@@ -271,7 +282,76 @@ impl TearminalApp {
         logical_key: &Key,
         physical_key: PhysicalKey,
         text: &Option<SmolStr>,
+        ctrl: bool,
     ) -> bool {
+        // Confirmación de descarte de cambios en Git
+        if self.file_explorer.visible
+            && self.file_explorer.changes_only
+            && self.file_explorer.discard_confirm.is_some()
+        {
+            match &logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.file_explorer.discard_confirm = None;
+                }
+                Key::Named(NamedKey::Enter) => {
+                    if let Some(target) = self.file_explorer.discard_confirm.take() {
+                        match target {
+                            crate::explorer::DiscardTarget::All => {
+                                if let Some(repo) = self.file_explorer.git_root.clone() {
+                                    self.spawn_git_bulk_action(
+                                        repo,
+                                        crate::renderer::GitBulkActionKind::DiscardAll,
+                                    );
+                                }
+                            }
+                            crate::explorer::DiscardTarget::File(p, untracked) => {
+                                self.execute_git_action(
+                                    &p,
+                                    crate::renderer::GitActionKind::Discard,
+                                    untracked,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return true;
+        }
+
+        // Formulario de mensaje de commit en Git con el foco
+        if self.file_explorer.visible
+            && self.file_explorer.changes_only
+            && self.file_explorer.git_commit.is_focused
+        {
+            let is_ctrl = ctrl || self.modifiers.control_key();
+            match &logical_key {
+                Key::Named(NamedKey::Escape) => {
+                    self.file_explorer.git_commit.is_focused = false;
+                }
+                Key::Named(NamedKey::Enter) if is_ctrl => {
+                    self.execute_git_commit();
+                }
+                _ => {
+                    let mut input = std::mem::take(&mut self.file_explorer.git_commit.input);
+                    self.handle_text_input_key(
+                        &mut input,
+                        logical_key,
+                        physical_key,
+                        text.as_deref(),
+                    );
+                    self.file_explorer.git_commit.input = input;
+                }
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return true;
+        }
+
         // Nombre en edición en el explorador (nuevo archivo/carpeta o renombrar): la barra absorbe todo el teclado
         if self.file_explorer.visible && self.file_explorer.edit.is_some() {
             match &logical_key {
@@ -366,6 +446,7 @@ impl TearminalApp {
         false
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_key_settings(
         &mut self,
         logical_key: &Key,
@@ -373,6 +454,7 @@ impl TearminalApp {
         text: &Option<SmolStr>,
         ctrl: bool,
         shift: bool,
+        alt: bool,
     ) -> bool {
         // Si estamos en la pestaña de Ajustes, capturar Escape, Ctrl+, o Ctrl+W para cerrarla/alternarla
         let active_is_settings = self
@@ -381,6 +463,16 @@ impl TearminalApp {
             .map(|t| t.is_settings)
             .unwrap_or(false);
         if active_is_settings {
+            if let Some(action) = self.settings_page_state.editing_shortcut {
+                return self.capture_shortcut_rebind(
+                    action,
+                    logical_key,
+                    physical_key,
+                    ctrl,
+                    shift,
+                    alt,
+                );
+            }
             if self.settings_page_state.editing_setting == Some(EditingSettingField::ThemeSearch) {
                 self.edit_theme_search(logical_key, physical_key, text.as_deref());
                 return true;
@@ -388,6 +480,11 @@ impl TearminalApp {
             if self.settings_page_state.editing_setting == Some(EditingSettingField::GeneralSearch)
             {
                 self.edit_general_settings_search(logical_key, physical_key, text.as_deref());
+                return true;
+            }
+            if self.settings_page_state.editing_setting == Some(EditingSettingField::AgentProfiles)
+            {
+                self.edit_agent_profiles(logical_key, physical_key, text.as_deref());
                 return true;
             }
             // Edición inline de campo numérico
@@ -428,7 +525,8 @@ impl TearminalApp {
                                 }
                             }
                             EditingSettingField::ThemeSearch
-                            | EditingSettingField::GeneralSearch => {}
+                            | EditingSettingField::GeneralSearch
+                            | EditingSettingField::AgentProfiles => {}
                             EditingSettingField::WindowOpacity => {
                                 if let Ok(mut val) = input.parse::<f32>() {
                                     if val > 1.0 {
@@ -483,8 +581,17 @@ impl TearminalApp {
 
             // Arriba / abajo: sección anterior / siguiente de la navegación lateral
             if let Key::Named(arrow @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) = &logical_key {
-                use crate::renderer::SettingsSection::{About, Appearance, Shortcuts, Terminal};
-                let order = [Appearance, Terminal, Shortcuts, About];
+                use crate::renderer::SettingsSection::{
+                    About, Appearance, Database, Performance, Shortcuts, Terminal,
+                };
+                let order = [
+                    Appearance,
+                    Terminal,
+                    Database,
+                    Performance,
+                    Shortcuts,
+                    About,
+                ];
                 let pos = order
                     .iter()
                     .position(|s| *s == self.settings_page_state.section)
@@ -501,13 +608,29 @@ impl TearminalApp {
             }
 
             if matches!(&logical_key, Key::Named(NamedKey::Escape))
-                || (ctrl && !shift && key_is_char(logical_key, physical_key, ','))
+                || shortcut_matches(
+                    &self.config.shortcuts,
+                    crate::config::ShortcutAction::Settings,
+                    logical_key,
+                    physical_key,
+                    ctrl,
+                    shift,
+                    alt,
+                )
             {
                 crate::logger::log("-> Cerrando Ajustes");
                 self.close_settings();
                 return true;
             }
-            if ctrl && !shift && key_is_char(logical_key, physical_key, 'f') {
+            if shortcut_matches(
+                &self.config.shortcuts,
+                crate::config::ShortcutAction::Find,
+                logical_key,
+                physical_key,
+                ctrl,
+                shift,
+                alt,
+            ) {
                 self.settings_page_state.editing_setting = Some(EditingSettingField::GeneralSearch);
                 self.cursor_on = true;
                 self.cursor_timer = Instant::now();
@@ -516,8 +639,16 @@ impl TearminalApp {
                 }
                 return true;
             }
-            if ctrl && !shift && key_is_char(logical_key, physical_key, 'w') {
-                crate::logger::log("-> Cerrando pestaña de Ajustes con Ctrl+W");
+            if shortcut_matches(
+                &self.config.shortcuts,
+                crate::config::ShortcutAction::CloseTab,
+                logical_key,
+                physical_key,
+                ctrl,
+                shift,
+                alt,
+            ) {
+                crate::logger::log("-> Cerrando pestaña de Ajustes");
                 self.close_tab(self.active_tab_index);
                 return true;
             }
@@ -541,42 +672,73 @@ impl TearminalApp {
             .map(|t| t.is_settings)
             .unwrap_or(false);
 
-        // Pantalla completa (F11 o Alt + Enter, estándar Windows)
+        // Pantalla completa (configurable, default F11 o Alt + Enter)
         let is_enter = matches!(
             physical_key,
             PhysicalKey::Code(KeyCode::Enter | KeyCode::NumpadEnter)
         ) || matches!(&logical_key, Key::Named(NamedKey::Enter));
-        if matches!(&logical_key, Key::Named(NamedKey::F11)) || (alt && !ctrl && !shift && is_enter)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::Fullscreen,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (alt && !ctrl && !shift && is_enter)
         {
-            crate::logger::log("-> Hotkey: Alternar pantalla completa (F11 / Alt+Enter)");
+            crate::logger::log("-> Hotkey: Alternar pantalla completa");
             self.toggle_fullscreen();
             return true;
         }
 
-        // Refrescar explorador y estado git (F5, estándar Windows)
-        if !ctrl && !alt && !shift && matches!(&logical_key, Key::Named(NamedKey::F5)) {
-            crate::logger::log("-> Hotkey: Refrescar (F5)");
+        // Refrescar explorador y estado git (configurable, default F5)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::RefreshExplorer,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) {
+            crate::logger::log("-> Hotkey: Refrescar explorador");
             self.file_explorer.refresh();
             self.request_redraw();
             return true;
         }
 
-        // Abrir / alternar pestaña de Ajustes (Ctrl + ,)
-        if ctrl && !shift && key_is_char(logical_key, physical_key, ',') {
-            crate::logger::log("-> Hotkey: Abrir / alternar Ajustes (Ctrl+,)");
+        // Abrir / alternar pestaña de Ajustes (configurable, default Ctrl + ,)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::Settings,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) {
+            crate::logger::log("-> Hotkey: Abrir / alternar Ajustes");
             self.open_or_switch_settings_tab();
             return true;
         }
 
-        // Paleta de comandos (Ctrl + Shift + P, F1, Ctrl + K)
+        // Paleta de comandos (configurable, default Ctrl + Shift + P, F1, Ctrl + K)
         let is_k = key_is_char(logical_key, physical_key, 'k');
         let is_p = key_is_char(logical_key, physical_key, 'p');
         let is_f1 = matches!(&logical_key, Key::Named(NamedKey::F1));
-        if (ctrl && shift && !alt && is_p)
-            || (ctrl && !shift && !alt && is_k)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::CommandPalette,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (ctrl && !shift && !alt && is_k)
             || (!ctrl && !shift && !alt && is_f1)
         {
-            crate::logger::log("-> Hotkey: Paleta de comandos (Ctrl+Shift+P / F1 / Ctrl+K)");
+            crate::logger::log("-> Hotkey: Paleta de comandos");
             self.toggle_palette();
             return true;
         }
@@ -588,25 +750,31 @@ impl TearminalApp {
             return true;
         }
 
-        // Búsqueda / filtro en el explorador con Ctrl+F si tiene el foco
-        if ctrl
-            && !shift
-            && !alt
-            && key_is_char(logical_key, physical_key, 'f')
-            && self.file_explorer.visible
-            && self.file_explorer.is_focused
-        {
-            crate::logger::log("-> Hotkey: Filtro en explorador (Ctrl+F)");
+        // Búsqueda / filtro en el explorador con Find si tiene el foco
+        let is_find_action = shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::Find,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        );
+        if is_find_action && self.file_explorer.visible && self.file_explorer.is_focused {
+            crate::logger::log("-> Hotkey: Filtro en explorador");
             self.open_explorer_filter();
             return true;
         }
 
-        // Búsqueda en el historial de la terminal activa (Ctrl + F o Ctrl + Shift + F) y su barra abierta
+        // Búsqueda en el historial de la terminal activa (Find o Ctrl + Shift + F) y su barra abierta
         let term_tab = self
             .tabs
             .get(self.active_tab_index)
             .is_some_and(|t| t.file_viewer.is_none() && !t.is_settings);
-        if term_tab && ctrl && !alt && key_is_char(logical_key, physical_key, 'f') {
+        if term_tab
+            && (is_find_action
+                || (ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'f')))
+        {
             if let Some(pane) = self.tabs[self.active_tab_index].active_pane_mut() {
                 pane.terminal.open_search();
             }
@@ -673,32 +841,61 @@ impl TearminalApp {
             || matches!(physical_key, PhysicalKey::Code(KeyCode::NumpadSubtract));
         let is_split_mod = (alt && shift) || (ctrl && alt);
 
-        // 1. División Horizontal: Alt + Shift + D o Alt + Shift + - (estándar Windows Terminal)
-        if (is_split_mod && is_d) || (alt && shift && is_minus) {
-            crate::logger::log("-> Hotkey: Split Horizontal (Alt+Shift+D / Alt+Shift+-)");
+        // 1. División Horizontal: configurable (default Alt+Shift+D) o Alt+Shift+- / Ctrl+Alt+D
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::SplitHorizontal,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (ctrl && alt && is_d)
+            || (alt && shift && is_minus)
+        {
+            crate::logger::log("-> Hotkey: Split Horizontal");
             self.split_active_pane(SplitDirection::Horizontal);
             return true;
         }
 
-        // 2. División Vertical: Alt + Shift + V o Alt + Shift + + (estándar Windows Terminal)
-        if (is_split_mod && is_v) || (alt && shift && is_plus) {
-            crate::logger::log("-> Hotkey: Split Vertical (Alt+Shift+V / Alt+Shift++)");
+        // 2. División Vertical: configurable (default Alt+Shift+V) o Alt+Shift++ / Ctrl+Alt+V
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::SplitVertical,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (ctrl && alt && is_v)
+            || (alt && shift && is_plus)
+        {
+            crate::logger::log("-> Hotkey: Split Vertical");
             self.split_active_pane(SplitDirection::Vertical);
             return true;
         }
 
-        // 3. Cerrar panel activo en split: Ctrl + Shift + W o Alt + Shift + W
-        if (ctrl && shift && !alt && is_w) || (is_split_mod && is_w) {
+        // 3. Cerrar panel activo en split: configurable (default Ctrl+Shift+W) o Alt+Shift+W
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::ClosePane,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (is_split_mod && is_w)
+        {
             let has_splits = self
                 .tabs
                 .get(self.active_tab_index)
                 .is_some_and(|t| t.panes.len() > 1);
             if has_splits {
-                crate::logger::log("-> Hotkey: Cerrar panel activo (Ctrl+Shift+W / Alt+Shift+W)");
+                crate::logger::log("-> Hotkey: Cerrar panel activo");
                 self.close_active_pane();
                 return true;
             } else if ctrl && shift && is_w {
-                crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+Shift+W)");
+                crate::logger::log("-> Hotkey: Cerrar pestaña activa");
                 self.close_tab(self.active_tab_index);
                 return true;
             }
@@ -738,9 +935,17 @@ impl TearminalApp {
         }
 
         // --- ATAJOS DE GESTIÓN DE PESTAÑAS (TABS & SIDEBAR) CANÓNICOS DE WINDOWS ---
-        // 1. Nueva pestaña / terminal: Ctrl + T
-        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 't') {
-            crate::logger::log("-> Hotkey: Nueva terminal (Ctrl+T)");
+        // 1. Nueva pestaña / terminal: configurable (default Ctrl + T)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::NewTab,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) {
+            crate::logger::log("-> Hotkey: Nueva terminal");
             self.create_new_tab();
             return true;
         }
@@ -752,29 +957,46 @@ impl TearminalApp {
             return true;
         }
 
-        // 2. Cerrar pestaña activa: Ctrl + W
-        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 'w') {
-            crate::logger::log("-> Hotkey: Cerrar pestaña activa (Ctrl+W)");
+        // 2. Cerrar pestaña activa: configurable (default Ctrl + W)
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::CloseTab,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) {
+            crate::logger::log("-> Hotkey: Cerrar pestaña activa");
             self.close_tab(self.active_tab_index);
             return true;
         }
 
-        // 3. Conmutar pestaña siguiente / anterior: Ctrl + Tab / Ctrl + Shift + Tab / Ctrl + PageDown / Ctrl + PageUp
-        if ctrl && !alt {
-            let is_next = (*logical_key == Key::Named(NamedKey::Tab) && !shift)
-                || (!shift && matches!(&logical_key, Key::Named(NamedKey::PageDown)));
-            let is_prev = (*logical_key == Key::Named(NamedKey::Tab) && shift)
-                || (!shift && matches!(&logical_key, Key::Named(NamedKey::PageUp)));
-            if is_next {
-                crate::logger::log("-> Hotkey: Pestaña siguiente (Ctrl+Tab / Ctrl+PageDown)");
-                self.next_tab();
-                return true;
-            }
-            if is_prev {
-                crate::logger::log("-> Hotkey: Pestaña anterior (Ctrl+Shift+Tab / Ctrl+PageUp)");
-                self.prev_tab();
-                return true;
-            }
+        // 3. Conmutar pestaña siguiente / anterior: configurable (default Ctrl+Tab) / Ctrl+PageDown / Ctrl+Shift+Tab / Ctrl+PageUp
+        let next_tab_match = shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::NextTab,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        );
+        if next_tab_match
+            || (ctrl && !alt && !shift && matches!(&logical_key, Key::Named(NamedKey::PageDown)))
+        {
+            crate::logger::log("-> Hotkey: Pestaña siguiente");
+            self.next_tab();
+            return true;
+        }
+        if ctrl
+            && !alt
+            && ((*logical_key == Key::Named(NamedKey::Tab) && shift)
+                || (!shift && matches!(&logical_key, Key::Named(NamedKey::PageUp))))
+        {
+            crate::logger::log("-> Hotkey: Pestaña anterior (Ctrl+Shift+Tab / Ctrl+PageUp)");
+            self.prev_tab();
+            return true;
         }
 
         // 4. Cambiar directamente a pestaña 1-8 o última con Ctrl + 9 (estándar Windows)
@@ -813,13 +1035,9 @@ impl TearminalApp {
             }
         }
 
-        // Spaces: Ctrl+Shift+T nuevo, Ctrl+Alt+↑/↓ anterior / siguiente, Ctrl+Shift+B colapsa el panel
+        // Spaces y navegación: Ctrl+Shift+T nuevo, Ctrl+Alt+↑/↓ anterior / siguiente
         if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 't') {
             self.create_space(None);
-            return true;
-        }
-        if ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'b') {
-            self.toggle_spaces_panel();
             return true;
         }
         if ctrl && alt && !shift {
@@ -836,41 +1054,76 @@ impl TearminalApp {
             }
         }
 
-        // 5. Alternar barra lateral (Sidebar toggle): Ctrl + B
-        if ctrl && !alt && !shift && key_is_char(logical_key, physical_key, 'b') {
-            crate::logger::log("-> Hotkey: Alternar barra lateral (Ctrl+B)");
+        // 5. Alternar barra lateral (Sidebar toggle): configurable (default Ctrl + B) o Ctrl + Shift + B
+        if shortcut_matches(
+            &self.config.shortcuts,
+            crate::config::ShortcutAction::ToggleSidebar,
+            logical_key,
+            physical_key,
+            ctrl,
+            shift,
+            alt,
+        ) || (ctrl && shift && !alt && key_is_char(logical_key, physical_key, 'b'))
+        {
+            crate::logger::log("-> Hotkey: Alternar barra lateral");
             self.toggle_sidebar();
             return true;
         }
 
-        // Alternar / enfocar explorador lateral de archivos: Ctrl + Shift + E o Alt + E
+        // Atajos de módulos de la aplicación:
+        // Ctrl + Shift + E: Archivos
+        // Ctrl + Shift + G: Git
+        // Ctrl + Shift + D: Datos
+        // Ctrl + Shift + M: Sistema
         let is_e = key_is_char(logical_key, physical_key, 'e');
+        let is_g = key_is_char(logical_key, physical_key, 'g');
+        let is_d = key_is_char(logical_key, physical_key, 'd');
+        let is_m = key_is_char(logical_key, physical_key, 'm');
+
         if (ctrl && shift && !alt && is_e) || (alt && !ctrl && !shift && is_e) {
-            crate::logger::log("-> Hotkey: Alternar / enfocar explorador de archivos");
-            if !self.file_explorer.visible {
-                self.toggle_file_explorer();
-                self.file_explorer.is_focused = true;
-                if self.file_explorer.selected_index.is_none()
-                    && !self.file_explorer.items.is_empty()
-                {
-                    self.file_explorer.selected_index = Some(0);
-                    self.file_explorer.selected_path =
-                        Some(self.file_explorer.items[0].path.clone());
-                }
-            } else if !self.file_explorer.is_focused {
-                self.file_explorer.is_focused = true;
-                if self.file_explorer.selected_index.is_none()
-                    && !self.file_explorer.items.is_empty()
-                {
-                    self.file_explorer.selected_index = Some(0);
-                    self.file_explorer.selected_path =
-                        Some(self.file_explorer.items[0].path.clone());
-                }
-                if let Some(w) = &self.window {
-                    w.request_redraw();
+            crate::logger::log("-> Hotkey: Módulo Archivos (Ctrl+Shift+E / Alt+E)");
+            if self.active_module == crate::config::AppModule::Files && !self.sidebar_collapsed {
+                if !self.file_explorer.is_focused {
+                    self.file_explorer.is_focused = true;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                } else {
+                    self.toggle_sidebar();
                 }
             } else {
-                self.toggle_file_explorer();
+                self.set_active_module(crate::config::AppModule::Files);
+                self.file_explorer.is_focused = true;
+            }
+            return true;
+        }
+
+        if ctrl && shift && !alt && is_g {
+            crate::logger::log("-> Hotkey: Módulo Git (Ctrl+Shift+G)");
+            if self.active_module == crate::config::AppModule::Git && !self.sidebar_collapsed {
+                self.toggle_sidebar();
+            } else {
+                self.set_active_module(crate::config::AppModule::Git);
+            }
+            return true;
+        }
+
+        if ctrl && shift && !alt && is_d {
+            crate::logger::log("-> Hotkey: Módulo Datos (Ctrl+Shift+D)");
+            if self.active_module == crate::config::AppModule::Data && !self.sidebar_collapsed {
+                self.toggle_sidebar();
+            } else {
+                self.set_active_module(crate::config::AppModule::Data);
+            }
+            return true;
+        }
+
+        if ctrl && shift && !alt && is_m {
+            crate::logger::log("-> Hotkey: Módulo Sistema (Ctrl+Shift+M)");
+            if self.active_module == crate::config::AppModule::System && !self.sidebar_collapsed {
+                self.toggle_sidebar();
+            } else {
+                self.set_active_module(crate::config::AppModule::System);
             }
             return true;
         }
@@ -1469,5 +1722,550 @@ impl TearminalApp {
                 }
             }
         }
+    }
+
+    /// Manejo de pulsaciones de teclado dentro de una pestaña del módulo de bases de datos.
+    fn handle_key_database(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: &Option<SmolStr>,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
+        let is_query_view = self.tabs.get(self.active_tab_index).is_some_and(|t| {
+            t.is_database
+                && t.db_tab
+                    .as_ref()
+                    .is_some_and(|db| db.active_view == crate::renderer::DbViewMode::Query)
+        });
+
+        if is_query_view
+            && ((ctrl && matches!(logical_key, Key::Named(NamedKey::Enter)))
+                || matches!(logical_key, Key::Named(NamedKey::F5)))
+        {
+            self.execute_db_query_from_editor();
+            return true;
+        }
+
+        let clipboard = self.get_clipboard_string();
+
+        let active_tab = match self.tabs.get_mut(self.active_tab_index) {
+            Some(t) if t.is_database => t,
+            _ => return false,
+        };
+        let db = match active_tab.db_tab.as_mut() {
+            Some(db) => db,
+            None => return false,
+        };
+
+        if db.sidebar_search_focused {
+            if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                db.sidebar_search_focused = false;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                return true;
+            }
+            if matches!(logical_key, Key::Named(NamedKey::Enter)) {
+                db.sidebar_search_focused = false;
+                if !db.sidebar_subtab_queries {
+                    if let Some((first_tbl, _)) = db.filtered_tables().into_iter().next() {
+                        db.browse.table_name = first_tbl;
+                        db.browse.current_page = 0;
+                        db.browse.scroll_y = 0;
+                        db.active_view = crate::renderer::DbViewMode::Browse;
+                        self.reload_db_browse_table();
+                        return true;
+                    }
+                } else if let Some(first_q) = db.filtered_saved_queries().into_iter().next() {
+                    db.query.editor_input = crate::ui::TextInput::new(&first_q.sql);
+                    db.active_view = crate::renderer::DbViewMode::Query;
+                    self.execute_db_query_from_editor();
+                    return true;
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                return true;
+            }
+            let (res, _) = db.sidebar_search.handle_key(
+                logical_key,
+                physical_key,
+                text.as_deref(),
+                ctrl,
+                shift,
+                alt,
+                clipboard.as_deref(),
+            );
+            if res != TextInputKeyResult::Ignored {
+                db.sidebar_scroll = 0;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                return true;
+            }
+        }
+
+        match db.active_view {
+            crate::renderer::DbViewMode::Query => {
+                // Entrada en el editor SQL con soporte multilínea (Enter añade salto de línea, Up/Down navegan entre líneas)
+                let (res, _) = db.query.editor_input.handle_multiline_key(
+                    logical_key,
+                    physical_key,
+                    text.as_deref(),
+                    ctrl,
+                    shift,
+                    alt,
+                    clipboard.as_deref(),
+                );
+                if res != TextInputKeyResult::Ignored {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
+                }
+            }
+            crate::renderer::DbViewMode::Browse => {
+                // Si hay celda en edición en la cuadrícula de datos
+                if let Some((r, c, ref mut inp)) = db.browse.editing_cell {
+                    if matches!(logical_key, Key::Named(NamedKey::Enter)) {
+                        let new_val = inp.text.clone();
+                        db.browse.commit_cell_edit(r, c, new_val);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                    if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                        db.browse.editing_cell = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                    let (res, _) = inp.handle_key(
+                        logical_key,
+                        physical_key,
+                        text.as_deref(),
+                        ctrl,
+                        shift,
+                        alt,
+                        clipboard.as_deref(),
+                    );
+                    if res != TextInputKeyResult::Ignored {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                } else if let Some(filter) = db.browse.active_filter {
+                    if matches!(logical_key, Key::Named(NamedKey::Enter)) {
+                        self.reload_db_browse_table();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                    if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                        db.browse.active_filter = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                    let inp = match filter {
+                        crate::app::db_tab::BrowseFilterField::Where => &mut db.browse.where_input,
+                        crate::app::db_tab::BrowseFilterField::OrderBy => {
+                            &mut db.browse.order_by_input
+                        }
+                    };
+                    let (res, _) = inp.handle_key(
+                        logical_key,
+                        physical_key,
+                        text.as_deref(),
+                        ctrl,
+                        shift,
+                        alt,
+                        clipboard.as_deref(),
+                    );
+                    if res != TextInputKeyResult::Ignored {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                }
+            }
+            crate::renderer::DbViewMode::Connections => {
+                if matches!(logical_key, Key::Named(NamedKey::Escape)) {
+                    db.connections.active_field = None;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
+                }
+
+                if matches!(logical_key, Key::Named(NamedKey::Tab)) {
+                    let field_order = match db.connections.form_tab {
+                        crate::app::db_tab::DbConnFormTab::General => vec![
+                            crate::app::db_tab::DbConnField::Name,
+                            crate::app::db_tab::DbConnField::Host,
+                            crate::app::db_tab::DbConnField::Port,
+                            crate::app::db_tab::DbConnField::Database,
+                            crate::app::db_tab::DbConnField::User,
+                            crate::app::db_tab::DbConnField::Password,
+                        ],
+                        crate::app::db_tab::DbConnFormTab::Tls => vec![
+                            crate::app::db_tab::DbConnField::Name,
+                            crate::app::db_tab::DbConnField::TlsServerName,
+                            crate::app::db_tab::DbConnField::TlsCaPath,
+                            crate::app::db_tab::DbConnField::TlsCertPath,
+                            crate::app::db_tab::DbConnField::TlsKeyPath,
+                        ],
+                        crate::app::db_tab::DbConnFormTab::Tunnel => vec![
+                            crate::app::db_tab::DbConnField::Name,
+                            crate::app::db_tab::DbConnField::TunnelHost,
+                            crate::app::db_tab::DbConnField::TunnelPort,
+                            crate::app::db_tab::DbConnField::TunnelUser,
+                            crate::app::db_tab::DbConnField::TunnelKeyPath,
+                            crate::app::db_tab::DbConnField::TunnelFingerprint,
+                        ],
+                        crate::app::db_tab::DbConnFormTab::Advanced => {
+                            vec![crate::app::db_tab::DbConnField::Name]
+                        }
+                    };
+                    let cur_idx = db
+                        .connections
+                        .active_field
+                        .and_then(|cf| field_order.iter().position(|&f| f == cf))
+                        .unwrap_or(0);
+                    let next_idx = if shift {
+                        if cur_idx == 0 {
+                            field_order.len().saturating_sub(1)
+                        } else {
+                            cur_idx - 1
+                        }
+                    } else {
+                        (cur_idx + 1) % field_order.len()
+                    };
+                    db.connections.active_field = field_order.get(next_idx).copied();
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
+                }
+
+                if let Some(field) = db.connections.active_field {
+                    let inp = match field {
+                        crate::app::db_tab::DbConnField::Name => &mut db.connections.name_input,
+                        crate::app::db_tab::DbConnField::Host => &mut db.connections.host_input,
+                        crate::app::db_tab::DbConnField::Port => &mut db.connections.port_input,
+                        crate::app::db_tab::DbConnField::Database => {
+                            &mut db.connections.database_input
+                        }
+                        crate::app::db_tab::DbConnField::User => &mut db.connections.user_input,
+                        crate::app::db_tab::DbConnField::Password => {
+                            &mut db.connections.password_input
+                        }
+                        crate::app::db_tab::DbConnField::TlsServerName => {
+                            &mut db.connections.tls_server_name
+                        }
+                        crate::app::db_tab::DbConnField::TlsCaPath => {
+                            &mut db.connections.tls_ca_path
+                        }
+                        crate::app::db_tab::DbConnField::TlsCertPath => {
+                            &mut db.connections.tls_cert_path
+                        }
+                        crate::app::db_tab::DbConnField::TlsKeyPath => {
+                            &mut db.connections.tls_key_path
+                        }
+                        crate::app::db_tab::DbConnField::TunnelHost => {
+                            &mut db.connections.tunnel_host
+                        }
+                        crate::app::db_tab::DbConnField::TunnelPort => {
+                            &mut db.connections.tunnel_port
+                        }
+                        crate::app::db_tab::DbConnField::TunnelUser => {
+                            &mut db.connections.tunnel_user
+                        }
+                        crate::app::db_tab::DbConnField::TunnelKeyPath => {
+                            &mut db.connections.tunnel_key_path
+                        }
+                        crate::app::db_tab::DbConnField::TunnelFingerprint => {
+                            &mut db.connections.tunnel_fingerprint
+                        }
+                    };
+                    let (res, _) = inp.handle_key(
+                        logical_key,
+                        physical_key,
+                        text.as_deref(),
+                        ctrl,
+                        shift,
+                        alt,
+                        clipboard.as_deref(),
+                    );
+                    if res != TextInputKeyResult::Ignored {
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Pestaña de base de datos activa: no enviar al PTY
+        true
+    }
+
+    fn capture_shortcut_rebind(
+        &mut self,
+        action: crate::config::ShortcutAction,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+    ) -> bool {
+        if matches!(logical_key, Key::Named(NamedKey::Escape)) && !ctrl && !shift && !alt {
+            self.settings_page_state.editing_shortcut = None;
+            self.request_redraw();
+            return true;
+        }
+        if matches!(logical_key, Key::Named(NamedKey::Backspace)) && !ctrl && !shift && !alt {
+            let def = action.default_chord().to_string();
+            self.config.shortcuts.set(action, def);
+            let _ = self.config.save();
+            self.settings_page_state.editing_shortcut = None;
+            self.request_redraw();
+            return true;
+        }
+        let Some(chord) = chord_from_winit(logical_key, physical_key, ctrl, shift, alt) else {
+            return true;
+        };
+        let is_fn_key = chord.key.starts_with('F')
+            && chord.key[1..]
+                .parse::<u8>()
+                .is_ok_and(|n| (1..=12).contains(&n));
+        if !chord.ctrl && !chord.alt && !is_fn_key {
+            self.show_toast(
+                crate::app::dialog::ToastSeverity::Warning,
+                "Usa Ctrl, Alt o una tecla F1–F12",
+            );
+            return true;
+        }
+        if let Some(other) = self.config.shortcuts.find_conflict(action, &chord) {
+            self.show_toast(
+                crate::app::dialog::ToastSeverity::Warning,
+                format!("Atajo ya asignado a: {}", other.description()),
+            );
+            self.settings_page_state.editing_shortcut = None;
+            self.request_redraw();
+            return true;
+        }
+        let compact = chord.format_compact();
+        self.config.shortcuts.set(action, compact.clone());
+        let _ = self.config.save();
+        self.settings_page_state.editing_shortcut = None;
+        self.show_toast(
+            crate::app::dialog::ToastSeverity::Success,
+            format!("Atajo actualizado: {compact}"),
+        );
+        self.request_redraw();
+        true
+    }
+}
+
+fn winit_key_token(logical_key: &Key, physical_key: PhysicalKey) -> Option<String> {
+    if let PhysicalKey::Code(code) = physical_key {
+        let mapped = match code {
+            KeyCode::KeyA => Some("A"),
+            KeyCode::KeyB => Some("B"),
+            KeyCode::KeyC => Some("C"),
+            KeyCode::KeyD => Some("D"),
+            KeyCode::KeyE => Some("E"),
+            KeyCode::KeyF => Some("F"),
+            KeyCode::KeyG => Some("G"),
+            KeyCode::KeyH => Some("H"),
+            KeyCode::KeyI => Some("I"),
+            KeyCode::KeyJ => Some("J"),
+            KeyCode::KeyK => Some("K"),
+            KeyCode::KeyL => Some("L"),
+            KeyCode::KeyM => Some("M"),
+            KeyCode::KeyN => Some("N"),
+            KeyCode::KeyO => Some("O"),
+            KeyCode::KeyP => Some("P"),
+            KeyCode::KeyQ => Some("Q"),
+            KeyCode::KeyR => Some("R"),
+            KeyCode::KeyS => Some("S"),
+            KeyCode::KeyT => Some("T"),
+            KeyCode::KeyU => Some("U"),
+            KeyCode::KeyV => Some("V"),
+            KeyCode::KeyW => Some("W"),
+            KeyCode::KeyX => Some("X"),
+            KeyCode::KeyY => Some("Y"),
+            KeyCode::KeyZ => Some("Z"),
+            KeyCode::Digit0 | KeyCode::Numpad0 => Some("0"),
+            KeyCode::Digit1 | KeyCode::Numpad1 => Some("1"),
+            KeyCode::Digit2 | KeyCode::Numpad2 => Some("2"),
+            KeyCode::Digit3 | KeyCode::Numpad3 => Some("3"),
+            KeyCode::Digit4 | KeyCode::Numpad4 => Some("4"),
+            KeyCode::Digit5 | KeyCode::Numpad5 => Some("5"),
+            KeyCode::Digit6 | KeyCode::Numpad6 => Some("6"),
+            KeyCode::Digit7 | KeyCode::Numpad7 => Some("7"),
+            KeyCode::Digit8 | KeyCode::Numpad8 => Some("8"),
+            KeyCode::Digit9 | KeyCode::Numpad9 => Some("9"),
+            KeyCode::Comma => Some(","),
+            KeyCode::Period => Some("."),
+            KeyCode::Minus | KeyCode::NumpadSubtract => Some("-"),
+            KeyCode::Equal | KeyCode::NumpadAdd => Some("+"),
+            KeyCode::Tab => Some("Tab"),
+            KeyCode::Enter | KeyCode::NumpadEnter => Some("Enter"),
+            KeyCode::Space => Some("Space"),
+            KeyCode::Backspace => Some("Backspace"),
+            KeyCode::PageUp => Some("PageUp"),
+            KeyCode::PageDown => Some("PageDown"),
+            KeyCode::Home => Some("Home"),
+            KeyCode::End => Some("End"),
+            KeyCode::Insert => Some("Insert"),
+            KeyCode::Delete => Some("Delete"),
+            KeyCode::ArrowUp => Some("Up"),
+            KeyCode::ArrowDown => Some("Down"),
+            KeyCode::ArrowLeft => Some("Left"),
+            KeyCode::ArrowRight => Some("Right"),
+            KeyCode::F1 => Some("F1"),
+            KeyCode::F2 => Some("F2"),
+            KeyCode::F3 => Some("F3"),
+            KeyCode::F4 => Some("F4"),
+            KeyCode::F5 => Some("F5"),
+            KeyCode::F6 => Some("F6"),
+            KeyCode::F7 => Some("F7"),
+            KeyCode::F8 => Some("F8"),
+            KeyCode::F9 => Some("F9"),
+            KeyCode::F10 => Some("F10"),
+            KeyCode::F11 => Some("F11"),
+            KeyCode::F12 => Some("F12"),
+            KeyCode::ControlLeft
+            | KeyCode::ControlRight
+            | KeyCode::ShiftLeft
+            | KeyCode::ShiftRight
+            | KeyCode::AltLeft
+            | KeyCode::AltRight
+            | KeyCode::SuperLeft
+            | KeyCode::SuperRight => return None,
+            _ => None,
+        };
+        if let Some(m) = mapped {
+            return Some(m.to_string());
+        }
+    }
+    match logical_key {
+        Key::Named(n) => {
+            let name = match n {
+                NamedKey::Tab => "Tab",
+                NamedKey::Enter => "Enter",
+                NamedKey::Space => "Space",
+                NamedKey::Backspace => "Backspace",
+                NamedKey::PageUp => "PageUp",
+                NamedKey::PageDown => "PageDown",
+                NamedKey::Home => "Home",
+                NamedKey::End => "End",
+                NamedKey::Insert => "Insert",
+                NamedKey::Delete => "Delete",
+                NamedKey::ArrowUp => "Up",
+                NamedKey::ArrowDown => "Down",
+                NamedKey::ArrowLeft => "Left",
+                NamedKey::ArrowRight => "Right",
+                NamedKey::F1 => "F1",
+                NamedKey::F2 => "F2",
+                NamedKey::F3 => "F3",
+                NamedKey::F4 => "F4",
+                NamedKey::F5 => "F5",
+                NamedKey::F6 => "F6",
+                NamedKey::F7 => "F7",
+                NamedKey::F8 => "F8",
+                NamedKey::F9 => "F9",
+                NamedKey::F10 => "F10",
+                NamedKey::F11 => "F11",
+                NamedKey::F12 => "F12",
+                _ => return None,
+            };
+            Some(name.to_string())
+        }
+        Key::Character(s) => crate::config::ParsedKeyChord::normalize_key_token(s.as_str()),
+        _ => None,
+    }
+}
+
+fn chord_from_winit(
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+) -> Option<crate::config::ParsedKeyChord> {
+    let key = winit_key_token(logical_key, physical_key)?;
+    Some(crate::config::ParsedKeyChord {
+        ctrl,
+        shift,
+        alt,
+        key,
+    })
+}
+
+fn shortcut_matches(
+    shortcuts: &crate::config::ShortcutsConfig,
+    action: crate::config::ShortcutAction,
+    logical_key: &Key,
+    physical_key: PhysicalKey,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+) -> bool {
+    let Some(pressed) = chord_from_winit(logical_key, physical_key, ctrl, shift, alt) else {
+        return false;
+    };
+    shortcuts.parsed(action) == pressed
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    use crate::config::{ShortcutAction, ShortcutsConfig};
+
+    #[test]
+    fn test_shortcut_matches_custom_binding() {
+        let mut sc = ShortcutsConfig::default();
+        assert!(shortcut_matches(
+            &sc,
+            ShortcutAction::NewTab,
+            &Key::Character("t".into()),
+            PhysicalKey::Code(KeyCode::KeyT),
+            true,
+            false,
+            false,
+        ));
+        sc.set(ShortcutAction::NewTab, "Ctrl+Alt+N".to_string());
+        assert!(!shortcut_matches(
+            &sc,
+            ShortcutAction::NewTab,
+            &Key::Character("t".into()),
+            PhysicalKey::Code(KeyCode::KeyT),
+            true,
+            false,
+            false,
+        ));
+        assert!(shortcut_matches(
+            &sc,
+            ShortcutAction::NewTab,
+            &Key::Character("n".into()),
+            PhysicalKey::Code(KeyCode::KeyN),
+            true,
+            false,
+            true,
+        ));
     }
 }

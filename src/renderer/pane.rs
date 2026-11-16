@@ -422,6 +422,7 @@ impl TerminalRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_pane_header(
         &mut self,
         canvas: &mut Canvas,
@@ -435,6 +436,7 @@ impl TerminalRenderer {
         multi_pane: bool,
         show_buttons: bool,
         hovered: Option<PaneHeaderButton>,
+        status_badge: Option<&str>,
         theme: &Theme,
     ) {
         let (width, height) = canvas.size();
@@ -469,7 +471,16 @@ impl TerminalRenderer {
         } else {
             x + w
         };
-        let text_max = buttons_left.saturating_sub(12);
+        let badge_w = if let Some(badge) = status_badge {
+            self.measure_ui_text(badge, tokens::MICRO, true) + 16
+        } else {
+            0
+        };
+        let text_max = if badge_w > 0 {
+            buttons_left.saturating_sub(badge_w + 16)
+        } else {
+            buttons_left.saturating_sub(12)
+        };
         let baseline = self.centered_baseline(cy);
         self.draw_lucide_icon(
             canvas,
@@ -500,6 +511,27 @@ impl TerminalRenderer {
                 theme.text_muted(),
                 tokens::DETAIL,
                 false,
+            );
+        }
+
+        // Chip de estado a la derecha (ej. «Sin conexión» en rojo, Ssh.dc.html)
+        if let Some(badge) = status_badge {
+            let bw = badge_w;
+            let bx = buttons_left.saturating_sub(bw + 8);
+            let by = cy.saturating_sub(10);
+            let red = theme.ansi[1];
+            let badge_bg = theme.mix(theme.chrome_bg(), red, 0.22);
+            canvas.fill_rect(clip, bx, by, bw, 20, badge_bg);
+            let b_base = self.centered_baseline(cy);
+            self.draw_ui_text(
+                canvas,
+                badge,
+                bx + 8,
+                b_base,
+                bx + bw - 4,
+                red,
+                tokens::MICRO,
+                true,
             );
         }
 
@@ -535,6 +567,111 @@ impl TerminalRenderer {
         ] {
             self.draw_pane_header_button(canvas, rect, icon, hovered == Some(button), theme);
         }
+    }
+
+    /// Renderiza la vista de conexión SSH perdida con cuenta atrás y botones de acción (Ssh.dc.html).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn render_ssh_lost_connection(
+        &mut self,
+        canvas: &mut Canvas,
+        rect_x: usize,
+        rect_y: usize,
+        rect_w: usize,
+        rect_h: usize,
+        reconnect: &crate::app::SshReconnectState,
+        hovered_btn: Option<crate::renderer::SshLostButton>,
+        theme: &Theme,
+    ) {
+        let (width, height) = canvas.size();
+        if rect_w == 0 || rect_h == 0 || width == 0 || height == 0 {
+            return;
+        }
+
+        let max_y = (rect_y + rect_h).min(height);
+        let max_x = (rect_x + rect_w).min(width);
+        let clip: Clip = (rect_x, rect_y, max_x, max_y);
+        canvas.fill_rect(clip, rect_x, rect_y, rect_w, rect_h, theme.background);
+
+        let rects =
+            crate::renderer::SshLostConnectionRects::compute(rect_x, rect_y, rect_w, rect_h);
+
+        // 1. Título principal: "Conexión perdida con {host}" (Ssh.dc.html)
+        let title = format!("Conexión perdida con {}", reconnect.host);
+        let title_base = self.centered_baseline(rects.title_rect.1 + rects.title_rect.3 / 2);
+        self.draw_ui_text(
+            canvas,
+            &title,
+            rects.title_rect.0,
+            title_base,
+            rects.title_rect.0 + rects.title_rect.2,
+            theme.foreground,
+            tokens::DISPLAY,
+            true,
+        );
+
+        // 2. Subtítulo: "Reintento 3 de 5 en 4 s. La sesión y el directorio se recuperan al reconectar."
+        let subtitle = reconnect.subtitle();
+        let sub_base = self.centered_baseline(rects.subtitle_rect.1 + rects.subtitle_rect.3 / 2);
+        self.draw_ui_text(
+            canvas,
+            &subtitle,
+            rects.subtitle_rect.0,
+            sub_base,
+            rects.subtitle_rect.0 + rects.subtitle_rect.2,
+            theme.text_secondary(),
+            tokens::BODY,
+            false,
+        );
+
+        // 3. Botón primario: "Reconectar ahora"
+        let (rx, ry, rw, rh) = rects.reconnect_btn;
+        let r_hover = hovered_btn == Some(crate::renderer::SshLostButton::Reconnect);
+        let rec_bg = if r_hover {
+            theme.mix(theme.accent_color(), theme.foreground, 0.15)
+        } else {
+            theme.accent_color()
+        };
+        canvas.fill_rect(clip, rx, ry, rw, rh, rec_bg);
+        let rec_base = self.centered_baseline(ry + rh / 2);
+        let rec_text = "Reconectar ahora";
+        let rec_tw = self.measure_ui_text(rec_text, tokens::DETAIL, true);
+        let rec_tx = rx + (rw.saturating_sub(rec_tw)) / 2;
+        self.draw_ui_text(
+            canvas,
+            rec_text,
+            rec_tx,
+            rec_base,
+            rx + rw,
+            theme.on_accent(),
+            tokens::DETAIL,
+            true,
+        );
+
+        // 4. Botón secundario: "Cerrar panel"
+        let (cx, cy, cw, ch) = rects.close_pane_btn;
+        let c_hover = hovered_btn == Some(crate::renderer::SshLostButton::Close);
+        if c_hover {
+            canvas.fill_rect(clip, cx, cy, cw, ch, theme.surface_hover());
+        }
+        canvas.fill_rect(clip, cx, cy, cw, 1, theme.chrome_line_strong());
+        canvas.fill_rect(clip, cx, cy + ch - 1, cw, 1, theme.chrome_line_strong());
+        canvas.fill_rect(clip, cx, cy, 1, ch, theme.chrome_line_strong());
+        canvas.fill_rect(clip, cx + cw - 1, cy, 1, ch, theme.chrome_line_strong());
+
+        let close_base = self.centered_baseline(cy + ch / 2);
+        let close_text = "Cerrar panel";
+        let close_tw = self.measure_ui_text(close_text, tokens::DETAIL, true);
+        let close_tx = cx + (cw.saturating_sub(close_tw)) / 2;
+        self.draw_ui_text(
+            canvas,
+            close_text,
+            close_tx,
+            close_base,
+            cx + cw,
+            theme.foreground,
+            tokens::DETAIL,
+            false,
+        );
     }
 
     #[allow(clippy::too_many_arguments)]

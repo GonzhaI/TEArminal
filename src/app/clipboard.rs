@@ -69,7 +69,8 @@ impl TearminalApp {
     /// Maneja el evento de soltar un archivo o carpeta en la ventana (desde el explorador
     /// del sistema de Windows o desde el explorador lateral de TEArminal).
     ///
-    /// - Si la pestaña activa es Ajustes, se ignora.
+    /// - Si la pestaña activa es Ajustes y se suelta un `.itermcolors`, lo importa a
+    ///   `%APPDATA%\tearminal\themes\` y lo aplica de inmediato (otros archivos se ignoran).
     /// - Si la pestaña activa es un visor de archivos, abre el archivo arrastrado en el visor.
     /// - Si es una pestaña de terminal, pega su ruta entre comillas (con espacio final)
     ///   en el panel bajo el cursor o en el panel activo.
@@ -79,6 +80,33 @@ impl TearminalApp {
             .get(self.active_tab_index)
             .is_some_and(|t| t.is_settings)
         {
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("itermcolors"))
+            {
+                match crate::theme::Theme::import_itermcolors_file(&path) {
+                    Ok(name) => {
+                        self.settings_page_state.filtered_themes =
+                            crate::theme::Theme::search_all(&self.settings_page_state.theme_filter);
+                        self.pick_theme(&name);
+                        self.reveal_current_theme();
+                        self.show_toast(
+                            crate::app::dialog::ToastSeverity::Success,
+                            format!("Tema importado: {name}"),
+                        );
+                    }
+                    Err(err) => {
+                        self.show_toast(
+                            crate::app::dialog::ToastSeverity::Error,
+                            format!("No se pudo importar el tema: {err}"),
+                        );
+                    }
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
             return;
         }
 

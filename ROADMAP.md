@@ -66,18 +66,18 @@ TEArminal se define por cuatro pilares irrenunciables:
 * **Perfiles rápidos de Shell en el selector `+`** ✅ *[Completado]*:
   * Menú desplegable para abrir pestañas o dividir paneles eligiendo entre PowerShell 7, Windows PowerShell 5.1, WSL (Ubuntu/Debian), Git Bash o CMD.
   * Accesible mediante clic derecho o `Shift + Clic` / `Alt + Clic` en el botón `+`, en el menú contextual de la barra superior y en la paleta de comandos (`Ctrl + Shift + P`).
-* **Diseños predefinidos de división (*Grid Layouts*)**:
+* **Diseños predefinidos de división (*Grid Layouts*)** ✅ *[Completado]*:
   * Presets rápidos: cuadrícula 2×2, 1 panel principal a la izquierda y 2 divididos a la derecha.
 
 ### 2.4. Ajustes (`src/app/settings.rs`, `src/renderer/settings_page.rs`)
 
-* **Editor interactivo de atajos de teclado**:
+* **Editor interactivo de atajos de teclado** ✅ *[Completado]*:
   * Reemplazo de la tabla puramente estática por una interfaz donde hacer clic en una acción y pulsar la nueva combinación para guardarla en `tearminal.toml`.
 * **Selector de familias tipográficas instaladas** ✅ *[Completado]*:
   * Enumeración asíncrona en segundo plano de fuentes monoespaciadas del sistema (`src/fonts.rs`) mediante inspección de tablas OpenType (`ttf_parser` integrado en `rustybuzz`), selector interactivo (`‹` / `›`) en la tarjeta de Tipografía de Ajustes, persistencia en `tearminal.toml` y recálculo dinámico de métricas/rejilla conservando JetBrains Mono como fallback seguro.
-* **Importación de temas `.itermcolors` externos**:
+* **Importación de temas `.itermcolors` externos** ✅ *[Completado]*:
   * Soporte para cargar archivos `.itermcolors` colocados en `%APPDATA%\tearminal\themes\` o arrastrados a Ajustes, sin depender de la lista fija de `themes.txt`.
-* **Perfiles de agentes CLI configurables**:
+* **Perfiles de agentes CLI configurables** ✅ *[Completado]*:
   * Registro de nombres de ejecutables de agentes adicionales para monitorización de consumo en `init.ps1`.
 
 ---
@@ -108,9 +108,9 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 * **Por qué sobra / conflicto:** El canal en banda OSC tiene un límite estricto de buffer (128 KB en `Parser<OSC_BUF_SIZE>`), fragmenta respuestas, requiere lógica compleja de ensamblado de chunks y puede corromperse ante ruidos en el PTY. `SshConnection` fuera de banda es mucho más robusto, admite listados de hasta 5.000 entradas y no contamina el emulador VT.
 * **Acción recomendada:** Consolidar progresivamente la navegación y transferencia de archivos remotos a través del canal `SshConnection`, reduciendo la complejidad del parser OSC y evitando fragmentaciones en memoria.
 
-### 3.5. Banderas VT no operativas o anuladas por ConPTY
+### 3.5. Banderas VT no operativas o anuladas por ConPTY ✅ *[Completado]*
 * **Situación:** En `src/terminal.rs` se mantienen banderas como el modo 1004 (Focus reporting), que luego debe ser neutralizado porque Windows ConPTY lo convierte erróneamente en caracteres `Enter` o `Escape`.
-* **Acción recomendada:** Auditar y eliminar estados del emulador VT que nunca pueden ser procesados de forma fiable a través de ConPTY en Windows, documentando las secuencias no soportadas en lugar de emularlas a medias.
+* **Acción realizada:** Auditadas y eliminadas las banderas de modo 1004 en `src/terminal.rs`, `src/terminal/performer.rs` y `src/app/handler.rs`, documentando la omisión intencionada frente a ConPTY en lugar de emularla a medias.
 
 ### 3.6. Modo "Solo lectura" artificial en el Visor de Archivos ✅ *[Completado]*
 * **Situación:** En `src/app/viewer.rs` existía una alternancia manual entre modo lectura y edición (`Ctrl + E`). Para archivos locales regulares en los que el usuario tiene permisos de escritura, este bloqueo provocaba pulsaciones perdidas y confusión en el usuario.
@@ -137,7 +137,7 @@ Para preservar la ligereza del binario y evitar sobrecarga cognitiva y técnica,
 | **Visor** | Visor nativo de imágenes (`.png`, `.jpg`, `.gif` animado, `.webp`, `.ico`; local y remoto) | Característica | **P2** | ✅ Completado | Medio-Alto |
 | **IA / Telemetría** | Simplificar AGY y eliminar sondeos superfluos de cuota | Limpieza | **P2** | ✅ Completado | Medio |
 | **Terminal** | Búsqueda en el scrollback (`Ctrl + Shift + F`) | Característica | **P3** | ✅ Completado | Alto |
-| **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | Pendiente | Medio-Alto |
+| **Ajustes** | Editor interactivo de atajos de teclado | Característica | **P3** | ✅ Completado | Medio-Alto |
 | **Ajustes** | Selector de fuentes instaladas del sistema (`DirectWrite`) | Característica | **P3** | ✅ Completado | Medio |
 | **SSH** | Consolidar listados remotos en `SshConnection` vs OSC en banda | Limpieza / Refactor | **P3** | ✅ Completado | Alto (Estabilidad) |
 | **Visor** | Abrir archivos con permisos de escritura en modo editable por defecto | Usabilidad / Limpieza | **P3** | ✅ Completado | Alto |

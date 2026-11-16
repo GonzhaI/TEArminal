@@ -76,15 +76,15 @@ const LCS_MAX_CELLS: usize = 4_000_000;
 
 /// Tramo cambiado: `del` líneas de la base desde `b` sustituidas por `add` líneas de la actual desde `c`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Hunk {
-    b: usize,
-    del: usize,
-    c: usize,
-    add: usize,
+pub(crate) struct Hunk {
+    pub(crate) b: usize,
+    pub(crate) del: usize,
+    pub(crate) c: usize,
+    pub(crate) add: usize,
 }
 
 /// Diff por líneas (prefijo/sufijo comunes y LCS en el medio), tramos en orden.
-fn diff_hunks(base: &[String], cur: &[String]) -> Vec<Hunk> {
+pub(crate) fn diff_hunks(base: &[String], cur: &[String]) -> Vec<Hunk> {
     let pre = base.iter().zip(cur).take_while(|(a, b)| a == b).count();
     let suf = base[pre..]
         .iter()

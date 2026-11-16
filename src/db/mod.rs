@@ -18,21 +18,21 @@ pub(crate) mod store;
 pub(crate) mod tunnel;
 
 #[cfg(feature = "db")]
-mod apply;
+pub(crate) mod apply;
 #[cfg(feature = "db")]
-mod driver;
+pub(crate) mod driver;
 #[cfg(feature = "db")]
-mod mssql;
+pub(crate) mod mssql;
 #[cfg(feature = "db")]
-mod mysql;
+pub(crate) mod mysql;
 #[cfg(feature = "db")]
-mod pg;
+pub(crate) mod pg;
 #[cfg(feature = "db")]
-mod schema;
+pub(crate) mod schema;
 #[cfg(feature = "db")]
-mod session;
+pub(crate) mod session;
 #[cfg(feature = "db")]
-mod tls;
+pub(crate) mod tls;
 
 #[cfg(all(test, feature = "db"))]
 mod integration_tests;

@@ -88,8 +88,8 @@ pub(crate) struct TerminalState {
     pub mouse_reporting_button_event: bool, // Modo 1002: Clics y arrastre
     pub mouse_reporting_any_event: bool, // Modo 1003: Todo movimiento
     pub mouse_reporting_sgr: bool,    // Modo 1006: Coordenadas SGR extendidas (\x1b[<...M/m)
-    pub focus_event_reporting: bool,  // Modo 1004: Foco ganado/perdido (\x1b[I, \x1b[O)
-    pub sync_update_mode: bool,       // Modo 2026: Renderizado sincronizado (DEC 2026)
+    // Nota: El modo 1004 (Focus reporting) no es soportado bajo Windows ConPTY y se ignora en performer.rs.
+    pub sync_update_mode: bool, // Modo 2026: Renderizado sincronizado (DEC 2026)
     pub sync_update_start: Option<std::time::Instant>, // Marca de tiempo de inicio del renderizado sincronizado
     pub report_color_scheme_mode: bool, // Modo 2031: Notificación de modo claro/oscuro (DEC 2031)
 
@@ -187,7 +187,6 @@ impl TerminalState {
             mouse_reporting_button_event: false,
             mouse_reporting_any_event: false,
             mouse_reporting_sgr: false,
-            focus_event_reporting: false,
             sync_update_mode: false,
             sync_update_start: None,
             report_color_scheme_mode: false,

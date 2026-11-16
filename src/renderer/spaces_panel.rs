@@ -24,7 +24,6 @@ pub(crate) enum SpacesHover {
     #[default]
     None,
     Toggle,
-    Search,
     /// «+» de Este equipo: un Space nuevo
     Plus,
     /// «+» de Equipos remotos: abre «Añadir máquina»
@@ -33,6 +32,8 @@ pub(crate) enum SpacesHover {
     Row(usize),
     Settings,
     Machine,
+    Terminal,
+    RailModule(crate::config::AppModule),
 }
 
 impl SpaceItem {
@@ -55,6 +56,261 @@ impl SpaceItem {
 }
 
 impl TerminalRenderer {
+    /// Dibuja el riel de navegación izquierdo (DISENO §4):
+    /// 56 px de ancho, fondo crust, borde s1 a la derecha, 5 botones de módulos de 58 px de alto con icono 20 px
+    /// y etiqueta mayúscula de 10 px, y el botón de Ajustes anclado al pie del riel.
+    pub(crate) fn render_rail(
+        &mut self,
+        canvas: &mut Canvas,
+        active_module: crate::config::AppModule,
+        git_changes: usize,
+        hover: SpacesHover,
+        theme: &Theme,
+    ) {
+        let (width, height) = canvas.size();
+        if width < RailRects::WIDTH || height < TopTabBarRects::HEIGHT + StatusBarRects::BAR_H {
+            return;
+        }
+
+        let rects = RailRects::compute(height, StatusBarRects::BAR_H);
+        let (rx, ry, rw, rh) = rects.rect;
+
+        // Fondo del riel (crust) y borde derecho (s1)
+        Self::draw_rect(canvas, rx, ry, rw, rh, theme.rail_bg());
+        Self::draw_rect(canvas, rx + rw - 1, ry, 1, rh, theme.chrome_line());
+
+        // 5 Botones de módulos en el riel
+        let modules = [
+            (
+                crate::config::AppModule::Spaces,
+                crate::ui::LucideIcon::Terminal,
+                "ESPACIOS",
+            ),
+            (
+                crate::config::AppModule::Files,
+                crate::ui::LucideIcon::Folder,
+                "ARCHIVOS",
+            ),
+            (
+                crate::config::AppModule::Git,
+                crate::ui::LucideIcon::GitBranch,
+                "GIT",
+            ),
+            (
+                crate::config::AppModule::Data,
+                crate::ui::LucideIcon::Database,
+                "DATOS",
+            ),
+            (
+                crate::config::AppModule::System,
+                crate::ui::LucideIcon::Sliders,
+                "SISTEMA",
+            ),
+        ];
+
+        for (module, icon, label) in modules {
+            let btn_rect = rects.module_btn(module);
+            let is_active = active_module == module;
+            let is_hovered = hover == SpacesHover::RailModule(module);
+
+            if is_active {
+                // Fondo mantle y barra izquierda de 2px blue (DISENO §3.3)
+                Self::draw_rect(
+                    canvas,
+                    btn_rect.0,
+                    btn_rect.1,
+                    btn_rect.2,
+                    btn_rect.3,
+                    theme.bar_bg(),
+                );
+                Self::draw_rect(
+                    canvas,
+                    btn_rect.0,
+                    btn_rect.1,
+                    2,
+                    btn_rect.3,
+                    theme.accent_color(),
+                );
+            } else if is_hovered {
+                Self::draw_rect(
+                    canvas,
+                    btn_rect.0,
+                    btn_rect.1,
+                    btn_rect.2,
+                    btn_rect.3,
+                    theme.surface_hover(),
+                );
+            }
+
+            let fg = if is_active || is_hovered {
+                theme.foreground
+            } else {
+                theme.text_secondary()
+            };
+
+            // Icono de 20 px centrado
+            let icon_cx = btn_rect.0 + btn_rect.2 / 2;
+            let icon_cy = btn_rect.1 + 18;
+            self.draw_lucide_icon(canvas, icon, icon_cx, icon_cy, 20.0, fg);
+
+            // Etiqueta mayúscula de 10 px
+            let label_w = self.measure_ui_text(label, 10.0, true);
+            let label_x = (btn_rect.0 + btn_rect.2).saturating_sub(label_w) / 2;
+            let label_base = self.centered_baseline(btn_rect.1 + 43);
+            self.draw_ui_text(
+                canvas,
+                label,
+                label_x.max(btn_rect.0 + 2),
+                label_base,
+                btn_rect.0 + btn_rect.2 - 2,
+                fg,
+                10.0,
+                true,
+            );
+
+            // Insignia de cambios de Git (DISENO §4)
+            if module == crate::config::AppModule::Git && git_changes > 0 {
+                let badge_str = if git_changes > 99 {
+                    "99+".to_string()
+                } else {
+                    git_changes.to_string()
+                };
+                let bw = (self.measure_mono_text(&badge_str, tokens::MICRO, true) + 8).max(18);
+                let bx = (btn_rect.0 + btn_rect.2).saturating_sub(bw + 4);
+                let by = btn_rect.1 + 4;
+                Self::draw_rect(canvas, bx, by, bw, 16, theme.accent_color());
+                let badge_base = self.centered_baseline(by + 8);
+                self.draw_mono_text(
+                    canvas,
+                    &badge_str,
+                    bx + 4,
+                    badge_base,
+                    bx + bw,
+                    theme.background,
+                    tokens::MICRO,
+                    true,
+                );
+            }
+        }
+
+        // Botón Ajustes al pie del riel (DISENO §4)
+        let s_rect = rects.settings_btn;
+        let s_hover = hover == SpacesHover::Settings;
+        Self::draw_rect(canvas, s_rect.0, s_rect.1, s_rect.2, 1, theme.chrome_line());
+        if s_hover {
+            Self::draw_rect(
+                canvas,
+                s_rect.0,
+                s_rect.1 + 1,
+                s_rect.2,
+                s_rect.3 - 1,
+                theme.surface_hover(),
+            );
+        }
+        let s_fg = if s_hover {
+            theme.foreground
+        } else {
+            theme.text_secondary()
+        };
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Settings,
+            s_rect.0 + s_rect.2 / 2,
+            s_rect.1 + 18,
+            20.0,
+            s_fg,
+        );
+        let s_label = "AJUSTES";
+        let s_label_w = self.measure_ui_text(s_label, 10.0, true);
+        let s_label_x = (s_rect.0 + s_rect.2).saturating_sub(s_label_w) / 2;
+        let s_base = self.centered_baseline(s_rect.1 + 43);
+        self.draw_ui_text(
+            canvas,
+            s_label,
+            s_label_x.max(s_rect.0 + 2),
+            s_base,
+            s_rect.0 + s_rect.2 - 2,
+            s_fg,
+            10.0,
+            true,
+        );
+    }
+
+    /// Cabecera contextual del panel lateral (DISENO §4)
+    pub(crate) fn render_sidebar_header(
+        &mut self,
+        canvas: &mut Canvas,
+        module: crate::config::AppModule,
+        rects: ContextualSidebarRects,
+        hover: SpacesHover,
+        theme: &Theme,
+    ) {
+        if rects.collapsed || rects.width == 0 {
+            return;
+        }
+
+        let (hx, hy, hw, hh) = rects.header;
+
+        // Fondo mantle y línea separadora inferior (s1)
+        Self::draw_rect(canvas, hx, hy, hw, hh, theme.bar_bg());
+        Self::draw_rect(canvas, hx, hy + hh - 1, hw, 1, theme.chrome_line());
+        // Línea separadora derecha con el área de trabajo (s1)
+        Self::draw_rect(canvas, hx + hw - 1, hy, 1, hh, theme.chrome_line());
+
+        // Título del módulo
+        let title = match module {
+            crate::config::AppModule::Spaces => "ESPACIOS",
+            crate::config::AppModule::Files => "ARCHIVOS",
+            crate::config::AppModule::Git => "CONTROL DE CÓDIGO",
+            crate::config::AppModule::Data => "BASES DE DATOS",
+            crate::config::AppModule::System => "SISTEMA",
+        };
+
+        let base = self.centered_baseline(hy + hh / 2);
+        self.draw_ui_text(
+            canvas,
+            title,
+            hx + 14,
+            base,
+            rects.action_btn.0.saturating_sub(6),
+            theme.foreground,
+            tokens::TITLE,
+            true,
+        );
+
+        // Botón de acción contextual en cabecera (+ para Espacios/Archivos, refrescar para Git)
+        if rects.action_btn.2 > 0 {
+            let act_icon = match module {
+                crate::config::AppModule::Spaces => crate::ui::LucideIcon::Plus,
+                crate::config::AppModule::Files => crate::ui::LucideIcon::Plus,
+                crate::config::AppModule::Git => crate::ui::LucideIcon::RefreshCw,
+                _ => crate::ui::LucideIcon::Plus,
+            };
+            self.draw_chrome_action(
+                canvas,
+                rects.action_btn,
+                act_icon,
+                false,
+                hover == SpacesHover::Plus,
+                14.0,
+                theme,
+            );
+        }
+
+        // Botón contraer panel contextual (PanelLeft)
+        if rects.toggle_btn.2 > 0 {
+            self.draw_chrome_action(
+                canvas,
+                rects.toggle_btn,
+                crate::ui::LucideIcon::PanelLeft,
+                false,
+                hover == SpacesHover::Toggle,
+                15.0,
+                theme,
+            );
+        }
+    }
+
     pub(crate) fn render_spaces_panel(
         &mut self,
         canvas: &mut Canvas,
@@ -67,71 +323,57 @@ impl TerminalRenderer {
     ) {
         let (_, height) = canvas.size();
         let rects = SpacesPanelRects::compute(collapsed, height);
-        if height == 0 {
+        if height == 0 || collapsed {
             return;
         }
 
-        // Fondo del marco y línea que lo separa de la barra superior y de las tarjetas.
-        Self::draw_rect(canvas, 0, 0, rects.width, height, theme.bar_bg());
-        Self::draw_rect(canvas, rects.width - 1, 0, 1, height, theme.chrome_line());
+        let sidebar_x = SpacesPanelRects::RAIL_W;
+        let sidebar_w = SpacesPanelRects::WIDTH - SpacesPanelRects::RAIL_W;
+        let status_h = StatusBarRects::BAR_H;
+        let total_h = height.saturating_sub(TopTabBarRects::HEIGHT + status_h);
 
-        // Cabecera: marca (solo expandido), búsqueda y alternar.
-        if !collapsed {
-            let base = self.centered_baseline(SpacesPanelRects::HEADER_H / 2);
-            self.draw_ui_text(
-                canvas,
-                "TEArminal",
-                18,
-                base,
-                rects.search_btn.0.saturating_sub(8),
-                theme.foreground,
-                tokens::TITLE,
-                true,
-            );
-            self.draw_chrome_action(
-                canvas,
-                rects.search_btn,
-                crate::ui::LucideIcon::Search,
-                false,
-                hover == SpacesHover::Search,
-                15.0,
-                theme,
-            );
-        }
-        self.draw_chrome_action(
+        // Fondo del panel lateral contextual (mantle) y línea derecha (s1)
+        Self::draw_rect(
             canvas,
-            rects.toggle_btn,
-            crate::ui::LucideIcon::PanelLeft,
-            false,
-            hover == SpacesHover::Toggle,
-            15.0,
+            sidebar_x,
+            TopTabBarRects::HEIGHT,
+            sidebar_w,
+            total_h,
+            theme.bar_bg(),
+        );
+        Self::draw_rect(
+            canvas,
+            sidebar_x + sidebar_w - 1,
+            TopTabBarRects::HEIGHT,
+            1,
+            total_h,
+            theme.chrome_line(),
+        );
+
+        // Cabecera contextual del panel de Spaces
+        let sidebar_rects = ContextualSidebarRects::compute(
+            collapsed,
+            crate::config::AppModule::Spaces,
+            height,
+            status_h,
+        );
+        self.render_sidebar_header(
+            canvas,
+            crate::config::AppModule::Spaces,
+            sidebar_rects,
+            hover,
             theme,
         );
-        if collapsed {
-            self.draw_chrome_action(
-                canvas,
-                rects.plus_btn,
-                crate::ui::LucideIcon::Plus,
-                false,
-                hover == SpacesHover::Plus,
-                14.0,
-                theme,
-            );
-        }
 
         // Lista: «Este equipo» y, si los hay, «Equipos remotos»
         let remote: Vec<bool> = items.iter().map(|i| i.remote).collect();
         for (slot, r) in rects.visible_slots(&remote, scroll) {
             match slot {
                 SpacesSlot::Header { remote: is_remote } => {
-                    if collapsed {
-                        Self::draw_rect(canvas, r.0, r.1, r.2, 1, theme.chrome_line());
-                        continue;
-                    }
                     let label = if is_remote {
-                        "Equipos remotos"
+                        "EQUIPOS REMOTOS"
                     } else {
-                        "Este equipo"
+                        "ESTE EQUIPO"
                     };
                     let plus = SpacesPanelRects::header_plus(r);
                     self.draw_ui_text(
@@ -141,8 +383,8 @@ impl TerminalRenderer {
                         self.centered_baseline(r.1 + r.3 / 2),
                         plus.0,
                         theme.text_muted(),
-                        tokens::BODY,
-                        false,
+                        tokens::MICRO,
+                        true,
                     );
                     let plus_hover = if is_remote {
                         SpacesHover::MachinePlus
@@ -175,33 +417,76 @@ impl TerminalRenderer {
             }
         }
 
-        // Pie: línea, Ajustes y Add machine.
-        Self::draw_rect(
-            canvas,
-            SpacesPanelRects::PAD_X,
-            rects.settings_btn.1.saturating_sub(6),
-            rects.width - 2 * SpacesPanelRects::PAD_X,
-            1,
-            theme.chrome_line(),
-        );
-        self.draw_footer_row(
-            canvas,
-            rects.settings_btn,
-            crate::ui::LucideIcon::Settings,
-            "Ajustes",
-            collapsed,
-            hover == SpacesHover::Settings,
-            theme,
-        );
-        self.draw_footer_row(
-            canvas,
-            rects.machine_btn,
-            crate::ui::LucideIcon::Plus,
-            "Añadir máquina",
-            collapsed,
-            hover == SpacesHover::Machine,
-            theme,
-        );
+        // Pie: línea separadora superior y botones «Terminal» y «Añadir máquina» (DISENO §4)
+        if rects.terminal_btn.2 > 0 {
+            Self::draw_rect(
+                canvas,
+                sidebar_x,
+                rects.terminal_btn.1.saturating_sub(10),
+                sidebar_w,
+                1,
+                theme.chrome_line(),
+            );
+            self.draw_footer_btn(
+                canvas,
+                rects.terminal_btn,
+                crate::ui::LucideIcon::Terminal,
+                "Terminal",
+                hover == SpacesHover::Terminal,
+                theme,
+            );
+            self.draw_footer_btn(
+                canvas,
+                rects.machine_btn,
+                crate::ui::LucideIcon::Plus,
+                "Añadir máquina",
+                hover == SpacesHover::Machine,
+                theme,
+            );
+        }
+    }
+
+    /// Botón rectangular con contorno de 1 px para el pie del panel contextual (DISENO §4)
+    pub(crate) fn draw_footer_btn(
+        &mut self,
+        canvas: &mut Canvas,
+        rect: Rect,
+        icon: crate::ui::LucideIcon,
+        label: &str,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let (x, y, w, h) = rect;
+        if w == 0 || h == 0 {
+            return;
+        }
+        let border = if hovered {
+            theme.accent_color()
+        } else {
+            theme.card_outline()
+        };
+        let bg = if hovered {
+            theme.surface_hover()
+        } else {
+            theme.bar_bg()
+        };
+        Self::draw_rect(canvas, x, y, w, h, bg);
+        Self::draw_rect(canvas, x, y, w, 1, border);
+        Self::draw_rect(canvas, x, y + h - 1, w, 1, border);
+        Self::draw_rect(canvas, x, y, 1, h, border);
+        Self::draw_rect(canvas, x + w - 1, y, 1, h, border);
+
+        let fg = if hovered {
+            theme.foreground
+        } else {
+            theme.text_secondary()
+        };
+        let label_w = self.measure_ui_text(label, 11.0, true);
+        let total_content = 14 + 6 + label_w;
+        let start_x = x + (w.saturating_sub(total_content)) / 2;
+        self.draw_lucide_icon(canvas, icon, start_x + 7, y + h / 2, 13.0, fg);
+        let base = self.centered_baseline(y + h / 2);
+        self.draw_ui_text(canvas, label, start_x + 18, base, x + w - 4, fg, 11.0, true);
     }
 
     fn draw_space_row(
@@ -216,16 +501,10 @@ impl TerminalRenderer {
     ) {
         let hovered = hover == SpacesHover::Row(item.index);
         if item.is_active {
-            canvas.rounded_fill(r.0, r.1, r.2, r.3, tokens::RADIUS_ROW, theme.surface_bg());
+            Self::draw_rect(canvas, r.0, r.1, r.2, r.3, theme.surface_bg());
+            Self::draw_rect(canvas, r.0, r.1, 2, r.3, theme.accent_color());
         } else if hovered {
-            canvas.rounded_fill(
-                r.0,
-                r.1,
-                r.2,
-                r.3,
-                tokens::RADIUS_ROW,
-                theme.surface_hover(),
-            );
+            Self::draw_rect(canvas, r.0, r.1, r.2, r.3, theme.surface_hover());
         }
         let badge = SpacesPanelRects::BADGE;
         let bx = if collapsed {
@@ -234,14 +513,7 @@ impl TerminalRenderer {
             r.0 + 8
         };
         let by = r.1 + (r.3 - badge) / 2;
-        canvas.rounded_fill(
-            bx,
-            by,
-            badge,
-            badge,
-            tokens::RADIUS_ROW.saturating_sub(2),
-            theme.ansi[item.color_index()],
-        );
+        Self::draw_rect(canvas, bx, by, badge, badge, theme.ansi[item.color_index()]);
         let letter = item
             .editing_input
             .as_ref()
@@ -339,42 +611,6 @@ impl TerminalRenderer {
                 end,
                 theme.text_muted(),
                 tokens::MICRO,
-                false,
-            );
-        }
-    }
-
-    fn draw_footer_row(
-        &mut self,
-        canvas: &mut Canvas,
-        rect: Rect,
-        icon: crate::ui::LucideIcon,
-        label: &str,
-        collapsed: bool,
-        hovered: bool,
-        theme: &Theme,
-    ) {
-        let (x, y, w, h) = rect;
-        if hovered {
-            canvas.rounded_fill(x, y, w, h, tokens::RADIUS_ROW, theme.surface_hover());
-        }
-        let fg = if hovered {
-            theme.foreground
-        } else {
-            theme.text_secondary()
-        };
-        let icon_x = if collapsed { x + w / 2 } else { x + 16 };
-        self.draw_lucide_icon(canvas, icon, icon_x, y + h / 2, 14.0, fg);
-        if !collapsed {
-            let base = self.centered_baseline(y + h / 2);
-            self.draw_ui_text(
-                canvas,
-                label,
-                x + 34,
-                base,
-                x + w - 8,
-                fg,
-                tokens::BODY,
                 false,
             );
         }

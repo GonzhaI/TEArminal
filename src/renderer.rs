@@ -9,6 +9,8 @@
 mod blocks;
 mod canvas;
 mod context_menu;
+mod db_view;
+mod dialog;
 mod diff_view;
 mod draw;
 mod explorer_panel;
@@ -18,18 +20,24 @@ mod glyphs;
 mod gpu;
 mod machine_modal;
 pub(crate) mod md_preview;
+mod monitor_view;
 mod palette;
 mod pane;
 mod scene;
 mod settings_page;
 mod spaces_panel;
 mod state;
+mod states;
 mod status_bar;
 mod syntax;
 #[cfg(test)]
 mod test_support;
+mod toasts;
 pub(crate) mod tokens;
 mod top_bar;
+
+#[allow(unused_imports)]
+pub(crate) use states::{StateCheck, TechBadge};
 
 use draw::Clip;
 use glyphs::{

@@ -1,16 +1,17 @@
 //! Repintado de un fotograma completo.
 
 use super::*;
-use crate::renderer::{Canvas, Presented, SidebarRects};
+use crate::renderer::{Canvas, Presented};
 
 #[allow(clippy::too_many_arguments)]
 struct SceneParams<'a> {
-    spaces_collapsed: bool,
+    active_module: crate::config::AppModule,
+    sidebar_collapsed: bool,
+    git_changes: usize,
     spaces_hover: crate::renderer::SpacesHover,
     spaces_scroll: usize,
     space_items: &'a [crate::renderer::SpaceItem],
-    hovered_changes_btn: bool,
-    changes_active: bool,
+    hovered_search: bool,
     offset: usize,
     right_offset: usize,
     top_offset: usize,
@@ -21,8 +22,8 @@ struct SceneParams<'a> {
     hovered_tab: Option<usize>,
     hovered_close: Option<usize>,
     hovered_new_tab: bool,
-    hovered_files_btn: bool,
     hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
+    hovered_ssh_lost_btn: Option<(PaneId, crate::renderer::SshLostButton)>,
     hovered_pane_header: Option<PaneId>,
     hovered_url_span: Option<(PaneId, usize, usize, usize)>,
     hovered_win_min: bool,
@@ -40,10 +41,12 @@ struct SceneParams<'a> {
     content_idx: usize,
     tab_items: &'a [SidebarTabItem],
     panel_right: bool,
-    panel_width: usize,
     tab_anim_rect: Option<(f32, f32)>,
     palette_anim_progress: f32,
     settings_modal_anim_progress: f32,
+    monitor: &'a crate::monitor::MonitorState,
+    system_hover: Option<crate::renderer::SystemClickTarget>,
+    hovered_toast_close: Option<usize>,
 }
 
 impl TearminalApp {
@@ -89,12 +92,10 @@ impl TearminalApp {
         let hovered_tab = self.hovered_tab;
         let hovered_close = self.hovered_close;
         let hovered_new_tab = self.hovered_new_tab;
-        let hovered_files_btn = self.hovered_files_btn;
         let space_items = self.space_items();
         let visible_tabs = self.visible_tab_indices();
         let cursor_visible = !self.config.terminal.cursor_blink || self.cursor_on;
         let panel_right = self.panel_on_right();
-        let panel_width = self.panel_width();
 
         // Editar una vista previa la fija (si no, la siguiente vista previa borraría el trabajo)
         for t in &mut self.tabs {
@@ -127,6 +128,8 @@ impl TearminalApp {
 
         let keep_awake_working = self.has_working_agent();
 
+        self.toasts.retain(|t| !t.is_expired());
+
         let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) else {
             return;
         };
@@ -158,12 +161,13 @@ impl TearminalApp {
         });
 
         let params = SceneParams {
-            spaces_collapsed: self.spaces_collapsed,
+            active_module: self.active_module,
+            sidebar_collapsed: self.sidebar_collapsed,
+            git_changes: self.file_explorer.git_statuses.len(),
             spaces_hover: self.spaces_hover,
             spaces_scroll: self.spaces_scroll,
             space_items: &space_items,
-            hovered_changes_btn: self.hovered_changes_btn,
-            changes_active: self.file_explorer.changes_only,
+            hovered_search: self.hovered_search,
             offset,
             right_offset,
             top_offset,
@@ -174,8 +178,8 @@ impl TearminalApp {
             hovered_tab,
             hovered_close,
             hovered_new_tab,
-            hovered_files_btn,
             hovered_pane_btn: self.hovered_pane_btn,
+            hovered_ssh_lost_btn: self.hovered_ssh_lost_btn,
             hovered_pane_header: self.hovered_pane_header,
             hovered_url_span: self.hovered_url_span,
             hovered_win_min: self.hovered_win_min,
@@ -192,10 +196,12 @@ impl TearminalApp {
             content_idx,
             tab_items: &tab_items,
             panel_right,
-            panel_width,
             tab_anim_rect: self.tab_anim_rect,
             palette_anim_progress: self.palette_anim_progress,
             settings_modal_anim_progress: self.settings_modal_anim_progress,
+            monitor: &self.monitor,
+            system_hover: self.system_hover,
+            hovered_toast_close: self.hovered_toast_close,
         };
 
         self.canvas.begin(size.width, size.height);
@@ -211,6 +217,8 @@ impl TearminalApp {
             &self.context_menu,
             &self.palette,
             &self.machine_modal,
+            &self.active_dialog,
+            &self.toasts,
             &params,
             size.width as usize,
             size.height as usize,
@@ -255,6 +263,8 @@ fn draw_full_scene(
     context_menu: &Option<ContextMenu>,
     palette: &Option<PaletteState>,
     machine: &Option<MachineModal>,
+    active_dialog: &Option<DialogState>,
+    toasts: &[Toast],
     p: &SceneParams,
     width: usize,
     height: usize,
@@ -272,30 +282,95 @@ fn draw_full_scene(
         p.hovered_tab,
         p.hovered_close,
         p.hovered_new_tab,
-        p.hovered_files_btn,
-        p.hovered_changes_btn,
+        p.hovered_search,
         p.hovered_win_min,
         p.hovered_win_max,
         p.hovered_win_close,
         is_maximized,
-        p.explorer_visible,
-        p.changes_active,
         p.offset,
         theme,
     );
     renderer.tab_indicator_visual = None;
-    renderer.render_spaces_panel(
+
+    renderer.render_rail(
         canvas,
-        p.space_items,
-        p.spaces_collapsed,
+        p.active_module,
+        p.git_changes,
         p.spaces_hover,
-        p.spaces_scroll,
-        p.cursor_visible,
         theme,
     );
 
-    if p.sidebar_visible {
-        draw_panel(canvas, renderer, theme, p, width, height);
+    if !p.sidebar_collapsed {
+        match p.active_module {
+            crate::config::AppModule::Spaces => {
+                renderer.render_spaces_panel(
+                    canvas,
+                    p.space_items,
+                    p.sidebar_collapsed,
+                    p.spaces_hover,
+                    p.spaces_scroll,
+                    p.cursor_visible,
+                    theme,
+                );
+            }
+            crate::config::AppModule::Files | crate::config::AppModule::Git => {
+                let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+                    p.sidebar_collapsed,
+                    p.active_module,
+                    height,
+                    p.status_bar_h,
+                );
+                renderer.render_sidebar_header(
+                    canvas,
+                    p.active_module,
+                    sb_rects,
+                    p.spaces_hover,
+                    theme,
+                );
+                if file_explorer.visible {
+                    renderer.render_file_explorer(
+                        canvas,
+                        p.top_offset,
+                        p.status_bar_h,
+                        file_explorer,
+                        p.cursor_visible,
+                        theme,
+                    );
+                }
+            }
+            crate::config::AppModule::Data => {
+                let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+                    p.sidebar_collapsed,
+                    p.active_module,
+                    height,
+                    p.status_bar_h,
+                );
+                renderer.render_sidebar_header(
+                    canvas,
+                    p.active_module,
+                    sb_rects,
+                    p.spaces_hover,
+                    theme,
+                );
+                renderer.render_db_sidebar(canvas, sb_rects, active_tab.db_tab.as_ref(), theme);
+            }
+            crate::config::AppModule::System => {
+                let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+                    p.sidebar_collapsed,
+                    p.active_module,
+                    height,
+                    p.status_bar_h,
+                );
+                renderer.render_sidebar_header(
+                    canvas,
+                    p.active_module,
+                    sb_rects,
+                    p.spaces_hover,
+                    theme,
+                );
+                renderer.render_system_sidebar(canvas, sb_rects, p.monitor, p.system_hover, theme);
+            }
+        }
     }
 
     if let Some(ref mut viewer) = active_tab.file_viewer {
@@ -348,13 +423,32 @@ fn draw_full_scene(
             theme,
         );
         renderer.scroll_visual_offset = None;
-
-        if file_explorer.visible {
-            renderer.render_file_explorer(
+    } else if active_tab.is_system_monitor {
+        let term_area_w = width.saturating_sub(p.offset + p.right_offset);
+        let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
+        renderer.render_system_monitor(
+            canvas,
+            p.offset,
+            p.top_offset,
+            term_area_w + p.right_offset,
+            term_area_h,
+            p.status_bar_h,
+            p.monitor,
+            p.system_hover,
+            theme,
+        );
+    } else if active_tab.is_database {
+        let term_area_w = width.saturating_sub(p.offset + p.right_offset);
+        let term_area_h = height.saturating_sub(p.top_offset + p.status_bar_h);
+        if let Some(ref db) = active_tab.db_tab {
+            renderer.render_db_view(
                 canvas,
+                p.offset,
                 p.top_offset,
-                p.status_bar_h,
-                file_explorer,
+                term_area_w + p.right_offset,
+                term_area_h,
+                db,
+                p.cursor_visible,
                 theme,
             );
         }
@@ -373,13 +467,16 @@ fn draw_full_scene(
         for rect in &pane_rects {
             if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
                 let is_active = rect.pane_id == focused_pane_id;
+                let is_disconnected = pane.ssh_reconnect.is_some();
                 if rect.has_header {
                     let ssh_pane = pane
                         .terminal
                         .ssh_session
                         .as_ref()
                         .is_some_and(|s| s.is_active);
-                    let (icon, icon_color) = if pane.is_agent_pane() {
+                    let (icon, icon_color) = if is_disconnected {
+                        (crate::ui::LucideIcon::Dot, theme.ansi[1])
+                    } else if pane.is_agent_pane() {
                         (crate::ui::LucideIcon::Sparkles, theme.accent_color())
                     } else if ssh_pane {
                         (crate::ui::LucideIcon::Server, theme.text_secondary())
@@ -390,6 +487,11 @@ fn draw_full_scene(
                         .hovered_pane_btn
                         .filter(|(pane_id, _)| *pane_id == rect.pane_id)
                         .map(|(_, button)| button);
+                    let badge = if is_disconnected {
+                        Some("Sin conexión")
+                    } else {
+                        None
+                    };
                     renderer.render_pane_header(
                         canvas,
                         (rect.x, rect.slot_y, rect.width),
@@ -402,6 +504,7 @@ fn draw_full_scene(
                         rect.has_buttons,
                         p.hovered_pane_header == Some(rect.pane_id),
                         hovered,
+                        badge,
                         theme,
                     );
                 }
@@ -410,18 +513,36 @@ fn draw_full_scene(
                     .filter(|(pane_id, _, _, _)| *pane_id == rect.pane_id)
                     .map(|(_, line, sc, ec)| (line, sc, ec));
                 renderer.cursor_visual = pane.cursor_visual_pos;
-                renderer.render_pane(
-                    canvas,
-                    rect.x,
-                    rect.y,
-                    rect.width,
-                    rect.height,
-                    &pane.terminal,
-                    theme,
-                    p.cursor_visible,
-                    is_active,
-                    has_multiple,
-                );
+
+                if let Some(ref rec) = pane.ssh_reconnect {
+                    let hovered_lost = p
+                        .hovered_ssh_lost_btn
+                        .filter(|(pane_id, _)| *pane_id == rect.pane_id)
+                        .map(|(_, btn)| btn);
+                    renderer.render_ssh_lost_connection(
+                        canvas,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        rec,
+                        hovered_lost,
+                        theme,
+                    );
+                } else {
+                    renderer.render_pane(
+                        canvas,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        &pane.terminal,
+                        theme,
+                        p.cursor_visible,
+                        is_active,
+                        has_multiple,
+                    );
+                }
                 renderer.cursor_visual = None;
                 renderer.hovered_url_span = None;
             }
@@ -434,16 +555,6 @@ fn draw_full_scene(
         } in dividers
         {
             TerminalRenderer::render_pane_divider(canvas, dx, dy, dw, dh, divider_color);
-        }
-
-        if file_explorer.visible {
-            renderer.render_file_explorer(
-                canvas,
-                p.top_offset,
-                p.status_bar_h,
-                file_explorer,
-                theme,
-            );
         }
     }
 
@@ -466,7 +577,7 @@ fn draw_full_scene(
     }
     TerminalRenderer::draw_framed_card(canvas, cards.content, content_focused, theme);
 
-    if file_explorer.visible {
+    if file_explorer.visible && !file_explorer.changes_only {
         renderer.render_file_explorer_hover_overlay(
             canvas,
             p.top_offset,
@@ -518,25 +629,33 @@ fn draw_full_scene(
             };
 
         let active_model = ai_snapshot.model_for(ai_status);
-        let meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
-        renderer.render_status_bar_full(
-            canvas,
-            p.offset,
-            cwd.as_deref(),
-            git_branch.as_deref(),
-            ssh_host.as_deref(),
-            cols,
-            rows,
-            ai_status,
-            active_model,
-            &meters,
-            p.keep_awake,
-            p.keep_awake_working,
-            p.hovered_keep_awake,
-            p.hovered_ai_badge,
-            p.explorer_visible,
-            theme,
-        );
+        let mut meters = TerminalRenderer::status_meters_for(ai_snapshot, ai_status);
+        if meters.is_empty() {
+            meters =
+                TerminalRenderer::system_status_meters_configured(p.monitor, &config.performance);
+        }
+        if active_tab.is_system_monitor {
+            renderer.render_system_monitor_status_bar(canvas, width, height, p.monitor, theme);
+        } else {
+            renderer.render_status_bar_full(
+                canvas,
+                p.offset,
+                cwd.as_deref(),
+                git_branch.as_deref(),
+                ssh_host.as_deref(),
+                cols,
+                rows,
+                ai_status,
+                active_model,
+                &meters,
+                p.keep_awake,
+                p.keep_awake_working,
+                p.hovered_keep_awake,
+                p.hovered_ai_badge,
+                p.explorer_visible,
+                theme,
+            );
+        }
         if p.keep_awake_popup_open {
             renderer.render_keep_awake_popup(
                 canvas,
@@ -616,6 +735,16 @@ fn draw_full_scene(
         );
         renderer.palette_anim_progress = None;
     }
+
+    // Diálogos modales y confirmaciones (F4)
+    if let Some(dlg) = active_dialog {
+        renderer.render_dialog(canvas, dlg, p.cursor_visible, theme);
+    }
+
+    // Avisos (toasts) en esquina inferior derecha
+    if !toasts.is_empty() {
+        renderer.render_toasts(canvas, toasts, p.hovered_toast_close, theme);
+    }
 }
 
 /// Dibuja el panel lateral. A la izquierda lo hace sobre el fotograma; a la derecha, en un búfer propio
@@ -639,32 +768,14 @@ pub(super) fn card_regions(
     offset: usize,
     right_offset: usize,
     top_offset: usize,
-    panel_visible: bool,
-    panel_right: bool,
+    _panel_visible: bool,
+    _panel_right: bool,
 ) -> CardRegions {
     let usable = height.saturating_sub(status_bar_h);
-    let top = SidebarRects::TOP;
-    let panel_w = if panel_right { right_offset } else { offset };
-    let panel_w = if panel_w > 0 { panel_w } else { SIDEBAR_WIDTH };
-    let panel = panel_visible.then(|| {
-        let x0 = if panel_right {
-            width.saturating_sub(panel_w)
-        } else {
-            0
-        };
-        (x0, top, panel_w, usable.saturating_sub(top))
-    });
-    // El panel de Spaces es marco plano (no tarjeta): el contenido arranca justo en su borde. A la derecha,
-    // con el explorador a la vista, el contenido se estira bajo el margen de su tarjeta: un solo margen.
-    let stretch = if panel_visible {
-        SidebarRects::CARD_INSET
-    } else {
-        0
-    };
     let left = offset;
-    let right = width.saturating_sub(right_offset) + if right_offset > 0 { stretch } else { 0 };
+    let right = width.saturating_sub(right_offset);
     CardRegions {
-        panel,
+        panel: None,
         content: (
             left,
             top_offset,
@@ -672,33 +783,4 @@ pub(super) fn card_regions(
             usable.saturating_sub(top_offset),
         ),
     }
-}
-
-fn draw_panel(
-    canvas: &mut Canvas,
-    renderer: &mut TerminalRenderer,
-    theme: &Theme,
-    p: &SceneParams,
-    width: usize,
-    height: usize,
-) {
-    let panel_w = p.panel_width;
-    let x0 = width.saturating_sub(panel_w);
-    let usable = height.saturating_sub(p.status_bar_h);
-    let top = SidebarRects::TOP;
-    canvas.fill_rect(
-        (0, 0, width, height),
-        x0,
-        top,
-        panel_w,
-        usable.saturating_sub(top),
-        theme.background,
-    );
-    canvas.with_offset(
-        x0 as i32,
-        0,
-        (panel_w, height),
-        (x0, top, x0 + panel_w, usable),
-        |c| renderer.render_files_panel(c, panel_w, p.status_bar_h, true, theme),
-    );
 }

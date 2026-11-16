@@ -10,9 +10,6 @@ const METER_PCT_GAP: usize = 8;
 const METER_GAP: usize = 17;
 /// Cuerpo del porcentaje: un paso por debajo de la etiqueta, como en el bosquejo.
 const METER_PCT_SIZE: f32 = 9.0;
-/// Sitio mínimo (px) que debe quedar tras un tramo de las migas para dibujar el separador `›` (22) y el
-/// icono del siguiente elemento (21); si no, el elemento se omite en vez de pisar el badge del agente.
-const CRUMB_ROOM: usize = 43;
 /// Etiquetas del grupo de estado (badge y medidores): los 12 px del bosquejo, a la escala por
 /// defecto de `ui_font_size`.
 const STATUS_LABEL_SIZE: f32 = 10.5;
@@ -95,7 +92,7 @@ impl TerminalRenderer {
     pub(crate) fn render_status_bar_full(
         &mut self,
         canvas: &mut Canvas,
-        left_x: usize,
+        _left_x: usize,
         cwd: Option<&str>,
         git_branch: Option<&str>,
         ssh_host: Option<&str>,
@@ -121,20 +118,18 @@ impl TerminalRenderer {
         let center_y = bar_y + (bar_h / 2);
         let baseline = self.centered_baseline(center_y);
 
-        // 1. Fondo: la barra pertenece al chrome y se separa del lienzo por el tono, sin hairline.
-        Self::draw_rect(
-            canvas,
-            left_x,
-            bar_y,
-            width.saturating_sub(left_x),
-            bar_h,
-            theme.bar_bg(),
-        );
+        // 1. Fondo completo de la barra de estado y línea superior divisoria (DISENO §4)
+        Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
+        Self::draw_rect(canvas, 0, bar_y, width, 1, theme.chrome_line());
 
-        // 2. Grupo derecho anclado al borde: badge del agente · medidores · dimensiones · keep-awake.
-        let (_, badge_label, ai_fg) =
+        // 2. Cálculo de métricas y segmentos
+        let (badge_icon, badge_label, ai_fg) =
             Self::status_bar_badge(ai_status, ssh_host, active_model, theme);
-        let ai_text_w = self.measure_ui_text(&badge_label, STATUS_LABEL_SIZE, true);
+        let ai_text_w = if badge_label.is_empty() {
+            0
+        } else {
+            self.measure_ui_text(&badge_label, STATUS_LABEL_SIZE, true)
+        };
         let update_info = crate::updater::get_available_update();
         let update_text = update_info
             .as_ref()
@@ -152,13 +147,200 @@ impl TerminalRenderer {
         let meters_w = self.status_meters_width(meters);
         let kw_w = self.keep_awake_button_width(keep_awake);
         let rects = StatusBarRects::compute_full(
-            width, height, ai_text_w, update_w, dims_w, meters_w, kw_w,
+            width,
+            height,
+            ai_text_w,
+            update_w,
+            dims_w,
+            meters_w,
+            kw_w,
+            git_branch.is_some(),
         );
 
-        // Selector de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha.
-        // Sin cápsula ni contorno: solo icono y texto, que se aclara al pasar el ratón o con el selector abierto.
+        // --- SEGMENTOS IZQUIERDOS (entorno, rama, ruta) con separadores de 1 px ---
+        // Segmento 1: Entorno (LOCAL o SSH host)
+        let env_r = rects.env_rect;
+        let is_remote = ssh_host.is_some();
+        let env_label = ssh_host.unwrap_or("LOCAL");
+        let dot_color = if is_remote {
+            theme.ansi[3]
+        } else {
+            theme.ansi[2]
+        };
+        let dot_y = (bar_h.saturating_sub(7)) / 2;
+        Self::draw_rect(canvas, env_r.0 + 12, bar_y + dot_y, 7, 7, dot_color);
+        self.draw_ui_text(
+            canvas,
+            env_label,
+            env_r.0 + 25,
+            baseline,
+            env_r.0 + env_r.2.saturating_sub(8),
+            theme.foreground,
+            STATUS_LABEL_SIZE,
+            true,
+        );
+        Self::draw_rect(
+            canvas,
+            env_r.0 + env_r.2 - 1,
+            bar_y,
+            1,
+            bar_h,
+            theme.chrome_line(),
+        );
+
+        // Segmento 2: Rama Git (si existe)
+        if let (Some(br_rect), Some(branch)) = (rects.branch_rect, git_branch) {
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::GitBranch,
+                br_rect.0 + 16,
+                center_y,
+                11.0,
+                theme.text_secondary(),
+            );
+            self.draw_mono_text(
+                canvas,
+                branch,
+                br_rect.0 + 26,
+                baseline,
+                br_rect.0 + br_rect.2.saturating_sub(8),
+                theme.text_secondary(),
+                tokens::DETAIL,
+                true,
+            );
+            Self::draw_rect(
+                canvas,
+                br_rect.0 + br_rect.2 - 1,
+                bar_y,
+                1,
+                bar_h,
+                theme.chrome_line(),
+            );
+        }
+
+        // Segmento 3: Ruta actual (cwd)
+        if let (Some(p_rect), Some(dir)) = (rects.path_rect, cwd) {
+            self.draw_mono_text(
+                canvas,
+                dir,
+                p_rect.0 + 12,
+                baseline,
+                p_rect.0 + p_rect.2.saturating_sub(8),
+                theme.text_secondary(),
+                tokens::DETAIL,
+                false,
+            );
+            Self::draw_rect(
+                canvas,
+                p_rect.0 + p_rect.2 - 1,
+                bar_y,
+                1,
+                bar_h,
+                theme.chrome_line(),
+            );
+        }
+
+        // --- SEGMENTOS DERECHOS con bordes izquierdos de 1 px ---
+        // Dimensiones (cols × rows)
+        if let (ref dims_r, Some(ref dims)) = (rects.dims_rect, dims_str) {
+            if dims_r.2 > 0 {
+                Self::draw_rect(canvas, dims_r.0, bar_y, 1, bar_h, theme.chrome_line());
+                let dw = self.measure_mono_text(dims, tokens::MICRO, false);
+                let dx = dims_r.0 + (dims_r.2.saturating_sub(dw)) / 2;
+                self.draw_mono_text(
+                    canvas,
+                    dims,
+                    dx,
+                    baseline,
+                    dims_r.0 + dims_r.2,
+                    theme.text_muted(),
+                    tokens::MICRO,
+                    false,
+                );
+            }
+        }
+
+        // Medidores / botón del monitor de sistema (F1/F3)
+        if rects.meters.2 > 0 {
+            Self::draw_rect(canvas, rects.meters.0, bar_y, 1, bar_h, theme.chrome_line());
+            if meters.is_empty() {
+                // Hueco reservado para monitor de rendimiento (DISENO §4): etiqueta SISTEMA con icono
+                self.draw_lucide_icon(
+                    canvas,
+                    crate::ui::LucideIcon::Sliders,
+                    rects.meters.0 + 14,
+                    center_y,
+                    12.0,
+                    theme.text_muted(),
+                );
+                let sys_label = "SISTEMA";
+                self.draw_ui_text(
+                    canvas,
+                    sys_label,
+                    rects.meters.0 + 24,
+                    baseline,
+                    rects.meters.0 + rects.meters.2.saturating_sub(6),
+                    theme.text_muted(),
+                    tokens::MICRO + 1.0,
+                    true,
+                );
+            } else {
+                self.draw_status_meters(
+                    canvas,
+                    meters,
+                    rects.meters.0 + rects.meters.2.saturating_sub(12),
+                    (bar_y, bar_h),
+                    baseline,
+                    ai_fg,
+                    theme,
+                );
+            }
+        }
+
+        // Chip de IA (solo con agente activo: el entorno Local/SSH ya aparece en el segmento izquierdo)
+        if rects.ai_badge.2 > 0 {
+            let (bx, _by, bw, _bh) = rects.ai_badge;
+            Self::draw_rect(canvas, bx, bar_y, 1, bar_h, theme.chrome_line());
+            self.draw_lucide_icon(
+                canvas,
+                badge_icon.unwrap_or(crate::ui::LucideIcon::Sparkles),
+                bx + 14,
+                center_y,
+                12.0,
+                ai_fg,
+            );
+            self.draw_ui_text(
+                canvas,
+                &badge_label,
+                bx + 28,
+                baseline,
+                bx + bw.saturating_sub(6),
+                theme.foreground,
+                STATUS_LABEL_SIZE,
+                true,
+            );
+        }
+
+        // Actualización disponible (si existe)
+        if let (Some((ub_x, _ub_y, ub_w, _ub_h)), Some(utext)) = (rects.update_badge, update_text) {
+            Self::draw_rect(canvas, ub_x, bar_y, 1, bar_h, theme.chrome_line());
+            Self::draw_rect(canvas, ub_x + 10, bar_y + dot_y, 7, 7, theme.ansi[3]);
+            self.draw_mono_text(
+                canvas,
+                &utext,
+                ub_x + 22,
+                baseline,
+                ub_x + ub_w.saturating_sub(6),
+                theme.ansi[3],
+                tokens::MICRO + 0.5,
+                false,
+            );
+        }
+
+        // Selector Keep-awake
         let (kw_x, _kw_y, kw_btn_w, _kw_btn_h) = rects.keep_awake_btn;
         if kw_btn_w > 0 {
+            Self::draw_rect(canvas, kw_x, bar_y, 1, bar_h, theme.chrome_line());
             let (icon, icon_fg, mut text_fg) = match keep_awake {
                 KeepAwakeMode::Active => (
                     crate::ui::LucideIcon::Coffee,
@@ -183,197 +365,34 @@ impl TerminalRenderer {
                 text_fg = theme.foreground;
             }
 
-            self.draw_lucide_icon(canvas, icon, kw_x + 7, center_y, 10.0, icon_fg);
+            self.draw_lucide_icon(canvas, icon, kw_x + 14, center_y, 11.0, icon_fg);
             self.draw_ui_text(
                 canvas,
                 keep_awake.label(),
-                kw_x + 20,
+                kw_x + 28,
                 baseline,
-                kw_x + kw_btn_w,
+                kw_x + kw_btn_w.saturating_sub(6),
                 text_fg,
                 STATUS_LABEL_SIZE,
                 true,
             );
         }
-
-        // Dimensiones como dato, a la izquierda del botón de keep-awake.
-        if let Some(ref dims) = dims_str {
-            let dims_right = if rects.keep_awake_btn.2 > 0 {
-                rects
-                    .keep_awake_btn
-                    .0
-                    .saturating_sub(StatusBarRects::GROUP_GAP)
-            } else {
-                width.saturating_sub(StatusBarRects::RIGHT_PAD)
-            };
-            let dims_x = dims_right.saturating_sub(dims_w);
-            self.draw_mono_text(
-                canvas,
-                dims,
-                dims_x,
-                baseline,
-                dims_right,
-                theme.text_muted(),
-                tokens::MICRO,
-                false,
-            );
-        }
-
-        // Medidores de los límites reales del agente (solo Claude los tiene), a la izquierda de las
-        // dimensiones: etiqueta, barra y porcentaje. La geometría decide si caben.
-        if rects.meters.2 > 0 {
-            self.draw_status_meters(
-                canvas,
-                meters,
-                rects.meters.0 + rects.meters.2,
-                (bar_y, bar_h),
-                baseline,
-                ai_fg,
-                theme,
-            );
-        }
-
-        let (bx, _by, bw, _bh) = rects.ai_badge;
-
-        // 3. Izquierda: SSH, carpeta (solo texto) y rama. Sin separadores: el espacio en blanco ya agrupa.
-        let mut cur_x = left_x + 14;
-        let mut room = true;
-        let text_limit = rects
-            .update_badge
-            .map_or(bx, |(ux, _, _, _)| ux)
-            .saturating_sub(18);
-
-        if let Some(ssh) = ssh_host {
-            self.draw_lucide_icon(
-                canvas,
-                crate::ui::LucideIcon::Server,
-                cur_x + 7,
-                center_y,
-                11.0,
-                theme.text_secondary(),
-            );
-            cur_x += 21;
-            let adv = self.draw_mono_text(
-                canvas,
-                ssh,
-                cur_x,
-                baseline,
-                text_limit,
-                theme.text_secondary(),
-                tokens::DETAIL,
-                true,
-            );
-            cur_x = adv + 14;
-            if cwd.is_some() || git_branch.is_some() {
-                // Separador + icono del siguiente elemento: si no caben antes del grupo derecho, se omiten.
-                if adv + CRUMB_ROOM <= text_limit {
-                    cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
-                } else {
-                    room = false;
-                }
-            }
-        }
-
-        if let (Some(dir), true) = (cwd, room) {
-            let adv = self.draw_mono_text(
-                canvas,
-                dir,
-                cur_x,
-                baseline,
-                text_limit,
-                theme.text_secondary(),
-                tokens::DETAIL,
-                false,
-            );
-            cur_x = adv + 14;
-            if git_branch.is_some() {
-                if adv + CRUMB_ROOM <= text_limit {
-                    cur_x = Self::draw_crumb_separator(self, canvas, adv, center_y, theme);
-                } else {
-                    room = false;
-                }
-            }
-        }
-
-        if let (Some(branch), true) = (git_branch, room) {
-            self.draw_lucide_icon(
-                canvas,
-                crate::ui::LucideIcon::GitBranch,
-                cur_x + 7,
-                center_y,
-                10.5,
-                theme.accent_color(),
-            );
-            cur_x += 21;
-            self.draw_mono_text(
-                canvas,
-                branch,
-                cur_x,
-                baseline,
-                text_limit,
-                theme.accent_text(),
-                tokens::DETAIL,
-                true,
-            );
-        }
-
-        // 4. Actualización disponible: icono + texto de acento, sin relleno.
-        if let (Some((ub_x, _ub_y, ub_w, _ub_h)), Some(utext)) = (rects.update_badge, update_text) {
-            self.draw_lucide_icon(
-                canvas,
-                crate::ui::LucideIcon::ArrowUp,
-                ub_x + 7,
-                center_y,
-                10.5,
-                theme.accent_color(),
-            );
-            self.draw_mono_text(
-                canvas,
-                &utext,
-                ub_x + 18,
-                baseline,
-                ub_x + ub_w,
-                theme.accent_text(),
-                tokens::MICRO + 0.5,
-                false,
-            );
-        }
-
-        // 5. Entorno (Local / SSH) y agente: solo texto, sin icono, cápsula ni interacción.
-        let text_x = bx + 12;
-        let label_fg = if ai_status == AiAgentStatus::None && ssh_host.is_none() {
-            ai_fg
-        } else {
-            theme.foreground
-        };
-        self.draw_ui_text(
-            canvas,
-            &badge_label,
-            text_x,
-            baseline,
-            bx + bw,
-            label_fg,
-            STATUS_LABEL_SIZE,
-            true,
-        );
     }
 
-    /// Entorno de trabajo siempre visible: «Local» o «SSH», y con un agente activo se antepone al agente
-    /// («Local · Claude Sonnet 5.5»). Sin agente y en local no lleva icono.
+    /// Chip derecho de la barra de estado: muestra únicamente el agente/modelo de IA cuando está
+    /// activo, evitando repetir el entorno («LOCAL» / host SSH) que ya vive en el segmento izquierdo.
     pub(crate) fn status_bar_badge(
         ai_status: AiAgentStatus,
         ssh_host: Option<&str>,
         active_model: Option<&str>,
         theme: &Theme,
     ) -> (Option<crate::ui::LucideIcon>, String, Color) {
+        if ai_status == AiAgentStatus::None {
+            return (None, String::new(), theme.text_muted());
+        }
         let (icon, label, fg) =
             Self::status_bar_badge_info(ai_status, ssh_host, active_model, theme);
-        if ai_status == AiAgentStatus::None {
-            let icon = ssh_host.map(|_| icon);
-            return (icon, label, fg);
-        }
-        let env = if ssh_host.is_some() { "SSH" } else { "Local" };
-        (Some(icon), format!("{env} · {label}"), fg)
+        (Some(icon), label, fg)
     }
 
     /// Selector de pantalla encendida: tarjeta elevada que se despliega hacia arriba con las tres opciones,
@@ -473,26 +492,6 @@ impl TerminalRenderer {
         }
     }
 
-    /// Separador `›` de las migas (SSH · carpeta · rama): `adv` es donde terminó el texto anterior.
-    /// Devuelve la X donde empieza el siguiente elemento.
-    fn draw_crumb_separator(
-        &mut self,
-        canvas: &mut Canvas,
-        adv: usize,
-        center_y: usize,
-        theme: &Theme,
-    ) -> usize {
-        self.draw_lucide_icon(
-            canvas,
-            crate::ui::LucideIcon::ChevronRight,
-            adv + 11,
-            center_y,
-            12.0,
-            theme.text_muted(),
-        );
-        adv + 22
-    }
-
     /// Dibuja los medidores terminando en `right_limit` y devuelve el borde izquierdo que ocupan.
     /// El porcentaje va siempre como texto: el color de la barra solo refuerza.
     #[allow(clippy::too_many_arguments)]
@@ -549,7 +548,9 @@ impl TerminalRenderer {
                 } else {
                     theme.accent_color()
                 };
-                let color = if meter.percent >= 90.0 {
+                let color = if meter.percent >= 90.0
+                    || meter.alert_at.is_some_and(|limit| meter.percent >= limit)
+                {
                     theme.ansi[1]
                 } else if meter.percent >= 70.0 {
                     theme.ansi[3]
@@ -609,8 +610,60 @@ impl TerminalRenderer {
             .map(|l| StatusMeter {
                 label: short_limit_label(&l.label),
                 percent: l.percent,
+                alert_at: None,
             })
             .collect()
+    }
+
+    /// Medidores de la barra de estado a partir de los datos muestreados del monitor del sistema (F3).
+    #[allow(dead_code)]
+    pub(crate) fn system_status_meters(monitor: &crate::monitor::MonitorState) -> Vec<StatusMeter> {
+        Self::system_status_meters_configured(monitor, &crate::config::PerformanceConfig::default())
+    }
+
+    /// Medidores de la barra de estado según la configuración de rendimiento activa (F8).
+    pub(crate) fn system_status_meters_configured(
+        monitor: &crate::monitor::MonitorState,
+        perf: &crate::config::PerformanceConfig,
+    ) -> Vec<StatusMeter> {
+        let Some(snap) = &monitor.snapshot else {
+            return Vec::new();
+        };
+        let alert = |threshold: u8| perf.enable_alerts.then_some(f32::from(threshold));
+        let net_pct = ((snap.net_rx_bytes_sec + snap.net_tx_bytes_sec) as f32 / 12_500_000.0
+            * 100.0)
+            .min(100.0); // respecto a 100 Mbit/s, la misma escala que el historial del monitor
+        let mut meters = Vec::new();
+        let mut push = |enabled: bool, label: &str, percent: f32, alert_at: Option<f32>| {
+            if enabled {
+                meters.push(StatusMeter {
+                    label: label.to_string(),
+                    percent,
+                    alert_at,
+                });
+            }
+        };
+        push(
+            perf.show_cpu,
+            "CPU",
+            snap.cpu_total,
+            alert(perf.cpu_alert_threshold),
+        );
+        push(
+            perf.show_ram,
+            "RAM",
+            snap.ram_pct,
+            alert(perf.ram_alert_threshold),
+        );
+        push(perf.show_gpu, "GPU", snap.gpu_usage_pct, None);
+        push(
+            perf.show_disk,
+            "DISCO",
+            snap.disk_usage_pct,
+            alert(perf.disk_alert_threshold),
+        );
+        push(perf.show_net, "RED", net_pct, None);
+        meters
     }
 
     pub(crate) fn status_bar_badge_info(
@@ -806,7 +859,7 @@ impl TerminalRenderer {
             let plan_w = u
                 .plan
                 .as_deref()
-                .map_or(0, |p| self.measure_ui_text(p, 10.0, true) + 20);
+                .map_or(0, |p| self.measure_ui_text(p, tokens::MICRO, true) + 20);
             self.draw_ui_text(
                 canvas,
                 &u.model,
@@ -814,11 +867,11 @@ impl TerminalRenderer {
                 cur_y + 10,
                 max_x.saturating_sub(plan_w),
                 theme.foreground,
-                11.0,
+                tokens::MICRO,
                 true,
             );
             if let Some(plan) = u.plan.as_deref() {
-                let plan_w = self.measure_ui_text(plan, 10.0, false);
+                let plan_w = self.measure_ui_text(plan, tokens::MICRO, false);
                 self.draw_ui_text(
                     canvas,
                     plan,
@@ -826,7 +879,7 @@ impl TerminalRenderer {
                     cur_y + 10,
                     max_x,
                     theme.text_muted(),
-                    10.0,
+                    tokens::MICRO,
                     false,
                 );
             }
@@ -1004,7 +1057,7 @@ impl TerminalRenderer {
             crate::app::format_tokens(snapshot.window_24h_tokens),
             snapshot.window_24h_sessions
         );
-        let d24_lw = self.measure_ui_text(&d24_line, 10.5, true);
+        let d24_lw = self.measure_ui_text(&d24_line, tokens::MICRO, true);
         self.draw_ui_text(
             canvas,
             &d24_line,
@@ -1012,7 +1065,7 @@ impl TerminalRenderer {
             cur_y + 10,
             max_x,
             theme.foreground,
-            10.5,
+            tokens::MICRO,
             true,
         );
         cur_y += 16;
@@ -1030,7 +1083,7 @@ impl TerminalRenderer {
                 cur_y + 10,
                 max_x,
                 theme.text_secondary(),
-                10.0,
+                tokens::MICRO,
                 true,
             );
             cur_y += 16;
@@ -1043,9 +1096,17 @@ impl TerminalRenderer {
                     _ => theme.text_secondary(),
                 };
                 let tag = format!("{}: ", ag.agent);
-                let next_x =
-                    self.draw_ui_text(canvas, &tag, pad_x, cur_y + 10, max_x, brand_fg, 10.5, true);
-                let dw = self.measure_ui_text(&ag.detail, 10.0, false);
+                let next_x = self.draw_ui_text(
+                    canvas,
+                    &tag,
+                    pad_x,
+                    cur_y + 10,
+                    max_x,
+                    brand_fg,
+                    tokens::MICRO,
+                    true,
+                );
+                let dw = self.measure_ui_text(&ag.detail, tokens::MICRO, false);
                 let model_max_x = max_x.saturating_sub(dw + 8);
                 self.draw_ui_text(
                     canvas,
@@ -1054,7 +1115,7 @@ impl TerminalRenderer {
                     cur_y + 10,
                     model_max_x,
                     theme.foreground,
-                    10.5,
+                    tokens::MICRO,
                     false,
                 );
                 self.draw_ui_text(
@@ -1064,7 +1125,7 @@ impl TerminalRenderer {
                     cur_y + 10,
                     max_x,
                     theme.text_secondary(),
-                    10.0,
+                    tokens::MICRO,
                     false,
                 );
                 cur_y += 20;
@@ -1084,6 +1145,130 @@ impl TerminalRenderer {
                 false,
             );
         }
+    }
+
+    /// Renderiza la barra de estado inferior específica para la vista del Monitor de Sistema (F3 / Monitor.dc.html).
+    pub(crate) fn render_system_monitor_status_bar(
+        &mut self,
+        canvas: &mut Canvas,
+        width: usize,
+        height: usize,
+        monitor: &crate::monitor::MonitorState,
+        theme: &Theme,
+    ) {
+        let bar_h = 28usize;
+        let bar_y = height.saturating_sub(bar_h);
+        let center_y = bar_y + bar_h / 2;
+        let baseline = self.centered_baseline(center_y);
+
+        // Fondo y separador superior (DISENO §4 / Monitor.dc.html)
+        Self::draw_rect(canvas, 0, bar_y, width, bar_h, theme.bar_bg());
+        Self::draw_rect(canvas, 0, bar_y, width, 1, theme.chrome_line());
+
+        let fallback_snap = crate::monitor::SystemSnapshot::default();
+        let snap = monitor.snapshot.as_ref().unwrap_or(&fallback_snap);
+
+        // Segmento 1: Fuente e intervalo de actualización
+        let (dot_c, source_text) = match &monitor.selected_source {
+            crate::monitor::MonitorSource::Local => (
+                theme.ansi[2], // verde
+                "Este equipo · actualiza cada 1 s".to_string(),
+            ),
+            crate::monitor::MonitorSource::Remote(dest) => {
+                let is_conn = monitor
+                    .remote_snapshots
+                    .get(dest)
+                    .is_some_and(|r| r.is_connected);
+                let c = if is_conn {
+                    theme.ansi[3]
+                } else {
+                    theme.ansi[1]
+                };
+                (c, format!("{} · actualiza cada 3 s", dest))
+            }
+        };
+
+        let dot_size = 7usize;
+        let dot_y = bar_y + (bar_h.saturating_sub(dot_size)) / 2;
+        canvas.rounded_fill(14, dot_y, dot_size, dot_size, tokens::RADIUS_ROW, dot_c);
+
+        let s1_w = self.measure_ui_text(&source_text, tokens::DETAIL, true) + 36;
+        self.draw_ui_text(
+            canvas,
+            &source_text,
+            26,
+            baseline,
+            s1_w.saturating_sub(8),
+            theme.foreground,
+            tokens::DETAIL,
+            true,
+        );
+        Self::draw_rect(canvas, s1_w, bar_y, 1, bar_h, theme.chrome_line());
+
+        // Segmento 2: Resumen del hardware
+        let hw_summary = match &monitor.selected_source {
+            crate::monitor::MonitorSource::Local => {
+                let cpu_short = snap
+                    .cpu_name
+                    .split("with")
+                    .next()
+                    .unwrap_or(&snap.cpu_name)
+                    .trim();
+                let ram_gb = (snap.ram_total_bytes as f32 / 1_073_741_824.0).round();
+                format!(
+                    "Windows 11 · {} · {:.0} GB · {}",
+                    cpu_short, ram_gb, snap.gpu_name
+                )
+            }
+            crate::monitor::MonitorSource::Remote(dest) => {
+                if let Some(rem) = monitor.remote_snapshots.get(dest) {
+                    let ram_gb = rem.ram_total_bytes as f32 / 1_073_741_824.0;
+                    format!(
+                        "Linux remoto · {} · {:.1} GB RAM · Carga: {:.2}",
+                        dest, ram_gb, rem.load_1m
+                    )
+                } else {
+                    format!("Host remoto: {}", dest)
+                }
+            }
+        };
+
+        let s2_x = s1_w + 14;
+        let s2_w = self.measure_ui_text(&hw_summary, tokens::DETAIL, false) + 24;
+        self.draw_ui_text(
+            canvas,
+            &hw_summary,
+            s2_x,
+            baseline,
+            width.saturating_sub(180),
+            theme.text_secondary(),
+            tokens::DETAIL,
+            false,
+        );
+        Self::draw_rect(canvas, s2_x + s2_w, bar_y, 1, bar_h, theme.chrome_line());
+
+        // Segmento derecho: Historial
+        let hist_text = "Historial: últimos 60 s";
+        let hist_w = self.measure_mono_text(hist_text, tokens::MICRO, false);
+        let hist_x = width.saturating_sub(hist_w + 20);
+        Self::draw_rect(
+            canvas,
+            hist_x.saturating_sub(12),
+            bar_y,
+            1,
+            bar_h,
+            theme.chrome_line(),
+        );
+        self.draw_mono_text(
+            canvas,
+            hist_text,
+            hist_x,
+            baseline,
+            width.saturating_sub(10),
+            theme.text_muted(),
+            tokens::MICRO,
+            false,
+        );
     }
 }
 

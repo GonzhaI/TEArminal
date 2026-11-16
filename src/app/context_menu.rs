@@ -30,6 +30,8 @@ pub(crate) enum MenuAction {
     TermPaste,
     SplitHorizontal,
     SplitVertical,
+    ApplyGrid2x2,
+    ApplyGrid1Plus2,
     ClosePane,
     ClearTerminal,
     // Pestañas y ventana
@@ -68,8 +70,12 @@ pub(crate) enum MenuAction {
     ExplorerCollapseAll,
     ExplorerExpandAll,
     FilterExplorer,
+    GitCheckoutBranch(String),
     // Modo pantalla encendida (keep-awake)
     SetKeepAwake(KeepAwakeMode),
+    // Navegación de módulos y barra lateral
+    SwitchModule(crate::config::AppModule),
+    ToggleSidebar,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +86,7 @@ pub(crate) struct MenuItem {
     /// `None` = separador
     pub(crate) action: Option<MenuAction>,
     pub(crate) enabled: bool,
+    pub(crate) danger: bool,
 }
 
 impl MenuItem {
@@ -96,7 +103,13 @@ impl MenuItem {
             shortcut,
             action: Some(action),
             enabled,
+            danger: false,
         }
+    }
+
+    pub(super) fn danger(mut self) -> Self {
+        self.danger = true;
+        self
     }
 
     pub(super) fn separator() -> Self {
@@ -106,6 +119,7 @@ impl MenuItem {
             shortcut: "",
             action: None,
             enabled: false,
+            danger: false,
         }
     }
 }
@@ -313,13 +327,16 @@ impl TearminalApp {
                     MenuAction::ExplorerRename,
                     can_manage,
                 ));
-                items.push(MenuItem::new(
-                    "Eliminar",
-                    LucideIcon::Trash2,
-                    "Supr",
-                    MenuAction::ExplorerDelete,
-                    can_manage,
-                ));
+                items.push(
+                    MenuItem::new(
+                        "Eliminar",
+                        LucideIcon::Trash2,
+                        "Supr",
+                        MenuAction::ExplorerDelete,
+                        can_manage,
+                    )
+                    .danger(),
+                );
             }
             items.push(MenuItem::separator());
             let any_open = self.file_explorer.items.iter().any(|i| i.is_expanded);
@@ -358,7 +375,14 @@ impl TearminalApp {
             let keep_awake_w = self.renderer.as_ref().map_or(65, |r| {
                 r.keep_awake_button_width(self.config.terminal.keep_awake)
             });
-            let rects = StatusBarRects::compute_full(win_w, win_h, 0, None, 0, 0, keep_awake_w);
+            let has_branch = self
+                .tabs
+                .get(self.active_tab_index)
+                .and_then(|t| t.active_pane())
+                .and_then(|p| p.cached_git_branch.as_ref())
+                .is_some();
+            let rects =
+                StatusBarRects::compute_full(win_w, win_h, 0, None, 0, 0, keep_awake_w, has_branch);
             if StatusBarRects::inside(mx, my, rects.keep_awake_btn) {
                 self.keep_awake_menu()
             } else {
@@ -727,6 +751,20 @@ impl TearminalApp {
                 true,
             ),
             MenuItem::new(
+                "Cuadrícula 2×2",
+                LucideIcon::Columns2,
+                "",
+                MenuAction::ApplyGrid2x2,
+                true,
+            ),
+            MenuItem::new(
+                "Diseño 1 + 2",
+                LucideIcon::Rows2,
+                "",
+                MenuAction::ApplyGrid1Plus2,
+                true,
+            ),
+            MenuItem::new(
                 "Cerrar panel",
                 LucideIcon::X,
                 "Ctrl+Alt+W",
@@ -1080,6 +1118,8 @@ impl TearminalApp {
             }
             MenuAction::SplitHorizontal => self.split_active_pane(SplitDirection::Horizontal),
             MenuAction::SplitVertical => self.split_active_pane(SplitDirection::Vertical),
+            MenuAction::ApplyGrid2x2 => self.apply_grid_layout(GridPreset::TwoByTwo),
+            MenuAction::ApplyGrid1Plus2 => self.apply_grid_layout(GridPreset::OnePlusTwo),
             MenuAction::ClosePane => self.close_active_pane(),
             MenuAction::ClearTerminal => {
                 if let Some(p) = self.tabs[idx].active_pane_mut() {
@@ -1181,8 +1221,19 @@ impl TearminalApp {
             MenuAction::FilterExplorer => {
                 self.open_explorer_filter();
             }
+            MenuAction::GitCheckoutBranch(branch) => {
+                if let Some(repo) = self.file_explorer.git_root.clone() {
+                    self.spawn_git_checkout(repo, branch);
+                }
+            }
             MenuAction::SetKeepAwake(mode) => {
                 self.set_keep_awake_mode(mode);
+            }
+            MenuAction::SwitchModule(module) => {
+                self.set_active_module(module);
+            }
+            MenuAction::ToggleSidebar => {
+                self.toggle_sidebar();
             }
         }
         if let Some(w) = &self.window {

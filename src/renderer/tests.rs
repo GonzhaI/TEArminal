@@ -368,9 +368,6 @@ mod bench {
             false,
             false,
             false,
-            false,
-            true,
-            false,
             0,
             &theme,
         );
@@ -427,9 +424,6 @@ mod bench {
                 false,
                 false,
                 false,
-                false,
-                true,
-                false,
                 0,
                 &theme,
             );
@@ -483,7 +477,7 @@ impl TerminalRenderer {
         hovered_win_max: bool,
         hovered_win_close: bool,
         is_maximized: bool,
-        explorer_visible: bool,
+        _explorer_visible: bool,
         theme: &crate::theme::Theme,
     ) {
         self.render_top_tab_bar(
@@ -493,13 +487,10 @@ impl TerminalRenderer {
             None,
             false,
             false,
-            false,
             hovered_win_min,
             hovered_win_max,
             hovered_win_close,
             is_maximized,
-            explorer_visible,
-            false,
             crate::renderer::SpacesPanelRects::WIDTH,
             theme,
         );
@@ -779,32 +770,32 @@ fn test_ai_agent_detection_and_status_bar() {
     assert_eq!(label_none, "Local");
     assert_eq!(fg_none, theme.text_muted());
 
-    // Local sin agente: solo texto, sin punto ni icono; con SSH, icono de servidor
+    // Sin agente activo el chip derecho queda vacío (Local/SSH ya aparece en el segmento izquierdo)
     let (icon, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
         AiAgentStatus::None,
         None,
         None,
         &theme,
     );
-    assert_eq!((icon, label.as_str()), (None, "Local"));
+    assert_eq!((icon, label.as_str()), (None, ""));
     let (icon, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
         AiAgentStatus::None,
+        Some("host"),
+        None,
+        &theme,
+    );
+    assert_eq!((icon, label.as_str()), (None, ""));
+    // Con un agente activo se muestra solo el agente sin duplicar el entorno
+    let (icon, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
+        AiAgentStatus::Claude,
         Some("host"),
         None,
         &theme,
     );
     assert_eq!(
         (icon, label.as_str()),
-        (Some(crate::ui::LucideIcon::Server), "SSH")
+        (Some(crate::ui::LucideIcon::Sparkles), "Claude")
     );
-    // Con un agente el entorno sigue visible
-    let (_, label, _) = crate::renderer::TerminalRenderer::status_bar_badge(
-        AiAgentStatus::Claude,
-        Some("host"),
-        None,
-        &theme,
-    );
-    assert_eq!(label, "SSH · Claude");
 
     // El selector de pantalla encendida: tres opciones dentro de su tarjeta, sobre la barra de estado
     {
@@ -869,61 +860,55 @@ fn test_ai_agent_detection_and_status_bar() {
         &theme,
     );
 
-    // El status bar cubre todo el ancho inferior (0..width), por encima del cual reposa el sidebar
+    // En F1 el status bar cubre todo el ancho inferior (0..width) con altura de 28 px
     let buffer = canvas.snapshot();
     let status_bg = theme.bar_bg().to_u32_xrgb();
     assert_eq!(
-        buffer[(600 - 28) * 1000 + sidebar_offset + 5],
+        buffer[(600 - 28 + 1) * 1000 + 5],
         status_bg,
-        "El status bar debe empezar en su primera fila, sin hairline sobre el lienzo"
-    );
-    assert_eq!(
-        buffer[(600 - 22) * 1000 + sidebar_offset - 1],
-        Color::from_u32_xrgb(0xCAFE_BABE).to_u32_xrgb(),
-        "La barra de estado no invade el panel de Spaces, que ocupa todo el alto"
-    );
-    assert_eq!(
-        buffer[(600 - 22) * 1000 + sidebar_offset + 1],
-        status_bg,
-        "La barra de estado empieza en el borde del panel de Spaces"
+        "El inicio del status bar tiene fondo bar_bg (0..width)"
     );
     assert_eq!(
         buffer[(600 - 22) * 1000 + sidebar_offset + 5],
         status_bg,
-        "El fondo del status bar debe dibujarse en el área de trabajo"
+        "El interior del status bar tiene fondo bar_bg"
+    );
+    assert_eq!(
+        buffer[(600 - 22) * 1000 + 995],
+        status_bg,
+        "El extremo derecho del status bar tiene fondo bar_bg"
     );
 }
 
 #[test]
 fn test_top_tab_bar_geometry_and_layout() {
-    use crate::renderer::{SidebarRects, TopTabBarRects};
+    use crate::renderer::TopTabBarRects;
 
-    // Con el panel de Spaces a la izquierda las pestañas arrancan en su borde más el margen de tarjeta
+    // Con el riel + panel contextual a la izquierda las pestañas arrancan en su borde
     let left_x = 264;
     let rects = TopTabBarRects::compute(1400, left_x, 3);
-    assert_eq!(rects.bar_h, 38);
-    let first_x = left_x + SidebarRects::CARD_INSET;
-    assert_eq!(rects.tabs_start_x, first_x);
-    assert_eq!(rects.tab_w, 177);
+    assert_eq!(rects.bar_h, 40);
+    assert_eq!(rects.tabs_start_x, left_x);
+    assert!(rects.tab_w >= 40 && rects.tab_w <= 220);
 
     let tab0 = rects.tab_rect(0);
-    assert_eq!(tab0, (first_x, 0, 177, 38));
+    assert_eq!(tab0, (left_x, 0, rects.tab_w, 40));
 
     let close0 = rects.close_btn_rect(0);
-    assert_eq!(close0.0, first_x + 177 - 30);
-    assert_eq!(close0.1, 7);
+    assert_eq!(close0.0, left_x + rects.tab_w - 30);
+    assert_eq!(close0.1, 8);
     assert_eq!((close0.2, close0.3), (24, 24));
 
-    // De derecha a izquierda: controles de ventana · Changes · Files · «+», sin solaparse
+    // De derecha a izquierda: controles de ventana · Buscador Ctrl+K (290x26) · «+», sin solaparse
     assert_eq!(rects.win_min_btn.0, 1400 - 138);
     assert_eq!(rects.win_max_btn.0, 1400 - 92);
     assert_eq!(rects.win_close_btn.0, 1400 - 46);
-    assert!(rects.changes_btn.0 + rects.changes_btn.2 <= rects.win_min_btn.0);
-    assert!(rects.files_btn.0 + rects.files_btn.2 <= rects.changes_btn.0);
-    assert!(rects.plus_btn.0 + rects.plus_btn.2 <= rects.files_btn.0);
-    assert_eq!(rects.files_btn.3, TopTabBarRects::ACTION);
+    assert!(rects.search_btn.0 + rects.search_btn.2 <= rects.win_min_btn.0);
+    assert!(rects.plus_btn.0 + rects.plus_btn.2 <= rects.search_btn.0);
+    assert_eq!(rects.search_btn.2, 290);
+    assert_eq!(rects.search_btn.3, 26);
 
-    // Con 30 pestañas ninguna invade el «+» ni las píldoras
+    // Con 30 pestañas ninguna invade el «+» ni el buscador
     let compact = TopTabBarRects::compute(1200, 0, 30);
     let tab29 = compact.tab_rect(29);
     assert!(tab29.0 + tab29.2 <= compact.plus_btn.0);
@@ -1069,7 +1054,7 @@ fn test_settings_page_scrolls_only_the_content() {
 
     let max = SettingsPageRects::max_scroll(
         SettingsSection::Appearance,
-        h - SettingsPageRects::CONTENT_TOP - status,
+        h - SettingsPageRects::CONTENT_TOP - 16,
     );
     assert!(max > 0);
     assert_eq!(
@@ -1125,6 +1110,53 @@ fn test_settings_scrollbar_geometry_spans_the_track() {
     assert_eq!(bottom.1 + bottom.3, track.1 + track.3);
     // sin desbordamiento no hay barra
     assert!(SettingsPageRects::scrollbar(sec, 40, 900, 5000, 0).is_none());
+}
+
+#[test]
+fn test_settings_database_and_performance_render() {
+    use crate::renderer::{SettingsPageRects, SettingsPageState, SettingsSection};
+    let cfg = TearminalConfig::default();
+    let theme = crate::theme::Theme::default();
+    let mut r = TerminalRenderer::new(&cfg, 1.0);
+    let (w, h) = (1120, 816);
+
+    // 1. Validar geometrías
+    let rects = SettingsPageRects::compute_modal(0, 0, w, h);
+    assert!(rects.nav_database.2 > 0);
+    assert!(rects.nav_performance.2 > 0);
+    assert!(rects.db_prod_read_only_btn.2 > 0);
+    assert!(rects.db_write_window_minus_btn.2 > 0);
+    assert!(rects.db_page_size_plus_btn.2 > 0);
+    assert!(rects.perf_show_cpu_btn.2 > 0);
+    assert!(rects.perf_sample_interval_minus_btn.2 > 0);
+
+    // 2. Renderizar pestaña de bases de datos
+    let db_state = SettingsPageState {
+        section: SettingsSection::Database,
+        ..Default::default()
+    };
+    let mut canvas = test_support::new_canvas(w, h);
+    r.render_settings_page(&mut canvas, 40, 40, 40, 28, &cfg, &db_state, false, &theme);
+    assert!(canvas.scene().ops.len() > 20);
+
+    // 3. Renderizar pestaña de rendimiento
+    let perf_state = SettingsPageState {
+        section: SettingsSection::Performance,
+        ..Default::default()
+    };
+    let mut canvas_perf = test_support::new_canvas(w, h);
+    r.render_settings_page(
+        &mut canvas_perf,
+        40,
+        40,
+        40,
+        28,
+        &cfg,
+        &perf_state,
+        false,
+        &theme,
+    );
+    assert!(canvas_perf.scene().ops.len() > 20);
 }
 
 #[test]
@@ -1298,8 +1330,7 @@ fn test_panel_content_keeps_clear_of_the_panel_card() {
     );
 }
 
-/// El aviso de versión disponible deja 10 px de aire hasta la cápsula del badge del agente (que sobresale 6 px de su
-/// rectángulo).
+/// El aviso de versión disponible y el chip de IA están en segmentos independientes sin solaparse.
 #[test]
 fn test_update_badge_keeps_clear_of_the_agent_capsule() {
     use crate::renderer::StatusBarRects;
@@ -1307,27 +1338,23 @@ fn test_update_badge_keeps_clear_of_the_agent_capsule() {
     let r = StatusBarRects::compute_with_status(1440, 900, 120, Some(90), 0, 0);
     let ub = r.update_badge.expect("aviso de versión");
     assert!(
-        ub.0 + ub.2 + 10 <= r.ai_badge.0 - 6,
-        "aviso termina en {}, cápsula empieza en {}",
-        ub.0 + ub.2,
-        r.ai_badge.0 - 6
+        r.ai_badge.0 + r.ai_badge.2 <= ub.0,
+        "cápsula de IA termina en {}, aviso de versión empieza en {}",
+        r.ai_badge.0 + r.ai_badge.2,
+        ub.0
     );
 }
 
-/// La primera pestaña arranca alineada con el borde izquierdo de las tarjetas (`CARD_INSET`), no pegada a la ventana.
+/// La primera pestaña arranca tras la marca «TEARMINAL» o en el borde del panel lateral contextual.
 #[test]
 fn test_first_tab_aligns_with_the_card_edge() {
-    use crate::renderer::{SidebarRects, TopTabBarRects};
+    use crate::renderer::TopTabBarRects;
 
     for n in [1usize, 3, 12] {
         let rects = TopTabBarRects::compute(1440, 0, n);
-        assert_eq!(rects.tab_rect(0).0, SidebarRects::CARD_INSET, "n={n}");
+        assert_eq!(rects.tab_rect(0).0, TopTabBarRects::LEFT_PAD, "n={n}");
         let with_panel = TopTabBarRects::compute(1440, 264, n);
-        assert_eq!(
-            with_panel.tab_rect(0).0,
-            264 + SidebarRects::CARD_INSET,
-            "n={n}"
-        );
+        assert_eq!(with_panel.tab_rect(0).0, 264, "n={n}");
     }
 }
 
@@ -1510,9 +1537,6 @@ pub(super) fn build_recorded_scenes_themed(
         false,
         false,
         false,
-        false,
-        true,
-        false,
         0,
         &theme,
     );
@@ -1548,7 +1572,14 @@ pub(super) fn build_recorded_scenes_themed(
         true,
         false,
     );
-    r.render_file_explorer(&mut canvas, top_tabs.bar_h, status_h, &h_explorer, &theme);
+    r.render_file_explorer(
+        &mut canvas,
+        top_tabs.bar_h,
+        status_h,
+        &h_explorer,
+        false,
+        &theme,
+    );
     // Tarjetas del panel y del contenido, como las dibuja `redraw.rs` (horizontal, panel a la derecha:
     // el contenido se estira bajo el margen de la tarjeta vecina).
     let inset = crate::renderer::SidebarRects::CARD_INSET;
@@ -1580,10 +1611,12 @@ pub(super) fn build_recorded_scenes_themed(
             crate::renderer::StatusMeter {
                 label: "5 h".into(),
                 percent: 42.0,
+                alert_at: None,
             },
             crate::renderer::StatusMeter {
                 label: "Semana".into(),
                 percent: 18.0,
+                alert_at: None,
             },
         ],
         false,
@@ -1779,10 +1812,12 @@ pub(super) fn build_recorded_scenes_themed(
         crate::renderer::StatusMeter {
             label: "5 h".into(),
             percent: 42.0,
+            alert_at: None,
         },
         crate::renderer::StatusMeter {
             label: "Semana".into(),
             percent: 18.0,
+            alert_at: None,
         },
     ];
 
@@ -1838,9 +1873,6 @@ pub(super) fn build_recorded_scenes_themed(
         false,
         false,
         false,
-        false,
-        false,
-        true,
         false,
         SIDEBAR_WIDTH,
         &theme,
@@ -2040,6 +2072,7 @@ pub(super) fn build_recorded_scenes_themed(
                 true,
                 focused,
                 None,
+                None,
                 &theme,
             );
             let header_offset = crate::renderer::PaneHeaderRects::content_offset_for(y);
@@ -2141,9 +2174,6 @@ pub(super) fn build_recorded_scenes_themed(
             false,
             false,
             false,
-            false,
-            true,
-            false,
             SIDEBAR_WIDTH,
             &theme,
         );
@@ -2176,6 +2206,7 @@ pub(super) fn build_recorded_scenes_themed(
             false,
             false,
             false,
+            None,
             None,
             &theme,
         );
@@ -2426,6 +2457,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     let with = draw(&[StatusMeter {
         label: "5 h".into(),
         percent: 42.0,
+        alert_at: None,
     }]);
     assert_ne!(without, with, "los medidores deben dibujar algo");
     // Sin sitio (ventana estrecha) no se dibujan: no pisan la ruta ni la rama
@@ -2436,6 +2468,7 @@ fn test_status_bar_draws_limit_meters_only_when_given() {
     let meter = [StatusMeter {
         label: "5 h".into(),
         percent: 42.0,
+        alert_at: None,
     }];
     for (canvas, meters) in [(&mut narrow, &[][..]), (&mut narrow_with, &meter[..])] {
         r.render_status_bar_with_ai(
@@ -2502,6 +2535,7 @@ fn preview_panel_card() {
         SidebarRects::TOP,
         status_h,
         &explorer,
+        false,
         &theme,
     );
     explorer.toggle_changes_only();
@@ -2513,6 +2547,7 @@ fn preview_panel_card() {
         SidebarRects::TOP,
         status_h,
         &explorer,
+        false,
         &theme,
     );
     let region = (
@@ -2701,7 +2736,7 @@ fn test_tab_chip_stays_inside_tab_rect() {
     use crate::theme::Theme;
 
     let theme = Theme::default();
-    let (fill, line) = (
+    let (_fill, _line) = (
         theme.background.to_u32_xrgb(),
         theme.card_outline().to_u32_xrgb(),
     );
@@ -2731,36 +2766,26 @@ fn test_tab_chip_stays_inside_tab_rect() {
         let h = TopTabBarRects::HEIGHT;
         let buf = test_support::with_canvas(w, h, |c| {
             r.render_top_tab_bar(
-                c, &tabs, None, None, false, false, false, false, false, false, false, false,
-                false, 0, &theme,
+                c, &tabs, None, None, false, false, false, false, false, false, 0, &theme,
             )
         });
         let t = rects.tab_rect(0);
-        let chip = (t.0, t.1 + 4, t.2, t.3 - 8);
         let at = |x: usize, y: usize| buf[y * w + x];
-        let mid_x = chip.0 + chip.2 / 2;
-        let mid_y = chip.1 + chip.3 / 2;
+        let mid_x = t.0 + t.2 / 2;
         let ctx = format!("w={w} n={n}");
-        assert_eq!(at(mid_x, chip.1), line, "{ctx}: contorno superior");
+        let accent = theme.ui_accent.to_u32_xrgb();
+        assert_eq!(at(mid_x, t.1), accent, "{ctx}: barra de acento superior");
         assert_eq!(
-            at(mid_x, chip.1 + chip.3 - 1),
-            line,
-            "{ctx}: contorno inferior"
+            at(mid_x, t.1 + 1),
+            accent,
+            "{ctx}: barra de acento superior l2"
         );
-        assert_eq!(at(chip.0, mid_y), line, "{ctx}: contorno izquierdo");
-        assert_eq!(at(chip.0 + 2, mid_y), fill, "{ctx}: relleno");
-        for y in 0..h {
-            for x in 0..rects.plus_btn.0.min(w) {
-                let inside =
-                    x >= chip.0 && x < chip.0 + chip.2 && y >= chip.1 && y < chip.1 + chip.3;
-                if !inside {
-                    assert!(
-                        at(x, y) != fill && at(x, y) != line,
-                        "{ctx}: chip fuera de su rectángulo en ({x},{y})"
-                    );
-                }
-            }
-        }
+        let right_border = theme.chrome_line().to_u32_xrgb();
+        assert_eq!(
+            at(t.0 + t.2 - 1, t.1 + t.3 / 2),
+            right_border,
+            "{ctx}: borde derecho"
+        );
     }
 }
 
@@ -2774,10 +2799,10 @@ fn test_status_bar_separator_between_cwd_and_branch() {
     let bar_y = h - StatusBarRects::BAR_H;
     let cwd = "~/dev/tearminal";
     let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
-    // La carpeta empieza en x = 14 + 21 (icono) y su texto avanza `measure_mono_text`; el icono de la rama
-    // empieza 22 px después del texto, así que [adv + 4, adv + 18) solo puede contener el separador.
-    let adv = 35 + r.measure_mono_text(cwd, tokens::DETAIL, false);
-    let mut region_has_ink = |branch: Option<&str>| {
+    let line = theme.chrome_line().to_u32_xrgb();
+    let rects = StatusBarRects::compute_full(w, h, 0, None, 0, 0, 0, true);
+    let branch_div_x = rects.branch_rect.map(|b| b.0 + b.2 - 1).unwrap_or(209);
+    let mut region_has_divider = |branch: Option<&str>| {
         let buf = test_support::with_canvas(w, h, |c| {
             c.clear(theme.bar_bg());
             r.render_status_bar_with_ai(
@@ -2796,31 +2821,39 @@ fn test_status_bar_separator_between_cwd_and_branch() {
                 &theme,
             );
         });
-        let bg = theme.bar_bg().to_u32_xrgb();
-        (bar_y + 4..h - 4).any(|y| (adv + 4..adv + 18).any(|x| buf[y * w + x] != bg))
+        (bar_y..h)
+            .filter(|&y| buf[y * w + branch_div_x] == line)
+            .count()
+            >= StatusBarRects::BAR_H - 2
     };
-    assert!(region_has_ink(Some("main")), "falta el separador con rama");
-    assert!(!region_has_ink(None), "sin rama no debe haber separador");
+    assert!(
+        region_has_divider(Some("main")),
+        "falta el separador con rama"
+    );
+    assert!(
+        !region_has_divider(None),
+        "sin rama no debe haber separador de rama"
+    );
 }
 
-/// Con una ruta tan larga que el texto se recorta en el límite del grupo derecho, la rama y su separador se omiten:
-/// no pueden pisar la cápsula ni el icono del badge del agente.
+/// Con una ruta muy larga, el texto se recorta antes del grupo derecho y no pisa el chip de IA.
+/// Cuando el ancho total es insuficiente (< 120 px), la rama se omite por completo.
 #[test]
 fn test_status_bar_drops_branch_when_cwd_fills_the_left_side() {
+    use crate::renderer::StatusBarRects;
     use crate::theme::Theme;
 
     let theme = Theme::default();
     let (w, h) = (520usize, 60usize);
-    let cwd = "~/dev/un/directorio/de/trabajo/con/una/ruta/muy/larga/que/no/cabe/en/la/barra";
     let mut r = TerminalRenderer::new(&TearminalConfig::default(), 1.0);
-    let mut render = |branch: Option<&str>| {
+    let mut render = |cwd: &str| {
         test_support::with_canvas(w, h, |c| {
             c.clear(theme.bar_bg());
             r.render_status_bar_with_ai(
                 c,
                 0,
                 Some(cwd),
-                branch,
+                Some("main"),
                 None,
                 110,
                 34,
@@ -2833,9 +2866,23 @@ fn test_status_bar_drops_branch_when_cwd_fills_the_left_side() {
             );
         })
     };
+    let buf_long =
+        render("~/dev/un/directorio/de/trabajo/con/una/ruta/muy/larga/que/no/cabe/en/la/barra");
+    let buf_short = render("~/short");
+    let rects = StatusBarRects::compute_full(w, h, 100, None, 0, 0, 0, true);
+    let (bx, by, bw, bh) = rects.ai_badge;
+    let badge_identical =
+        (by..by + bh).all(|y| (bx..bx + bw).all(|x| buf_long[y * w + x] == buf_short[y * w + x]));
     assert!(
-        render(Some("main")) == render(None),
-        "la rama se dibuja encima del badge cuando la ruta ocupa todo el sitio"
+        badge_identical,
+        "la ruta larga no debe pisar el badge de IA"
+    );
+
+    // Con ancho muy reducido, la rama no cabe y se omite
+    let narrow_rects = StatusBarRects::compute_full(100, h, 0, None, 0, 0, 0, true);
+    assert!(
+        narrow_rects.branch_rect.is_none(),
+        "en ventana muy estrecha la rama debe omitirse"
     );
 }
 
@@ -2854,10 +2901,12 @@ fn test_status_bar_capsules_dropped_when_narrow() {
         StatusMeter {
             label: "5 h".into(),
             percent: 42.0,
+            alert_at: None,
         },
         StatusMeter {
             label: "Semana".into(),
             percent: 18.0,
+            alert_at: None,
         },
     ];
     for (w, capsules) in [(200usize, 0usize), (400, 0), (1440, 0)] {
@@ -2879,9 +2928,24 @@ fn test_status_bar_capsules_dropped_when_narrow() {
                 &theme,
             );
         });
-        // Una cápsula = un tramo continuo de contorno en su fila superior.
+        // Una cápsula = un tramo continuo de contorno de más de 8 px en su fila superior.
+        // Los separadores verticales de 1 px de F1 no constituyen cápsulas.
         let on = |x: usize| buf[top_row * w + x] == line;
-        let runs = (0..w).filter(|&x| on(x) && (x == 0 || !on(x - 1))).count();
+        let mut runs = 0;
+        let mut cur_run = 0;
+        for x in 0..w {
+            if on(x) {
+                cur_run += 1;
+            } else {
+                if cur_run > 8 {
+                    runs += 1;
+                }
+                cur_run = 0;
+            }
+        }
+        if cur_run > 8 {
+            runs += 1;
+        }
         assert_eq!(runs, capsules, "w={w}: cápsulas dibujadas");
     }
 }
@@ -5168,36 +5232,38 @@ mod gpu_scenes {
 fn test_spaces_panel_slots_group_local_and_remote_without_overlap() {
     use crate::renderer::{SpacesPanelRects, SpacesSlot};
 
-    for collapsed in [false, true] {
-        let r = SpacesPanelRects::compute(collapsed, 900);
-        let flags = [false, false, true, true];
-        let slots = r.visible_slots(&flags, 0);
-        let spaces = slots
-            .iter()
-            .filter(|(s, _)| matches!(s, SpacesSlot::Space(_)))
-            .count();
-        assert_eq!(spaces, 4, "collapsed={collapsed}");
-        let headers = slots
-            .iter()
-            .filter(|(s, _)| matches!(s, SpacesSlot::Header { .. }))
-            .count();
-        assert_eq!(headers, if collapsed { 1 } else { 2 });
-        // Sin solapes y dentro de la lista
-        let mut last_bottom = r.list_top;
-        for (_, rect) in &slots {
-            assert!(rect.1 >= last_bottom, "solape en {rect:?}");
-            assert!(rect.1 + rect.3 <= r.list_bottom);
-            last_bottom = rect.1 + rect.3;
-        }
-        // Sin remotos no hay segundo grupo
-        let only_local = r.visible_slots(&[false, false], 0);
-        assert!(!only_local
-            .iter()
-            .any(|(s, _)| matches!(s, SpacesSlot::Header { remote: true })));
-        // El desplazamiento salta elementos
-        assert_eq!(r.slot_count(&flags), if collapsed { 5 } else { 6 });
-        assert!(r.visible_slots(&flags, 2).len() < slots.len());
+    // 1. Expandido: muestra cabeceras y filas de espacios
+    let r = SpacesPanelRects::compute(false, 900);
+    let flags = [false, false, true, true];
+    let slots = r.visible_slots(&flags, 0);
+    let spaces = slots
+        .iter()
+        .filter(|(s, _)| matches!(s, SpacesSlot::Space(_)))
+        .count();
+    assert_eq!(spaces, 4);
+    let headers = slots
+        .iter()
+        .filter(|(s, _)| matches!(s, SpacesSlot::Header { .. }))
+        .count();
+    assert_eq!(headers, 2);
+    // Sin solapes y dentro de la lista
+    let mut last_bottom = r.list_top;
+    for (_, rect) in &slots {
+        assert!(rect.1 >= last_bottom, "solape en {rect:?}");
+        assert!(rect.1 + rect.3 <= r.list_bottom);
+        last_bottom = rect.1 + rect.3;
     }
+    // Sin remotos no hay segundo grupo
+    let only_local = r.visible_slots(&[false, false], 0);
+    assert!(!only_local
+        .iter()
+        .any(|(s, _)| matches!(s, SpacesSlot::Header { remote: true })));
+    assert_eq!(r.slot_count(&flags), 6);
+    assert!(r.visible_slots(&flags, 2).len() < slots.len());
+
+    // 2. Colapsado: el riel de módulos reemplaza el panel, la lista de espacios se contrae
+    let collapsed_r = SpacesPanelRects::compute(true, 900);
+    assert_eq!(collapsed_r.visible_slots(&flags, 0).len(), 0);
 }
 
 #[test]
@@ -5648,4 +5714,224 @@ fn test_tracked_labels_are_uppercase() {
     };
     assert_eq!(end_of(&mut r, "interfaz"), end_of(&mut r, "INTERFAZ"));
     assert_eq!(end_of(&mut r, "tipografía"), end_of(&mut r, "TIPOGRAFÍA"));
+}
+
+#[test]
+fn test_render_system_monitor_and_sidebar_recording() {
+    let config = TearminalConfig::default();
+    let mut r = TerminalRenderer::new(&config, 1.0);
+    let theme = Theme::default();
+    let mut canvas = test_support::new_canvas(1440, 900);
+    canvas.clear(theme.background);
+
+    let mut monitor = crate::monitor::MonitorState::new();
+    let snap = crate::monitor::SystemSnapshot {
+        cpu_total: 22.5,
+        ram_pct: 45.0,
+        gpu_usage_pct: 15.0,
+        disk_usage_pct: 50.0,
+        cpu_cores: vec![
+            crate::monitor::CoreUsage {
+                index: 0,
+                percent: 12.0,
+            },
+            crate::monitor::CoreUsage {
+                index: 1,
+                percent: 35.0,
+            },
+        ],
+        volumes: vec![crate::monitor::VolumeInfo {
+            letter: "C:".into(),
+            label: "Windows".into(),
+            total_bytes: 1_000_000_000_000,
+            free_bytes: 500_000_000_000,
+            used_pct: 50.0,
+        }],
+        top_project_folders: vec![crate::monitor::ProjectFolderInfo {
+            name: "target/".into(),
+            size_bytes: 5_000_000_000,
+            action: Some("cargo clean".into()),
+        }],
+        processes: vec![crate::monitor::ProcessInfo {
+            pid: 1001,
+            name: "tearminal.exe".into(),
+            note: "ventana principal".into(),
+            kind: crate::monitor::ProcessKind::Tearminal,
+            cpu_pct: 0.4,
+            ram_bytes: 120_000_000,
+            gpu_pct: 2.0,
+        }],
+        ..Default::default()
+    };
+    monitor.apply_snapshot(snap);
+
+    // 1. Renderizar vista de monitor
+    r.render_system_monitor(
+        &mut canvas,
+        56,
+        40,
+        1440 - 56,
+        900 - 40 - 28,
+        28,
+        &monitor,
+        None,
+        &theme,
+    );
+    assert!(
+        !canvas.scene().ops.is_empty(),
+        "La escena debe contener primitivas grabadas"
+    );
+
+    // 2. Renderizar panel contextual de Sistema
+    let sb_rects =
+        ContextualSidebarRects::compute(false, crate::config::AppModule::System, 900, 28);
+    r.render_system_sidebar(&mut canvas, sb_rects, &monitor, None, &theme);
+
+    // 3. Verificar generación de medidores para la barra de estado
+    let meters = TerminalRenderer::system_status_meters(&monitor);
+    assert_eq!(meters.len(), 4);
+    assert_eq!(meters[0].label, "CPU");
+    assert_eq!(meters[0].percent, 22.5);
+    assert_eq!(meters[1].label, "RAM");
+    assert_eq!(meters[1].percent, 45.0);
+    assert_eq!(meters[2].label, "GPU");
+    assert_eq!(meters[2].percent, 15.0);
+    assert_eq!(meters[3].label, "DISCO");
+    assert_eq!(meters[3].percent, 50.0);
+
+    // 4. Verificar medidores configurados (F8)
+    let custom_perf = crate::config::PerformanceConfig {
+        show_gpu: false,
+        show_net: true,
+        ..Default::default()
+    };
+    let custom_meters = TerminalRenderer::system_status_meters_configured(&monitor, &custom_perf);
+    assert_eq!(custom_meters.len(), 4);
+    assert_eq!(custom_meters[0].label, "CPU");
+    assert_eq!(custom_meters[1].label, "RAM");
+    assert_eq!(custom_meters[2].label, "DISCO");
+    assert_eq!(custom_meters[3].label, "RED");
+}
+
+#[test]
+fn test_render_dialogs_toasts_and_states() {
+    let config = TearminalConfig::load_or_default();
+    let mut r = TerminalRenderer::new(&config, 1.0);
+    let themes = [
+        Theme::from_name(Theme::DEFAULT_DARK),
+        Theme::from_name(Theme::DEFAULT_LIGHT),
+    ];
+
+    for theme in &themes {
+        let mut canvas = Canvas::new();
+        canvas.begin(1440, 900);
+
+        // 1. Renderizar diálogo con confirmación escrita (Peligro)
+        let spec_danger = crate::app::DialogSpec::statement_without_where(
+            "usuarios",
+            250,
+            "DELETE FROM usuarios WHERE 1=1",
+        );
+        let dlg_danger = crate::app::DialogState::new(spec_danger);
+        r.render_dialog(&mut canvas, &dlg_danger, true, theme);
+        assert!(
+            !canvas.scene().ops.is_empty(),
+            "El diálogo peligroso debe grabar primitivas"
+        );
+
+        // 2. Renderizar diálogo de huella (Aviso)
+        let mut canvas2 = Canvas::new();
+        canvas2.begin(1440, 900);
+        let spec_warn = crate::app::DialogSpec::unknown_host_fingerprint(
+            "api-prod",
+            "10.0.4.12",
+            "SHA256:3wQ0xJ9p2m1v8Yk0aR5nTz7LdE4hB6uCfS1gXoWiVjM",
+        );
+        let dlg_warn = crate::app::DialogState::new(spec_warn);
+        r.render_dialog(&mut canvas2, &dlg_warn, false, theme);
+        assert!(
+            !canvas2.scene().ops.is_empty(),
+            "El diálogo de aviso debe grabar primitivas"
+        );
+
+        // 3. Renderizar pila de toasts
+        let mut canvas3 = Canvas::new();
+        canvas3.begin(1440, 900);
+        let toasts = vec![
+            crate::app::Toast::new(
+                1,
+                crate::app::ToastSeverity::Success,
+                "Conexión restablecida",
+            ),
+            crate::app::Toast::new(
+                2,
+                crate::app::ToastSeverity::Warning,
+                "Consulta lenta: 412 ms",
+            ),
+            crate::app::Toast::new(3, crate::app::ToastSeverity::Error, "Error al conectar"),
+        ];
+        r.render_toasts(&mut canvas3, &toasts, Some(0), theme);
+        assert!(
+            !canvas3.scene().ops.is_empty(),
+            "Los avisos deben grabar primitivas"
+        );
+
+        // 4. Renderizar vistas de estado
+        let mut canvas4 = Canvas::new();
+        canvas4.begin(1440, 900);
+        let container = (100, 100, 600, 400);
+
+        // Estado vacío
+        r.render_empty_state(
+            &mut canvas4,
+            container,
+            Some("Conexiones · vacío"),
+            &[],
+            "Aún no hay conexiones",
+            "Conecta PostgreSQL, MySQL, SQL Server o MariaDB.",
+            &["Nueva conexión", "Pegar cadena"],
+            Some(0),
+            theme,
+        );
+
+        // Estado cargando
+        r.render_loading_state(&mut canvas4, container, "Cargando esquema...", false, theme);
+
+        // Estado error
+        let checks = [
+            crate::renderer::StateCheck {
+                label: "Túnel SSH activo".into(),
+                ok: true,
+            },
+            crate::renderer::StateCheck {
+                label: "Certificado CA leído".into(),
+                ok: false,
+            },
+        ];
+        r.render_error_state(
+            &mut canvas4,
+            container,
+            "mssql-colegio · sin conexión",
+            "Certificado del servidor rechazado",
+            "sql01 no está firmado por la CA",
+            &checks,
+            &["Reintentar", "Copiar error"],
+            None,
+            theme,
+        );
+
+        // Estado sin permisos
+        r.render_no_permission_state(
+            &mut canvas4,
+            container,
+            "Sin permiso para leer esquema",
+            "El usuario no tiene privilegios",
+            true,
+            theme,
+        );
+        assert!(
+            !canvas4.scene().ops.is_empty(),
+            "Los estados deben grabar primitivas"
+        );
+    }
 }

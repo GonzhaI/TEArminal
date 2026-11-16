@@ -1,12 +1,22 @@
 //! Geometría compartida entre el dibujo y la detección de clics/hover (una sola fuente de verdad).
 
+mod db;
+mod dialog;
+mod git;
 mod modals;
 mod settings;
+mod system;
 mod viewer;
 
+pub(crate) use db::*;
+pub(crate) use dialog::*;
+pub(crate) use git::*;
 pub(crate) use modals::*;
 pub(crate) use settings::*;
+pub(crate) use system::*;
 pub(crate) use viewer::*;
+
+use crate::config::AppModule;
 
 /// Rectángulo (x, y, ancho, alto) en píxeles
 pub(crate) type Rect = (usize, usize, usize, usize);
@@ -63,34 +73,36 @@ pub(crate) fn pane_search_bar_rect(rect_x: usize, rect_y: usize, rect_width: usi
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct TopTabBarRects {
     pub bar_h: usize,
-    /// Borde izquierdo de la barra: el panel de Spaces ocupa lo que hay a su izquierda.
+    /// Borde izquierdo de la barra: riel + panel lateral ocupan lo que hay a su izquierda.
     pub left_x: usize,
+    /// Rectángulo del título de marca «TEARMINAL» (DISENO §4)
+    pub brand_rect: Rect,
+    /// Buscador «Buscar o ejecutar… Ctrl+K» (290×26 px)
+    pub search_btn: Rect,
     pub tabs_start_x: usize,
     pub tab_w: usize,
     pub tab_gap: usize,
-    pub plus_btn: (usize, usize, usize, usize),
-    /// Píldora «Files»: muestra u oculta la tarjeta del explorador.
-    pub files_btn: (usize, usize, usize, usize),
-    /// Píldora «Changes»: la tarjeta en su vista de cambios de git.
-    pub changes_btn: (usize, usize, usize, usize),
-    pub win_min_btn: (usize, usize, usize, usize),
-    pub win_max_btn: (usize, usize, usize, usize),
-    pub win_close_btn: (usize, usize, usize, usize),
+    pub plus_btn: Rect,
+    /// Píldora «Files»: retrocompatibilidad de tipos
+    pub files_btn: Rect,
+    /// Píldora «Changes»: retrocompatibilidad de tipos
+    pub changes_btn: Rect,
+    pub win_min_btn: Rect,
+    pub win_max_btn: Rect,
+    pub win_close_btn: Rect,
 }
 
 impl TopTabBarRects {
-    pub(crate) const HEIGHT: usize = 38;
-    pub(crate) const TAB_GAP: usize = 3;
+    pub(crate) const HEIGHT: usize = 40;
+    pub(crate) const TAB_GAP: usize = 0;
     pub(crate) const CLOSE_W: usize = 24;
-    pub(crate) const PLUS_W: usize = 28;
-    /// Ancho de las píldoras Files y Changes (icono + etiqueta).
-    pub(crate) const FILES_W: usize = 124;
-    pub(crate) const CHANGES_W: usize = 124;
-    /// Alto de las píldoras y de los botones de acción del chrome.
-    pub(crate) const ACTION: usize = 30;
+    pub(crate) const PLUS_W: usize = 32;
+    pub(crate) const SEARCH_W: usize = 290;
+    pub(crate) const SEARCH_H: usize = 26;
+    pub(crate) const LEFT_PAD: usize = 140;
 
-    /// `width` es el ancho de la ventana y `left_x` el borde izquierdo de la barra (ancho del panel de
-    /// Spaces); las pestañas empiezan alineadas con la tarjeta de contenido.
+    /// `width` es el ancho de la ventana y `left_x` el borde izquierdo de la barra (ancho de riel + panel lateral);
+    /// las pestañas empiezan alineadas a continuación del nombre de marca.
     pub(crate) fn compute(width: usize, left_x: usize, tabs_count: usize) -> Self {
         let bar_h = Self::HEIGHT;
         let ctrl_w = 46;
@@ -98,44 +110,62 @@ impl TopTabBarRects {
         let win_max_btn = (width.saturating_sub(ctrl_w * 2), 0, ctrl_w, bar_h);
         let win_min_btn = (width.saturating_sub(ctrl_w * 3), 0, ctrl_w, bar_h);
 
-        // De derecha a izquierda: Changes · Files · «+», junto a los controles de ventana.
-        let action_y = (bar_h.saturating_sub(Self::ACTION)) / 2;
-        let changes_btn = (
-            win_min_btn.0.saturating_sub(8 + Self::CHANGES_W),
-            action_y,
-            Self::CHANGES_W,
-            Self::ACTION,
-        );
-        let files_btn = (
-            changes_btn.0.saturating_sub(4 + Self::FILES_W),
-            action_y,
-            Self::FILES_W,
-            Self::ACTION,
-        );
-        let plus_btn = (
-            files_btn.0.saturating_sub(8 + Self::PLUS_W),
-            (bar_h - Self::PLUS_W) / 2,
-            Self::PLUS_W,
-            Self::PLUS_W,
-        );
+        let left_x = left_x.max(Self::LEFT_PAD);
+        let brand_rect = (0, 0, left_x, bar_h);
+        let tabs_start_x = left_x;
 
-        let tabs_start_x = left_x + SidebarRects::CARD_INSET;
-        let available = plus_btn.0.saturating_sub(tabs_start_x + 12);
-        let gap = Self::TAB_GAP;
-        let usable = available.saturating_sub(tabs_count.saturating_mul(gap));
-        let tab_w = usable
+        // Buscador de 290×26 px centrado verticalmente a 10 px a la izquierda de los controles de ventana
+        let search_y = (bar_h.saturating_sub(Self::SEARCH_H)) / 2;
+        let right_limit = win_min_btn.0.saturating_sub(10);
+        let search_btn = if right_limit > tabs_start_x + Self::PLUS_W + 120 + Self::SEARCH_W {
+            (
+                right_limit - Self::SEARCH_W,
+                search_y,
+                Self::SEARCH_W,
+                Self::SEARCH_H,
+            )
+        } else if right_limit > tabs_start_x + Self::PLUS_W + 120 + 120 {
+            let sw = (right_limit - (tabs_start_x + Self::PLUS_W + 120)).min(Self::SEARCH_W);
+            (right_limit - sw, search_y, sw, Self::SEARCH_H)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let tabs_end_x = if search_btn.2 > 0 {
+            search_btn.0
+        } else {
+            win_min_btn.0.saturating_sub(10)
+        };
+
+        let available = tabs_end_x.saturating_sub(tabs_start_x + Self::PLUS_W + 12);
+        let tab_w = available
             .checked_div(tabs_count)
-            .map_or(177, |w| w.clamp(20, 177));
+            .map_or(177, |w| w.clamp(16, 220));
+
+        let plus_x = if tabs_count > 0 {
+            (tabs_start_x + tabs_count * (tab_w + Self::TAB_GAP) + 4)
+                .min(tabs_end_x.saturating_sub(Self::PLUS_W + 4))
+        } else {
+            tabs_start_x + 4
+        };
+        let plus_btn = (
+            plus_x,
+            (bar_h.saturating_sub(Self::PLUS_W)) / 2,
+            Self::PLUS_W,
+            Self::PLUS_W,
+        );
 
         Self {
             bar_h,
             left_x,
+            brand_rect,
+            search_btn,
             tabs_start_x,
             tab_w,
-            tab_gap: gap,
+            tab_gap: Self::TAB_GAP,
             plus_btn,
-            files_btn,
-            changes_btn,
+            files_btn: (0, 0, 0, 0),
+            changes_btn: (0, 0, 0, 0),
             win_min_btn,
             win_max_btn,
             win_close_btn,
@@ -170,6 +200,198 @@ impl TopTabBarRects {
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         rect_contains(rect, mx, my)
+    }
+}
+
+/// Destino interactivo en el riel de módulos
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RailTarget {
+    Module(AppModule),
+    Settings,
+}
+
+/// Geometría del riel izquierdo de módulos (56 px de ancho, de y = 40 a win_h - status_bar_h)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct RailRects {
+    pub(crate) rect: Rect,
+    pub(crate) spaces_btn: Rect,
+    pub(crate) files_btn: Rect,
+    pub(crate) git_btn: Rect,
+    pub(crate) data_btn: Rect,
+    pub(crate) system_btn: Rect,
+    pub(crate) settings_btn: Rect,
+}
+
+impl RailRects {
+    pub(crate) const WIDTH: usize = 68;
+    pub(crate) const BTN_H: usize = 58;
+
+    pub(crate) fn compute(win_h: usize, status_bar_h: usize) -> Self {
+        let top = TopTabBarRects::HEIGHT;
+        let total_h = win_h.saturating_sub(top + status_bar_h);
+        let w = Self::WIDTH;
+        let h = Self::BTN_H;
+
+        let spaces_btn = (0, top, w, h);
+        let files_btn = (0, top + h, w, h);
+        let git_btn = (0, top + 2 * h, w, h);
+        let data_btn = (0, top + 3 * h, w, h);
+        let system_btn = (0, top + 4 * h, w, h);
+
+        let settings_y = (top + total_h).saturating_sub(h);
+        let settings_btn = (0, settings_y, w, h);
+
+        Self {
+            rect: (0, top, w, total_h),
+            spaces_btn,
+            files_btn,
+            git_btn,
+            data_btn,
+            system_btn,
+            settings_btn,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn module_btn(&self, module: AppModule) -> Rect {
+        match module {
+            AppModule::Spaces => self.spaces_btn,
+            AppModule::Files => self.files_btn,
+            AppModule::Git => self.git_btn,
+            AppModule::Data => self.data_btn,
+            AppModule::System => self.system_btn,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn button_at(&self, mx: usize, my: usize) -> Option<RailTarget> {
+        if !rect_contains(self.rect, mx, my) {
+            return None;
+        }
+        if rect_contains(self.spaces_btn, mx, my) {
+            Some(RailTarget::Module(AppModule::Spaces))
+        } else if rect_contains(self.files_btn, mx, my) {
+            Some(RailTarget::Module(AppModule::Files))
+        } else if rect_contains(self.git_btn, mx, my) {
+            Some(RailTarget::Module(AppModule::Git))
+        } else if rect_contains(self.data_btn, mx, my) {
+            Some(RailTarget::Module(AppModule::Data))
+        } else if rect_contains(self.system_btn, mx, my) {
+            Some(RailTarget::Module(AppModule::System))
+        } else if rect_contains(self.settings_btn, mx, my) {
+            Some(RailTarget::Settings)
+        } else {
+            None
+        }
+    }
+}
+
+/// Geometría del panel lateral contextual (264 px de ancho, anclado a x = 56)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct ContextualSidebarRects {
+    pub(crate) width: usize,
+    pub(crate) collapsed: bool,
+    pub(crate) rect: Rect,
+    pub(crate) header: Rect,
+    pub(crate) toggle_btn: Rect,
+    pub(crate) action_btn: Rect,
+    pub(crate) content: Rect,
+    pub(crate) footer: Option<Rect>,
+    pub(crate) terminal_btn: Option<Rect>,
+    pub(crate) add_machine_btn: Option<Rect>,
+}
+
+impl ContextualSidebarRects {
+    pub(crate) const WIDTH: usize = 264;
+    pub(crate) const HEADER_H: usize = 40;
+    pub(crate) const BTN_SIZE: usize = 26;
+    pub(crate) const FOOTER_H: usize = 48;
+
+    pub(crate) fn compute(
+        collapsed: bool,
+        module: AppModule,
+        win_h: usize,
+        status_bar_h: usize,
+    ) -> Self {
+        if collapsed {
+            return Self {
+                width: 0,
+                collapsed: true,
+                rect: (RailRects::WIDTH, TopTabBarRects::HEIGHT, 0, 0),
+                header: (0, 0, 0, 0),
+                toggle_btn: (0, 0, 0, 0),
+                action_btn: (0, 0, 0, 0),
+                content: (0, 0, 0, 0),
+                footer: None,
+                terminal_btn: None,
+                add_machine_btn: None,
+            };
+        }
+
+        let x = RailRects::WIDTH;
+        let y = TopTabBarRects::HEIGHT;
+        let w = Self::WIDTH;
+        let total_h = win_h.saturating_sub(y + status_bar_h);
+
+        let header = (x, y, w, Self::HEADER_H);
+        let btn_y = y + (Self::HEADER_H.saturating_sub(Self::BTN_SIZE)) / 2;
+        let toggle_btn = (
+            x + w.saturating_sub(Self::BTN_SIZE + 8),
+            btn_y,
+            Self::BTN_SIZE,
+            Self::BTN_SIZE,
+        );
+        let action_btn = if matches!(
+            module,
+            AppModule::Spaces | AppModule::Files | AppModule::Git
+        ) {
+            (
+                toggle_btn.0.saturating_sub(Self::BTN_SIZE + 4),
+                btn_y,
+                Self::BTN_SIZE,
+                Self::BTN_SIZE,
+            )
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let (content, footer, terminal_btn, add_machine_btn) = if module == AppModule::Spaces {
+            let foot_y = (y + total_h).saturating_sub(Self::FOOTER_H);
+            let footer_rect = (x, foot_y, w, Self::FOOTER_H);
+            let pad = 12;
+            let gap = 8;
+            let btn_w = (w.saturating_sub(2 * pad + gap)) / 2;
+            let t_btn = (x + pad, foot_y + 10, btn_w, 28);
+            let m_btn = (x + pad + btn_w + gap, foot_y + 10, btn_w, 28);
+            let cnt = (
+                x,
+                y + Self::HEADER_H,
+                w,
+                foot_y.saturating_sub(y + Self::HEADER_H),
+            );
+            (cnt, Some(footer_rect), Some(t_btn), Some(m_btn))
+        } else {
+            let cnt = (
+                x,
+                y + Self::HEADER_H,
+                w,
+                total_h.saturating_sub(Self::HEADER_H),
+            );
+            (cnt, None, None, None)
+        };
+
+        Self {
+            width: w,
+            collapsed: false,
+            rect: (x, y, w, total_h),
+            header,
+            toggle_btn,
+            action_btn,
+            content,
+            footer,
+            terminal_btn,
+            add_machine_btn,
+        }
     }
 }
 
@@ -242,6 +464,7 @@ impl SidebarRects {
     }
 
     /// Borde inferior del contenido del panel (sin el pie, que ya no existe).
+    #[allow(dead_code)]
     #[inline]
     pub(crate) fn content_bottom(usable_h: usize) -> usize {
         usable_h.saturating_sub(8)
@@ -296,23 +519,24 @@ pub(crate) struct SpacesPanelRects {
     pub list_bottom: usize,
     pub settings_btn: Rect,
     pub machine_btn: Rect,
+    pub terminal_btn: Rect,
 }
 
 impl SpacesPanelRects {
-    pub(crate) const WIDTH: usize = 264;
-    pub(crate) const RAIL_W: usize = 44;
+    pub(crate) const WIDTH: usize = RailRects::WIDTH + ContextualSidebarRects::WIDTH;
+    pub(crate) const RAIL_W: usize = RailRects::WIDTH;
     /// La cabecera mide como la barra superior para que las dos filas queden alineadas.
     pub(crate) const HEADER_H: usize = TopTabBarRects::HEIGHT;
-    pub(crate) const ROW_H: usize = 30;
+    pub(crate) const ROW_H: usize = 32;
     pub(crate) const ROW_GAP: usize = 2;
-    pub(crate) const PAD_X: usize = 8;
-    pub(crate) const BTN: usize = 28;
+    pub(crate) const PAD_X: usize = 12;
+    pub(crate) const BTN: usize = 26;
     /// Alto de la cabecera de un grupo y lado de su «+».
-    pub(crate) const GROUP_H: usize = 26;
+    pub(crate) const GROUP_H: usize = 34;
     pub(crate) const GROUP_BTN: usize = 24;
     /// Lado de la insignia de letra de cada Space.
     pub(crate) const BADGE: usize = 18;
-    const FOOT_H: usize = 28;
+    const FOOT_H: usize = 48;
 
     pub(crate) fn width_for(collapsed: bool) -> usize {
         if collapsed {
@@ -324,41 +548,58 @@ impl SpacesPanelRects {
 
     pub(crate) fn compute(collapsed: bool, win_h: usize) -> Self {
         let width = Self::width_for(collapsed);
-        let btn = Self::BTN;
-        let head_y = (Self::HEADER_H - btn) / 2;
         let none = (0, 0, 0, 0);
-        let foot_x = Self::PAD_X;
-        let foot_w = width - 2 * Self::PAD_X;
-        let machine_y = win_h.saturating_sub(Self::PAD_X + Self::FOOT_H);
-        let settings_y = machine_y.saturating_sub(Self::FOOT_H + 2);
-        let machine_btn = (foot_x, machine_y, foot_w, Self::FOOT_H);
-        let settings_btn = (foot_x, settings_y, foot_w, Self::FOOT_H);
-        let list_bottom = settings_y.saturating_sub(10);
+        let settings_y = win_h.saturating_sub(28 + 58);
+        let settings_btn = (0, settings_y, Self::RAIL_W, 58);
+
         if collapsed {
-            let plus_y = Self::HEADER_H + 6;
             Self {
                 width,
                 collapsed,
-                toggle_btn: (Self::PAD_X, head_y, btn, btn),
+                toggle_btn: none,
                 search_btn: none,
-                plus_btn: (Self::PAD_X, plus_y, btn, btn),
-                list_top: plus_y + btn + 10,
-                list_bottom,
+                plus_btn: none,
+                list_top: 0,
+                list_bottom: 0,
                 settings_btn,
-                machine_btn,
+                machine_btn: none,
+                terminal_btn: none,
             }
         } else {
-            let toggle_btn = (width - Self::PAD_X - btn, head_y, btn, btn);
+            let x = Self::RAIL_W;
+            let sidebar_w = Self::WIDTH - Self::RAIL_W;
+            let btn_y = Self::HEADER_H + (Self::HEADER_H.saturating_sub(Self::BTN)) / 2;
+            let toggle_btn = (
+                x + sidebar_w.saturating_sub(Self::BTN + 8),
+                btn_y,
+                Self::BTN,
+                Self::BTN,
+            );
+            let plus_btn = (
+                toggle_btn.0.saturating_sub(Self::BTN + 4),
+                btn_y,
+                Self::BTN,
+                Self::BTN,
+            );
+
+            let foot_y = win_h.saturating_sub(28 + Self::FOOT_H);
+            let pad = 12;
+            let gap = 8;
+            let btn_w = (sidebar_w.saturating_sub(2 * pad + gap)) / 2;
+            let terminal_btn = (x + pad, foot_y + 10, btn_w, 28);
+            let machine_btn = (x + pad + btn_w + gap, foot_y + 10, btn_w, 28);
+
             Self {
                 width,
                 collapsed,
                 toggle_btn,
-                search_btn: (toggle_btn.0 - 2 - btn, head_y, btn, btn),
-                plus_btn: none,
-                list_top: Self::HEADER_H + 8,
-                list_bottom,
+                search_btn: none,
+                plus_btn,
+                list_top: Self::HEADER_H + 40 + 4,
+                list_bottom: foot_y.saturating_sub(6),
                 settings_btn,
                 machine_btn,
+                terminal_btn,
             }
         }
     }
@@ -420,7 +661,10 @@ impl SpacesPanelRects {
         let (x, w) = if self.collapsed {
             (Self::PAD_X, Self::BTN)
         } else {
-            (Self::PAD_X, self.width - 2 * Self::PAD_X)
+            (
+                Self::RAIL_W + Self::PAD_X,
+                (Self::WIDTH - Self::RAIL_W) - 2 * Self::PAD_X,
+            )
         };
         for (slot, h) in self.slot_heights(remote).into_iter().skip(scroll) {
             if y + h > self.list_bottom {
@@ -491,8 +735,10 @@ impl ScrollbarRects {
 
 /// Geometría del panel del modo de pestañas superiores: el explorador ocupa todo el panel, que mide
 /// `SidebarRects::WIDTH`. Es local al panel.
+#[allow(dead_code)]
 pub(crate) struct FilesPanelRects;
 
+#[allow(dead_code)]
 impl FilesPanelRects {
     /// Rectángulo del explorador alojado: el interior de la tarjeta del panel (sin su margen), hasta el fondo.
     #[cfg(test)]
@@ -588,25 +834,28 @@ impl GitActionBtnRects {
 pub(crate) struct StatusBarRects {
     pub(crate) ai_badge: Rect,
     pub(crate) update_badge: Option<Rect>,
-    /// Medidores de límites; `0` de ancho cuando no hay sitio y no se dibujan.
+    /// Medidores de límites / ranura del monitor de rendimiento (abre Sistema al pulsar)
     pub(crate) meters: Rect,
-    /// Botón de selección de modo pantalla encendida (Activo, Agente, Apagado) en la esquina inferior derecha.
+    /// Botón de selección de modo pantalla encendida (Activo, Agente, Apagado)
     pub(crate) keep_awake_btn: Rect,
+    /// Dimensiones de la cuadrícula terminal (ej. «120 × 38»)
+    pub(crate) dims_rect: Rect,
+    /// Entorno / destino (LOCAL o SSH)
+    pub(crate) env_rect: Rect,
+    /// Rama git
+    pub(crate) branch_rect: Option<Rect>,
+    /// Ruta activa
+    pub(crate) path_rect: Option<Rect>,
 }
 
 impl StatusBarRects {
     pub(crate) const BAR_H: usize = 28;
     #[cfg(test)]
     pub(crate) const POPUP_W: usize = 392;
-    /// Margen derecho del grupo de estado (las dimensiones cierran la barra).
-    pub(crate) const RIGHT_PAD: usize = 14;
-    /// Separación entre bloques del grupo derecho (badge, medidores, dimensiones).
-    pub(crate) const GROUP_GAP: usize = 20;
-    /// Ancho de la barra de un medidor y alto del carril.
+    pub(crate) const RIGHT_PAD: usize = 0;
     pub(crate) const METER_TRACK_W: usize = 82;
     pub(crate) const METER_TRACK_H: usize = 6;
-    /// Ancho mínimo que debe quedar para la ruta y la rama: por debajo, los medidores no se dibujan.
-    pub(crate) const MIN_CONTENT_W: usize = 200;
+    pub(crate) const MIN_CONTENT_W: usize = 120;
 
     /// Como `compute_full`, con `keep_awake_w = 0`.
     #[cfg(test)]
@@ -618,12 +867,11 @@ impl StatusBarRects {
         dims_w: usize,
         meters_w: usize,
     ) -> Self {
-        Self::compute_full(width, height, label_w, update_w, dims_w, meters_w, 0)
+        Self::compute_full(width, height, label_w, update_w, dims_w, meters_w, 0, true)
     }
 
-    /// Como `compute`, reservando a la derecha del badge las dimensiones de la rejilla (`dims_w`), los
-    /// medidores de límites (`meters_w`) y el selector de modo de pantalla encendida (`keep_awake_w`).
-    /// El grupo se ancla al borde derecho y el badge queda a su izquierda.
+    /// Calcula la geometría en segmentos de la barra de estado (DISENO §4, DISENO §1).
+    /// Segmentos a la izquierda (entorno, rama, ruta) y a la derecha (dimensiones, medidores, IA, actualización, keep-awake).
     pub(crate) fn compute_full(
         width: usize,
         height: usize,
@@ -632,62 +880,80 @@ impl StatusBarRects {
         dims_w: usize,
         meters_w: usize,
         keep_awake_w: usize,
+        has_branch: bool,
     ) -> Self {
         let bar_y = height.saturating_sub(Self::BAR_H);
-        let badge_w = (label_w + 24).min(width);
+        let mut cur_right = width;
 
-        let (kw_block, keep_awake_btn) = if keep_awake_w > 0 {
-            let kw_x = width.saturating_sub(Self::RIGHT_PAD + keep_awake_w);
-            (
-                keep_awake_w + Self::GROUP_GAP,
-                (kw_x, bar_y, keep_awake_w, Self::BAR_H),
-            )
+        // 1. Selector keep-awake (si está activo/disponible)
+        let (kw_btn, _kw_w) = if keep_awake_w > 0 {
+            let kw_full_w = keep_awake_w + 38;
+            cur_right = cur_right.saturating_sub(kw_full_w);
+            ((cur_right, bar_y, kw_full_w, Self::BAR_H), kw_full_w)
         } else {
-            (0, (0, bar_y, 0, 0))
+            ((0, bar_y, 0, 0), 0)
         };
 
-        let dims_block = if dims_w > 0 {
-            dims_w + Self::GROUP_GAP
-        } else {
-            0
-        };
-        let mut meters_block = if meters_w > 0 {
-            meters_w + Self::GROUP_GAP
-        } else {
-            0
-        };
-        // El grupo derecho no puede comerse el espacio de la ruta y la rama: si al colocar el badge no
-        // queda sitio para la izquierda, los medidores (lo opcional) se caen antes que el badge.
-        let mut badge_x =
-            width.saturating_sub(Self::RIGHT_PAD + kw_block + dims_block + meters_block + badge_w);
-        if badge_x < Self::MIN_CONTENT_W && meters_block > 0 {
-            meters_block = 0;
-            badge_x = width.saturating_sub(Self::RIGHT_PAD + kw_block + dims_block + badge_w);
-        }
-        if badge_x < Self::MIN_CONTENT_W && dims_block > 0 {
-            badge_x = width.saturating_sub(Self::RIGHT_PAD + kw_block + badge_w);
-        }
-        let badge_right = badge_x + badge_w;
-        let ai_badge = (badge_x, bar_y, badge_w, Self::BAR_H);
-
-        let meters = if meters_block > 0 {
-            (badge_right + Self::GROUP_GAP, bar_y, meters_w, Self::BAR_H)
-        } else {
-            (0, bar_y, 0, Self::BAR_H)
-        };
-
+        // 2. Insignia de actualización disponible (si hay una disponible)
         let update_badge = update_w.map(|uw| {
-            let ub_w = uw + 26;
-            // 16 px hasta el badge: la cápsula del agente sobresale 6 px de su rectángulo y quedan 10 de aire.
-            let ub_x = badge_x.saturating_sub(ub_w + 16);
-            (ub_x, bar_y, ub_w, Self::BAR_H)
+            let ub_w = uw + 32;
+            cur_right = cur_right.saturating_sub(ub_w);
+            (cur_right, bar_y, ub_w, Self::BAR_H)
         });
+
+        // 3. Chip de IA (solo cuando hay un agente activo; Local/SSH ya va a la izquierda)
+        let badge_w = if label_w > 0 {
+            (label_w + 38).min(cur_right)
+        } else {
+            0
+        };
+        cur_right = cur_right.saturating_sub(badge_w);
+        let ai_badge = (cur_right, bar_y, badge_w, Self::BAR_H);
+
+        // 4. Medidores de rendimiento / ranura del monitor de sistema en F1/F3
+        let mw = if meters_w > 0 { meters_w + 24 } else { 88 };
+        let (meters, _m_w) = if cur_right > Self::MIN_CONTENT_W + mw {
+            cur_right = cur_right.saturating_sub(mw);
+            ((cur_right, bar_y, mw, Self::BAR_H), mw)
+        } else {
+            ((0, bar_y, 0, Self::BAR_H), 0)
+        };
+
+        // 5. Dimensiones (cols × rows)
+        let dims_full_w = if dims_w > 0 { dims_w + 24 } else { 0 };
+        let dims_rect = if dims_full_w > 0 && cur_right > Self::MIN_CONTENT_W + dims_full_w {
+            cur_right = cur_right.saturating_sub(dims_full_w);
+            (cur_right, bar_y, dims_full_w, Self::BAR_H)
+        } else {
+            (0, bar_y, 0, 0)
+        };
+
+        // Segmentos izquierdos: entorno (80 px), rama (130 px si hay), ruta
+        let env_w = 80;
+        let env_rect = (0, bar_y, env_w, Self::BAR_H);
+        let branch_w = 130;
+        let (branch_rect, path_start) = if has_branch && cur_right >= env_w + 40 {
+            let bw = branch_w.min(cur_right - env_w);
+            (Some((env_w, bar_y, bw, Self::BAR_H)), env_w + bw)
+        } else {
+            (None, env_w)
+        };
+        let path_w = cur_right.saturating_sub(path_start);
+        let path_rect = if path_w > 30 {
+            Some((path_start, bar_y, path_w, Self::BAR_H))
+        } else {
+            None
+        };
 
         Self {
             ai_badge,
             update_badge,
             meters,
-            keep_awake_btn,
+            keep_awake_btn: kw_btn,
+            dims_rect,
+            env_rect,
+            branch_rect,
+            path_rect,
         }
     }
 
@@ -763,8 +1029,8 @@ pub(crate) enum PaneHeaderButton {
     Close,
 }
 
-/// Geometría de la cabecera de un panel dividido (38 px): icono, título, subtítulo y los tres
-/// botones de la derecha. Es local al hueco del panel y la comparten dibujo, clic y hover.
+/// Geometría de la cabecera de un panel dividido (40 px): icono, título, subtítulo y los botones
+/// de la derecha. Es local al hueco del panel y la comparten dibujo, clic y hover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PaneHeaderRects {
     pub(crate) header: Rect,
@@ -777,7 +1043,7 @@ pub(crate) struct PaneHeaderRects {
 }
 
 impl PaneHeaderRects {
-    pub(crate) const HEIGHT: usize = 38;
+    pub(crate) const HEIGHT: usize = 40;
     /// Línea inferior que separa la cabecera del terminal
     pub(crate) const BORDER: usize = 1;
     pub(crate) const BTN: usize = 26;
@@ -788,7 +1054,7 @@ impl PaneHeaderRects {
 
     /// Margen superior del hueco si la cabecera coincide con el borde superior de la tarjeta de contenido.
     /// La tarjeta recorta `SidebarRects::CARD_INSET` px de margen, de modo que la cabecera visible
-    /// arranca en `y + top_pad` y mide `HEIGHT` (38 px), alineándose exactamente con el explorador y el visor.
+    /// arranca en `y + top_pad` y mide `HEIGHT` (40 px), alineándose exactamente con el explorador y el visor.
     #[inline]
     pub(crate) fn top_pad(y: usize) -> usize {
         if y <= SidebarRects::TOP {
@@ -902,9 +1168,68 @@ impl FocusMarkRects {
     }
 }
 
+/// Botón interactivo dentro de la vista de reconexión SSH (Ssh.dc.html).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SshLostButton {
+    Reconnect,
+    Close,
+}
+
+/// Rectángulos de la vista de conexión perdida y reconexión SSH en un panel (pantalla 03 / Ssh.dc.html).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct SshLostConnectionRects {
+    pub(crate) title_rect: Rect,
+    pub(crate) subtitle_rect: Rect,
+    pub(crate) reconnect_btn: Rect,
+    pub(crate) close_pane_btn: Rect,
+}
+
+impl SshLostConnectionRects {
+    pub(crate) const BTN_H: usize = 28;
+    pub(crate) const RECONNECT_W: usize = 140;
+    pub(crate) const CLOSE_W: usize = 110;
+    pub(crate) const GAP: usize = 8;
+
+    pub(crate) fn compute(rx: usize, ry: usize, rw: usize, rh: usize) -> Self {
+        let pad_x = 24.max(rw.saturating_sub(400) / 4).min(40);
+        let start_x = rx + pad_x;
+        let content_h = 96;
+        let start_y = ry + (rh.saturating_sub(content_h)) / 2;
+        let text_w = rw.saturating_sub(pad_x * 2);
+        let btn_y = start_y + 64;
+        Self {
+            title_rect: (start_x, start_y, text_w, 24),
+            subtitle_rect: (start_x, start_y + 30, text_w, 22),
+            reconnect_btn: (start_x, btn_y, Self::RECONNECT_W, Self::BTN_H),
+            close_pane_btn: (
+                start_x + Self::RECONNECT_W + Self::GAP,
+                btn_y,
+                Self::CLOSE_W,
+                Self::BTN_H,
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ssh_lost_connection_rects_compute() {
+        let rects = SshLostConnectionRects::compute(100, 200, 500, 400);
+        assert!(rects.reconnect_btn.0 >= 100);
+        assert_eq!(rects.reconnect_btn.2, SshLostConnectionRects::RECONNECT_W);
+        assert_eq!(rects.reconnect_btn.3, SshLostConnectionRects::BTN_H);
+        assert_eq!(
+            rects.close_pane_btn.0,
+            rects.reconnect_btn.0
+                + SshLostConnectionRects::RECONNECT_W
+                + SshLostConnectionRects::GAP
+        );
+        assert_eq!(rects.close_pane_btn.2, SshLostConnectionRects::CLOSE_W);
+        assert_eq!(rects.close_pane_btn.3, SshLostConnectionRects::BTN_H);
+    }
 
     #[test]
     fn test_focus_marks_are_11px_crosses_centered_on_each_corner() {

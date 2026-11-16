@@ -5,12 +5,16 @@
 
 mod ai_usage;
 mod click;
+mod click_db;
 mod click_explorer;
 mod click_settings;
 mod click_viewer;
 mod clipboard;
 mod context_menu;
 mod cursor;
+pub(crate) mod db_jobs;
+pub(crate) mod db_tab;
+pub(crate) mod dialog;
 mod fs_watcher;
 mod handler;
 mod host;
@@ -35,10 +39,12 @@ mod viewer_editor;
 pub(crate) mod viewer_image;
 mod wheel;
 
-pub(crate) use crate::config::KeepAwakeMode;
+pub(crate) use crate::config::{AppModule, KeepAwakeMode};
 pub(crate) use crate::renderer::PaletteRects;
 pub(crate) use ai_usage::*;
 pub(crate) use context_menu::*;
+pub(crate) use db_tab::*;
+pub(crate) use dialog::*;
 pub(crate) use host::TearminalHost;
 pub(crate) use kitty_keys::{encode_kitty_key, key_code_to_char, key_is_char, KeyEventType};
 pub(crate) use layout::*;
@@ -82,6 +88,8 @@ pub(crate) enum TearminalEvent {
     FsChanged,
     /// Comprobación de actualizaciones en segundo plano completada
     UpdateCheckDone,
+    /// Muestreo del monitor del sistema completado
+    MonitorDone,
 }
 
 pub(crate) const SIDEBAR_WIDTH: usize = crate::renderer::SidebarRects::WIDTH;
@@ -99,16 +107,29 @@ pub(crate) struct TearminalApp {
     pub tabs: Vec<TerminalTab>,
     /// Spaces de la ventana (cada pestaña pertenece a uno); ver `spaces.rs`.
     pub(crate) spaces: Vec<Space>,
-    /// Panel de Spaces colapsado a riel (44 px)
+    /// Panel de Spaces colapsado a riel (44 px, mantenido por retrocompatibilidad)
     pub(crate) spaces_collapsed: bool,
+    /// Módulo activo en el riel izquierdo (DISENO §4)
+    pub(crate) active_module: crate::config::AppModule,
+    /// Panel lateral contextual colapsado a riel (56 px)
+    pub(crate) sidebar_collapsed: bool,
+    /// Hover en el buscador «Buscar o ejecutar… Ctrl+K» (290×26 px)
+    pub(crate) hovered_search: bool,
     /// Modal «Añadir máquina» abierto
     pub(crate) machine_modal: Option<MachineModal>,
+    /// Diálogo modal activo (F4: gravedad, confirmación escrita o catálogo de alertas)
+    pub(crate) active_dialog: Option<DialogState>,
+    /// Pila de avisos emergentes (toasts) visibles
+    pub(crate) toasts: Vec<Toast>,
+    /// Índice del botón de cierre de toast bajo el ratón
+    pub(crate) hovered_toast_close: Option<usize>,
+    /// Contador secuencial de identificadores de toast
+    pub(crate) next_toast_id: u64,
     /// Edición en curso del nombre de un Space
     pub(crate) space_edit: Option<crate::app::spaces::SpaceEdit>,
     spaces_hover: crate::renderer::SpacesHover,
     /// Primera fila visible de la lista de Spaces
     spaces_scroll: usize,
-    hovered_changes_btn: bool,
     pub active_tab_index: usize,
     /// Historial de activación de pestañas (MRU) para volver a la última abierta al cerrar una
     pub tab_history: Vec<TabId>,
@@ -122,6 +143,8 @@ pub(crate) struct TearminalApp {
     hovered_new_tab: bool,
     /// Botón de la cabecera de un panel dividido bajo el ratón
     hovered_pane_btn: Option<(PaneId, PaneHeaderButton)>,
+    /// Botón dentro de la tarjeta de reconexión SSH bajo el ratón
+    pub(crate) hovered_ssh_lost_btn: Option<(PaneId, crate::renderer::SshLostButton)>,
     /// Panel cuya cabecera tiene el ratón encima (muestra sus botones)
     hovered_pane_header: Option<PaneId>,
     /// Rango de hipervínculo bajo el ratón con Ctrl pulsado `(pane_id, global_line, start_col, end_col)`
@@ -135,7 +158,6 @@ pub(crate) struct TearminalApp {
     pub context_menu: Option<ContextMenu>,
     pub palette: Option<PaletteState>,
     pub file_explorer: crate::explorer::FileExplorer,
-    hovered_files_btn: bool,
     pub last_terminal_tab_index: usize,
     renderer: Option<TerminalRenderer>,
     window: Option<Arc<Window>>,
@@ -242,6 +264,11 @@ pub(crate) struct TearminalApp {
     fs_watcher: Option<fs_watcher::FsWatcher>,
     /// Estado de arrastre de un archivo o carpeta desde el explorador lateral hacia la terminal
     pub(crate) explorer_drag: Option<ExplorerDragState>,
+    /// Estado y métricas del monitor de rendimiento del sistema (Fase F3)
+    pub(crate) monitor: crate::monitor::MonitorState,
+    pub(crate) system_hover: Option<crate::renderer::SystemClickTarget>,
+    monitor_tx: std::sync::mpsc::Sender<crate::monitor::SystemSnapshot>,
+    monitor_rx: std::sync::mpsc::Receiver<crate::monitor::SystemSnapshot>,
 }
 
 /// Estado de arrastre de un elemento desde el explorador lateral de archivos hacia la terminal
@@ -498,6 +525,44 @@ impl TearminalApp {
         }
     }
 
+    /// Abre un diálogo modal común centrado (F4).
+    pub(crate) fn open_dialog(&mut self, spec: DialogSpec) {
+        self.active_dialog = Some(DialogState::new(spec));
+        self.request_redraw();
+    }
+
+    /// Cierra el diálogo modal activo.
+    pub(crate) fn close_dialog(&mut self) {
+        self.active_dialog = None;
+        self.request_redraw();
+    }
+
+    /// Muestra un aviso flotante (toast) con cierre automático y marca de tiempo.
+    pub(crate) fn show_toast(&mut self, severity: ToastSeverity, message: impl Into<String>) {
+        let id = self.next_toast_id;
+        self.next_toast_id = self.next_toast_id.wrapping_add(1);
+        self.toasts.push(Toast::new(id, severity, message));
+        if self.toasts.len() > 5 {
+            self.toasts.remove(0);
+        }
+        self.request_redraw();
+    }
+
+    /// Cierra un aviso por su identificador.
+    pub(crate) fn close_toast(&mut self, id: u64) {
+        self.toasts.retain(|t| t.id != id);
+        self.request_redraw();
+    }
+
+    /// Purga los avisos expirados sin despertar la CPU innecesariamente.
+    pub(crate) fn clean_expired_toasts(&mut self) {
+        let before = self.toasts.len();
+        self.toasts.retain(|t| !t.is_expired());
+        if self.toasts.len() != before {
+            self.request_redraw();
+        }
+    }
+
     /// Rectángulo del área de contenido principal (terminales, visor o ajustes) en coordenadas de ventana:
     /// `(x, y, ancho, alto)`.
     #[inline]
@@ -576,14 +641,25 @@ impl TearminalApp {
         (mx >= x0 && mx < x0 + pw).then(|| mx - x0)
     }
 
-    /// Coloca el explorador acoplado al borde derecho dentro del área disponible.
-    pub(crate) fn sync_explorer_dock(&mut self, win_w: usize, win_h: usize) {
-        self.file_explorer.dock = if self.sidebar_visible && self.file_explorer.visible {
-            let usable_h = win_h.saturating_sub(self.status_bar_height());
-            let pw = self.panel_width();
-            let (x, y, w, h) =
-                crate::renderer::FilesPanelRects::explorer_rect_with_width(pw, usable_h);
-            Some((self.panel_x(win_w) + x, y, w, h))
+    /// Coloca el explorador acoplado dentro del panel lateral contextual izquierdo.
+    pub(crate) fn sync_explorer_dock(&mut self, _win_w: usize, win_h: usize) {
+        let is_explorer_module =
+            self.active_module == AppModule::Files || self.active_module == AppModule::Git;
+        let is_visible = is_explorer_module && !self.sidebar_collapsed;
+        self.file_explorer.visible = is_visible;
+        self.file_explorer.changes_only = self.active_module == AppModule::Git;
+
+        self.file_explorer.dock = if is_visible {
+            let status_h = self.status_bar_height();
+            let usable_h = win_h.saturating_sub(status_h);
+            let top = crate::renderer::TopTabBarRects::HEIGHT;
+            let h = usable_h.saturating_sub(top);
+            Some((
+                crate::renderer::RailRects::WIDTH,
+                top,
+                crate::renderer::ContextualSidebarRects::WIDTH,
+                h,
+            ))
         } else {
             None
         };
@@ -592,48 +668,18 @@ impl TearminalApp {
     /// ¿Está el ratón `(mx, my)` sobre el borde que separa el panel / explorador y el contenido?
     pub(crate) fn on_panel_resize_edge(
         &self,
-        mx: usize,
-        my: usize,
-        win_w: usize,
-        win_h: usize,
+        _mx: usize,
+        _my: usize,
+        _win_w: usize,
+        _win_h: usize,
     ) -> bool {
-        if self
-            .tabs
-            .get(self.active_tab_index)
-            .is_some_and(|t| t.is_settings)
-        {
-            return false;
-        }
-        let top_offset = self.top_offset();
-        let status_bar_h = self.status_bar_height();
-        let usable_h = win_h.saturating_sub(status_bar_h);
-        if my < top_offset || my >= usable_h {
-            return false;
-        }
-
-        if self.sidebar_visible {
-            let pw = self.panel_width();
-            let edge_x = win_w.saturating_sub(pw);
-            mx + 6 >= edge_x && mx <= edge_x + 5
-        } else if self.file_explorer.visible {
-            self.file_explorer
-                .on_resize_edge(mx, my, win_w, win_h, top_offset, status_bar_h)
-        } else {
-            false
-        }
+        // En F1 el panel contextual izquierdo tiene ancho fijo de 264 px o se contrae.
+        false
     }
 
     /// Redimensiona el ancho del explorador de archivos al arrastrar su borde con el ratón.
-    pub(crate) fn resize_panel_from_mouse(&mut self, mx: usize, win_w: usize) {
-        let new_w = win_w.saturating_sub(mx);
-        self.file_explorer.width = crate::explorer::FileExplorer::clamp_width(new_w, win_w);
-        if let Some(ref mut cfg_pw) = self.config.appearance.panel_width {
-            *cfg_pw = self.file_explorer.width;
-        }
-        if self.sidebar_visible {
-            let win_h = self.window_size().1;
-            self.sync_explorer_dock(win_w, win_h);
-        }
+    pub(crate) fn resize_panel_from_mouse(&mut self, _mx: usize, _win_w: usize) {
+        // En F1 el ancho es fijo de 264 px.
     }
 
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {
@@ -729,7 +775,9 @@ impl TearminalApp {
         );
         app.prune_spaces();
         if let Some(s) = &session {
-            app.spaces_collapsed = s.spaces_collapsed;
+            app.spaces_collapsed = s.spaces_collapsed || s.sidebar_collapsed;
+            app.sidebar_collapsed = s.sidebar_collapsed || s.spaces_collapsed;
+            app.active_module = s.active_module;
             // Sin tamaño de ventana aún: solo el mínimo; `set_width_from_edge` acota el máximo al arrastrar
             app.file_explorer.width = s
                 .file_explorer_width
@@ -799,6 +847,7 @@ impl TearminalApp {
         }
         let clipboard = arboard::Clipboard::new().ok();
         let (ssh_tx, ssh_rx) = std::sync::mpsc::channel();
+        let (monitor_tx, monitor_rx) = std::sync::mpsc::channel();
         let tab_history = tabs
             .get(active_tab_index)
             .map(|t| vec![t.id])
@@ -810,11 +859,17 @@ impl TearminalApp {
             tabs,
             spaces,
             spaces_collapsed: false,
+            active_module: crate::config::AppModule::Spaces,
+            sidebar_collapsed: false,
+            hovered_search: false,
             machine_modal: None,
+            active_dialog: None,
+            toasts: Vec::new(),
+            hovered_toast_close: None,
+            next_toast_id: 1,
             space_edit: None,
             spaces_hover: crate::renderer::SpacesHover::None,
             spaces_scroll: 0,
-            hovered_changes_btn: false,
             active_tab_index,
             tab_history,
             next_tab_id,
@@ -823,6 +878,7 @@ impl TearminalApp {
             hovered_close: None,
             hovered_new_tab: false,
             hovered_pane_btn: None,
+            hovered_ssh_lost_btn: None,
             hovered_pane_header: None,
             hovered_url_span: None,
             hovered_file_cache: None,
@@ -832,7 +888,6 @@ impl TearminalApp {
             context_menu: None,
             palette: None,
             file_explorer,
-            hovered_files_btn: false,
             last_terminal_tab_index: 0,
             explorer_focus: None,
             renderer: None,
@@ -908,8 +963,13 @@ impl TearminalApp {
             ai_usage: AiUsageState::default(),
             fs_watcher: None,
             explorer_drag: None,
+            monitor: crate::monitor::MonitorState::new(),
+            system_hover: None,
+            monitor_tx,
+            monitor_rx,
         };
         app.update_keep_awake();
+        crate::monitor::set_agent_profiles(&app.config.performance.normalized_agent_names());
         app
     }
 
@@ -965,7 +1025,9 @@ impl TearminalApp {
             file_explorer_visible: self.file_explorer.visible,
             file_explorer_width: self.file_explorer.width,
             spaces: spaces.into_iter().map(|s| s.name.clone()).collect(),
-            spaces_collapsed: self.spaces_collapsed,
+            spaces_collapsed: self.sidebar_collapsed,
+            active_module: self.active_module,
+            sidebar_collapsed: self.sidebar_collapsed,
             tabs,
         }
     }
@@ -982,7 +1044,9 @@ impl TearminalApp {
             file_explorer_visible: self.file_explorer.visible,
             file_explorer_width: self.file_explorer.width,
             spaces: vec![space_name(self.active_cwd().as_deref(), 1)],
-            spaces_collapsed: self.spaces_collapsed,
+            spaces_collapsed: self.sidebar_collapsed,
+            active_module: self.active_module,
+            sidebar_collapsed: self.sidebar_collapsed,
             tabs: vec![TabSession {
                 space: 0,
                 title: "Terminal 1".to_string(),
@@ -1035,23 +1099,23 @@ impl TearminalApp {
     pub(crate) fn terminal_area_offsets(&self) -> (usize, usize, usize, usize) {
         let top = self.top_offset();
         let status_h = if self.config.appearance.show_status_bar {
-            26
+            crate::renderer::StatusBarRects::BAR_H
         } else {
             0
         };
-        let right = if self.sidebar_visible {
-            self.panel_width()
-        } else if self.file_explorer.visible {
-            self.file_explorer.width
-        } else {
-            0
-        };
-        (self.spaces_w(), right, top, status_h)
+        let left = self.sidebar_offset();
+        let right = self.file_explorer_offset();
+        (left, right, top, status_h)
     }
 
-    /// Espacio que el panel lateral quita al contenido por la izquierda.
+    /// Espacio que el panel lateral quita al contenido por la izquierda (riel + panel contextual).
     pub(crate) fn sidebar_offset(&self) -> usize {
-        self.spaces_w()
+        crate::renderer::RailRects::WIDTH
+            + if self.sidebar_collapsed {
+                0
+            } else {
+                crate::renderer::ContextualSidebarRects::WIDTH
+            }
     }
 
     pub(crate) fn top_offset(&self) -> usize {
@@ -1060,26 +1124,51 @@ impl TearminalApp {
 
     pub(crate) fn status_bar_height(&self) -> usize {
         if self.config.appearance.show_status_bar {
-            26
+            crate::renderer::StatusBarRects::BAR_H
         } else {
             0
         }
     }
 
-    /// Espacio que quitan al contenido por la derecha el explorador acoplado y el panel si va a ese lado.
-    /// Con el panel a la vista el explorador va dentro de él y no resta ancho.
+    /// Espacio que quitan al contenido por la derecha: en F1 el explorador migró al panel lateral
+    /// contextual izquierdo, por lo que el hueco derecho es siempre 0.
     pub(crate) fn file_explorer_offset(&self) -> usize {
-        if self.panel_shown() {
-            return if self.panel_on_right() {
-                self.panel_width()
-            } else {
-                0
-            };
+        0
+    }
+
+    /// Cambia el módulo activo en el riel de navegación (DISENO §4). Si se pulsa el módulo ya activo,
+    /// se contrae o expande el panel contextual.
+    pub(crate) fn set_active_module(&mut self, module: crate::config::AppModule) {
+        if self.active_module == module {
+            self.toggle_sidebar();
+            return;
         }
-        if self.file_explorer.visible {
-            self.file_explorer.width
-        } else {
-            0
+        self.active_module = module;
+        self.sidebar_collapsed = false;
+        self.spaces_collapsed = false;
+
+        match module {
+            crate::config::AppModule::Files => {
+                self.file_explorer.visible = true;
+                self.file_explorer.set_changes_only(false);
+            }
+            crate::config::AppModule::Git => {
+                self.file_explorer.visible = true;
+                self.file_explorer.set_changes_only(true);
+            }
+            crate::config::AppModule::System => {
+                self.open_or_switch_system_monitor_tab();
+            }
+            crate::config::AppModule::Data => {
+                self.open_or_switch_database_tab();
+            }
+            _ => {}
+        }
+
+        self.recompute_grid_for_all_tabs();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
         }
     }
 
@@ -1087,6 +1176,10 @@ impl TearminalApp {
         if let (Some(w), Some(tab)) = (&self.window, self.tabs.get(self.active_tab_index)) {
             let full_title = if tab.is_settings {
                 "TEArminal - ⚙ Ajustes".to_string()
+            } else if tab.is_system_monitor {
+                "TEArminal - ∿ Sistema".to_string()
+            } else if tab.is_database {
+                format!("TEArminal - ⛃ {}", tab.display_title())
             } else if let Some(ref v) = tab.file_viewer {
                 format!("TEArminal - ◈ {}", v.file_name)
             } else if tab.panes.len() > 1 {
@@ -1172,6 +1265,60 @@ impl TearminalApp {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    /// Lanza un muestreo inmediato del monitor del sistema en un hilo en segundo plano
+    pub(crate) fn request_immediate_monitor_sample(&mut self) {
+        if self.monitor.is_sampling {
+            return;
+        }
+        self.monitor.is_sampling = true;
+        let tx = self.monitor_tx.clone();
+        let proxy = self.proxy.clone();
+        let workspace_dir = Some(self.file_explorer.root_dir.clone());
+        let tracked_pids = self.tracked_shell_pids();
+
+        let _ = std::thread::Builder::new()
+            .name("tearminal-monitor".into())
+            .spawn(move || {
+                // El motor persiste entre muestras: la CPU, la red y los procesos se calculan como delta
+                // frente a la muestra anterior; con un motor nuevo cada vez la CPU marcaría siempre 0 %.
+                static SAMPLER: std::sync::Mutex<Option<crate::monitor::MonitorState>> =
+                    std::sync::Mutex::new(None);
+                let mut guard = SAMPLER.lock().unwrap_or_else(|e| e.into_inner());
+                let engine = guard.get_or_insert_with(crate::monitor::MonitorState::new);
+                let snap = engine.sample_local(workspace_dir.as_deref(), &tracked_pids);
+                drop(guard);
+                let _ = tx.send(snap);
+                if let Some(p) = proxy {
+                    let _ = p.send_event(TearminalEvent::MonitorDone);
+                }
+            });
+    }
+
+    /// Recibe e incorpora las muestras calculadas por el hilo en segundo plano
+    pub(crate) fn process_monitor_sample(&mut self) {
+        while let Ok(snap) = self.monitor_rx.try_recv() {
+            self.monitor.apply_snapshot(snap);
+        }
+        if !self.occluded {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+        }
+    }
+
+    /// PIDs de los procesos shell de todos los paneles abiertos en la aplicación
+    pub(crate) fn tracked_shell_pids(&self) -> Vec<u32> {
+        let mut pids = Vec::new();
+        for tab in &self.tabs {
+            for pane in &tab.panes {
+                if let Some(pid) = pane.pty.process_id() {
+                    pids.push(pid);
+                }
+            }
+        }
+        pids
     }
 }
 

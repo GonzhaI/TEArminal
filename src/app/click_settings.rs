@@ -95,8 +95,24 @@ impl TearminalApp {
                         w.request_redraw();
                     }
                     return true;
+                } else if SettingsPageRects::inside(mx, nav_my, rects.nav_database) {
+                    self.settings_page_state.section = SettingsSection::Database;
+                    self.settings_page_state.scroll_y = 0;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
+                } else if SettingsPageRects::inside(mx, nav_my, rects.nav_performance) {
+                    self.settings_page_state.section = SettingsSection::Performance;
+                    self.settings_page_state.editing_shortcut = None;
+                    self.settings_page_state.scroll_y = 0;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return true;
                 } else if SettingsPageRects::inside(mx, nav_my, rects.nav_shortcuts) {
                     self.settings_page_state.section = SettingsSection::Shortcuts;
+                    self.settings_page_state.editing_setting = None;
                     self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -104,6 +120,7 @@ impl TearminalApp {
                     return true;
                 } else if SettingsPageRects::inside(mx, nav_my, rects.nav_about) {
                     self.settings_page_state.section = SettingsSection::About;
+                    self.settings_page_state.editing_shortcut = None;
                     self.settings_page_state.scroll_y = 0;
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -143,14 +160,20 @@ impl TearminalApp {
                             self.settings_page_state.editing_setting = None;
                         }
                         if let Some(row) = rects.theme_row_at(mx, my) {
-                            let matches = &self.settings_page_state.filtered_themes;
-                            let first = self
+                            let first = self.settings_page_state.theme_scroll.min(
+                                self.settings_page_state
+                                    .filtered_themes
+                                    .len()
+                                    .saturating_sub(SettingsPageRects::THEME_ROWS),
+                            );
+                            if let Some(th_name) = self
                                 .settings_page_state
-                                .theme_scroll
-                                .min(matches.len().saturating_sub(SettingsPageRects::THEME_ROWS));
-                            if let Some(&th_name) = matches.get(first + row) {
+                                .filtered_themes
+                                .get(first + row)
+                                .cloned()
+                            {
                                 crate::logger::log(&format!("-> Clic en tema: {}", th_name));
-                                self.pick_theme(th_name);
+                                self.pick_theme(&th_name);
                                 return true;
                             }
                         }
@@ -400,6 +423,217 @@ impl TearminalApp {
                             self.settings_page_state.editing_setting = None;
                         }
                     }
+                    SettingsSection::Database => {
+                        let db = &mut self.config.database;
+                        if SettingsPageRects::inside(mx, my, rects.db_prod_read_only_btn) {
+                            db.prod_read_only = !db.prod_read_only;
+                        } else if SettingsPageRects::inside(mx, my, rects.db_write_window_minus_btn)
+                        {
+                            db.write_window_minutes =
+                                db.write_window_minutes.saturating_sub(5).max(1);
+                        } else if SettingsPageRects::inside(mx, my, rects.db_write_window_plus_btn)
+                        {
+                            db.write_window_minutes = (db.write_window_minutes + 5).min(120);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_written_confirmation_btn,
+                        ) {
+                            db.written_confirmation = !db.written_confirmation;
+                        } else if SettingsPageRects::inside(mx, my, rects.db_warn_no_where_btn) {
+                            db.warn_no_where = !db.warn_no_where;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_enforce_transaction_btn,
+                        ) {
+                            db.enforce_transaction = !db.enforce_transaction;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_backup_original_rows_btn,
+                        ) {
+                            db.backup_original_rows = !db.backup_original_rows;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_warn_unsafe_pem_permissions_btn,
+                        ) {
+                            db.warn_unsafe_pem_permissions = !db.warn_unsafe_pem_permissions;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_cert_warn_days_minus_btn,
+                        ) {
+                            db.cert_warn_days = db.cert_warn_days.saturating_sub(5).max(1);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_cert_warn_days_plus_btn,
+                        ) {
+                            db.cert_warn_days = (db.cert_warn_days + 5).min(365);
+                        } else if SettingsPageRects::inside(mx, my, rects.db_certs_folder_btn) {
+                            if db.certs_folder.is_empty() {
+                                db.certs_folder = "~/.tearminal/certs".to_string();
+                            } else {
+                                db.certs_folder.clear();
+                            }
+                        } else if SettingsPageRects::inside(mx, my, rects.db_page_size_minus_btn) {
+                            db.page_size = db.page_size.saturating_sub(25).max(10);
+                        } else if SettingsPageRects::inside(mx, my, rects.db_page_size_plus_btn) {
+                            db.page_size = (db.page_size + 25).min(500);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_query_timeout_minus_btn,
+                        ) {
+                            db.query_timeout_seconds =
+                                db.query_timeout_seconds.saturating_sub(5).max(5);
+                        } else if SettingsPageRects::inside(mx, my, rects.db_query_timeout_plus_btn)
+                        {
+                            db.query_timeout_seconds = (db.query_timeout_seconds + 5).min(300);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_query_row_limit_minus_btn,
+                        ) {
+                            db.query_row_limit = db.query_row_limit.saturating_sub(1000).max(500);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_query_row_limit_plus_btn,
+                        ) {
+                            db.query_row_limit = (db.query_row_limit + 1000).min(50_000);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_slow_query_threshold_minus_btn,
+                        ) {
+                            db.slow_query_threshold_ms =
+                                db.slow_query_threshold_ms.saturating_sub(50).max(50);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.db_slow_query_threshold_plus_btn,
+                        ) {
+                            db.slow_query_threshold_ms =
+                                (db.slow_query_threshold_ms + 50).min(5000);
+                        } else if SettingsPageRects::inside(mx, my, rects.db_autocomplete_btn) {
+                            db.autocomplete = !db.autocomplete;
+                        } else if SettingsPageRects::inside(mx, my, rects.db_save_passwords_btn) {
+                            db.save_passwords_in_credential_manager =
+                                !db.save_passwords_in_credential_manager;
+                        } else if SettingsPageRects::inside(mx, my, rects.db_save_query_history_btn)
+                        {
+                            db.save_query_history = !db.save_query_history;
+                        } else {
+                            return true;
+                        }
+                        let _ = self.config.save();
+                        for tab in &mut self.tabs {
+                            if let Some(db_tab) = tab.db_tab.as_mut() {
+                                db_tab.apply_config(&self.config.database);
+                            }
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+                    SettingsSection::Performance => {
+                        let perf = &mut self.config.performance;
+                        if SettingsPageRects::inside(mx, my, rects.perf_show_cpu_btn) {
+                            perf.show_cpu = !perf.show_cpu;
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_show_ram_btn) {
+                            perf.show_ram = !perf.show_ram;
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_show_gpu_btn) {
+                            perf.show_gpu = !perf.show_gpu;
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_show_disk_btn) {
+                            perf.show_disk = !perf.show_disk;
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_show_net_btn) {
+                            perf.show_net = !perf.show_net;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_sample_interval_minus_btn,
+                        ) {
+                            perf.sample_interval_ms =
+                                perf.sample_interval_ms.saturating_sub(1000).max(1000);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_sample_interval_plus_btn,
+                        ) {
+                            perf.sample_interval_ms = (perf.sample_interval_ms + 1000).min(10000);
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_enable_alerts_btn) {
+                            perf.enable_alerts = !perf.enable_alerts;
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_cpu_threshold_minus_btn,
+                        ) {
+                            perf.cpu_alert_threshold =
+                                perf.cpu_alert_threshold.saturating_sub(5).max(50);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_cpu_threshold_plus_btn,
+                        ) {
+                            perf.cpu_alert_threshold = (perf.cpu_alert_threshold + 5).min(99);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_ram_threshold_minus_btn,
+                        ) {
+                            perf.ram_alert_threshold =
+                                perf.ram_alert_threshold.saturating_sub(5).max(50);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_ram_threshold_plus_btn,
+                        ) {
+                            perf.ram_alert_threshold = (perf.ram_alert_threshold + 5).min(99);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_disk_threshold_minus_btn,
+                        ) {
+                            perf.disk_alert_threshold =
+                                perf.disk_alert_threshold.saturating_sub(5).max(50);
+                        } else if SettingsPageRects::inside(
+                            mx,
+                            my,
+                            rects.perf_disk_threshold_plus_btn,
+                        ) {
+                            perf.disk_alert_threshold = (perf.disk_alert_threshold + 5).min(99);
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_agent_input_box) {
+                            let csv = perf.agent_executables_csv();
+                            self.settings_page_state.editing_setting =
+                                Some(crate::renderer::EditingSettingField::AgentProfiles);
+                            self.settings_page_state.agent_profiles_input =
+                                crate::ui::TextInput::new(&csv);
+                            let mut input =
+                                std::mem::take(&mut self.settings_page_state.agent_profiles_input);
+                            self.handle_text_input_click(
+                                &mut input,
+                                mx,
+                                rects.perf_agent_input_box.0 + 10,
+                            );
+                            self.settings_page_state.agent_profiles_input = input;
+                            return true;
+                        } else if SettingsPageRects::inside(mx, my, rects.perf_agent_reset_btn) {
+                            perf.agent_executables = crate::config::default_agent_executables();
+                            self.settings_page_state.editing_setting = None;
+                            self.apply_agent_profiles_env();
+                        } else {
+                            return true;
+                        }
+                        let _ = self.config.save();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
                     SettingsSection::About => {
                         if SettingsPageRects::inside(mx, my, rects.about_open_file_btn) {
                             crate::logger::log("-> Clic en abrir archivo tearminal.toml (About)");
@@ -413,7 +647,44 @@ impl TearminalApp {
                             return true;
                         }
                     }
-                    SettingsSection::Shortcuts => {}
+                    SettingsSection::Shortcuts => {
+                        if SettingsPageRects::inside(mx, my, rects.shortcuts_reset_btn) {
+                            self.config.shortcuts = crate::config::ShortcutsConfig::default();
+                            self.settings_page_state.editing_shortcut = None;
+                            let _ = self.config.save();
+                            self.show_toast(
+                                crate::app::dialog::ToastSeverity::Success,
+                                "Atajos restablecidos por defecto",
+                            );
+                        } else if let Some((idx, _)) = rects
+                            .shortcuts_rows
+                            .iter()
+                            .enumerate()
+                            .find(|(_, r)| SettingsPageRects::inside(mx, my, **r))
+                        {
+                            if let Some(Some(action)) =
+                                crate::config::ShortcutAction::SETTINGS_SLOTS
+                                    .get(idx)
+                                    .copied()
+                            {
+                                self.settings_page_state.editing_setting = None;
+                                self.settings_page_state.editing_shortcut =
+                                    if self.settings_page_state.editing_shortcut == Some(action) {
+                                        None
+                                    } else {
+                                        Some(action)
+                                    };
+                            } else {
+                                self.settings_page_state.editing_shortcut = None;
+                            }
+                        } else {
+                            self.settings_page_state.editing_shortcut = None;
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
                 }
             }
             return true;

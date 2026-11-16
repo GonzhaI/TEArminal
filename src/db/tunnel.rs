@@ -596,10 +596,10 @@ mod tests {
     #[test]
     fn key_readable_by_everyone_blocks_the_tunnel() {
         let key = temp_file("insecure", "k.pem", "relleno");
-        let granted = Command::new("icacls.exe")
-            .arg(&key)
-            .args(["/grant", "*S-1-1-0:(R)"])
-            .output();
+        let mut cmd = Command::new("icacls.exe");
+        cmd.arg(&key).args(["/grant", "*S-1-1-0:(R)"]);
+        crate::app::platform::hide_console(&mut cmd);
+        let granted = cmd.output();
         let Ok(granted) = granted else { return };
         if !granted.status.success() {
             return;

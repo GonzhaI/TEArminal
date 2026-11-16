@@ -45,14 +45,78 @@ impl TearminalApp {
             needs_redraw = true;
         }
 
+        // Hover en Monitor del Sistema (panel lateral o vista principal)
+        let mut new_system_hover = None;
+        if self.active_module == crate::config::AppModule::System && !self.sidebar_collapsed {
+            let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+                self.sidebar_collapsed,
+                self.active_module,
+                win_h,
+                self.status_bar_height(),
+            );
+            let side_geom = crate::renderer::SystemSidebarRects::compute(
+                sb_rects.content.0,
+                sb_rects.content.1,
+                sb_rects.content.2,
+                sb_rects.content.3,
+            );
+            let source_count = 1 + self.monitor.remote_snapshots.len();
+            new_system_hover = side_geom.hit_test(mx, my, source_count);
+        }
+        if new_system_hover.is_none()
+            && !is_settings_active
+            && self
+                .tabs
+                .get(self.active_tab_index)
+                .is_some_and(|t| t.is_system_monitor)
+        {
+            let offset = self.sidebar_offset();
+            let status_bar_h = self.status_bar_height();
+            let has_sel = self.monitor.selected_process_pid.is_some();
+            let sys_layout = crate::renderer::SystemLayoutRects::compute(
+                offset,
+                top_offset,
+                win_w,
+                win_h,
+                status_bar_h,
+                has_sel,
+            );
+            let (proc_count, folder_count, volume_count) =
+                if let Some(s) = self.monitor.snapshot.as_ref() {
+                    let filtered_len = self.monitor.filtered_processes(s).len();
+                    let visible_len = filtered_len.saturating_sub(self.monitor.process_scroll);
+                    (visible_len, s.top_project_folders.len(), s.volumes.len())
+                } else {
+                    (0, 0, 0)
+                };
+            new_system_hover = sys_layout.hit_test(mx, my, proc_count, folder_count, volume_count);
+            if let Some(crate::renderer::SystemClickTarget::FolderAction(idx)) = new_system_hover {
+                let has_action = self
+                    .monitor
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.top_project_folders.get(idx))
+                    .is_some_and(|f| f.action.is_some());
+                if !has_action {
+                    new_system_hover = None;
+                }
+            }
+        }
+        if new_system_hover.is_some() {
+            is_pointer = true;
+        }
+        if self.system_hover != new_system_hover {
+            self.system_hover = new_system_hover;
+            needs_redraw = true;
+        }
+
         {
             let visible = self.visible_tab_indices();
             let top_rects = TopTabBarRects::compute(win_w, self.spaces_w(), visible.len());
             let mut new_hovered_tab = None;
             let mut new_hovered_close = None;
             let mut new_hovered_new_tab = false;
-            let mut new_hovered_files = false;
-            let mut new_hovered_changes = false;
+            let mut new_hovered_search = false;
 
             if my < TopTabBarRects::HEIGHT && mx >= self.spaces_w() {
                 if TopTabBarRects::inside(mx, my, top_rects.win_min_btn) {
@@ -71,12 +135,8 @@ impl TearminalApp {
                     new_hovered_new_tab = true;
                     is_pointer = true;
                 }
-                if TopTabBarRects::inside(mx, my, top_rects.files_btn) {
-                    new_hovered_files = true;
-                    is_pointer = true;
-                }
-                if TopTabBarRects::inside(mx, my, top_rects.changes_btn) {
-                    new_hovered_changes = true;
+                if TopTabBarRects::inside(mx, my, top_rects.search_btn) {
+                    new_hovered_search = true;
                     is_pointer = true;
                 }
                 for (pos, &idx) in visible.iter().enumerate() {
@@ -104,12 +164,8 @@ impl TearminalApp {
                 self.hovered_new_tab = new_hovered_new_tab;
                 needs_redraw = true;
             }
-            if self.hovered_files_btn != new_hovered_files {
-                self.hovered_files_btn = new_hovered_files;
-                needs_redraw = true;
-            }
-            if self.hovered_changes_btn != new_hovered_changes {
-                self.hovered_changes_btn = new_hovered_changes;
+            if self.hovered_search != new_hovered_search {
+                self.hovered_search = new_hovered_search;
                 needs_redraw = true;
             }
         }
@@ -199,6 +255,10 @@ impl TearminalApp {
             let mut h_acu = false;
             let mut h_ka = None;
             let mut h_of = false;
+            let mut h_db = None;
+            let mut h_perf = None;
+            let mut h_sc_idx = None;
+            let mut h_sc_reset = false;
             let mut h_reset = SettingsPageRects::inside(mx, my, rects.reset_defaults_btn);
             let h_search = SettingsPageRects::inside(mx, my, rects.search_box);
             if h_search {
@@ -300,16 +360,106 @@ impl TearminalApp {
                     h_of = SettingsPageRects::inside(mx, my, rects.open_file_btn);
                     h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.term_reset_btn);
                 }
+                SettingsSection::Database => {
+                    use crate::renderer::HoveredDbControl as D;
+                    let db_controls = [
+                        (rects.db_prod_read_only_btn, D::ProdReadOnly),
+                        (rects.db_write_window_minus_btn, D::WriteWindowMinus),
+                        (rects.db_write_window_plus_btn, D::WriteWindowPlus),
+                        (rects.db_write_window_value_box, D::WriteWindowBox),
+                        (rects.db_written_confirmation_btn, D::WrittenConfirmation),
+                        (rects.db_warn_no_where_btn, D::WarnNoWhere),
+                        (rects.db_enforce_transaction_btn, D::EnforceTransaction),
+                        (rects.db_backup_original_rows_btn, D::BackupOriginalRows),
+                        (rects.db_warn_unsafe_pem_permissions_btn, D::WarnUnsafePem),
+                        (rects.db_cert_warn_days_minus_btn, D::CertWarnDaysMinus),
+                        (rects.db_cert_warn_days_plus_btn, D::CertWarnDaysPlus),
+                        (rects.db_cert_warn_days_value_box, D::CertWarnDaysBox),
+                        (rects.db_certs_folder_btn, D::CertsFolder),
+                        (rects.db_page_size_minus_btn, D::PageSizeMinus),
+                        (rects.db_page_size_plus_btn, D::PageSizePlus),
+                        (rects.db_page_size_value_box, D::PageSizeBox),
+                        (rects.db_query_timeout_minus_btn, D::QueryTimeoutMinus),
+                        (rects.db_query_timeout_plus_btn, D::QueryTimeoutPlus),
+                        (rects.db_query_timeout_value_box, D::QueryTimeoutBox),
+                        (rects.db_query_row_limit_minus_btn, D::QueryRowLimitMinus),
+                        (rects.db_query_row_limit_plus_btn, D::QueryRowLimitPlus),
+                        (rects.db_query_row_limit_value_box, D::QueryRowLimitBox),
+                        (
+                            rects.db_slow_query_threshold_minus_btn,
+                            D::SlowQueryThresholdMinus,
+                        ),
+                        (
+                            rects.db_slow_query_threshold_plus_btn,
+                            D::SlowQueryThresholdPlus,
+                        ),
+                        (
+                            rects.db_slow_query_threshold_value_box,
+                            D::SlowQueryThresholdBox,
+                        ),
+                        (rects.db_autocomplete_btn, D::Autocomplete),
+                        (rects.db_save_passwords_btn, D::SavePasswords),
+                        (rects.db_save_query_history_btn, D::SaveQueryHistory),
+                    ];
+                    h_db = db_controls
+                        .iter()
+                        .find(|(r, _)| SettingsPageRects::inside(mx, my, *r))
+                        .map(|(_, c)| *c);
+                }
+                SettingsSection::Performance => {
+                    use crate::renderer::HoveredPerfControl as P;
+                    let perf_controls = [
+                        (rects.perf_show_cpu_btn, P::ShowCpu),
+                        (rects.perf_show_ram_btn, P::ShowRam),
+                        (rects.perf_show_gpu_btn, P::ShowGpu),
+                        (rects.perf_show_disk_btn, P::ShowDisk),
+                        (rects.perf_show_net_btn, P::ShowNet),
+                        (rects.perf_sample_interval_minus_btn, P::SampleIntervalMinus),
+                        (rects.perf_sample_interval_plus_btn, P::SampleIntervalPlus),
+                        (rects.perf_sample_interval_value_box, P::SampleIntervalBox),
+                        (rects.perf_enable_alerts_btn, P::EnableAlerts),
+                        (rects.perf_cpu_threshold_minus_btn, P::CpuThresholdMinus),
+                        (rects.perf_cpu_threshold_plus_btn, P::CpuThresholdPlus),
+                        (rects.perf_cpu_threshold_value_box, P::CpuThresholdBox),
+                        (rects.perf_ram_threshold_minus_btn, P::RamThresholdMinus),
+                        (rects.perf_ram_threshold_plus_btn, P::RamThresholdPlus),
+                        (rects.perf_ram_threshold_value_box, P::RamThresholdBox),
+                        (rects.perf_disk_threshold_minus_btn, P::DiskThresholdMinus),
+                        (rects.perf_disk_threshold_plus_btn, P::DiskThresholdPlus),
+                        (rects.perf_disk_threshold_value_box, P::DiskThresholdBox),
+                        (rects.perf_agent_input_box, P::AgentProfilesBox),
+                        (rects.perf_agent_reset_btn, P::AgentProfilesReset),
+                    ];
+                    h_perf = perf_controls
+                        .iter()
+                        .find(|(r, _)| SettingsPageRects::inside(mx, my, *r))
+                        .map(|(_, c)| *c);
+                }
                 SettingsSection::About => {
                     h_of = SettingsPageRects::inside(mx, my, rects.about_open_file_btn);
                     h_reset = h_reset || SettingsPageRects::inside(mx, my, rects.about_reset_btn);
                 }
-                SettingsSection::Shortcuts => {}
+                SettingsSection::Shortcuts => {
+                    h_sc_reset = SettingsPageRects::inside(mx, my, rects.shortcuts_reset_btn);
+                    h_sc_idx = rects
+                        .shortcuts_rows
+                        .iter()
+                        .enumerate()
+                        .find(|(idx, r)| {
+                            SettingsPageRects::inside(mx, my, **r)
+                                && crate::config::ShortcutAction::SETTINGS_SLOTS
+                                    .get(*idx)
+                                    .is_some_and(Option::is_some)
+                        })
+                        .map(|(idx, _)| idx);
+                }
             }
 
             if h_theme.is_some()
                 || h_ts.is_some()
                 || h_tm.is_some()
+                || h_db.is_some()
+                || h_perf.is_some()
                 || h_ff_prev
                 || h_ff_next
                 || h_fm
@@ -346,6 +496,8 @@ impl TearminalApp {
                 || h_ka.is_some()
                 || h_of
                 || h_reset
+                || h_sc_idx.is_some()
+                || h_sc_reset
             {
                 is_pointer = true;
             }
@@ -392,7 +544,15 @@ impl TearminalApp {
                 || st.hovered_open_file != h_of
                 || st.hovered_reset_defaults != h_reset
                 || st.hovered_search_box != h_search
+                || st.hovered_db != h_db
+                || st.hovered_perf != h_perf
+                || st.hovered_shortcut_idx != h_sc_idx
+                || st.hovered_shortcuts_reset != h_sc_reset
             {
+                st.hovered_db = h_db;
+                st.hovered_perf = h_perf;
+                st.hovered_shortcut_idx = h_sc_idx;
+                st.hovered_shortcuts_reset = h_sc_reset;
                 st.hovered_section = h_sec;
                 st.hovered_theme = h_theme;
                 st.hovered_theme_slot = h_ts;
@@ -446,15 +606,19 @@ impl TearminalApp {
             let (panel_x, panel_y, panel_w, panel_h) =
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
-            let expanded_hover = self.renderer.as_mut().and_then(|r| {
-                r.explorer_hovered_item_geometry(
-                    win_w,
-                    win_h,
-                    top_offset,
-                    status_bar_h,
-                    &self.file_explorer,
-                )
-            });
+            let expanded_hover = if self.file_explorer.changes_only {
+                None
+            } else {
+                self.renderer.as_mut().and_then(|r| {
+                    r.explorer_hovered_item_geometry(
+                        win_w,
+                        win_h,
+                        top_offset,
+                        status_bar_h,
+                        &self.file_explorer,
+                    )
+                })
+            };
             let in_expanded_item = expanded_hover.is_some_and(|(idx, item_y, item_h, row_w)| {
                 self.file_explorer.hovered_index == Some(idx)
                     && my >= item_y
@@ -465,7 +629,51 @@ impl TearminalApp {
             let in_panel =
                 mx >= panel_x && mx < panel_x + panel_w && my >= panel_y && my < panel_y + panel_h;
 
-            if in_panel || in_expanded_item {
+            if self.file_explorer.changes_only && in_panel {
+                let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
+                let content_y = panel_y + header_h;
+                let content_h = panel_h.saturating_sub(header_h);
+                let staged_count = self.file_explorer.staged_change_items().len();
+                let unstaged_count = self.file_explorer.unstaged_change_items().len();
+                let rects = crate::renderer::GitPanelRects::compute(
+                    panel_x,
+                    content_y,
+                    panel_w,
+                    content_h,
+                    staged_count,
+                    self.file_explorer.staged_collapsed,
+                    unstaged_count,
+                    self.file_explorer.unstaged_collapsed,
+                    self.file_explorer.discard_confirm.is_some(),
+                );
+                let target = rects.hit_test(
+                    mx,
+                    my,
+                    staged_count,
+                    self.file_explorer.staged_collapsed,
+                    unstaged_count,
+                    self.file_explorer.unstaged_collapsed,
+                    self.file_explorer.scroll_offset,
+                );
+                if target
+                    .is_some_and(|t| !matches!(t, crate::renderer::GitClickTarget::CommitInput))
+                {
+                    is_pointer = true;
+                }
+                if self.file_explorer.hovered_git_target != target
+                    || self.file_explorer.hovered_index.is_some()
+                    || self.file_explorer.hovered_scrollbar
+                    || self.file_explorer.hovered_filter_close
+                    || self.file_explorer.hovered_git_action.is_some()
+                {
+                    self.file_explorer.hovered_git_target = target;
+                    self.file_explorer.hovered_index = None;
+                    self.file_explorer.hovered_scrollbar = false;
+                    self.file_explorer.hovered_filter_close = false;
+                    self.file_explorer.hovered_git_action = None;
+                    needs_redraw = true;
+                }
+            } else if in_panel || in_expanded_item {
                 let is_over_scrollbar = if in_expanded_item {
                     false
                 } else if let Some((track, _thumb)) = TerminalRenderer::explorer_scrollbar_geometry(
@@ -502,57 +710,32 @@ impl TearminalApp {
                     self.file_explorer.item_at_y(my, panel_y)
                 };
 
-                let git_action_hover = if self.file_explorer.changes_only {
-                    if let Some(idx) = item_hover {
-                        if let Some(item) = self.file_explorer.visible_item(idx) {
-                            if let Some(item_y) = self.file_explorer.item_y(idx, panel_y) {
-                                let item_h = crate::explorer::FileExplorer::ITEM_HEIGHT;
-                                crate::renderer::GitActionBtnRects::hit_test(
-                                    panel_x,
-                                    panel_w,
-                                    item_y,
-                                    item_h,
-                                    item.is_staged,
-                                    item.is_unstaged,
-                                    mx,
-                                    my,
-                                )
-                                .map(|act| (idx, act))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                if item_hover.is_some() || git_action_hover.is_some() {
+                if item_hover.is_some() {
                     is_pointer = true;
                 }
 
                 if self.file_explorer.hovered_index != item_hover
                     || self.file_explorer.hovered_scrollbar != is_over_scrollbar
-                    || self.file_explorer.hovered_git_action != git_action_hover
+                    || self.file_explorer.hovered_git_action.is_some()
+                    || self.file_explorer.hovered_git_target.is_some()
                 {
                     self.file_explorer.hovered_index = item_hover;
                     self.file_explorer.hovered_scrollbar = is_over_scrollbar;
-                    self.file_explorer.hovered_git_action = git_action_hover;
+                    self.file_explorer.hovered_git_action = None;
+                    self.file_explorer.hovered_git_target = None;
                     needs_redraw = true;
                 }
             } else if self.file_explorer.hovered_index.is_some()
                 || self.file_explorer.hovered_scrollbar
                 || self.file_explorer.hovered_filter_close
                 || self.file_explorer.hovered_git_action.is_some()
+                || self.file_explorer.hovered_git_target.is_some()
             {
                 self.file_explorer.hovered_index = None;
                 self.file_explorer.hovered_scrollbar = false;
                 self.file_explorer.hovered_filter_close = false;
                 self.file_explorer.hovered_git_action = None;
+                self.file_explorer.hovered_git_target = None;
                 needs_redraw = true;
             }
         }
@@ -916,6 +1099,35 @@ impl TearminalApp {
                     needs_redraw = true;
                 }
 
+                let (is_hover_reload, is_hover_keep) = if viewer.has_external_disk_change() {
+                    let b_rects = crate::renderer::FileViewerBannerRects::compute(
+                        offset,
+                        top_offset + crate::renderer::FileViewerHeaderRects::HEIGHT,
+                        viewer_w,
+                    );
+                    (
+                        crate::renderer::FileViewerHeaderRects::inside(mx, my, b_rects.reload_btn),
+                        crate::renderer::FileViewerHeaderRects::inside(
+                            mx,
+                            my,
+                            b_rects.keep_mine_btn,
+                        ),
+                    )
+                } else {
+                    (false, false)
+                };
+                if is_hover_reload || is_hover_keep {
+                    is_pointer = true;
+                }
+                if viewer.hovered_reload_disk != is_hover_reload {
+                    viewer.hovered_reload_disk = is_hover_reload;
+                    needs_redraw = true;
+                }
+                if viewer.hovered_keep_mine != is_hover_keep {
+                    viewer.hovered_keep_mine = is_hover_keep;
+                    needs_redraw = true;
+                }
+
                 let is_over_viewer_scrollbar = if let Some((track, _)) =
                     TerminalRenderer::file_viewer_scrollbar_geometry(
                         offset, top_offset, viewer_w, viewer_h, viewer, row_h,
@@ -1152,6 +1364,12 @@ impl TearminalApp {
                 r.keep_awake_button_width(self.config.terminal.keep_awake)
             });
 
+            let has_branch = self
+                .tabs
+                .get(self.active_tab_index)
+                .and_then(|t| t.active_pane())
+                .and_then(|p| p.cached_git_branch.as_ref())
+                .is_some();
             let sb_rects = StatusBarRects::compute_full(
                 win_w,
                 win_h,
@@ -1160,6 +1378,7 @@ impl TearminalApp {
                 dims_w,
                 meters_w,
                 keep_awake_w,
+                has_branch,
             );
             let update_hov = sb_rects
                 .update_badge
@@ -1549,6 +1768,58 @@ impl TearminalApp {
                 None => winit::window::CursorIcon::Default,
             });
             return true;
+        }
+
+        // Con un diálogo modal abierto (F4) solo se resalta su elemento bajo el ratón
+        if self.active_dialog.is_some() {
+            let (win_w, win_h) = self.window_size();
+            let rects_opt = self.dialog_rects_for_active(win_w, win_h);
+            let (hit, needs_redraw) =
+                if let (Some(dlg), Some(rects)) = (&mut self.active_dialog, rects_opt) {
+                    let hit = rects.hit_test(mx, my);
+                    let hovered_close = hit == Some(crate::renderer::DialogHit::Close);
+                    let hovered_copy_sql = hit == Some(crate::renderer::DialogHit::CopySql);
+                    let hovered_opt = match hit {
+                        Some(crate::renderer::DialogHit::OptionCheckbox(idx)) => Some(idx),
+                        _ => None,
+                    };
+                    let hovered_btn = match hit {
+                        Some(crate::renderer::DialogHit::Button(idx)) => Some(idx),
+                        _ => None,
+                    };
+                    let redraw = dlg.hovered_close != hovered_close
+                        || dlg.hovered_button != hovered_btn
+                        || dlg.hovered_copy_sql != hovered_copy_sql
+                        || dlg.hovered_option != hovered_opt;
+                    dlg.hovered_close = hovered_close;
+                    dlg.hovered_button = hovered_btn;
+                    dlg.hovered_copy_sql = hovered_copy_sql;
+                    dlg.hovered_option = hovered_opt;
+                    (hit, redraw)
+                } else {
+                    (None, false)
+                };
+            if needs_redraw {
+                self.request_redraw();
+            }
+            self.set_cursor_icon(match hit {
+                Some(crate::renderer::DialogHit::Input) => winit::window::CursorIcon::Text,
+                Some(_) => winit::window::CursorIcon::Pointer,
+                None => winit::window::CursorIcon::Default,
+            });
+            return true;
+        }
+
+        // Hover en botón de cierre de avisos (toasts)
+        let new_toast_hover = if !self.toasts.is_empty() {
+            let (win_w, win_h) = self.window_size();
+            crate::renderer::ToastRects::compute(win_w, win_h, self.toasts.len()).hit_close(mx, my)
+        } else {
+            None
+        };
+        if self.hovered_toast_close != new_toast_hover {
+            self.hovered_toast_close = new_toast_hover;
+            self.request_redraw();
         }
 
         // Con la paleta de comandos abierta solo se resalta su opción bajo el ratón

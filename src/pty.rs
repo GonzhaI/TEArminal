@@ -343,6 +343,10 @@ fn build_shell_command(
     }
 
     cmd.env("TEARMINAL_PANE_TOKEN", token);
+    let agent_profiles = crate::monitor::active_agent_profiles_csv();
+    if !agent_profiles.is_empty() {
+        cmd.env("TEARMINAL_AGENT_PROFILES", agent_profiles);
+    }
     cmd.env("PATH", path_env);
     let lower = shell.to_lowercase();
     if shell_integration && (lower.contains("powershell") || lower.contains("pwsh")) {
@@ -524,6 +528,11 @@ impl PtyManager {
 
     pub(crate) fn is_child_exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// PID del proceso shell hijo gestionado por este PTY
+    pub(crate) fn process_id(&self) -> Option<u32> {
+        self.child.process_id()
     }
 
     pub(crate) fn write_input(&self, data: &[u8]) {

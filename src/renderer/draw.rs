@@ -89,6 +89,11 @@ impl TerminalRenderer {
         self.measure_run(text, size_px, Self::body_face(semibold), 0.0)
     }
 
+    /// Mide un rótulo en mayúsculas (Barlow Semi Condensed) con espaciado tracking
+    pub(crate) fn measure_ui_text_tracked(&self, text: &str, size_px: f32, tracking: f32) -> usize {
+        self.measure_run(&text.to_uppercase(), size_px, UiFace::Label, tracking)
+    }
+
     fn measure_run(&self, text: &str, size_px: f32, face: UiFace, tracking: f32) -> usize {
         let effective_size = self.ui_text_px(size_px);
         let size_bits = effective_size.to_bits();

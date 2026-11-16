@@ -207,8 +207,17 @@ mod tests {
             return;
         }
         assert_eq!(load(kind, &id).unwrap(), Some(secret));
-        let _ = delete_all(&id);
-        assert_eq!(load(kind, &id).unwrap(), None);
+        delete_all(&id).unwrap();
+        // En Windows bajo carga paralela, `CredReadW` puede ver brevemente la caché de LSASS tras `CredDeleteW`
+        let mut after_delete = load(kind, &id).unwrap();
+        for _ in 0..50 {
+            if after_delete.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            after_delete = load(kind, &id).unwrap();
+        }
+        assert_eq!(after_delete, None);
         assert!(delete(kind, &id).is_ok());
     }
 

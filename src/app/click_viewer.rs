@@ -67,6 +67,45 @@ impl TearminalApp {
                                 }
                             }
 
+                            if let Some(rect) = header_rects.stage_file_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
+                                    let path = viewer.path.clone();
+                                    let was_staged = viewer.is_staged;
+                                    let action = if was_staged {
+                                        crate::renderer::GitActionKind::Unstage
+                                    } else {
+                                        crate::renderer::GitActionKind::Stage
+                                    };
+                                    let is_untracked = viewer.git_new_file;
+                                    viewer.is_staged = !was_staged;
+                                    self.execute_git_action(&path, action, is_untracked);
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return true;
+                                }
+                            }
+
+                            if let Some(rect) = header_rects.prev_change_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
+                                    viewer.jump_to_prev_change();
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return true;
+                                }
+                            }
+
+                            if let Some(rect) = header_rects.next_change_btn {
+                                if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
+                                    viewer.jump_to_next_change();
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return true;
+                                }
+                            }
+
                             if let Some(rect) = header_rects.diff_btn {
                                 if crate::renderer::FileViewerHeaderRects::inside(mx, my, rect) {
                                     viewer.toggle_diff();
@@ -99,8 +138,55 @@ impl TearminalApp {
                                 }
                             }
 
+                            // Aviso de archivo modificado externamente en disco
+                            if viewer.has_external_disk_change() {
+                                let b_rects = crate::renderer::FileViewerBannerRects::compute(
+                                    offset,
+                                    top_offset + crate::renderer::FileViewerHeaderRects::HEIGHT,
+                                    viewer_w,
+                                );
+                                if crate::renderer::FileViewerHeaderRects::inside(
+                                    mx,
+                                    my,
+                                    b_rects.reload_btn,
+                                ) {
+                                    let path = viewer.path.clone();
+                                    if let Ok(bytes) = std::fs::read(&path) {
+                                        let decoded =
+                                            crate::app::viewer::DecodedText::decode(&bytes);
+                                        viewer.lines = decoded.lines.clone();
+                                        viewer.original_lines = decoded.lines;
+                                        viewer.is_dirty = false;
+                                        viewer.disk_mtime = std::fs::metadata(&path)
+                                            .and_then(|m| m.modified())
+                                            .ok();
+                                        viewer.side_by_side_cache.take();
+                                        viewer.git_marks.take();
+                                        viewer.edit_gen = viewer.edit_gen.wrapping_add(1);
+                                    }
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return true;
+                                }
+                                if crate::renderer::FileViewerHeaderRects::inside(
+                                    mx,
+                                    my,
+                                    b_rects.keep_mine_btn,
+                                ) {
+                                    let path = viewer.path.clone();
+                                    viewer.disk_mtime =
+                                        std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                                    if let Some(w) = &self.window {
+                                        w.request_redraw();
+                                    }
+                                    return true;
+                                }
+                            }
+
                             let show_gutter = !(viewer.render_markdown && viewer.is_markdown());
-                            let lay = crate::renderer::FileViewerLayout::compute(
+                            let has_banner = viewer.has_external_disk_change();
+                            let lay = crate::renderer::FileViewerLayout::compute_with_banner(
                                 offset,
                                 top_offset,
                                 viewer_w,
@@ -109,6 +195,7 @@ impl TearminalApp {
                                 char_w,
                                 viewer.lines.len(),
                                 show_gutter,
+                                has_banner,
                             );
 
                             // Interacción con la barra flotante de búsqueda (`Ctrl + F`)

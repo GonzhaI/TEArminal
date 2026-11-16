@@ -38,13 +38,13 @@ pub(crate) fn first_leaf_cwd(node: &crate::config::PaneSession) -> Option<PathBu
 }
 
 impl TearminalApp {
-    /// Ancho que el panel de Spaces quita al contenido por la izquierda.
+    /// Ancho que el riel y panel lateral quitan al contenido por la izquierda.
     pub(crate) fn spaces_w(&self) -> usize {
-        SpacesPanelRects::width_for(self.spaces_collapsed)
+        SpacesPanelRects::width_for(self.sidebar_collapsed)
     }
 
     pub(super) fn spaces_rects(&self, win_h: usize) -> SpacesPanelRects {
-        SpacesPanelRects::compute(self.spaces_collapsed, win_h)
+        SpacesPanelRects::compute(self.sidebar_collapsed, win_h)
     }
 
     /// ¿Es remoto el Space `space`?
@@ -98,56 +98,79 @@ impl TearminalApp {
             .collect()
     }
 
-    /// Elemento del panel bajo `(mx, my)`.
+    /// Elemento del panel o riel bajo `(mx, my)`.
     pub(super) fn spaces_hit(&self, mx: usize, my: usize, win_h: usize) -> SpacesHover {
-        let r = self.spaces_rects(win_h);
-        if !r.contains(mx, my, win_h) {
+        let status_h = self.status_bar_height();
+        if mx < crate::renderer::RailRects::WIDTH {
+            let rail_rects = crate::renderer::RailRects::compute(win_h, status_h);
+            if let Some(target) = rail_rects.button_at(mx, my) {
+                return match target {
+                    crate::renderer::RailTarget::Module(m) => SpacesHover::RailModule(m),
+                    crate::renderer::RailTarget::Settings => SpacesHover::Settings,
+                };
+            }
             return SpacesHover::None;
         }
+
+        if self.sidebar_collapsed {
+            return SpacesHover::None;
+        }
+
+        let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+            self.sidebar_collapsed,
+            self.active_module,
+            win_h,
+            status_h,
+        );
+
         let inside = |rect| crate::renderer::SidebarRects::inside(mx, my, rect);
-        if inside(r.toggle_btn) {
+
+        if inside(sb_rects.toggle_btn) {
             return SpacesHover::Toggle;
-        } else if inside(r.search_btn) {
-            return SpacesHover::Search;
-        } else if inside(r.plus_btn) {
+        }
+        if inside(sb_rects.action_btn) {
             return SpacesHover::Plus;
-        } else if inside(r.settings_btn) {
-            return SpacesHover::Settings;
-        } else if inside(r.machine_btn) {
-            return SpacesHover::Machine;
         }
-        if my < r.list_top || my >= r.list_bottom {
-            return SpacesHover::None;
-        }
-        let order = self.space_order();
-        for (slot, rect) in r.visible_slots(&self.space_remote_flags(), self.spaces_scroll) {
-            match slot {
-                SpacesSlot::Header { remote } if !r.collapsed => {
-                    if inside(SpacesPanelRects::header_plus(rect)) {
-                        return if remote {
-                            SpacesHover::MachinePlus
-                        } else {
-                            SpacesHover::Plus
-                        };
+
+        if self.active_module == crate::config::AppModule::Spaces {
+            if let Some(btn) = sb_rects.terminal_btn {
+                if inside(btn) {
+                    return SpacesHover::Terminal;
+                }
+            }
+            if let Some(btn) = sb_rects.add_machine_btn {
+                if inside(btn) {
+                    return SpacesHover::Machine;
+                }
+            }
+
+            let r = self.spaces_rects(win_h);
+            if my >= r.list_top && my < r.list_bottom {
+                let order = self.space_order();
+                for (slot, rect) in r.visible_slots(&self.space_remote_flags(), self.spaces_scroll)
+                {
+                    match slot {
+                        SpacesSlot::Header { remote } => {
+                            if inside(SpacesPanelRects::header_plus(rect)) {
+                                return if remote {
+                                    SpacesHover::MachinePlus
+                                } else {
+                                    SpacesHover::Plus
+                                };
+                            }
+                        }
+                        SpacesSlot::Space(pos) if inside(rect) => {
+                            return order
+                                .get(pos)
+                                .map_or(SpacesHover::None, |&i| SpacesHover::Row(i));
+                        }
+                        _ => {}
                     }
                 }
-                SpacesSlot::Space(pos) if inside(rect) => {
-                    return order
-                        .get(pos)
-                        .map_or(SpacesHover::None, |&i| SpacesHover::Row(i));
-                }
-                _ => {}
             }
         }
-        SpacesHover::None
-    }
 
-    pub(crate) fn toggle_spaces_panel(&mut self) {
-        self.spaces_collapsed = !self.spaces_collapsed;
-        self.spaces_scroll = 0;
-        self.recompute_grid_for_all_tabs();
-        self.save_session();
-        self.request_redraw();
+        SpacesHover::None
     }
 
     /// Clic central en una fila del panel: cierra ese Space.
@@ -159,9 +182,16 @@ impl TearminalApp {
         }
     }
 
-    /// Clic izquierdo en el panel de Spaces. Devuelve `true` si el clic cayó dentro del panel.
+    /// Clic izquierdo en el panel de Spaces / riel. Devuelve `true` si el clic cayó dentro del panel.
     pub(super) fn click_spaces_panel(&mut self, mx: usize, my: usize, win_h: usize) -> bool {
-        if !self.spaces_rects(win_h).contains(mx, my, win_h) {
+        let rail_w = crate::renderer::RailRects::WIDTH;
+        let total_w = rail_w
+            + if self.sidebar_collapsed {
+                0
+            } else {
+                crate::renderer::ContextualSidebarRects::WIDTH
+            };
+        if mx >= total_w || my >= win_h {
             if self.space_edit.is_some() {
                 self.commit_space_rename();
             }
@@ -187,9 +217,10 @@ impl TearminalApp {
                     {
                         let tx = r.0 + 8 + SpacesPanelRects::BADGE + 10;
                         let text_start_x = tx + 2;
-                        let mut edit = self.space_edit.take().unwrap();
-                        self.handle_text_input_click(&mut edit.input, mx, text_start_x);
-                        self.space_edit = Some(edit);
+                        if let Some(mut edit) = self.space_edit.take() {
+                            self.handle_text_input_click(&mut edit.input, mx, text_start_x);
+                            self.space_edit = Some(edit);
+                        }
                         if let Some(w) = &self.window {
                             w.request_redraw();
                         }
@@ -200,35 +231,55 @@ impl TearminalApp {
                 self.commit_space_rename();
             }
         }
+
         match self.spaces_hit(mx, my, win_h) {
-            SpacesHover::Toggle => self.toggle_spaces_panel(),
-            SpacesHover::Search => self.open_palette(),
-            SpacesHover::MachinePlus => self.open_machine_modal(),
-            SpacesHover::Plus => {
-                if self.modifiers.shift_key() || self.modifiers.alt_key() {
-                    let r = self.spaces_rects(win_h);
-                    let (win_w, win_h_curr) = self.window_size();
-                    let items = self.space_profiles_menu();
-                    self.show_menu(
-                        items,
-                        (r.plus_btn.0, r.plus_btn.1 + r.plus_btn.3 + 4),
-                        (win_w, win_h_curr),
-                    );
-                    return true;
+            SpacesHover::RailModule(m) => {
+                if self.active_module == m {
+                    self.toggle_sidebar();
+                } else {
+                    self.set_active_module(m);
                 }
-                self.create_space(None);
             }
+            SpacesHover::Settings => self.open_or_switch_settings_tab(),
+            SpacesHover::Toggle => self.toggle_sidebar(),
+            SpacesHover::Terminal => {
+                self.create_new_tab();
+            }
+            SpacesHover::Machine => self.open_machine_modal(),
+            SpacesHover::MachinePlus => self.open_machine_modal(),
+            SpacesHover::Plus => match self.active_module {
+                crate::config::AppModule::Spaces => {
+                    if self.modifiers.shift_key() || self.modifiers.alt_key() {
+                        let (win_w, win_h_curr) = self.window_size();
+                        let items = self.space_profiles_menu();
+                        self.show_menu(items, (mx, my + 10), (win_w, win_h_curr));
+                        return true;
+                    }
+                    self.create_space(None);
+                }
+                crate::config::AppModule::Files => {
+                    self.file_explorer
+                        .begin_edit(crate::explorer::EditKind::NewFile);
+                }
+                crate::config::AppModule::Git => {
+                    self.file_explorer.refresh();
+                }
+                _ => {}
+            },
             SpacesHover::Row(i) => {
                 if let Some(id) = self.spaces.get(i).map(|s| s.id) {
                     self.select_space(id);
                 }
             }
-            SpacesHover::Settings => self.open_or_switch_settings_tab(),
-            SpacesHover::Machine => self.open_machine_modal(),
             SpacesHover::None => {
                 // Cabecera vacía: arrastra la ventana (doble clic = maximizar), como la barra superior.
-                if my < SpacesPanelRects::HEADER_H {
+                if my < crate::renderer::TopTabBarRects::HEIGHT {
                     self.drag_or_maximize_window();
+                    return true;
+                }
+                if self.active_module != crate::config::AppModule::Spaces {
+                    // Clic dentro de la zona contextual (Files/Git/Data/System), dejar pasar a su manejador
+                    return false;
                 }
             }
         }

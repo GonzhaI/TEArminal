@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 mod edit;
 mod git;
-pub(crate) use edit::{EditKind, ExplorerEdit};
+pub(crate) use edit::{move_to_recycle_bin, EditKind, ExplorerEdit};
 pub(crate) use git::*;
 
 pub(crate) const FILE_EXPLORER_WIDTH: usize = 256;
@@ -123,6 +123,24 @@ impl From<(String, String)> for RemoteSshSession {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DiscardTarget {
+    #[allow(dead_code)]
+    All,
+    File(PathBuf, bool),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct GitCommitState {
+    pub input: crate::ui::TextInput,
+    pub is_focused: bool,
+    pub amend: bool,
+    pub ahead_behind: Option<(usize, usize)>,
+    pub status_message: Option<(String, bool)>,
+    pub is_committing: bool,
+    pub is_pushing: bool,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FileExplorer {
     pub root_dir: PathBuf,
@@ -146,6 +164,8 @@ pub(crate) struct FileExplorer {
     pub git_statuses: FxHashMap<PathBuf, GitStatusInfo>,
     /// Botón de acción rápida de Git (`(row_idx, action)`) sobre el que se encuentra el cursor
     pub hovered_git_action: Option<(usize, crate::renderer::GitActionKind)>,
+    /// Elemento interactivo del panel de Git sobre el que se encuentra el cursor
+    pub hovered_git_target: Option<crate::renderer::GitClickTarget>,
     /// Rectángulo `(x, y, ancho, alto)` cuando vive dentro del panel lateral; con `None` se acopla al borde derecho
     pub dock: Option<(usize, usize, usize, usize)>,
     /// Raíz del repositorio del directorio actual (None si no hay repo)
@@ -177,6 +197,16 @@ pub(crate) struct FileExplorer {
     /// Hay un `git status` en vuelo: no se lanza otro hasta que llegue su resultado (una ráfaga de cambios
     /// deja solo una petición pendiente y las respuestas nunca se cruzan)
     git_status_running: bool,
+    /// Estado del formulario de commit de Git (Fase F2)
+    pub git_commit: GitCommitState,
+    /// Rama actual del repositorio local para el panel Git
+    pub git_branch: Option<String>,
+    /// Sección «Preparados» colapsada
+    pub staged_collapsed: bool,
+    /// Sección «Cambios» colapsada
+    pub unstaged_collapsed: bool,
+    /// Diálogo de confirmación para descartar cambios
+    pub discard_confirm: Option<DiscardTarget>,
 }
 
 /// Listado remoto por SSH lento: la raíz (`expand = None`) o el contenido de una carpeta del árbol
@@ -191,7 +221,7 @@ pub(crate) struct RemoteLsReq {
 }
 
 impl FileExplorer {
-    pub(crate) const HEADER_HEIGHT: usize = 38;
+    pub(crate) const HEADER_HEIGHT: usize = 40;
     /// Aire entre la cabecera de sección y la lista (sin barra de herramientas).
     pub(crate) const SUBHEADER_HEIGHT: usize = 0;
     /// Alto de la barra de filtro rápido de archivos (`Ctrl + P` / `Ctrl + F`)
@@ -293,6 +323,7 @@ impl FileExplorer {
     }
 
     /// Acota `width` entre el mínimo y la mitad de la ventana (siempre queda sitio para el terminal)
+    #[allow(dead_code)]
     pub(crate) fn clamp_width(width: usize, win_w: usize) -> usize {
         width.clamp(
             FILE_EXPLORER_MIN_WIDTH,
@@ -307,6 +338,7 @@ impl FileExplorer {
     }
 
     /// ¿Está `(mx, my)` sobre el borde izquierdo del panel (franja de agarre para redimensionar)?
+    #[allow(dead_code)]
     pub(crate) fn on_resize_edge(
         &self,
         mx: usize,
@@ -354,6 +386,7 @@ impl FileExplorer {
             history_index: 0,
             git_statuses: FxHashMap::default(),
             hovered_git_action: None,
+            hovered_git_target: None,
             dock: None,
             git_root: None,
             changes_only: false,
@@ -365,6 +398,11 @@ impl FileExplorer {
             filtered_indices: None,
             hovered_filter_close: false,
             filter_saved_expansion: None,
+            git_commit: GitCommitState::default(),
+            git_branch: None,
+            staged_collapsed: false,
+            unstaged_collapsed: false,
+            discard_confirm: None,
         };
 
         if visible {
@@ -990,11 +1028,89 @@ impl FileExplorer {
             .count()
     }
 
+    /// Número de archivos preparados (staged) para el commit
+    #[allow(dead_code)]
+    pub(crate) fn staged_count(&self) -> usize {
+        self.git_statuses.values().filter(|s| s.is_staged).count()
+    }
+
+    /// Número de archivos con cambios sin preparar (unstaged)
+    #[allow(dead_code)]
+    pub(crate) fn unstaged_count(&self) -> usize {
+        self.git_statuses.values().filter(|s| s.is_unstaged).count()
+    }
+
+    /// Lista de archivos preparados para commit
+    pub(crate) fn staged_change_items(&self) -> Vec<ExplorerItem> {
+        let is_remote = self.remote_session.is_some();
+        let mut items: Vec<ExplorerItem> = self
+            .git_statuses
+            .iter()
+            .filter(|(path, info)| {
+                info.is_staged
+                    && (info.status == GitFileStatus::Deleted || is_remote || path.is_file())
+            })
+            .map(|(path, info)| ExplorerItem {
+                path: path.clone(),
+                name: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                is_dir: false,
+                depth: 0,
+                is_expanded: false,
+                git_status: Some(info.status),
+                is_staged: true,
+                is_unstaged: false,
+            })
+            .collect();
+        items.sort_by(|a, b| a.path.cmp(&b.path));
+        items
+    }
+
+    /// Lista de archivos con cambios sin preparar
+    pub(crate) fn unstaged_change_items(&self) -> Vec<ExplorerItem> {
+        let is_remote = self.remote_session.is_some();
+        let mut items: Vec<ExplorerItem> = self
+            .git_statuses
+            .iter()
+            .filter(|(path, info)| {
+                info.is_unstaged
+                    && (info.status == GitFileStatus::Deleted || is_remote || path.is_file())
+            })
+            .map(|(path, info)| ExplorerItem {
+                path: path.clone(),
+                name: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                is_dir: false,
+                depth: 0,
+                is_expanded: false,
+                git_status: Some(info.status),
+                is_staged: false,
+                is_unstaged: true,
+            })
+            .collect();
+        items.sort_by(|a, b| a.path.cmp(&b.path));
+        items
+    }
+
+    /// Establece si el explorador muestra solo los cambios de Git o el árbol de archivos
+    pub(crate) fn set_changes_only(&mut self, changes: bool) {
+        if self.changes_only != changes {
+            self.toggle_changes_only();
+        }
+    }
+
     /// Alterna entre el árbol de archivos y la lista de archivos con cambios
     pub(crate) fn toggle_changes_only(&mut self) {
         self.changes_only = !self.changes_only;
         self.scroll_offset = 0;
         self.selected_index = None;
+        self.hovered_index = None;
+        self.hovered_git_action = None;
+        self.hovered_git_target = None;
         if self.changes_only {
             self.items = self.change_items();
         } else if self.inband_remote {
@@ -1008,7 +1124,7 @@ impl FileExplorer {
         }
     }
 
-    /// Archivos con cambios (sin los borrados, que ya no se pueden abrir), ordenados por ruta relativa;
+    /// Archivos con cambios, ordenados por ruta relativa;
     /// la carpeta solo se muestra cuando el nombre de archivo se repite.
     fn change_items(&self) -> Vec<ExplorerItem> {
         let is_remote = self.remote_session.is_some();
@@ -1016,7 +1132,7 @@ impl FileExplorer {
             .git_statuses
             .iter()
             .filter(|(path, info)| {
-                info.status != GitFileStatus::Deleted && (is_remote || path.is_file())
+                info.status == GitFileStatus::Deleted || is_remote || path.is_file()
             })
             .map(|(path, info)| ExplorerItem {
                 path: path.clone(),
@@ -1275,6 +1391,7 @@ impl FileExplorer {
     }
 
     /// Alterna la visibilidad del explorador de archivos lateral
+    #[allow(dead_code)]
     pub(crate) fn toggle(&mut self) {
         self.visible = !self.visible;
         if self.visible && self.items.is_empty() && self.remote_session.is_none() {

@@ -10,9 +10,17 @@ pub(crate) struct FileViewerHeaderRects {
     pub diff_btn: Option<(usize, usize, usize, usize)>,
     /// Selector de modo de diff (Lado a lado / Unificado), visible mientras el diff está activo
     pub diff_mode_btn: Option<(usize, usize, usize, usize)>,
+    /// Botón de cambio anterior (∧)
+    pub prev_change_btn: Option<(usize, usize, usize, usize)>,
+    /// Botón de cambio siguiente (∨)
+    pub next_change_btn: Option<(usize, usize, usize, usize)>,
+    /// Botón «Preparar archivo» / «Quitar archivo»
+    pub stage_file_btn: Option<(usize, usize, usize, usize)>,
 }
 
 impl FileViewerHeaderRects {
+    pub(crate) const HEIGHT: usize = FileViewerLayout::HEADER_H;
+
     pub(crate) fn compute(
         x: usize,
         y: usize,
@@ -26,6 +34,39 @@ impl FileViewerHeaderRects {
         let btn_y = y
             + SidebarRects::CARD_INSET
             + (FileViewerLayout::HEADER_H.saturating_sub(SidebarRects::CARD_INSET + 24)) / 2;
+
+        if is_diff && has_diff {
+            // Modo diff: barra de herramientas especializada (Fase F2)
+            // [Lado a lado | Unificado] [∧] [∨] [Preparar archivo]
+            let stage_w = 118;
+            let stage_x = right_x.saturating_sub(stage_w);
+            let stage_file_btn = Some((stage_x, btn_y, stage_w, 24));
+            right_x = stage_x.saturating_sub(6);
+
+            let next_btn = Some((right_x.saturating_sub(26), btn_y, 26, 24));
+            right_x = right_x.saturating_sub(26 + 4);
+
+            let prev_btn = Some((right_x.saturating_sub(26), btn_y, 26, 24));
+            right_x = right_x.saturating_sub(26 + 8);
+
+            let mode_w = 154;
+            let mode_x = right_x.saturating_sub(mode_w);
+            let diff_mode_btn = Some((mode_x, btn_y, mode_w, 24));
+            right_x = mode_x.saturating_sub(8);
+
+            // Botón para cerrar diff y volver a la vista normal
+            let diff_btn = Some((right_x.saturating_sub(92), btn_y, 92, 24));
+
+            return Self {
+                mode_btn: (0, 0, 0, 0),
+                md_btn: None,
+                diff_btn,
+                diff_mode_btn,
+                prev_change_btn: prev_btn,
+                next_change_btn: next_btn,
+                stage_file_btn,
+            };
+        }
 
         // 1. Botón Vista previa / Código si es .md (icono + texto)
         let md_btn = if is_markdown {
@@ -68,12 +109,46 @@ impl FileViewerHeaderRects {
             md_btn,
             diff_btn,
             diff_mode_btn,
+            prev_change_btn: None,
+            next_change_btn: None,
+            stage_file_btn: None,
         }
     }
 
     #[inline]
     pub(crate) fn inside(mx: usize, my: usize, rect: (usize, usize, usize, usize)) -> bool {
         rect_contains(rect, mx, my)
+    }
+}
+
+/// Rectángulos del aviso de archivo modificado en disco externamente
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct FileViewerBannerRects {
+    pub banner_rect: (usize, usize, usize, usize),
+    pub reload_btn: (usize, usize, usize, usize),
+    pub keep_mine_btn: (usize, usize, usize, usize),
+}
+
+impl FileViewerBannerRects {
+    pub(crate) const HEIGHT: usize = 34;
+
+    pub(crate) fn compute(x: usize, y: usize, w: usize) -> Self {
+        let banner_rect = (x, y, w, Self::HEIGHT);
+        let btn_h = 22;
+        let btn_y = y + (Self::HEIGHT.saturating_sub(btn_h)) / 2;
+        let keep_w = 114;
+        let keep_x = (x + w).saturating_sub(keep_w + 14);
+        let keep_mine_btn = (keep_x, btn_y, keep_w, btn_h);
+
+        let reload_w = 72;
+        let reload_x = keep_x.saturating_sub(reload_w + 8);
+        let reload_btn = (reload_x, btn_y, reload_w, btn_h);
+
+        Self {
+            banner_rect,
+            reload_btn,
+            keep_mine_btn,
+        }
     }
 }
 
@@ -94,6 +169,7 @@ pub(crate) struct FileViewerLayout {
 
 impl FileViewerLayout {
     pub(crate) const HEADER_H: usize = 42;
+    pub(crate) const BANNER_H: usize = 34;
 
     pub(crate) fn compute(
         x: usize,
@@ -105,9 +181,36 @@ impl FileViewerLayout {
         total_lines: usize,
         show_gutter: bool,
     ) -> Self {
+        Self::compute_with_banner(
+            x,
+            y,
+            w,
+            h,
+            row_height,
+            char_width,
+            total_lines,
+            show_gutter,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compute_with_banner(
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        row_height: usize,
+        char_width: usize,
+        total_lines: usize,
+        show_gutter: bool,
+        has_banner: bool,
+    ) -> Self {
         let row_h = row_height.max(16);
         let char_w = char_width.max(7);
-        let content_h = h.saturating_sub(Self::HEADER_H);
+        let banner_offset = if has_banner { Self::BANNER_H } else { 0 };
+        let top_bars_h = Self::HEADER_H + banner_offset;
+        let content_h = h.saturating_sub(top_bars_h);
         let (gutter_w, sep_x, text_x) = if show_gutter {
             let digits = total_lines.to_string().len().max(3);
             let gw = SidebarRects::CARD_INSET + digits * char_w + 24;
@@ -122,7 +225,7 @@ impl FileViewerLayout {
         };
         let text_max_x = (x + w).saturating_sub(SidebarRects::CARD_INSET + 16);
         Self {
-            content_y: y + Self::HEADER_H,
+            content_y: y + top_bars_h,
             content_h,
             row_h,
             char_w,
@@ -218,12 +321,31 @@ impl SideBySideLayout {
         char_width: usize,
         total_lines: usize,
     ) -> Self {
+        Self::compute_with_banner(x, y, w, h, row_height, char_width, total_lines, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn compute_with_banner(
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        row_height: usize,
+        char_width: usize,
+        total_lines: usize,
+        has_banner: bool,
+    ) -> Self {
         let row_h = row_height.max(16);
         let char_w = char_width.max(7);
-        let col_header_y = y + FileViewerLayout::HEADER_H;
+        let banner_offset = if has_banner {
+            FileViewerLayout::BANNER_H
+        } else {
+            0
+        };
+        let col_header_y = y + FileViewerLayout::HEADER_H + banner_offset;
         let col_header_h = Self::COL_HEADER_H;
         let content_y = col_header_y + col_header_h;
-        let content_h = h.saturating_sub(FileViewerLayout::HEADER_H + col_header_h);
+        let content_h = h.saturating_sub(FileViewerLayout::HEADER_H + banner_offset + col_header_h);
 
         let half_w = w.saturating_sub(1) / 2;
         let left_x = x;

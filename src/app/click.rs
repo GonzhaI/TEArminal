@@ -54,6 +54,22 @@ impl TearminalApp {
             return;
         }
 
+        if self.click_system_sidebar_area(state, button, mx, my, win_h) {
+            return;
+        }
+
+        if self.click_system_monitor_area(state, button, mx, my, win_w, win_h) {
+            return;
+        }
+
+        if self.click_db_sidebar_area(state, button, mx, my, win_h) {
+            return;
+        }
+
+        if self.click_db_view_area(state, button, mx, my, win_w, win_h) {
+            return;
+        }
+
         if self.click_file_viewer_area(state, button, mx, my, win_w, win_h) {
             return;
         }
@@ -72,6 +88,29 @@ impl TearminalApp {
         win_h: usize,
         is_settings_active: bool,
     ) -> bool {
+        // Diálogo modal común (F4): consume todos los clics
+        if self.active_dialog.is_some() {
+            if state == ElementState::Pressed && button == MouseButton::Left {
+                self.click_dialog(mx, my);
+            } else if state == ElementState::Released {
+                self.handle_all_text_inputs_mouse_up();
+            }
+            return true;
+        }
+
+        // Clic en avisos (toasts): cerrar toast si se pulsa su botón de cierre
+        if !self.toasts.is_empty() && state == ElementState::Pressed && button == MouseButton::Left
+        {
+            let toast_rects = crate::renderer::ToastRects::compute(win_w, win_h, self.toasts.len());
+            if let Some(idx) = toast_rects.hit_close(mx, my) {
+                if let Some(t) = self.toasts.get(idx) {
+                    let tid = t.id;
+                    self.close_toast(tid);
+                    return true;
+                }
+            }
+        }
+
         // Modal «Añadir máquina»: consume todos los clics
         if self.machine_modal.is_some() {
             if state == ElementState::Pressed && button == MouseButton::Left {
@@ -440,18 +479,18 @@ impl TearminalApp {
         my: usize,
         win_h: usize,
     ) -> bool {
-        // Panel de Spaces: ocupa todo el alto a la izquierda de la barra superior
-        if self.spaces_rects(win_h).contains(mx, my, win_h) {
-            if state == ElementState::Pressed {
-                match button {
-                    MouseButton::Left => {
-                        self.click_spaces_panel(mx, my, win_h);
-                    }
-                    MouseButton::Middle => self.middle_click_spaces_panel(mx, my, win_h),
-                    _ => {}
+        // Panel de Spaces / Riel: ocupa el área izquierda
+        if self.spaces_rects(win_h).contains(mx, my, win_h) && state == ElementState::Pressed {
+            match button {
+                MouseButton::Left => {
+                    return self.click_spaces_panel(mx, my, win_h);
                 }
+                MouseButton::Middle => {
+                    self.middle_click_spaces_panel(mx, my, win_h);
+                    return true;
+                }
+                _ => {}
             }
-            return true;
         }
 
         false
@@ -516,15 +555,10 @@ impl TearminalApp {
                     return true;
                 }
 
-                // Píldoras Files / Changes
-                if TopTabBarRects::inside(mx, my, top_rects.files_btn) {
-                    crate::logger::log("-> Clic en Files (top bar)");
-                    self.show_explorer_view(false);
-                    return true;
-                }
-                if TopTabBarRects::inside(mx, my, top_rects.changes_btn) {
-                    crate::logger::log("-> Clic en Changes (top bar)");
-                    self.show_explorer_view(true);
+                // Clic en buscador Ctrl+K (top bar): abrir paleta
+                if TopTabBarRects::inside(mx, my, top_rects.search_btn) {
+                    crate::logger::log("-> Clic en buscador (top bar): abrir paleta");
+                    self.open_palette();
                     return true;
                 }
 
@@ -564,7 +598,7 @@ impl TearminalApp {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn click_status_bar_area(
+    pub(super) fn click_status_bar_area(
         &mut self,
         state: ElementState,
         button: MouseButton,
@@ -588,7 +622,13 @@ impl TearminalApp {
 
         // Clic sobre el badge de actualización disponible en la barra de estado
         if self.hovered_update_badge {
-            crate::updater::trigger_update();
+            if let Some(info) = crate::updater::get_available_update() {
+                self.open_dialog(crate::app::dialog::DialogSpec::update_available(
+                    &info.latest_version,
+                ));
+            } else {
+                crate::updater::trigger_update();
+            }
             return true;
         }
 
@@ -596,7 +636,45 @@ impl TearminalApp {
         let keep_awake_w = self.renderer.as_ref().map_or(65, |r| {
             r.keep_awake_button_width(self.config.terminal.keep_awake)
         });
-        let rects = StatusBarRects::compute_full(win_w, win_h, 0, None, 0, 0, keep_awake_w);
+        let has_branch = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|t| t.active_pane())
+            .and_then(|p| p.cached_git_branch.as_ref())
+            .is_some();
+        let ai_status = self
+            .tabs
+            .get(self.active_tab_index)
+            .and_then(|t| t.active_pane())
+            .map_or(crate::renderer::AiAgentStatus::None, |p| {
+                p.terminal.active_ai_agent()
+            });
+        let mut meters = TerminalRenderer::status_meters_for(&self.ai_usage.snapshot, ai_status);
+        if meters.is_empty() {
+            meters = TerminalRenderer::system_status_meters_configured(
+                &self.monitor,
+                &self.config.performance,
+            );
+        }
+        let meters_w = self
+            .renderer
+            .as_ref()
+            .map_or(meters.len() * 150, |r| r.status_meters_width(&meters));
+        let rects = StatusBarRects::compute_full(
+            win_w,
+            win_h,
+            0,
+            None,
+            0,
+            meters_w,
+            keep_awake_w,
+            has_branch,
+        );
+        if StatusBarRects::inside(mx, my, rects.meters) {
+            crate::logger::log("-> Clic en medidores de sistema (status bar)");
+            self.open_or_switch_system_monitor_tab();
+            return true;
+        }
         if self.hovered_keep_awake || StatusBarRects::inside(mx, my, rects.keep_awake_btn) {
             self.keep_awake_popup_open = !self.keep_awake_popup_open;
             self.hovered_keep_awake_option = None;
@@ -607,7 +685,230 @@ impl TearminalApp {
         false
     }
 
-    fn click_terminal_panes_area(
+    pub(super) fn click_system_sidebar_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_h: usize,
+    ) -> bool {
+        if state != ElementState::Pressed || button != MouseButton::Left {
+            return false;
+        }
+        if self.sidebar_collapsed || self.active_module != crate::config::AppModule::System {
+            return false;
+        }
+
+        let sb_rects = crate::renderer::ContextualSidebarRects::compute(
+            self.sidebar_collapsed,
+            self.active_module,
+            win_h,
+            self.status_bar_height(),
+        );
+        let side_geom = crate::renderer::SystemSidebarRects::compute(
+            sb_rects.content.0,
+            sb_rects.content.1,
+            sb_rects.content.2,
+            sb_rects.content.3,
+        );
+        let source_count = 1 + self.monitor.remote_snapshots.len();
+        let Some(target) = side_geom.hit_test(mx, my, source_count) else {
+            return false;
+        };
+
+        match target {
+            crate::renderer::SystemClickTarget::SidebarAddMachine => {
+                self.open_machine_modal();
+            }
+            crate::renderer::SystemClickTarget::SidebarSource(0) => {
+                self.monitor.selected_source = crate::monitor::MonitorSource::Local;
+                self.open_or_switch_system_monitor_tab();
+            }
+            crate::renderer::SystemClickTarget::SidebarSource(idx) => {
+                let keys: Vec<String> = self.monitor.remote_snapshots.keys().cloned().collect();
+                if let Some(dest) = keys.get(idx - 1) {
+                    self.monitor.selected_source =
+                        crate::monitor::MonitorSource::Remote(dest.clone());
+                    self.spawn_remote_system_metrics(dest.clone());
+                    self.open_or_switch_system_monitor_tab();
+                }
+            }
+            crate::renderer::SystemClickTarget::SidebarThresholds => {
+                self.settings_page_state.section = crate::renderer::SettingsSection::Performance;
+                self.open_or_switch_settings_tab();
+            }
+            _ => {}
+        }
+
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+        true
+    }
+
+    pub(super) fn click_system_monitor_area(
+        &mut self,
+        state: ElementState,
+        button: MouseButton,
+        mx: usize,
+        my: usize,
+        win_w: usize,
+        win_h: usize,
+    ) -> bool {
+        if state != ElementState::Pressed || button != MouseButton::Left {
+            return false;
+        }
+        if !self.tabs[self.active_tab_index].is_system_monitor {
+            return false;
+        }
+
+        let has_sel = self.monitor.selected_process_pid.is_some();
+        let sys_layout = crate::renderer::SystemLayoutRects::compute(
+            self.sidebar_offset(),
+            self.top_offset(),
+            win_w,
+            win_h,
+            self.status_bar_height(),
+            has_sel,
+        );
+        let (proc_count, folder_count, volume_count) =
+            if let Some(s) = self.monitor.snapshot.as_ref() {
+                let filtered_len = self.monitor.filtered_processes(s).len();
+                let max_rows = sys_layout.max_visible_process_rows();
+                let scroll = self
+                    .monitor
+                    .process_scroll
+                    .min(filtered_len.saturating_sub(max_rows));
+                (
+                    filtered_len.saturating_sub(scroll),
+                    s.top_project_folders.len(),
+                    s.volumes.len(),
+                )
+            } else {
+                (0, 0, 0)
+            };
+
+        let Some(target) = sys_layout.hit_test(mx, my, proc_count, folder_count, volume_count)
+        else {
+            return false;
+        };
+
+        match target {
+            crate::renderer::SystemClickTarget::MetricCard(_) => {
+                self.request_immediate_monitor_sample();
+            }
+            crate::renderer::SystemClickTarget::ProcessFilter(filter) => {
+                self.monitor.process_filter = match filter {
+                    crate::renderer::SystemProcessFilter::All => {
+                        crate::monitor::ProcessFilterKind::All
+                    }
+                    crate::renderer::SystemProcessFilter::Ai => {
+                        crate::monitor::ProcessFilterKind::Ai
+                    }
+                    crate::renderer::SystemProcessFilter::Build => {
+                        crate::monitor::ProcessFilterKind::Build
+                    }
+                };
+                self.monitor.process_scroll = 0;
+            }
+            crate::renderer::SystemClickTarget::ProcessRow(idx) => {
+                if let Some(snap) = &self.monitor.snapshot {
+                    let filtered = self.monitor.filtered_processes(snap);
+                    let max_rows = sys_layout.max_visible_process_rows();
+                    let scroll = self
+                        .monitor
+                        .process_scroll
+                        .min(filtered.len().saturating_sub(max_rows));
+                    if let Some(proc) = filtered.get(scroll + idx) {
+                        if self.monitor.selected_process_pid == Some(proc.pid) {
+                            self.monitor.selected_process_pid = None;
+                        } else {
+                            self.monitor.selected_process_pid = Some(proc.pid);
+                        }
+                    }
+                }
+            }
+            crate::renderer::SystemClickTarget::ViewInTerminal => {
+                if let Some(pid) = self.monitor.selected_process_pid {
+                    let mut shell_pids = Vec::new();
+                    for (t_idx, tab) in self.tabs.iter().enumerate() {
+                        for pane in &tab.panes {
+                            if let Some(spid) = pane.pty.process_id() {
+                                shell_pids.push((spid, t_idx, pane.id));
+                            }
+                        }
+                    }
+                    let pid_list: Vec<u32> = shell_pids.iter().map(|(s, _, _)| *s).collect();
+                    let found = crate::monitor::find_ancestor_shell_pid(pid, &pid_list).and_then(
+                        |matched_shell| {
+                            shell_pids
+                                .iter()
+                                .find(|(s, _, _)| *s == matched_shell)
+                                .map(|(_, t_idx, pane_id)| (*t_idx, *pane_id))
+                        },
+                    );
+                    if let Some((tab_idx, pane_id)) = found {
+                        self.switch_to_tab(tab_idx);
+                        if let Some(tab) = self.tabs.get_mut(tab_idx) {
+                            tab.active_pane_id = pane_id;
+                        }
+                    } else {
+                        self.show_toast(
+                            crate::app::dialog::ToastSeverity::Info,
+                            "El proceso no pertenece a ningún panel abierto",
+                        );
+                    }
+                }
+            }
+            crate::renderer::SystemClickTarget::KillProcess => {
+                if let Some(pid) = self.monitor.selected_process_pid {
+                    let name = self
+                        .monitor
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| {
+                            s.processes
+                                .iter()
+                                .find(|p| p.pid == pid)
+                                .map(|p| p.name.clone())
+                        })
+                        .unwrap_or_else(|| format!("PID {pid}"));
+                    self.open_dialog(crate::app::dialog::DialogSpec::kill_process_confirm(
+                        pid, &name,
+                    ));
+                }
+            }
+            crate::renderer::SystemClickTarget::FolderAction(idx) => {
+                if matches!(
+                    self.monitor.selected_source,
+                    crate::monitor::MonitorSource::Local
+                ) {
+                    if let Some(snap) = &self.monitor.snapshot {
+                        if let Some(folder) = snap.top_project_folders.get(idx) {
+                            if let Some(action) = folder.action.clone() {
+                                let dir = self.file_explorer.root_dir.clone();
+                                let fname = folder.name.clone();
+                                self.show_toast(
+                                    crate::app::dialog::ToastSeverity::Info,
+                                    format!("Ejecutando «{action}» en {fname}…"),
+                                );
+                                self.spawn_folder_action(dir, fname, action);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+        true
+    }
+
+    pub(crate) fn click_terminal_panes_area(
         &mut self,
         state: ElementState,
         button: MouseButton,
@@ -638,6 +939,27 @@ impl TearminalApp {
             }
 
             if let Some(pane) = active_tab.find_pane_mut(rect.pane_id) {
+                // Clic en botones de conexión perdida SSH («Reconectar ahora» y «Cerrar panel», Ssh.dc.html)
+                if pane.ssh_reconnect.is_some() {
+                    let lost_rects = crate::renderer::SshLostConnectionRects::compute(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                    );
+                    if button == MouseButton::Left && state == ElementState::Pressed {
+                        if crate::renderer::rect_contains(lost_rects.reconnect_btn, mx, my) {
+                            self.reconnect_ssh_pane(rect.pane_id);
+                            return;
+                        }
+                        if crate::renderer::rect_contains(lost_rects.close_pane_btn, mx, my) {
+                            self.close_pane_by_id(rect.pane_id);
+                            return;
+                        }
+                    }
+                    return;
+                }
+
                 // Clic en botón flotante "Ir hasta abajo"
                 if pane.terminal.scroll_offset > 0 && !pane.terminal.is_alt_screen {
                     let (bx, by, bw, bh) = crate::renderer::pane_scroll_to_bottom_btn_rect(

@@ -20,7 +20,7 @@ impl TearminalApp {
     fn settings_viewport_h(&self) -> usize {
         self.settings_modal()
             .3
-            .saturating_sub(SettingsPageRects::CONTENT_TOP)
+            .saturating_sub(SettingsPageRects::CONTENT_TOP + 16)
     }
 
     /// Pista y pulgar de la barra de scroll de Ajustes, en coordenadas locales al modal
@@ -30,7 +30,7 @@ impl TearminalApp {
         SettingsPageRects::scrollbar(
             self.settings_page_state.section,
             0,
-            self.settings_modal().2,
+            self.settings_modal().2.saturating_sub(4),
             self.settings_viewport_h(),
             self.settings_scroll(),
         )
@@ -209,7 +209,10 @@ impl TearminalApp {
             &a.theme
         });
         let matches = &self.settings_page_state.filtered_themes;
-        let idx = matches.iter().position(|&n| n == current).unwrap_or(0);
+        let idx = matches
+            .iter()
+            .position(|n| n.as_str() == current.as_ref())
+            .unwrap_or(0);
         self.settings_page_state.theme_scroll = idx.saturating_sub(2);
     }
 
@@ -222,10 +225,10 @@ impl TearminalApp {
     ) {
         match logical_key {
             Key::Named(NamedKey::Enter) => {
-                let st = &mut self.settings_page_state;
-                st.editing_setting = None;
-                if let Some(&name) = st.filtered_themes.first() {
-                    self.pick_theme(name);
+                let first = self.settings_page_state.filtered_themes.first().cloned();
+                self.settings_page_state.editing_setting = None;
+                if let Some(name) = first {
+                    self.pick_theme(&name);
                 }
             }
             Key::Named(NamedKey::Escape) => {
@@ -233,7 +236,7 @@ impl TearminalApp {
                 st.editing_setting = None;
                 st.theme_search_input.clear();
                 st.theme_filter.clear();
-                st.filtered_themes = Theme::search("");
+                st.filtered_themes = Theme::search_all("");
                 st.theme_scroll = 0;
                 self.reveal_current_theme();
                 if let Some(w) = &self.window {
@@ -255,7 +258,7 @@ impl TearminalApp {
     pub(super) fn sync_theme_search_filter(&mut self) {
         let st = &mut self.settings_page_state;
         st.theme_filter = st.theme_search_input.text().to_string();
-        st.filtered_themes = Theme::search(&st.theme_filter);
+        st.filtered_themes = Theme::search_all(&st.theme_filter);
         st.theme_scroll = 0;
     }
 
@@ -365,6 +368,37 @@ impl TearminalApp {
                             self.settings_page_state.section =
                                 crate::renderer::SettingsSection::Terminal;
                             self.settings_page_state.scroll_y = 380;
+                        } else if q.contains("base")
+                            || q.contains("dato")
+                            || q.contains("prod")
+                            || q.contains("segurid")
+                            || q.contains("pem")
+                            || q.contains("cert")
+                            || q.contains("consult")
+                            || q.contains("sql")
+                            || q.contains("transac")
+                            || q.contains("where")
+                            || q.contains("credencial")
+                            || q.contains("contraseñ")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Database;
+                            self.settings_page_state.scroll_y = 0;
+                        } else if q.contains("rendim")
+                            || q.contains("monitor")
+                            || q.contains("cpu")
+                            || q.contains("ram")
+                            || q.contains("gpu")
+                            || q.contains("disco")
+                            || q.contains("red")
+                            || q.contains("medidor")
+                            || q.contains("alert")
+                            || q.contains("muestre")
+                            || q.contains("umbral")
+                        {
+                            self.settings_page_state.section =
+                                crate::renderer::SettingsSection::Performance;
+                            self.settings_page_state.scroll_y = 0;
                         } else if q.contains("ataj")
                             || q.contains("ctrl")
                             || q.contains("alt")
@@ -504,6 +538,51 @@ impl TearminalApp {
     pub(crate) fn apply_ssh_integration_env(&self) {
         let on = self.config.terminal.ssh_integration;
         std::env::set_var("TEARMINAL_SSH_INTEGRATION", if on { "1" } else { "0" });
+    }
+
+    pub(crate) fn apply_agent_profiles_env(&self) {
+        crate::monitor::set_agent_profiles(&self.config.performance.normalized_agent_names());
+    }
+
+    pub(super) fn edit_agent_profiles(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: Option<&str>,
+    ) {
+        match logical_key {
+            Key::Named(NamedKey::Enter) => {
+                let raw = self
+                    .settings_page_state
+                    .agent_profiles_input
+                    .text()
+                    .to_string();
+                self.config.performance.set_agent_executables_csv(&raw);
+                self.apply_agent_profiles_env();
+                let _ = self.config.save();
+                self.settings_page_state.editing_setting = None;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            Key::Named(NamedKey::Escape) => {
+                self.settings_page_state.editing_setting = None;
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            _ => {
+                let mut input = std::mem::take(&mut self.settings_page_state.agent_profiles_input);
+                let (_consumed, changed) =
+                    self.handle_text_input_key(&mut input, logical_key, physical_key, text);
+                self.settings_page_state.agent_profiles_input = input;
+                if changed {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn toggle_ssh_integration(&mut self) {
@@ -655,6 +734,7 @@ impl TearminalApp {
     fn apply_loaded_config(&mut self) {
         self.apply_active_theme();
         self.apply_ssh_integration_env();
+        self.apply_agent_profiles_env();
         self.update_keep_awake();
         let parsed_shape =
             crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);

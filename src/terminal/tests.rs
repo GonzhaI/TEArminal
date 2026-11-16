@@ -686,23 +686,20 @@ fn test_tui_mouse_and_sync_protocols() {
 
     assert!(!term.is_mouse_reporting_active());
     assert!(!term.mouse_reporting_sgr);
-    assert!(!term.focus_event_reporting);
     assert!(!term.sync_update_mode);
 
-    // Herdr / Ratatui activa mouse tracking (1000, 1002, 1006) y focus (1004)
+    // Herdr / Ratatui activa mouse tracking (1000, 1002, 1006) y modo 1004 (ignorado en ConPTY)
     term.process_bytes(b"\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?2026h");
     assert!(term.is_mouse_reporting_active());
     assert!(term.mouse_reporting_normal);
     assert!(term.mouse_reporting_button_event);
     assert!(term.mouse_reporting_sgr);
-    assert!(term.focus_event_reporting);
     assert!(term.sync_update_mode);
 
     // Desactivación al salir del TUI
     term.process_bytes(b"\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1004l\x1b[?2026l");
     assert!(!term.is_mouse_reporting_active());
     assert!(!term.mouse_reporting_sgr);
-    assert!(!term.focus_event_reporting);
     assert!(!term.sync_update_mode);
 }
 

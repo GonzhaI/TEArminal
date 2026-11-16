@@ -175,7 +175,7 @@ impl Session {
 
     /// Una sentencia en la conexión (reconectando y sincronizando el modo antes). No aplica reglas de seguridad:
     /// quien llama ya las comprobó.
-    pub(super) async fn run_raw(
+    pub(crate) async fn run_raw(
         &mut self,
         sql: &str,
         limits: &QueryLimits,

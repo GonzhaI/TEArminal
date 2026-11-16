@@ -7,6 +7,12 @@ use std::path::PathBuf;
 pub(crate) struct TearminalConfig {
     pub(crate) appearance: AppearanceConfig,
     pub(crate) terminal: TerminalConfig,
+    #[serde(default)]
+    pub(crate) database: DatabaseConfig,
+    #[serde(default)]
+    pub(crate) performance: PerformanceConfig,
+    #[serde(default)]
+    pub(crate) shortcuts: ShortcutsConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -93,6 +99,536 @@ pub(crate) struct TerminalConfig {
     pub(crate) animations: bool,
 }
 
+/// Opciones globales y valores por defecto para conexiones y consultas de bases de datos (DISENO §6).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub(crate) struct DatabaseConfig {
+    /// Abrir conexiones de producción en modo solo lectura por defecto.
+    #[serde(default = "default_true")]
+    pub(crate) prod_read_only: bool,
+    /// Duración de la ventana de escritura habilitada en producción (minutos).
+    #[serde(default = "default_write_window_minutes")]
+    pub(crate) write_window_minutes: u32,
+    /// Exigir confirmación escrita tecleando el nombre de la conexión antes de aplicar en producción.
+    #[serde(default = "default_true")]
+    pub(crate) written_confirmation: bool,
+    /// Advertir antes de ejecutar sentencias DELETE o UPDATE sin cláusula WHERE.
+    #[serde(default = "default_true")]
+    pub(crate) warn_no_where: bool,
+    /// Aplicar cambios pendientes dentro de una transacción explícita (rollback si algo falla).
+    #[serde(default = "default_true")]
+    pub(crate) enforce_transaction: bool,
+    /// Guardar filas originales en archivo local antes de aplicar para permitir deshacer.
+    #[serde(default = "default_true")]
+    pub(crate) backup_original_rows: bool,
+    /// Comprobar permisos en Windows y advertir si una clave privada `.pem` es legible por otros usuarios.
+    #[serde(default = "default_true")]
+    pub(crate) warn_unsafe_pem_permissions: bool,
+    /// Días de antelación para advertir sobre certificados TLS por vencer.
+    #[serde(default = "default_cert_warn_days")]
+    pub(crate) cert_warn_days: u32,
+    /// Carpeta para certificados `.pem` (solo se guarda la ruta, nunca su contenido).
+    #[serde(default = "default_certs_folder")]
+    pub(crate) certs_folder: String,
+    /// Filas por página en el visor de datos de tablas.
+    #[serde(default = "default_page_size")]
+    pub(crate) page_size: usize,
+    /// Tiempo máximo de espera para una consulta (segundos) antes de cancelarla.
+    #[serde(default = "default_query_timeout_seconds")]
+    pub(crate) query_timeout_seconds: u32,
+    /// Límite máximo de filas devueltas para prevenir sobrecarga de memoria.
+    #[serde(default = "default_query_row_limit")]
+    pub(crate) query_row_limit: usize,
+    /// Umbral en milisegundos para marcar una consulta como lenta.
+    #[serde(default = "default_slow_query_threshold_ms")]
+    pub(crate) slow_query_threshold_ms: u32,
+    /// Autocompletado de tablas y columnas basado en el esquema de la base de datos.
+    #[serde(default = "default_true")]
+    pub(crate) autocomplete: bool,
+    /// Guardar credenciales de forma segura en el Administrador de credenciales de Windows.
+    #[serde(default = "default_true")]
+    pub(crate) save_passwords_in_credential_manager: bool,
+    /// Guardar historial de consultas ejecutadas (solo texto SQL y duración, sin parámetros).
+    #[serde(default = "default_true")]
+    pub(crate) save_query_history: bool,
+}
+
+/// Configuración de medidores en la barra de estado y monitor del sistema (F3 / F8).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub(crate) struct PerformanceConfig {
+    /// Mostrar medidor de CPU en la barra de estado.
+    #[serde(default = "default_true")]
+    pub(crate) show_cpu: bool,
+    /// Mostrar medidor de RAM en la barra de estado.
+    #[serde(default = "default_true")]
+    pub(crate) show_ram: bool,
+    /// Mostrar medidor de GPU en la barra de estado.
+    #[serde(default = "default_true")]
+    pub(crate) show_gpu: bool,
+    /// Mostrar medidor de Disco en la barra de estado.
+    #[serde(default = "default_true")]
+    pub(crate) show_disk: bool,
+    /// Mostrar medidor de Red en la barra de estado.
+    #[serde(default = "default_false")]
+    pub(crate) show_net: bool,
+    /// Intervalo de muestreo del monitor (en milisegundos).
+    #[serde(default = "default_sample_interval_ms")]
+    pub(crate) sample_interval_ms: u64,
+    /// Activar alertas visuales cuando un recurso supera el umbral crítico.
+    #[serde(default = "default_false")]
+    pub(crate) enable_alerts: bool,
+    /// Umbral porcentual de alerta para CPU (0-100).
+    #[serde(default = "default_alert_threshold")]
+    pub(crate) cpu_alert_threshold: u8,
+    /// Umbral porcentual de alerta para RAM (0-100).
+    #[serde(default = "default_alert_threshold")]
+    pub(crate) ram_alert_threshold: u8,
+    /// Umbral porcentual de alerta para Disco (0-100).
+    #[serde(default = "default_alert_threshold")]
+    pub(crate) disk_alert_threshold: u8,
+    /// Ejecutables de agentes CLI IA personalizados para monitorización e `init.ps1`.
+    #[serde(default = "default_agent_executables")]
+    pub(crate) agent_executables: Vec<String>,
+}
+
+pub(crate) fn default_agent_executables() -> Vec<String> {
+    [
+        "claude",
+        "agy",
+        "gemini",
+        "opencode",
+        "aider",
+        "codex",
+        "goose",
+        "copilot",
+        "cursor-agent",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+pub(crate) fn sanitize_agent_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let base = lower
+        .strip_suffix(".exe")
+        .or_else(|| lower.strip_suffix(".cmd"))
+        .or_else(|| lower.strip_suffix(".bat"))
+        .unwrap_or(&lower);
+    let valid = !base.is_empty()
+        && base.len() <= 64
+        && base.bytes().all(|b| {
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+        });
+    valid.then(|| base.to_string())
+}
+
+impl PerformanceConfig {
+    /// Nombres de ejecutables de agentes normalizados y sin duplicados (hasta 32).
+    pub(crate) fn normalized_agent_names(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for raw in &self.agent_executables {
+            if let Some(clean) = sanitize_agent_name(raw) {
+                if !out.contains(&clean) && out.len() < 32 {
+                    out.push(clean);
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn agent_executables_csv(&self) -> String {
+        self.normalized_agent_names().join(", ")
+    }
+
+    pub(crate) fn set_agent_executables_csv(&mut self, csv: &str) {
+        let mut next = Vec::new();
+        for token in csv.split([',', ';', ' ', '\t']) {
+            if let Some(clean) = sanitize_agent_name(token) {
+                if !next.contains(&clean) && next.len() < 32 {
+                    next.push(clean);
+                }
+            }
+        }
+        self.agent_executables = next;
+    }
+}
+
+/// Acciones globales editables desde Ajustes -> Atajos de teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ShortcutAction {
+    NewTab,
+    CloseTab,
+    NextTab,
+    Find,
+    CommandPalette,
+    Settings,
+    Fullscreen,
+    SplitHorizontal,
+    SplitVertical,
+    ClosePane,
+    ToggleSidebar,
+    RefreshExplorer,
+}
+
+impl ShortcutAction {
+    pub(crate) const ALL: [Self; 12] = [
+        Self::NewTab,
+        Self::CloseTab,
+        Self::NextTab,
+        Self::Find,
+        Self::CommandPalette,
+        Self::Settings,
+        Self::Fullscreen,
+        Self::SplitHorizontal,
+        Self::SplitVertical,
+        Self::ClosePane,
+        Self::ToggleSidebar,
+        Self::RefreshExplorer,
+    ];
+
+    /// Distribución de las 16 filas en «Ajustes -> Atajos» (None = informativo/rango fijo).
+    pub(crate) const SETTINGS_SLOTS: [Option<Self>; 16] = [
+        Some(Self::NewTab),
+        Some(Self::CloseTab),
+        Some(Self::NextTab),
+        None,
+        Some(Self::Find),
+        Some(Self::CommandPalette),
+        Some(Self::Settings),
+        Some(Self::Fullscreen),
+        Some(Self::SplitHorizontal),
+        Some(Self::SplitVertical),
+        None,
+        Some(Self::ClosePane),
+        Some(Self::ToggleSidebar),
+        Some(Self::RefreshExplorer),
+        None,
+        None,
+    ];
+
+    pub(crate) fn default_chord(self) -> &'static str {
+        match self {
+            Self::NewTab => "Ctrl+T",
+            Self::CloseTab => "Ctrl+W",
+            Self::NextTab => "Ctrl+Tab",
+            Self::Find => "Ctrl+F",
+            Self::CommandPalette => "Ctrl+Shift+P",
+            Self::Settings => "Ctrl+,",
+            Self::Fullscreen => "F11",
+            Self::SplitHorizontal => "Alt+Shift+D",
+            Self::SplitVertical => "Alt+Shift+V",
+            Self::ClosePane => "Ctrl+Shift+W",
+            Self::ToggleSidebar => "Ctrl+B",
+            Self::RefreshExplorer => "F5",
+        }
+    }
+
+    pub(crate) fn description(self) -> &'static str {
+        match self {
+            Self::NewTab => "Nueva terminal o pestaña",
+            Self::CloseTab => "Cerrar pestaña o panel activo",
+            Self::NextTab => "Siguiente pestaña (o Ctrl+AvPág)",
+            Self::Find => "Buscar en terminal o explorador",
+            Self::CommandPalette => "Paleta de comandos (o F1)",
+            Self::Settings => "Abrir o cerrar Ajustes",
+            Self::Fullscreen => "Pantalla completa (o Alt+Enter)",
+            Self::SplitHorizontal => "Dividir debajo (o Alt+Shift+-)",
+            Self::SplitVertical => "Dividir al lado (o Alt+Shift++)",
+            Self::ClosePane => "Cerrar panel dividido",
+            Self::ToggleSidebar => "Alternar barra lateral",
+            Self::RefreshExplorer => "Refrescar explorador y Git",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedKeyChord {
+    pub(crate) ctrl: bool,
+    pub(crate) shift: bool,
+    pub(crate) alt: bool,
+    pub(crate) key: String,
+}
+
+impl ParsedKeyChord {
+    pub(crate) fn normalize_key_token(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let upper = trimmed.to_ascii_uppercase();
+        let norm = match upper.as_str() {
+            "CTRL" | "CONTROL" | "SHIFT" | "ALT" | "SUPER" | "WIN" => return None,
+            "COMMA" => ",".to_string(),
+            "PERIOD" => ".".to_string(),
+            "PLUS" | "EQUAL" => "+".to_string(),
+            "MINUS" => "-".to_string(),
+            "TAB" => "Tab".to_string(),
+            "ENTER" | "RETURN" => "Enter".to_string(),
+            "SPACE" => "Space".to_string(),
+            "ESC" | "ESCAPE" => "Escape".to_string(),
+            "BACKSPACE" => "Backspace".to_string(),
+            "UP" | "ARROWUP" => "Up".to_string(),
+            "DOWN" | "ARROWDOWN" => "Down".to_string(),
+            "LEFT" | "ARROWLEFT" => "Left".to_string(),
+            "RIGHT" | "ARROWRIGHT" => "Right".to_string(),
+            "PAGEUP" => "PageUp".to_string(),
+            "PAGEDOWN" => "PageDown".to_string(),
+            "HOME" => "Home".to_string(),
+            "END" => "End".to_string(),
+            "INSERT" => "Insert".to_string(),
+            "DELETE" => "Delete".to_string(),
+            _ if upper.starts_with('F')
+                && upper[1..]
+                    .parse::<u8>()
+                    .is_ok_and(|n| (1..=12).contains(&n)) =>
+            {
+                upper
+            }
+            _ => {
+                let chars: Vec<char> = trimmed.chars().collect();
+                if chars.len() == 1 && !chars[0].is_control() && !chars[0].is_whitespace() {
+                    chars[0].to_ascii_uppercase().to_string()
+                } else {
+                    return None;
+                }
+            }
+        };
+        Some(norm)
+    }
+
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        let mut ctrl = false;
+        let mut shift = false;
+        let mut alt = false;
+        let mut key: Option<String> = None;
+        for part in raw.split('+') {
+            let p = part.trim();
+            if p.is_empty() {
+                // Caso especial como "Alt+Shift++" donde el último '+' dejó token vacío
+                if raw.trim_end().ends_with("++") && key.is_none() {
+                    key = Some("+".to_string());
+                }
+                continue;
+            }
+            match p.to_ascii_uppercase().as_str() {
+                "CTRL" | "CONTROL" => ctrl = true,
+                "SHIFT" => shift = true,
+                "ALT" => alt = true,
+                _ => {
+                    if key.is_some() {
+                        return None;
+                    }
+                    key = Some(Self::normalize_key_token(p)?);
+                }
+            }
+        }
+        Some(Self {
+            ctrl,
+            shift,
+            alt,
+            key: key?,
+        })
+    }
+
+    pub(crate) fn format_compact(&self) -> String {
+        let mut parts = Vec::new();
+        if self.ctrl {
+            parts.push("Ctrl".to_string());
+        }
+        if self.shift {
+            parts.push("Shift".to_string());
+        }
+        if self.alt {
+            parts.push("Alt".to_string());
+        }
+        parts.push(self.key.clone());
+        parts.join("+")
+    }
+
+    pub(crate) fn format_keycaps(&self) -> String {
+        self.format_compact().replace('+', " + ")
+    }
+}
+
+fn default_new_tab() -> String {
+    ShortcutAction::NewTab.default_chord().to_string()
+}
+fn default_close_tab() -> String {
+    ShortcutAction::CloseTab.default_chord().to_string()
+}
+fn default_next_tab() -> String {
+    ShortcutAction::NextTab.default_chord().to_string()
+}
+fn default_find() -> String {
+    ShortcutAction::Find.default_chord().to_string()
+}
+fn default_command_palette() -> String {
+    ShortcutAction::CommandPalette.default_chord().to_string()
+}
+fn default_settings_shortcut() -> String {
+    ShortcutAction::Settings.default_chord().to_string()
+}
+fn default_fullscreen() -> String {
+    ShortcutAction::Fullscreen.default_chord().to_string()
+}
+fn default_split_horizontal() -> String {
+    ShortcutAction::SplitHorizontal.default_chord().to_string()
+}
+fn default_split_vertical() -> String {
+    ShortcutAction::SplitVertical.default_chord().to_string()
+}
+fn default_close_pane() -> String {
+    ShortcutAction::ClosePane.default_chord().to_string()
+}
+fn default_toggle_sidebar() -> String {
+    ShortcutAction::ToggleSidebar.default_chord().to_string()
+}
+fn default_refresh_explorer() -> String {
+    ShortcutAction::RefreshExplorer.default_chord().to_string()
+}
+
+/// Combinaciones de atajos configurables guardadas en `tearminal.toml`.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct ShortcutsConfig {
+    #[serde(default = "default_new_tab")]
+    pub(crate) new_tab: String,
+    #[serde(default = "default_close_tab")]
+    pub(crate) close_tab: String,
+    #[serde(default = "default_next_tab")]
+    pub(crate) next_tab: String,
+    #[serde(default = "default_find")]
+    pub(crate) find: String,
+    #[serde(default = "default_command_palette")]
+    pub(crate) command_palette: String,
+    #[serde(default = "default_settings_shortcut")]
+    pub(crate) settings: String,
+    #[serde(default = "default_fullscreen")]
+    pub(crate) fullscreen: String,
+    #[serde(default = "default_split_horizontal")]
+    pub(crate) split_horizontal: String,
+    #[serde(default = "default_split_vertical")]
+    pub(crate) split_vertical: String,
+    #[serde(default = "default_close_pane")]
+    pub(crate) close_pane: String,
+    #[serde(default = "default_toggle_sidebar")]
+    pub(crate) toggle_sidebar: String,
+    #[serde(default = "default_refresh_explorer")]
+    pub(crate) refresh_explorer: String,
+}
+
+impl Default for ShortcutsConfig {
+    fn default() -> Self {
+        Self {
+            new_tab: ShortcutAction::NewTab.default_chord().to_string(),
+            close_tab: ShortcutAction::CloseTab.default_chord().to_string(),
+            next_tab: ShortcutAction::NextTab.default_chord().to_string(),
+            find: ShortcutAction::Find.default_chord().to_string(),
+            command_palette: ShortcutAction::CommandPalette.default_chord().to_string(),
+            settings: ShortcutAction::Settings.default_chord().to_string(),
+            fullscreen: ShortcutAction::Fullscreen.default_chord().to_string(),
+            split_horizontal: ShortcutAction::SplitHorizontal.default_chord().to_string(),
+            split_vertical: ShortcutAction::SplitVertical.default_chord().to_string(),
+            close_pane: ShortcutAction::ClosePane.default_chord().to_string(),
+            toggle_sidebar: ShortcutAction::ToggleSidebar.default_chord().to_string(),
+            refresh_explorer: ShortcutAction::RefreshExplorer.default_chord().to_string(),
+        }
+    }
+}
+
+impl ShortcutsConfig {
+    pub(crate) fn get(&self, action: ShortcutAction) -> &str {
+        match action {
+            ShortcutAction::NewTab => &self.new_tab,
+            ShortcutAction::CloseTab => &self.close_tab,
+            ShortcutAction::NextTab => &self.next_tab,
+            ShortcutAction::Find => &self.find,
+            ShortcutAction::CommandPalette => &self.command_palette,
+            ShortcutAction::Settings => &self.settings,
+            ShortcutAction::Fullscreen => &self.fullscreen,
+            ShortcutAction::SplitHorizontal => &self.split_horizontal,
+            ShortcutAction::SplitVertical => &self.split_vertical,
+            ShortcutAction::ClosePane => &self.close_pane,
+            ShortcutAction::ToggleSidebar => &self.toggle_sidebar,
+            ShortcutAction::RefreshExplorer => &self.refresh_explorer,
+        }
+    }
+
+    pub(crate) fn set(&mut self, action: ShortcutAction, chord: String) {
+        match action {
+            ShortcutAction::NewTab => self.new_tab = chord,
+            ShortcutAction::CloseTab => self.close_tab = chord,
+            ShortcutAction::NextTab => self.next_tab = chord,
+            ShortcutAction::Find => self.find = chord,
+            ShortcutAction::CommandPalette => self.command_palette = chord,
+            ShortcutAction::Settings => self.settings = chord,
+            ShortcutAction::Fullscreen => self.fullscreen = chord,
+            ShortcutAction::SplitHorizontal => self.split_horizontal = chord,
+            ShortcutAction::SplitVertical => self.split_vertical = chord,
+            ShortcutAction::ClosePane => self.close_pane = chord,
+            ShortcutAction::ToggleSidebar => self.toggle_sidebar = chord,
+            ShortcutAction::RefreshExplorer => self.refresh_explorer = chord,
+        }
+    }
+
+    pub(crate) fn parsed(&self, action: ShortcutAction) -> ParsedKeyChord {
+        ParsedKeyChord::parse(self.get(action))
+            .or_else(|| ParsedKeyChord::parse(action.default_chord()))
+            .unwrap_or(ParsedKeyChord {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                key: "F11".to_string(),
+            })
+    }
+
+    pub(crate) fn display_keycaps(&self, action: ShortcutAction) -> String {
+        self.parsed(action).format_keycaps()
+    }
+
+    pub(crate) fn find_conflict(
+        &self,
+        target: ShortcutAction,
+        candidate: &ParsedKeyChord,
+    ) -> Option<ShortcutAction> {
+        ShortcutAction::ALL
+            .into_iter()
+            .find(|&other| other != target && &self.parsed(other) == candidate)
+    }
+
+    pub(crate) fn slot_info(&self, idx: usize) -> (String, &'static str, Option<ShortcutAction>) {
+        match idx {
+            3 => (
+                "Ctrl + 1..9".to_string(),
+                "Ir a pestaña 1–8 o última (9)",
+                None,
+            ),
+            10 => (
+                "Alt + Flechas".to_string(),
+                "Mover el foco entre paneles",
+                None,
+            ),
+            14 => (
+                "Ctrl + C / V".to_string(),
+                "Copiar o pegar en terminal",
+                None,
+            ),
+            15 => ("Ctrl + Backspace".to_string(), "Borrar palabra atrás", None),
+            _ => {
+                if let Some(Some(action)) = ShortcutAction::SETTINGS_SLOTS.get(idx) {
+                    (
+                        self.display_keycaps(*action),
+                        action.description(),
+                        Some(*action),
+                    )
+                } else {
+                    (String::new(), "", None)
+                }
+            }
+        }
+    }
+}
+
 /// Modos de suspensión y pantalla encendida (keep-awake) para Windows.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -169,6 +705,42 @@ fn default_explorer_width() -> usize {
 
 fn default_theme_mode() -> String {
     "dark".to_string()
+}
+
+fn default_write_window_minutes() -> u32 {
+    10
+}
+
+fn default_cert_warn_days() -> u32 {
+    30
+}
+
+fn default_certs_folder() -> String {
+    "~/.tearminal/certs".to_string()
+}
+
+fn default_page_size() -> usize {
+    50
+}
+
+fn default_query_timeout_seconds() -> u32 {
+    30
+}
+
+fn default_query_row_limit() -> usize {
+    10_000
+}
+
+fn default_slow_query_threshold_ms() -> u32 {
+    300
+}
+
+fn default_sample_interval_ms() -> u64 {
+    2000
+}
+
+fn default_alert_threshold() -> u8 {
+    90
 }
 
 impl AppearanceConfig {
@@ -252,6 +824,9 @@ impl Default for TearminalConfig {
                 vsync: true,
                 animations: true,
             },
+            database: DatabaseConfig::default(),
+            performance: PerformanceConfig::default(),
+            shortcuts: ShortcutsConfig::default(),
         }
     }
 }
@@ -265,6 +840,47 @@ impl Default for AppearanceConfig {
 impl Default for TerminalConfig {
     fn default() -> Self {
         TearminalConfig::default().terminal
+    }
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            prod_read_only: true,
+            write_window_minutes: 10,
+            written_confirmation: true,
+            warn_no_where: true,
+            enforce_transaction: true,
+            backup_original_rows: true,
+            warn_unsafe_pem_permissions: true,
+            cert_warn_days: 30,
+            certs_folder: "~/.tearminal/certs".to_string(),
+            page_size: 50,
+            query_timeout_seconds: 30,
+            query_row_limit: 10_000,
+            slow_query_threshold_ms: 300,
+            autocomplete: true,
+            save_passwords_in_credential_manager: true,
+            save_query_history: true,
+        }
+    }
+}
+
+impl Default for PerformanceConfig {
+    fn default() -> Self {
+        Self {
+            show_cpu: true,
+            show_ram: true,
+            show_gpu: true,
+            show_disk: true,
+            show_net: false,
+            sample_interval_ms: 2000,
+            enable_alerts: false,
+            cpu_alert_threshold: 90,
+            ram_alert_threshold: 90,
+            disk_alert_threshold: 90,
+            agent_executables: default_agent_executables(),
+        }
     }
 }
 
@@ -524,6 +1140,18 @@ pub(crate) fn cache_dir_or_fallback() -> PathBuf {
     }
 }
 
+/// Módulos principales accesibles desde el riel izquierdo de la aplicación (DISENO §4)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AppModule {
+    #[default]
+    Spaces,
+    Files,
+    Git,
+    Data,
+    System,
+}
+
 /// Sesión persistida: una entrada por ventana abierta (`session.toml`)
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq)]
 pub(crate) struct SessionState {
@@ -544,9 +1172,15 @@ pub(crate) struct WindowSession {
     /// antiguas: todas las pestañas caen en un único Space.
     #[serde(default)]
     pub(crate) spaces: Vec<String>,
-    /// Panel de Spaces colapsado a riel
+    /// Panel de Spaces colapsado a riel (retrocompatibilidad)
     #[serde(default)]
     pub(crate) spaces_collapsed: bool,
+    /// Módulo activo en el riel de navegación (DISENO §4)
+    #[serde(default)]
+    pub(crate) active_module: AppModule,
+    /// Panel lateral contextual colapsado a riel
+    #[serde(default)]
+    pub(crate) sidebar_collapsed: bool,
     pub(crate) tabs: Vec<TabSession>,
 }
 
@@ -593,6 +1227,8 @@ impl Default for WindowSession {
             file_explorer_width: default_explorer_width(),
             spaces: Vec::new(),
             spaces_collapsed: false,
+            active_module: AppModule::Spaces,
+            sidebar_collapsed: false,
             tabs: Vec::new(),
         }
     }
@@ -804,6 +1440,8 @@ mod tests {
                 file_explorer_width: 320,
                 spaces: vec!["Users".into(), "Trabajo".into()],
                 spaces_collapsed: true,
+                active_module: AppModule::Spaces,
+                sidebar_collapsed: true,
                 tabs: vec![
                     TabSession {
                         title: "Terminal 1".into(),
@@ -965,5 +1603,97 @@ gpu = true
         def.write_to(&mut bytes).unwrap();
         let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
         assert!(!reloaded.terminal.animations);
+    }
+
+    #[test]
+    fn test_database_and_performance_config_defaults_and_roundtrip() {
+        let def = TearminalConfig::default();
+        assert!(def.database.prod_read_only);
+        assert_eq!(def.database.write_window_minutes, 10);
+        assert!(def.database.written_confirmation);
+        assert!(def.database.warn_no_where);
+        assert!(def.database.enforce_transaction);
+        assert!(def.database.backup_original_rows);
+        assert!(def.database.warn_unsafe_pem_permissions);
+        assert_eq!(def.database.cert_warn_days, 30);
+        assert_eq!(def.database.page_size, 50);
+        assert_eq!(def.database.query_timeout_seconds, 30);
+        assert_eq!(def.database.query_row_limit, 10_000);
+        assert_eq!(def.database.slow_query_threshold_ms, 300);
+        assert!(def.database.autocomplete);
+        assert!(def.database.save_passwords_in_credential_manager);
+        assert!(def.database.save_query_history);
+
+        assert!(def.performance.show_cpu);
+        assert!(def.performance.show_ram);
+        assert!(def.performance.show_gpu);
+        assert!(def.performance.show_disk);
+        assert!(!def.performance.show_net);
+        assert_eq!(def.performance.sample_interval_ms, 2000);
+        assert!(!def.performance.enable_alerts);
+        assert_eq!(def.performance.cpu_alert_threshold, 90);
+        assert_eq!(def.performance.ram_alert_threshold, 90);
+        assert_eq!(def.performance.disk_alert_threshold, 90);
+
+        // Deserializar configuración antigua sin [database] ni [performance]
+        let old_toml = r#"
+[appearance]
+font_family = "JetBrains Mono"
+font_size = 14.0
+ui_font_size = 14.0
+window_opacity = 1.0
+theme = "Catppuccin Frappe"
+theme_light = "Catppuccin Latte"
+line_spacing = 1.0
+
+[terminal]
+default_shell = "powershell.exe"
+scrollback_lines = 10000
+cursor_blink = true
+copy_on_select = false
+"#;
+        let parsed: TearminalConfig = toml::from_str(old_toml).unwrap();
+        assert_eq!(parsed.database, DatabaseConfig::default());
+        assert_eq!(parsed.performance, PerformanceConfig::default());
+
+        // Serializar y deserializar con valores modificados
+        let mut custom = def;
+        custom.database.prod_read_only = false;
+        custom.database.write_window_minutes = 25;
+        custom.database.query_timeout_seconds = 60;
+        custom.performance.show_net = true;
+        custom.performance.sample_interval_ms = 5000;
+        custom.performance.cpu_alert_threshold = 85;
+
+        let mut bytes = Vec::new();
+        custom.write_to(&mut bytes).unwrap();
+        let reloaded = TearminalConfig::from_reader(bytes.as_slice()).unwrap();
+        assert!(!reloaded.database.prod_read_only);
+        assert_eq!(reloaded.database.write_window_minutes, 25);
+        assert_eq!(reloaded.database.query_timeout_seconds, 60);
+        assert!(reloaded.performance.show_net);
+        assert_eq!(reloaded.performance.sample_interval_ms, 5000);
+        assert_eq!(reloaded.performance.cpu_alert_threshold, 85);
+
+        // Agentes CLI configurables + sanitización
+        assert!(sanitize_agent_name("codex.exe") == Some("codex".to_string()));
+        assert!(sanitize_agent_name("bad; rm -rf").is_none());
+        let mut perf = PerformanceConfig::default();
+        perf.set_agent_executables_csv("claude, my-agent.exe, bad$cmd, codex, claude");
+        assert_eq!(perf.agent_executables, vec!["claude", "my-agent", "codex"]);
+
+        // Atajos de teclado: parseo, formato y conflictos
+        let chord = ParsedKeyChord::parse("ctrl + shift + p").expect("chord válido");
+        assert!(chord.ctrl && chord.shift && !chord.alt && chord.key == "P");
+        assert_eq!(chord.format_compact(), "Ctrl+Shift+P");
+        assert_eq!(chord.format_keycaps(), "Ctrl + Shift + P");
+
+        let mut sc = ShortcutsConfig::default();
+        assert_eq!(
+            sc.find_conflict(ShortcutAction::NewTab, &chord),
+            Some(ShortcutAction::CommandPalette)
+        );
+        sc.set(ShortcutAction::NewTab, "Ctrl+Alt+N".to_string());
+        assert_eq!(sc.display_keycaps(ShortcutAction::NewTab), "Ctrl + Alt + N");
     }
 }

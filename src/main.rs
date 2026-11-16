@@ -10,6 +10,7 @@ mod explorer;
 mod fonts;
 mod json;
 mod logger;
+mod monitor;
 mod pty;
 mod renderer;
 mod ssh;

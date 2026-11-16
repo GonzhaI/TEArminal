@@ -386,11 +386,15 @@ fn test_git_stage_unstage_and_discard_actions() {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&tmp);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["init"]).status();
+    let _ = cmd.args(["init"]).output();
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&tmp);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["config", "core.autocrlf", "false"]).status();
+    let _ = cmd.args(["config", "core.autocrlf", "false"]).output();
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&tmp);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["config", "commit.gpgsign", "false"]).output();
 
     let file_a = tmp.join("file_a.txt");
     std::fs::write(&file_a, "initial line 1\n").unwrap();
@@ -415,18 +419,18 @@ fn test_git_stage_unstage_and_discard_actions() {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&tmp);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["config", "user.name", "TestUser"]).status();
+    let _ = cmd.args(["config", "user.name", "TestUser"]).output();
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&tmp);
     crate::app::platform::hide_console(&mut cmd);
     let _ = cmd
         .args(["config", "user.email", "test@example.com"])
-        .status();
+        .output();
     let _ = git_stage_file(&tmp, &file_a);
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&tmp);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["commit", "-m", "init"]).status();
+    let _ = cmd.args(["commit", "-m", "init", "--no-gpg-sign"]).output();
 
     // 3. Modificar file_a y descartar cambios
     std::fs::write(&file_a, "modified line\n").unwrap();

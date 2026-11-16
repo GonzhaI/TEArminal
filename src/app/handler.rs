@@ -28,6 +28,9 @@ impl TearminalApp {
                     }
                 }
             }
+            TearminalEvent::MonitorDone => {
+                self.process_monitor_sample();
+            }
             TearminalEvent::PtyData(pane_id) => {
                 let osc52 = self.config.terminal.osc52;
                 let mut redraw = false;
@@ -375,24 +378,6 @@ impl TearminalApp {
                         }
                     }
                 }
-
-                // En Windows ConPTY, las secuencias de foco VT (\x1b[I / \x1b[O) no son reconocidas
-                // en la entrada de la consola y ConPTY las traduce erróneamente a eventos de teclado (Enter/Escape),
-                // provocando prompts vacíos adicionales en PowerShell cada vez que se cambia de ventana.
-                #[cfg(not(target_os = "windows"))]
-                {
-                    if let Some(active) = self.tabs.get_mut(self.active_tab_index) {
-                        if let Some(pane) = active.active_pane_mut() {
-                            if pane.terminal.focus_event_reporting {
-                                if focused {
-                                    pane.pty.write_input(b"\x1b[I");
-                                } else {
-                                    pane.pty.write_input(b"\x1b[O");
-                                }
-                            }
-                        }
-                    }
-                }
             }
 
             WindowEvent::DroppedFile(path) => {
@@ -459,6 +444,15 @@ impl TearminalApp {
                                 ),
                                 Some(&text),
                             );
+                            return;
+                        }
+                        Some(EditingSettingField::AgentProfiles) => {
+                            self.settings_page_state
+                                .agent_profiles_input
+                                .insert_text(&text);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
                             return;
                         }
                         _ => {}
@@ -726,6 +720,34 @@ impl TearminalApp {
             }
         }
 
+        // Temporizador de cuenta atrás para reconexión SSH automática (Ssh.dc.html)
+        let mut pane_to_reconnect = None;
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if let Some(ref mut rec) = pane.ssh_reconnect {
+                    if !rec.is_reconnecting && rec.attempt <= rec.max_attempts {
+                        let sec = std::time::Duration::from_secs(1);
+                        if rec.last_tick.elapsed() >= sec {
+                            rec.last_tick = Instant::now();
+                            if rec.countdown_seconds > 0 {
+                                rec.countdown_seconds -= 1;
+                            }
+                            if rec.countdown_seconds == 0 {
+                                pane_to_reconnect = Some(pane.id);
+                            }
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                        earliest(&mut wake, rec.last_tick + sec);
+                    }
+                }
+            }
+        }
+        if let Some(pid) = pane_to_reconnect {
+            self.reconnect_ssh_pane(pid);
+        }
+
         // GIF animado abierto en el visor: despierta en el próximo fotograma y repinta solo si cambió
         // (`shown_frame` lo fija el render; así el repintado no se encadena a sí mismo)
         if !self.occluded {
@@ -913,12 +935,93 @@ impl TearminalApp {
             }
         }
 
+        // Monitor del sistema: muestreo periódico solo cuando es visible (DISENO §5 F3).
+        // Si la ventana está oculta/minimizada, o la pestaña de sistema no está abierta y la barra de estado
+        // no muestra medidores, NO se despierta el hilo y no se gasta CPU (0 % CPU en reposo).
+        if !self.occluded {
+            let is_system_tab_open = self
+                .tabs
+                .get(self.active_tab_index)
+                .is_some_and(|t| t.is_system_monitor);
+            let perf = &self.config.performance;
+            let any_meter_enabled =
+                perf.show_cpu || perf.show_ram || perf.show_gpu || perf.show_disk || perf.show_net;
+            let is_status_bar_visible = self.config.appearance.show_status_bar && any_meter_enabled;
+            if is_system_tab_open || is_status_bar_visible {
+                let interval = if is_system_tab_open {
+                    std::time::Duration::from_millis(1000)
+                } else {
+                    std::time::Duration::from_millis(self.config.performance.sample_interval_ms)
+                };
+                let last = self.monitor.last_sample_instant;
+                let due = match last {
+                    None => true,
+                    Some(t) => now.duration_since(t) >= interval,
+                };
+                if due && !self.monitor.is_sampling {
+                    self.request_immediate_monitor_sample();
+                    if let crate::monitor::MonitorSource::Remote(dest) =
+                        &self.monitor.selected_source
+                    {
+                        self.spawn_remote_system_metrics(dest.clone());
+                    }
+                }
+                let next_wake = match last {
+                    None => now + interval,
+                    Some(t) => t + interval,
+                };
+                earliest(&mut wake, next_wake);
+            }
+        }
+
         if has_more_pty_data {
             earliest(&mut wake, now);
         }
 
         if let Some(deadline) = self.expire_remote_requests() {
             earliest(&mut wake, deadline);
+        }
+
+        // Expiración de toasts activos sin despertar en reposo cuando la lista está vacía
+        if !self.toasts.is_empty() {
+            let before = self.toasts.len();
+            self.clean_expired_toasts();
+            if self.toasts.len() != before {
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
+            for t in &self.toasts {
+                earliest(&mut wake, t.created_at + t.duration);
+            }
+        }
+
+        // Cuenta atrás de desbloqueo temporal PROD en pestañas de BD (1 Hz solo mientras está activa)
+        let mut prod_expired = false;
+        let active_tab_idx = self.active_tab_index;
+        for (idx, tab) in self.tabs.iter_mut().enumerate() {
+            let Some(db) = tab.db_tab.as_mut() else {
+                continue;
+            };
+            let Some(expires) = db.prod_write_expires_at else {
+                continue;
+            };
+            if now >= expires {
+                db.prod_write_expires_at = None;
+                prod_expired = true;
+            } else if idx == active_tab_idx && !self.occluded {
+                let next_tick = (now + std::time::Duration::from_secs(1)).min(expires);
+                earliest(&mut wake, next_tick);
+            }
+        }
+        if prod_expired {
+            self.show_toast(
+                crate::app::dialog::ToastSeverity::Info,
+                "Ventana de escritura en PROD expirada",
+            );
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
         }
 
         // Renderizado sincronizado (DEC 2026): timeout de seguridad para repintar si la app retuvo el fotograma más de 200 ms

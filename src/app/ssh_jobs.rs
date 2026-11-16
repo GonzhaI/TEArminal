@@ -60,6 +60,14 @@ pub(super) enum SshDone {
         path: PathBuf,
         is_discard: bool,
     },
+    GitCommitResult(Result<(), String>),
+    GitPushResult(Result<(), String>),
+    GitBulkActionDone,
+    GitAheadBehind(Option<(usize, usize)>),
+    GitCheckoutResult(Result<String, String>),
+    FolderActionDone(Result<String, String>),
+    RemoteMetrics(Box<crate::monitor::RemoteSystemSnapshot>),
+    DbDone(Box<super::db_jobs::DbJobResult>),
 }
 
 fn remote_path_string(path: &Path) -> String {
@@ -67,7 +75,7 @@ fn remote_path_string(path: &Path) -> String {
 }
 
 impl TearminalApp {
-    fn spawn_ssh(&self, work: impl FnOnce() -> SshDone + Send + 'static) -> bool {
+    pub(super) fn spawn_ssh(&self, work: impl FnOnce() -> SshDone + Send + 'static) -> bool {
         let (tx, proxy) = (self.ssh_tx.clone(), self.proxy.clone());
         let spawned = std::thread::Builder::new()
             .name("tearminal-ssh".into())
@@ -140,6 +148,138 @@ impl TearminalApp {
                 path,
                 is_discard: action == crate::renderer::GitActionKind::Discard,
             }
+        });
+    }
+
+    /// Ejecuta un commit en un hilo en segundo plano sin congelar la UI
+    pub(super) fn spawn_git_commit(&mut self, repo: PathBuf, message: String, amend: bool) {
+        self.file_explorer.git_commit.is_committing = true;
+        self.spawn_ssh(move || {
+            let res = crate::explorer::git_commit(&repo, &message, amend);
+            SshDone::GitCommitResult(res)
+        });
+    }
+
+    /// Ejecuta un push en un hilo en segundo plano sin congelar la UI
+    pub(super) fn spawn_git_push(&mut self, repo: PathBuf) {
+        self.file_explorer.git_commit.is_pushing = true;
+        self.spawn_ssh(move || {
+            let res = crate::explorer::git_push(&repo);
+            SshDone::GitPushResult(res)
+        });
+    }
+
+    /// Ejecuta una acción grupal de Git (Preparar todo, Quitar todo, Descartar todo) en segundo plano
+    pub(super) fn spawn_git_bulk_action(
+        &self,
+        repo: PathBuf,
+        action: crate::renderer::GitBulkActionKind,
+    ) {
+        self.spawn_ssh(move || {
+            match action {
+                crate::renderer::GitBulkActionKind::StageAll => {
+                    let _ = crate::explorer::git_stage_all(&repo);
+                }
+                crate::renderer::GitBulkActionKind::UnstageAll => {
+                    let _ = crate::explorer::git_unstage_all(&repo);
+                }
+                crate::renderer::GitBulkActionKind::DiscardAll => {
+                    let _ = crate::explorer::git_discard_all(&repo);
+                }
+            }
+            SshDone::GitBulkActionDone
+        });
+    }
+
+    /// Lanza la recolección periódica de métricas del sistema en un host remoto vía SSH
+    pub(super) fn spawn_remote_system_metrics(&self, dest: String) {
+        let host = dest.clone();
+        self.spawn_ssh(move || {
+            let cmd = "cat /proc/loadavg 2>/dev/null; head -n 8 /proc/meminfo 2>/dev/null; df -k / 2>/dev/null";
+            let out_str = match ssh::SafeSshDestination::parse(&host) {
+                Ok(safe_dest) => {
+                    let conn = ssh::SshConnection::new(safe_dest).with_timeout(5);
+                    match conn.authenticate(None) {
+                        Ok(auth_conn) => match auth_conn.run_command(cmd, None, 32 * 1024) {
+                            Ok(output) => String::from_utf8_lossy(&output.stdout).to_string(),
+                            Err(_) => String::new(),
+                        },
+                        Err(_) => String::new(),
+                    }
+                }
+                Err(_) => String::new(),
+            };
+            let parsed = crate::monitor::parse_remote_metrics(&host, &out_str).unwrap_or_else(|| {
+                crate::monitor::RemoteSystemSnapshot {
+                    destination: host.clone(),
+                    is_connected: false,
+                    cpu_pct: 0.0,
+                    ram_pct: 0.0,
+                    disk_pct: 0.0,
+                    load_1m: 0.0,
+                    ram_total_bytes: 0,
+                    ram_used_bytes: 0,
+                    disk_total_bytes: 0,
+                    disk_used_bytes: 0,
+                }
+            });
+            SshDone::RemoteMetrics(Box::new(parsed))
+        });
+    }
+
+    /// Sincroniza las máquinas remotas conocidas (espacios y ~/.ssh/config) en el monitor.
+    pub(crate) fn sync_known_remote_sources(&mut self) {
+        let mut known = Vec::new();
+        for space in &self.spaces {
+            if space.remote && !space.name.is_empty() && !known.contains(&space.name) {
+                known.push(space.name.clone());
+            }
+        }
+        for host in crate::app::machine::read_user_ssh_hosts() {
+            if !host.alias.is_empty() && !known.contains(&host.alias) {
+                known.push(host.alias);
+            }
+        }
+        for dest in known {
+            self.monitor
+                .remote_snapshots
+                .entry(dest.clone())
+                .or_insert_with(|| crate::monitor::RemoteSystemSnapshot {
+                    destination: dest,
+                    is_connected: false,
+                    cpu_pct: 0.0,
+                    ram_pct: 0.0,
+                    disk_pct: 0.0,
+                    load_1m: 0.0,
+                    ram_total_bytes: 0,
+                    ram_used_bytes: 0,
+                    disk_total_bytes: 0,
+                    disk_used_bytes: 0,
+                });
+        }
+    }
+
+    /// Consulta commits por delante y por detrás del upstream en segundo plano
+    pub(super) fn spawn_git_ahead_behind(&self, repo: PathBuf) {
+        self.spawn_ssh(move || {
+            let counts = crate::explorer::git_ahead_behind(&repo);
+            SshDone::GitAheadBehind(counts)
+        });
+    }
+
+    /// Cambia de rama Git en segundo plano
+    pub(super) fn spawn_git_checkout(&self, repo: PathBuf, branch: String) {
+        self.spawn_ssh(move || {
+            let res = crate::explorer::git_checkout_branch(&repo, &branch).map(|()| branch);
+            SshDone::GitCheckoutResult(res)
+        });
+    }
+
+    /// Ejecuta la acción de limpieza de una carpeta de proyecto en segundo plano
+    pub(super) fn spawn_folder_action(&self, root: PathBuf, folder_name: String, action: String) {
+        self.spawn_ssh(move || {
+            let res = crate::monitor::run_project_folder_action(&root, &folder_name, &action);
+            SshDone::FolderActionDone(res)
         });
     }
 
@@ -389,6 +529,9 @@ impl TearminalApp {
                         statuses,
                     } = *git;
                     self.file_explorer.apply_git_statuses(&repo_root, statuses);
+                    self.file_explorer.git_branch =
+                        crate::app::shell_context::get_git_branch(Some(&repo_root));
+                    self.spawn_git_ahead_behind(repo_root);
                     self.sync_fs_watcher();
                     // Si llegaron cambios durante la consulta, queda una petición pendiente
                     self.pump_explorer_ssh();
@@ -412,6 +555,79 @@ impl TearminalApp {
                     self.file_explorer.refresh_git_status();
                     self.sync_viewer_on_git_action(&path, is_discard);
                     self.pump_explorer_ssh();
+                }
+                SshDone::GitCommitResult(res) => {
+                    self.file_explorer.git_commit.is_committing = false;
+                    match res {
+                        Ok(()) => {
+                            self.file_explorer.git_commit.input.text.clear();
+                            self.file_explorer.git_commit.input.cursor = 0;
+                            self.file_explorer.git_commit.amend = false;
+                            self.file_explorer.git_commit.status_message =
+                                Some(("Commit realizado con éxito".into(), false));
+                            self.file_explorer.refresh_git_status();
+                            if let Some(repo) = self.file_explorer.git_root.clone() {
+                                self.spawn_git_ahead_behind(repo);
+                            }
+                        }
+                        Err(e) => {
+                            self.file_explorer.git_commit.status_message = Some((e, true));
+                        }
+                    }
+                }
+                SshDone::GitPushResult(res) => {
+                    self.file_explorer.git_commit.is_pushing = false;
+                    match res {
+                        Ok(()) => {
+                            self.file_explorer.git_commit.status_message =
+                                Some(("Cambios subidos al remoto".into(), false));
+                            if let Some(repo) = self.file_explorer.git_root.clone() {
+                                self.spawn_git_ahead_behind(repo);
+                            }
+                        }
+                        Err(e) => {
+                            self.file_explorer.git_commit.status_message = Some((e, true));
+                        }
+                    }
+                }
+                SshDone::GitBulkActionDone => {
+                    self.file_explorer.refresh_git_status();
+                    self.pump_explorer_ssh();
+                }
+                SshDone::GitAheadBehind(counts) => {
+                    self.file_explorer.git_commit.ahead_behind = counts;
+                }
+                SshDone::GitCheckoutResult(res) => match res {
+                    Ok(branch) => {
+                        self.file_explorer.refresh_git_status();
+                        if let Some(repo) = self.file_explorer.git_root.clone() {
+                            self.spawn_git_ahead_behind(repo);
+                        }
+                        self.show_toast(
+                            crate::app::dialog::ToastSeverity::Success,
+                            format!("Rama cambiada a «{branch}»"),
+                        );
+                    }
+                    Err(e) => {
+                        self.show_toast(crate::app::dialog::ToastSeverity::Error, e);
+                    }
+                },
+                SshDone::FolderActionDone(res) => match res {
+                    Ok(msg) => {
+                        self.show_toast(crate::app::dialog::ToastSeverity::Success, msg);
+                        self.request_immediate_monitor_sample();
+                    }
+                    Err(e) => {
+                        self.show_toast(crate::app::dialog::ToastSeverity::Error, e);
+                    }
+                },
+                SshDone::RemoteMetrics(snap) => {
+                    self.monitor
+                        .remote_snapshots
+                        .insert(snap.destination.clone(), *snap);
+                }
+                SshDone::DbDone(res) => {
+                    self.apply_db_job_result(*res);
                 }
             }
         }

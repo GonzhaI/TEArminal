@@ -14,6 +14,10 @@ impl TearminalApp {
 
         self.last_terminal_tab_index = self.active_tab_index;
 
+        crate::theme::Theme::reload_custom_themes();
+        self.settings_page_state.filtered_themes =
+            crate::theme::Theme::search_all(&self.settings_page_state.theme_filter);
+
         if let Some(pos) = self.tabs.iter().position(|t| t.is_settings) {
             self.switch_to_tab(pos);
         } else {
@@ -24,6 +28,56 @@ impl TearminalApp {
         self.settings_page_state.theme_slot_light =
             self.config.appearance.uses_light_theme(self.system_light);
         self.reveal_current_theme();
+    }
+
+    pub(crate) fn open_or_switch_system_monitor_tab(&mut self) {
+        self.active_module = crate::config::AppModule::System;
+        self.sidebar_collapsed = false;
+        self.sync_known_remote_sources();
+
+        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+            if active_tab.is_system_monitor {
+                return;
+            }
+        }
+
+        self.last_terminal_tab_index = self.active_tab_index;
+
+        if let Some(pos) = self.tabs.iter().position(|t| t.is_system_monitor) {
+            self.switch_to_tab(pos);
+        } else {
+            let tab_id = self.alloc_tab_id();
+            self.push_tab(TerminalTab::new_system_monitor(tab_id));
+            self.switch_to_tab(self.tabs.len() - 1);
+        }
+        self.request_immediate_monitor_sample();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    pub(crate) fn open_or_switch_database_tab(&mut self) {
+        self.active_module = crate::config::AppModule::Data;
+        self.sidebar_collapsed = false;
+
+        if let Some(active_tab) = self.tabs.get(self.active_tab_index) {
+            if active_tab.is_database {
+                return;
+            }
+        }
+
+        self.last_terminal_tab_index = self.active_tab_index;
+
+        if let Some(pos) = self.tabs.iter().position(|t| t.is_database) {
+            self.switch_to_tab(pos);
+        } else {
+            let tab_id = self.alloc_tab_id();
+            self.push_tab(TerminalTab::new_database(tab_id, &self.config.database));
+            self.switch_to_tab(self.tabs.len() - 1);
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
     }
 
     /// Sincroniza dinámicamente el directorio raíz del explorador con el CWD o la sesión SSH de la terminal activa
@@ -138,6 +192,11 @@ impl TearminalApp {
                 info.status == crate::explorer::GitFileStatus::Untracked
                     || info.status == crate::explorer::GitFileStatus::Added
             });
+        let is_staged = self
+            .file_explorer
+            .git_statuses
+            .get(path)
+            .is_some_and(|info| info.is_staged);
 
         // Si ya existe una pestaña con este archivo local, alternar a ella
         if let Some(pos) = self.tabs.iter().position(|t| {
@@ -151,6 +210,7 @@ impl TearminalApp {
                 if is_git_new {
                     v.git_new_file = true;
                 }
+                v.is_staged = is_staged;
                 if self.file_explorer.changes_only {
                     v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
                 }
@@ -173,6 +233,7 @@ impl TearminalApp {
             if is_git_new {
                 v.git_new_file = true;
             }
+            v.is_staged = is_staged;
             if self.file_explorer.changes_only {
                 v.diff_mode = crate::app::viewer::DiffMode::SideBySide;
             }
@@ -258,22 +319,6 @@ impl TearminalApp {
         self.toggle_sidebar();
     }
 
-    /// Píldoras Files / Changes de la barra superior: muestran la tarjeta del explorador en esa vista;
-    /// pulsar la que ya está a la vista la oculta.
-    pub(crate) fn show_explorer_view(&mut self, changes: bool) {
-        if self.file_explorer.visible && self.file_explorer.changes_only == changes {
-            self.toggle_file_explorer();
-            return;
-        }
-        if !self.file_explorer.visible {
-            self.toggle_file_explorer();
-        }
-        if self.file_explorer.changes_only != changes {
-            self.file_explorer.toggle_changes_only();
-        }
-        self.request_redraw();
-    }
-
     /// Abre y enfoca el filtro rápido en el árbol del explorador (`Ctrl + P` / `Ctrl + F`)
     pub(crate) fn open_explorer_filter(&mut self) {
         if !self.file_explorer.visible {
@@ -281,26 +326,6 @@ impl TearminalApp {
         }
         self.file_explorer.is_focused = true;
         self.file_explorer.open_filter();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
-    }
-
-    pub(super) fn flip_file_explorer(&mut self) {
-        self.file_explorer.toggle();
-        if self.file_explorer.visible {
-            self.sync_file_explorer_root();
-            self.file_explorer.is_focused = true;
-            if self.file_explorer.selected_index.is_none() && !self.file_explorer.items.is_empty() {
-                self.file_explorer.selected_index = Some(0);
-                self.file_explorer.selected_path = Some(self.file_explorer.items[0].path.clone());
-            }
-        } else {
-            self.file_explorer.is_focused = false;
-            self.sync_fs_watcher();
-        }
-        self.recompute_grid_for_all_tabs();
-        self.save_session();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
@@ -401,6 +426,43 @@ impl TearminalApp {
     }
 
     pub(crate) fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        // Si la pestaña tiene procesos hijos activos en ejecución, advertir con el diálogo unificado de F4
+        for pane in &self.tabs[index].panes {
+            if let Some(shell_pid) = pane.pty.process_id() {
+                if let Some(child_name) = crate::monitor::shell_has_child_processes(shell_pid) {
+                    self.open_dialog(crate::app::dialog::DialogSpec::closing_tab_running_process(
+                        index,
+                        &child_name,
+                    ));
+                    return;
+                }
+            }
+        }
+
+        // Si es una pestaña de base de datos con cambios sin aplicar, advertir al usuario
+        if index == self.active_tab_index {
+            if let Some(ref db) = self.tabs[index].db_tab {
+                if !db.browse.pending_changes.is_empty() {
+                    let sql = db.browse.generated_sql();
+                    let dlg = crate::app::dialog::DialogSpec::unapplied_changes(
+                        &db.active_connection_name,
+                        db.browse.pending_changes.len(),
+                        &sql,
+                    );
+                    self.open_dialog(dlg);
+                    return;
+                }
+            }
+        }
+
+        self.force_close_tab(index);
+    }
+
+    pub(crate) fn force_close_tab(&mut self, index: usize) {
         if index >= self.tabs.len() {
             return;
         }
@@ -576,29 +638,66 @@ impl TearminalApp {
         self.split_active_pane_with_shell(direction, &shell);
     }
 
-    pub(crate) fn split_active_pane_with_shell(&mut self, direction: SplitDirection, shell: &str) {
-        if self.tabs[self.active_tab_index].is_settings
-            || self.tabs[self.active_tab_index].file_viewer.is_some()
+    /// Aplica un preset de cuadrícula (`2x2` o `1+2`), abriendo solo los paneles faltantes.
+    pub(crate) fn apply_grid_layout(&mut self, preset: GridPreset) {
+        let tab = &self.tabs[self.active_tab_index];
+        if tab.is_settings || tab.is_system_monitor || tab.is_database || tab.file_viewer.is_some()
         {
             return;
         }
-        let new_pane_id = alloc_pane_id();
+        let target_count: usize = match preset {
+            GridPreset::TwoByTwo => 4,
+            GridPreset::OnePlusTwo => 3,
+        };
+        let existing = tab.panes.len();
+        let needed = target_count.saturating_sub(existing);
+        let shell = self.config.terminal.default_shell.clone();
+        let mut extra = Vec::with_capacity(needed);
+        for _ in 0..needed {
+            if let Some(p) = self.spawn_sibling_pane(&shell) {
+                extra.push(p);
+            }
+        }
+        self.tabs[self.active_tab_index].apply_grid_preset(preset, extra);
+        self.recompute_grid_for_all_tabs();
+        self.update_window_title();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
 
+    pub(crate) fn split_active_pane_with_shell(&mut self, direction: SplitDirection, shell: &str) {
+        let tab = &self.tabs[self.active_tab_index];
+        if tab.is_settings || tab.file_viewer.is_some() {
+            return;
+        }
+        let Some(new_pane) = self.spawn_sibling_pane(shell) else {
+            return;
+        };
+        let new_pane_id = new_pane.id;
+        self.tabs[self.active_tab_index].split_active_pane(new_pane_id, new_pane, direction);
+        self.recompute_grid_for_all_tabs();
+        self.update_window_title();
+        self.save_session();
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
+    }
+
+    fn spawn_sibling_pane(&self, shell: &str) -> Option<TerminalPane> {
+        let new_pane_id = alloc_pane_id();
         let active_pane = self
             .tabs
             .get(self.active_tab_index)
             .and_then(|t| t.active_pane());
         let ssh_session = active_pane.and_then(|p| p.terminal.ssh_session.clone());
-
-        // Heredar el directorio de trabajo del pane activo
         let cwd_path = active_pane
             .and_then(|p| p.terminal.current_dir.clone())
             .filter(|d| !d.is_file() && !d.to_string_lossy().contains("clipboard"));
         let cwd_ref = cwd_path.as_deref();
-
         let (cols, rows) = (80, 24);
 
-        // Con sesión SSH activa se reconecta al mismo host; si falla (o no hay sesión) se abre un shell local
         let ssh_pty = ssh_session
             .as_ref()
             .filter(|s| s.is_active)
@@ -639,7 +738,7 @@ impl TearminalApp {
                 Ok(p) => (p, None),
                 Err(e) => {
                     crate::pty::report_spawn_error(shell, &e);
-                    return;
+                    return None;
                 }
             },
         };
@@ -654,18 +753,7 @@ impl TearminalApp {
             crate::terminal::CursorShape::from_str_name(&self.config.terminal.cursor_shape);
         terminal.current_dir = cwd_path;
         terminal.ssh_session = initial_ssh;
-
-        let new_pane = TerminalPane::new(new_pane_id, pty, terminal, (cols, rows));
-
-        let active_tab = &mut self.tabs[self.active_tab_index];
-        active_tab.split_active_pane(new_pane_id, new_pane, direction);
-
-        self.recompute_grid_for_all_tabs();
-        self.update_window_title();
-        self.save_session();
-        if let Some(w) = &self.window {
-            w.request_redraw();
-        }
+        Some(TerminalPane::new(new_pane_id, pty, terminal, (cols, rows)))
     }
 
     pub(crate) fn close_active_pane(&mut self) {
@@ -682,8 +770,90 @@ impl TearminalApp {
     /// El shell de un panel terminó. Si había un agente en marcha (opencode se lleva la consola por delante
     /// al salir) se abre un shell nuevo en el mismo panel y carpeta; si no (un `exit` normal) se cierra el panel.
     pub(super) fn on_shell_exit(&mut self, pane_id: PaneId) {
-        if !self.respawn_shell_after_agent(pane_id) {
-            self.close_pane_by_id(pane_id);
+        if self.respawn_shell_after_agent(pane_id) {
+            return;
+        }
+
+        // Si el panel estaba en reconexión o tenía una sesión SSH activa, pasar al estado de reconexión (Ssh.dc.html)
+        if let Some(pane) = self.tabs.iter_mut().find_map(|t| t.find_pane_mut(pane_id)) {
+            if let Some(ref mut rec) = pane.ssh_reconnect {
+                rec.is_reconnecting = false;
+                rec.attempt += 1;
+                rec.countdown_seconds = 5;
+                rec.last_tick = std::time::Instant::now();
+                crate::logger::log(&format!(
+                    "Pane {pane_id}: falló intento de reconexión SSH (intento {})",
+                    rec.attempt
+                ));
+                self.request_redraw();
+                return;
+            }
+            if let Some(ssh) = pane.terminal.ssh_session.take() {
+                if ssh.is_active || !ssh.destination.is_empty() {
+                    let mut rec =
+                        crate::app::SshReconnectState::new(ssh.destination, ssh.remote_dir);
+                    rec.countdown_seconds = 4;
+                    pane.ssh_reconnect = Some(rec);
+                    crate::logger::log(&format!(
+                        "Pane {pane_id}: conexión SSH finalizada, entrando en modo reconexión"
+                    ));
+                    self.request_redraw();
+                    return;
+                }
+            }
+        }
+
+        self.close_pane_by_id(pane_id);
+    }
+
+    /// Dispara la reconexión inmediata de un panel SSH en estado de conexión perdida (Ssh.dc.html).
+    pub(crate) fn reconnect_ssh_pane(&mut self, pane_id: PaneId) {
+        let Some(pane) = self.tabs.iter_mut().find_map(|t| t.find_pane_mut(pane_id)) else {
+            return;
+        };
+
+        let Some(ref mut rec) = pane.ssh_reconnect else {
+            return;
+        };
+
+        rec.is_reconnecting = true;
+        let dest = rec.destination.clone();
+        let remote_dir = rec.remote_dir.clone();
+
+        let (cols, rows) = pane.last_grid_size;
+        let cwd = pane.terminal.current_dir.clone().filter(|d| d.is_dir());
+
+        match PtyManager::new(
+            pane_id,
+            &self.config.terminal.default_shell,
+            self.config.terminal.shell_integration,
+            cols as u16,
+            rows as u16,
+            cwd.as_deref(),
+            Some(&self.theme),
+            self.proxy.clone(),
+        ) {
+            Ok(pty) => {
+                pane.terminal.pane_token = pty.token.clone();
+                pane.pty = pty;
+                let mut cmd = format!("ssh {dest}\r");
+                if let Some(dir) = remote_dir {
+                    cmd.push_str(&format!("cd {dir}\r"));
+                }
+                pane.pty.write_input(cmd.as_bytes());
+                self.request_redraw();
+            }
+            Err(e) => {
+                crate::logger::log(&format!("Error al reabrir PTY para reconectar: {e}"));
+                if let Some(p) = self.tabs.iter_mut().find_map(|t| t.find_pane_mut(pane_id)) {
+                    if let Some(ref mut r) = p.ssh_reconnect {
+                        r.is_reconnecting = false;
+                        r.attempt += 1;
+                        r.countdown_seconds = 5;
+                    }
+                }
+                self.request_redraw();
+            }
         }
     }
 
@@ -937,10 +1107,8 @@ impl TearminalApp {
     }
 
     pub(crate) fn toggle_sidebar(&mut self) {
-        self.sidebar_visible = !self.sidebar_visible;
-        if self.file_explorer.visible != self.sidebar_visible {
-            self.flip_file_explorer();
-        }
+        self.sidebar_collapsed = !self.sidebar_collapsed;
+        self.spaces_collapsed = self.sidebar_collapsed;
         self.recompute_grid_for_all_tabs();
         self.save_session();
         if let Some(w) = &self.window {
@@ -1020,12 +1188,65 @@ impl TearminalApp {
                         v.disk_mtime = std::fs::metadata(path).and_then(|m| m.modified()).ok();
                     }
                 }
+                let is_staged = self
+                    .file_explorer
+                    .git_statuses
+                    .get(path)
+                    .is_some_and(|info| info.is_staged);
+                v.is_staged = is_staged;
                 v.side_by_side_cache.take();
                 v.git_marks.take();
                 v.edit_gen += 1;
             }
             self.spawn_git_head_lines(path.to_path_buf());
         }
+    }
+
+    /// Ejecuta la confirmación (commit) del formulario de Git en segundo plano
+    pub(crate) fn execute_git_commit(&mut self) {
+        let Some(repo) = self.file_explorer.git_root.clone() else {
+            return;
+        };
+        if self.file_explorer.git_commit.is_committing {
+            return;
+        }
+        let message = self
+            .file_explorer
+            .git_commit
+            .input
+            .text()
+            .trim()
+            .to_string();
+        if message.is_empty() {
+            self.file_explorer.git_commit.status_message =
+                Some(("El mensaje de commit no puede estar vacío".into(), true));
+            return;
+        }
+        let staged_count = self.file_explorer.staged_count();
+        let is_amend = self.file_explorer.git_commit.amend;
+        if staged_count == 0 && !is_amend {
+            self.file_explorer.git_commit.status_message =
+                Some(("No hay cambios preparados para confirmar".into(), true));
+            return;
+        }
+
+        self.file_explorer.git_commit.is_committing = true;
+        self.file_explorer.git_commit.status_message =
+            Some(("Confirmando cambios...".into(), false));
+        self.spawn_git_commit(repo, message, is_amend);
+    }
+
+    /// Ejecuta el push de la rama Git actual hacia el remoto en segundo plano
+    pub(crate) fn execute_git_push(&mut self) {
+        let Some(repo) = self.file_explorer.git_root.clone() else {
+            return;
+        };
+        if self.file_explorer.git_commit.is_pushing {
+            return;
+        }
+        self.file_explorer.git_commit.is_pushing = true;
+        self.file_explorer.git_commit.status_message = Some(("Subiendo cambios...".into(), false));
+        self.spawn_git_push(repo);
     }
 }
 

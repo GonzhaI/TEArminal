@@ -27,7 +27,8 @@ impl TerminalRenderer {
             .len()
             .max(viewer.git_base.as_ref().map_or(0, |b| b.len()))
             .max(total_rows);
-        let lay = crate::renderer::geometry::SideBySideLayout::compute(
+        let has_banner = viewer.has_external_disk_change();
+        let lay = crate::renderer::geometry::SideBySideLayout::compute_with_banner(
             x,
             y,
             w,
@@ -35,12 +36,90 @@ impl TerminalRenderer {
             self.row_height,
             self.char_width,
             max_line,
+            has_banner,
         );
         let (row_h, char_w) = (lay.row_h, lay.char_w);
         let content_y = lay.content_y;
         let content_h = lay.content_h;
         if content_h == 0 {
             return;
+        }
+
+        // 0. Banner de archivo cambiado en disco si aplica
+        if has_banner {
+            let header_h = crate::renderer::geometry::FileViewerLayout::HEADER_H;
+            let b_rects =
+                crate::renderer::geometry::FileViewerBannerRects::compute(x, y + header_h, full_w);
+            let banner_bg = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[3], 18));
+            canvas.fill_rect(
+                clip,
+                b_rects.banner_rect.0,
+                b_rects.banner_rect.1,
+                b_rects.banner_rect.2,
+                b_rects.banner_rect.3,
+                banner_bg,
+            );
+            canvas.fill_rect(
+                clip,
+                b_rects.banner_rect.0,
+                b_rects.banner_rect.1 + b_rects.banner_rect.3 - 1,
+                b_rects.banner_rect.2,
+                1,
+                theme.chrome_line(),
+            );
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::Info,
+                b_rects.banner_rect.0 + 20,
+                b_rects.banner_rect.1 + b_rects.banner_rect.3 / 2,
+                14.0,
+                theme.ansi[3],
+            );
+            let text =
+                "Este archivo cambió en disco (probablemente un agente). Hay ediciones sin guardar.";
+            let base_y = self.centered_baseline(b_rects.banner_rect.1 + b_rects.banner_rect.3 / 2);
+            self.draw_ui_text(
+                canvas,
+                text,
+                b_rects.banner_rect.0 + 38,
+                base_y,
+                b_rects.reload_btn.0.saturating_sub(8),
+                theme.foreground,
+                tokens::DETAIL,
+                false,
+            );
+            // Botón Recargar
+            let (rx, ry, rw, rh) = b_rects.reload_btn;
+            canvas.rounded_stroke(rx, ry, rw, rh, tokens::RADIUS_ROW, theme.chrome_line());
+            let r_text = "Recargar";
+            let rw_text = self.measure_ui_text(r_text, tokens::MICRO, true);
+            let r_base = self.centered_baseline(ry + rh / 2);
+            self.draw_ui_text(
+                canvas,
+                r_text,
+                rx + (rw.saturating_sub(rw_text)) / 2,
+                r_base,
+                rx + rw,
+                theme.foreground,
+                tokens::MICRO,
+                true,
+            );
+            // Botón Conservar la mía
+            let (kx, ky, kw, kh) = b_rects.keep_mine_btn;
+            canvas.rounded_stroke(kx, ky, kw, kh, tokens::RADIUS_ROW, theme.chrome_line());
+            let k_text = "Conservar la mía";
+            let kw_text = self.measure_ui_text(k_text, tokens::MICRO, true);
+            let k_base = self.centered_baseline(ky + kh / 2);
+            self.draw_ui_text(
+                canvas,
+                k_text,
+                kx + (kw.saturating_sub(kw_text)) / 2,
+                k_base,
+                kx + kw,
+                theme.foreground,
+                tokens::MICRO,
+                true,
+            );
         }
 
         // 1. Barra de encabezado de columnas (HEAD vs Disco)

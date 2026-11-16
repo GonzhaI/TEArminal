@@ -100,7 +100,6 @@ impl TextInput {
         self.is_dragging = false;
     }
 
-    #[cfg(test)]
     pub(crate) fn set_text(&mut self, s: impl Into<String>) {
         self.push_undo();
         self.text = s.into();
@@ -664,6 +663,259 @@ impl TextInput {
 
         (start, end)
     }
+
+    /// Calcula la posición de línea y columna del cursor (1-indexed para la interfaz de usuario).
+    pub(crate) fn cursor_line_col(&self) -> (usize, usize) {
+        let prefix = &self.text[..self.cursor.min(self.text.len())];
+        let line = prefix.matches('\n').count() + 1;
+        let col = match prefix.rfind('\n') {
+            Some(last_nl) => prefix[last_nl + 1..].chars().count() + 1,
+            None => prefix.chars().count() + 1,
+        };
+        (line, col)
+    }
+
+    /// Número total de líneas en el texto.
+    #[allow(dead_code)]
+    pub(crate) fn line_count(&self) -> usize {
+        let count = self.text.matches('\n').count() + 1;
+        count
+    }
+
+    /// Inserta un salto de línea en la posición actual del cursor (multilínea).
+    pub(crate) fn insert_newline(&mut self) {
+        self.delete_selection();
+        self.push_undo();
+        self.text.insert(self.cursor, '\n');
+        self.cursor += 1;
+        self.clamp_cursor();
+    }
+
+    /// Mueve el cursor al inicio de la línea actual.
+    pub(crate) fn move_line_start(&mut self, extend_selection: bool) {
+        let prefix = &self.text[..self.cursor.min(self.text.len())];
+        let target = match prefix.rfind('\n') {
+            Some(last_nl) => last_nl + 1,
+            None => 0,
+        };
+        if extend_selection {
+            if self.select_anchor.is_none() {
+                self.select_anchor = Some(self.cursor);
+            }
+        } else {
+            self.select_anchor = None;
+        }
+        self.cursor = target;
+    }
+
+    /// Mueve el cursor al final de la línea actual.
+    pub(crate) fn move_line_end(&mut self, extend_selection: bool) {
+        let suffix = &self.text[self.cursor.min(self.text.len())..];
+        let target = match suffix.find('\n') {
+            Some(next_nl) => self.cursor + next_nl,
+            None => self.text.len(),
+        };
+        if extend_selection {
+            if self.select_anchor.is_none() {
+                self.select_anchor = Some(self.cursor);
+            }
+        } else {
+            self.select_anchor = None;
+        }
+        self.cursor = target;
+    }
+
+    /// Mueve el cursor hacia la línea anterior manteniendo la columna relativa.
+    pub(crate) fn move_up(&mut self, extend_selection: bool) {
+        let (_, cur_col) = self.cursor_line_col();
+        let prefix = &self.text[..self.cursor.min(self.text.len())];
+        let Some(prev_nl) = prefix.rfind('\n') else {
+            // Ya estamos en la primera línea: mover al inicio de la línea
+            self.move_line_start(extend_selection);
+            return;
+        };
+        // Inicio de la línea anterior
+        let line_before_prefix = &self.text[..prev_nl];
+        let prev_line_start = line_before_prefix.rfind('\n').map_or(0, |nl| nl + 1);
+        let prev_line_len = prev_nl - prev_line_start;
+
+        // Calcular posición de destino basada en número de caracteres
+        let prev_line_str = &self.text[prev_line_start..prev_nl];
+        let target_byte_offset = prev_line_str
+            .char_indices()
+            .nth(cur_col.saturating_sub(1))
+            .map_or(prev_line_len, |(idx, _)| idx);
+
+        let target = prev_line_start + target_byte_offset;
+        if extend_selection {
+            if self.select_anchor.is_none() {
+                self.select_anchor = Some(self.cursor);
+            }
+        } else {
+            self.select_anchor = None;
+        }
+        self.cursor = target;
+        self.clamp_cursor();
+    }
+
+    /// Mueve el cursor hacia la siguiente línea manteniendo la columna relativa.
+    pub(crate) fn move_down(&mut self, extend_selection: bool) {
+        let (_, cur_col) = self.cursor_line_col();
+        let suffix = &self.text[self.cursor.min(self.text.len())..];
+        let Some(next_nl) = suffix.find('\n') else {
+            // Ya estamos en la última línea: mover al final
+            self.move_line_end(extend_selection);
+            return;
+        };
+        let next_line_start = self.cursor + next_nl + 1;
+        if next_line_start >= self.text.len() {
+            let target = self.text.len();
+            if extend_selection {
+                if self.select_anchor.is_none() {
+                    self.select_anchor = Some(self.cursor);
+                }
+            } else {
+                self.select_anchor = None;
+            }
+            self.cursor = target;
+            return;
+        }
+
+        let next_line_rest = &self.text[next_line_start..];
+        let next_line_len = next_line_rest.find('\n').unwrap_or(next_line_rest.len());
+        let next_line_str = &next_line_rest[..next_line_len];
+
+        let target_byte_offset = next_line_str
+            .char_indices()
+            .nth(cur_col.saturating_sub(1))
+            .map_or(next_line_len, |(idx, _)| idx);
+
+        let target = next_line_start + target_byte_offset;
+        if extend_selection {
+            if self.select_anchor.is_none() {
+                self.select_anchor = Some(self.cursor);
+            }
+        } else {
+            self.select_anchor = None;
+        }
+        self.cursor = target;
+        self.clamp_cursor();
+    }
+
+    /// Posiciona el cursor a partir de una línea y columna (1-indexed).
+    pub(crate) fn set_cursor_from_line_col(&mut self, target_line: usize, target_col: usize) {
+        let mut cur_line = 1;
+        let mut line_start = 0;
+        for (idx, ch) in self.text.char_indices() {
+            if cur_line == target_line {
+                break;
+            }
+            if ch == '\n' {
+                cur_line += 1;
+                line_start = idx + 1;
+            }
+        }
+
+        if cur_line < target_line {
+            self.cursor = self.text.len();
+            self.select_anchor = None;
+            return;
+        }
+
+        let line_rest = &self.text[line_start..];
+        let line_len = line_rest.find('\n').unwrap_or(line_rest.len());
+        let line_str = &line_rest[..line_len];
+
+        let offset = line_str
+            .char_indices()
+            .nth(target_col.saturating_sub(1))
+            .map_or(line_len, |(idx, _)| idx);
+
+        self.cursor = line_start + offset;
+        self.select_anchor = None;
+        self.clamp_cursor();
+    }
+
+    /// Procesa pulsaciones de teclas para editores multilínea (consola SQL, notas).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn handle_multiline_key(
+        &mut self,
+        logical_key: &Key,
+        physical_key: PhysicalKey,
+        text: Option<&str>,
+        ctrl: bool,
+        shift: bool,
+        alt: bool,
+        clipboard_paste: Option<&str>,
+    ) -> (TextInputKeyResult, Option<String>) {
+        let is_up = matches!(logical_key, Key::Named(NamedKey::ArrowUp))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::ArrowUp)
+            );
+        if is_up {
+            self.move_up(shift);
+            return (TextInputKeyResult::Navigated, None);
+        }
+
+        let is_down = matches!(logical_key, Key::Named(NamedKey::ArrowDown))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::ArrowDown)
+            );
+        if is_down {
+            self.move_down(shift);
+            return (TextInputKeyResult::Navigated, None);
+        }
+
+        let is_enter = matches!(logical_key, Key::Named(NamedKey::Enter))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::Enter)
+            );
+        if is_enter && !ctrl && !alt {
+            self.insert_newline();
+            return (TextInputKeyResult::Changed, None);
+        }
+
+        let is_home = matches!(logical_key, Key::Named(NamedKey::Home))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::Home)
+            );
+        if is_home {
+            if ctrl {
+                self.move_home(shift);
+            } else {
+                self.move_line_start(shift);
+            }
+            return (TextInputKeyResult::Navigated, None);
+        }
+
+        let is_end = matches!(logical_key, Key::Named(NamedKey::End))
+            || matches!(
+                physical_key,
+                PhysicalKey::Code(winit::keyboard::KeyCode::End)
+            );
+        if is_end {
+            if ctrl {
+                self.move_end(shift);
+            } else {
+                self.move_line_end(shift);
+            }
+            return (TextInputKeyResult::Navigated, None);
+        }
+
+        self.handle_key(
+            logical_key,
+            physical_key,
+            text,
+            ctrl,
+            shift,
+            alt,
+            clipboard_paste,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -786,5 +1038,36 @@ mod tests {
         );
         assert_eq!(res, TextInputKeyResult::Navigated);
         assert!(!input.has_selection());
+    }
+
+    #[test]
+    fn test_text_input_multiline_navigation_and_lines() {
+        let mut input = TextInput::new("SELECT *\nFROM users\nWHERE id = 1;");
+        assert_eq!(input.line_count(), 3);
+
+        // Al inicio, cursor está al final: "WHERE id = 1;" tiene 13 chars -> col 14
+        assert_eq!(input.cursor_line_col(), (3, 14));
+
+        // Subir a línea 2: "FROM users" tiene 10 chars -> col 11 (al final de línea)
+        input.move_up(false);
+        assert_eq!(input.cursor_line_col(), (2, 11));
+
+        // Subir a línea 1: "SELECT *" tiene 8 chars -> col 9 (al final de línea)
+        input.move_up(false);
+        assert_eq!(input.cursor_line_col(), (1, 9));
+
+        // Bajar a línea 2 manteniendo col 9
+        input.move_down(false);
+        assert_eq!(input.cursor_line_col(), (2, 9));
+
+        // Set cursor explícito
+        input.set_cursor_from_line_col(1, 1);
+        assert_eq!(input.cursor_line_col(), (1, 1));
+        assert_eq!(input.cursor, 0);
+
+        // Insertar salto de línea
+        input.insert_newline();
+        assert_eq!(input.line_count(), 4);
+        assert_eq!(input.cursor_line_col(), (2, 1));
     }
 }

@@ -230,7 +230,167 @@ impl Theme {
         THEMES.lines().map(first_field)
     }
 
+    /// Carpeta principal donde se guardan y buscan temas `.itermcolors` externos.
+    pub(crate) fn primary_custom_themes_dir() -> std::path::PathBuf {
+        if cfg!(test) {
+            return crate::config::dirs_or_fallback().join("themes");
+        }
+        std::env::var_os("APPDATA")
+            .filter(|v| !v.is_empty())
+            .map(|p| std::path::PathBuf::from(p).join("tearminal").join("themes"))
+            .unwrap_or_else(|| crate::config::dirs_or_fallback().join("themes"))
+    }
+
+    fn custom_theme_dirs() -> Vec<std::path::PathBuf> {
+        let primary = Self::primary_custom_themes_dir();
+        let mut dirs = vec![primary.clone()];
+        if !cfg!(test) {
+            let cfg_themes = crate::config::dirs_or_fallback().join("themes");
+            if cfg_themes != primary {
+                dirs.push(cfg_themes);
+            }
+        }
+        dirs
+    }
+
+    /// Recarga desde disco los `.itermcolors` colocados en `%APPDATA%\tearminal\themes\`.
+    pub(crate) fn reload_custom_themes() {
+        let loaded = Self::scan_custom_themes(&Self::custom_theme_dirs());
+        let lock = custom_themes_store();
+        if let Ok(mut guard) = lock.write() {
+            *guard = loaded;
+        }
+    }
+
+    fn with_custom_themes<R>(f: impl FnOnce(&[(String, Theme)]) -> R) -> R {
+        let lock = custom_themes_store();
+        if let Ok(guard) = lock.read() {
+            f(&guard)
+        } else {
+            f(&[])
+        }
+    }
+
+    fn scan_custom_themes(dirs: &[std::path::PathBuf]) -> Vec<(String, Theme)> {
+        let mut found: Vec<(String, Theme)> = Vec::new();
+        let mut seen_keys: Vec<String> = Vec::new();
+        for dir in dirs {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            let mut paths: Vec<std::path::PathBuf> = entries
+                .filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.is_file()
+                        && p.extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| e.eq_ignore_ascii_case("itermcolors"))
+                })
+                .collect();
+            paths.sort();
+            for path in paths {
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue;
+                };
+                if meta.len() > MAX_ITERMCOLORS_BYTES {
+                    continue;
+                }
+                let Ok(xml) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(theme) = Self::from_itermcolors_str(&xml) else {
+                    continue;
+                };
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let clean = sanitize_theme_name(stem);
+                if clean.is_empty() {
+                    continue;
+                }
+                let k = name_key(&clean);
+                if !seen_keys.contains(&k) {
+                    seen_keys.push(k);
+                    found.push((clean, theme));
+                }
+            }
+        }
+        found.sort_by_key(|a| a.0.to_lowercase());
+        found
+    }
+
+    /// Parsea el contenido XML plist de un archivo `.itermcolors`.
+    pub(crate) fn from_itermcolors_str(xml: &str) -> Result<Self, String> {
+        let entries = parse_plist_color_dicts(xml)?;
+        let get = |k: &str| entries.iter().find(|(name, _)| name == k).map(|(_, c)| *c);
+        let background = get("Background Color")
+            .ok_or_else(|| "falta `Background Color` en el archivo .itermcolors".to_string())?;
+        let foreground = get("Foreground Color")
+            .ok_or_else(|| "falta `Foreground Color` en el archivo .itermcolors".to_string())?;
+        let cursor = get("Cursor Color").unwrap_or(foreground);
+        let selection = get("Selection Color").unwrap_or(foreground);
+        let selection_fg = get("Selected Text Color").unwrap_or(background);
+        let mut ansi = [Color::TRANSPARENT; 16];
+        for (i, slot) in ansi.iter_mut().enumerate() {
+            let key = format!("Ansi {i} Color");
+            *slot = get(&key).ok_or_else(|| format!("falta `{key}` en el archivo .itermcolors"))?;
+        }
+        Ok(Self {
+            background,
+            foreground,
+            cursor,
+            selection,
+            selection_fg,
+            ui_accent: ui_accent_for(background, foreground, &ansi),
+            ansi,
+        })
+    }
+
+    /// Valida e importa un archivo `.itermcolors` a `%APPDATA%\tearminal\themes\`,
+    /// recargando el catálogo y devolviendo el nombre del tema importado.
+    pub(crate) fn import_itermcolors_file(src: &std::path::Path) -> Result<String, String> {
+        let is_iterm = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("itermcolors"));
+        if !is_iterm {
+            return Err("el archivo debe tener extensión .itermcolors".to_string());
+        }
+        let meta =
+            std::fs::metadata(src).map_err(|e| format!("no se pudo leer el archivo: {e}"))?;
+        if meta.len() > MAX_ITERMCOLORS_BYTES {
+            return Err("el archivo .itermcolors supera el tamaño máximo (512 KB)".to_string());
+        }
+        let content =
+            std::fs::read_to_string(src).map_err(|e| format!("no se pudo leer como UTF-8: {e}"))?;
+        let _parsed = Self::from_itermcolors_str(&content)?;
+        let stem = src
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(sanitize_theme_name)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "nombre de archivo inválido".to_string())?;
+        let dir = Self::primary_custom_themes_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("no se pudo crear carpeta de temas: {e}"))?;
+        let dest = dir.join(format!("{stem}.itermcolors"));
+        let same_file = std::fs::canonicalize(src).ok() == std::fs::canonicalize(&dest).ok();
+        if !same_file {
+            std::fs::write(&dest, content.as_bytes())
+                .map_err(|e| format!("no se pudo guardar tema en `{}`: {e}", dest.display()))?;
+        }
+        Self::reload_custom_themes();
+        Ok(stem)
+    }
+
+    /// Cantidad total de temas disponibles (externos + incorporados).
+    pub(crate) fn all_count() -> usize {
+        Self::with_custom_themes(|custom| custom.len()) + THEMES.lines().count()
+    }
+
     /// Temas cuyo nombre contiene `filter` (sin distinguir mayúsculas ni separadores).
+    #[cfg(test)]
     pub(crate) fn search(filter: &str) -> Vec<&'static str> {
         let key = name_key(filter);
         if key.is_empty() {
@@ -241,13 +401,29 @@ impl Theme {
             .collect()
     }
 
-    fn find(name: &str) -> Option<(&'static str, Theme)> {
-        // Camino rápido: el nombre exacto de la lista (la interfaz lo usa en cada fila dibujada)
-        if let Some(line) = THEMES.lines().find(|l| first_field(l) == name) {
-            return parse_line(line);
+    /// Temas externos e incorporados cuyo nombre contiene `filter`.
+    pub(crate) fn search_all(filter: &str) -> Vec<String> {
+        let key = name_key(filter);
+        let mut out = Self::with_custom_themes(|custom| {
+            custom
+                .iter()
+                .filter(|(n, _)| key.is_empty() || name_key(n).contains(&key))
+                .map(|(n, _)| n.clone())
+                .collect::<Vec<String>>()
+        });
+        for name in Self::names() {
+            if (key.is_empty() || name_key(name).contains(&key))
+                && !out.iter().any(|existing| existing == name)
+            {
+                out.push(name.to_string());
+            }
         }
+        out
+    }
+
+    fn canonical_lookup_key(name: &str) -> String {
         let key = name_key(name);
-        let key = match key.as_str() {
+        match key.as_str() {
             // Valores de versiones anteriores de `tearminal.toml`
             "frappe" => name_key("Catppuccin Frappe"),
             "latte" => name_key("Catppuccin Latte"),
@@ -258,23 +434,55 @@ impl Theme {
             "onedark" => name_key("Atom One Dark"),
             "solarizeddark" => name_key("iTerm2 Solarized Dark"),
             _ => key,
-        };
+        }
+    }
+
+    fn find(name: &str) -> Option<(&'static str, Theme)> {
+        // Camino rápido: el nombre exacto de la lista (la interfaz lo usa en cada fila dibujada)
+        if let Some(line) = THEMES.lines().find(|l| first_field(l) == name) {
+            return parse_line(line);
+        }
+        let key = Self::canonical_lookup_key(name);
         THEMES
             .lines()
             .find(|l| name_key(first_field(l)) == key)
             .and_then(parse_line)
     }
 
+    fn find_custom(name: &str) -> Option<(String, Theme)> {
+        Self::with_custom_themes(|custom| {
+            if let Some((n, t)) = custom.iter().find(|(n, _)| n == name) {
+                return Some((n.clone(), t.clone()));
+            }
+            let key = Self::canonical_lookup_key(name);
+            custom
+                .iter()
+                .find(|(n, _)| name_key(n) == key)
+                .map(|(n, t)| (n.clone(), t.clone()))
+        })
+    }
+
     /// Nombre canónico del tema configurado (el de por defecto si no existe).
-    pub(crate) fn canonical_name(name: &str) -> &'static str {
-        Self::find(name).map_or(Self::DEFAULT_DARK, |(n, _)| n)
+    pub(crate) fn canonical_name(name: &str) -> std::borrow::Cow<'static, str> {
+        if let Some((custom_name, _)) = Self::find_custom(name) {
+            return std::borrow::Cow::Owned(custom_name);
+        }
+        Self::find(name).map_or(std::borrow::Cow::Borrowed(Self::DEFAULT_DARK), |(n, _)| {
+            std::borrow::Cow::Borrowed(n)
+        })
     }
 
     /// Resuelve el tema configurado; si no existe, usa el de por defecto.
     pub(crate) fn from_name(name: &str) -> Self {
-        Self::find(name)
-            .or_else(|| Self::find(Self::DEFAULT_DARK))
-            .or_else(|| THEMES.lines().find_map(parse_line))
+        Self::find_custom(name)
+            .or_else(|| Self::find(name).map(|(n, t)| (n.to_string(), t)))
+            .or_else(|| Self::find(Self::DEFAULT_DARK).map(|(n, t)| (n.to_string(), t)))
+            .or_else(|| {
+                THEMES
+                    .lines()
+                    .find_map(parse_line)
+                    .map(|(n, t)| (n.to_string(), t))
+            })
             .map(|(_, t)| t)
             .unwrap_or(Self {
                 background: Color::from_rgb(30, 30, 46),
@@ -329,6 +537,11 @@ impl Theme {
     /// Fondo del chrome (barras, pestañas inactivas). Un paso hacia el texto, nunca un gris ajeno.
     pub(crate) fn chrome_bg(&self) -> Color {
         self.mantle()
+    }
+
+    /// Fondo del riel de navegación (56 px) equivalente a crust.
+    pub(crate) fn rail_bg(&self) -> Color {
+        self.bar_bg()
     }
 
     /// `crust` del diseño: marco de la ventana (barras, riel, estado y margen de las tarjetas), un paso hacia
@@ -587,6 +800,240 @@ pub(crate) fn is_windows_system_light_mode() -> bool {
         }
     }
     false
+}
+
+const MAX_ITERMCOLORS_BYTES: u64 = 512 * 1024;
+
+static CUSTOM_THEMES: std::sync::OnceLock<std::sync::RwLock<Vec<(String, Theme)>>> =
+    std::sync::OnceLock::new();
+
+fn custom_themes_store() -> &'static std::sync::RwLock<Vec<(String, Theme)>> {
+    CUSTOM_THEMES.get_or_init(|| {
+        std::sync::RwLock::new(Theme::scan_custom_themes(&Theme::custom_theme_dirs()))
+    })
+}
+
+fn sanitize_theme_name(raw: &str) -> String {
+    raw.chars()
+        .filter(|&c| {
+            !c.is_control() && !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Token simple XML para leer plists de `.itermcolors`.
+#[derive(Debug)]
+enum XmlToken<'a> {
+    Open(&'a str),
+    Close(&'a str),
+    Text(&'a str),
+}
+
+fn tokenize_xml(xml: &str) -> Vec<XmlToken<'_>> {
+    let mut tokens = Vec::new();
+    let mut rest = xml.trim_start_matches('\u{feff}');
+    while !rest.is_empty() {
+        if let Some(lt) = rest.find('<') {
+            let text = rest[..lt].trim();
+            if !text.is_empty() {
+                tokens.push(XmlToken::Text(text));
+            }
+            let after_lt = &rest[lt..];
+            if after_lt.starts_with("<!--") {
+                if let Some(end) = after_lt.find("-->") {
+                    rest = &after_lt[end + 3..];
+                    continue;
+                }
+                break;
+            }
+            if let Some(gt) = after_lt.find('>') {
+                let tag = after_lt[1..gt].trim();
+                rest = &after_lt[gt + 1..];
+                if tag.starts_with('?') || tag.starts_with('!') || tag.ends_with('/') {
+                    continue;
+                }
+                if let Some(close_name) = tag.strip_prefix('/') {
+                    tokens.push(XmlToken::Close(close_name.trim()));
+                } else {
+                    let name = tag.split_whitespace().next().unwrap_or("");
+                    if !name.is_empty() {
+                        tokens.push(XmlToken::Open(name));
+                    }
+                }
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    tokens
+}
+
+fn parse_tag_text<'a>(
+    tokens: &[XmlToken<'a>],
+    idx: &mut usize,
+    expected_tag: &str,
+) -> Option<String> {
+    let mut buf = String::new();
+    while *idx < tokens.len() {
+        match tokens[*idx] {
+            XmlToken::Close(tag) if tag == expected_tag => {
+                *idx += 1;
+                return Some(
+                    buf.replace("&amp;", "&")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&quot;", "\"")
+                        .replace("&apos;", "'"),
+                );
+            }
+            XmlToken::Text(t) => {
+                buf.push_str(t);
+                *idx += 1;
+            }
+            _ => {
+                *idx += 1;
+            }
+        }
+    }
+    None
+}
+
+fn p3_to_srgb(rgb: [f64; 3]) -> [f64; 3] {
+    let lin = rgb.map(|c| {
+        if c < 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let m = [
+        [1.224_940_18, -0.224_698_80, -0.000_129_73],
+        [-0.042_056_31, 1.042_032_82, -0.000_006_01],
+        [-0.019_637_55, -0.078_628_14, 1.098_263_65],
+    ];
+    m.map(|row| {
+        let l = (row[0] * lin[0] + row[1] * lin[1] + row[2] * lin[2]).clamp(0.0, 1.0);
+        let s = if l < 0.003_130_8 {
+            12.92 * l
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        };
+        s.clamp(0.0, 1.0)
+    })
+}
+
+fn parse_single_color_dict(tokens: &[XmlToken<'_>], idx: &mut usize) -> Result<Color, String> {
+    let mut r: Option<f64> = None;
+    let mut g: Option<f64> = None;
+    let mut b: Option<f64> = None;
+    let mut is_p3 = false;
+
+    while *idx < tokens.len() {
+        match tokens[*idx] {
+            XmlToken::Close("dict") => {
+                *idx += 1;
+                break;
+            }
+            XmlToken::Open("key") => {
+                *idx += 1;
+                let key = parse_tag_text(tokens, idx, "key").unwrap_or_default();
+                while *idx < tokens.len() {
+                    match tokens[*idx] {
+                        XmlToken::Open(vtag @ ("real" | "integer" | "string")) => {
+                            *idx += 1;
+                            let val = parse_tag_text(tokens, idx, vtag).unwrap_or_default();
+                            match key.as_str() {
+                                "Red Component" => r = val.trim().parse::<f64>().ok(),
+                                "Green Component" => g = val.trim().parse::<f64>().ok(),
+                                "Blue Component" => b = val.trim().parse::<f64>().ok(),
+                                "Color Space" => is_p3 = val.trim().eq_ignore_ascii_case("P3"),
+                                _ => {}
+                            }
+                            break;
+                        }
+                        XmlToken::Open(_) => {
+                            *idx += 1;
+                            break;
+                        }
+                        XmlToken::Close("dict") => break,
+                        _ => *idx += 1,
+                    }
+                }
+            }
+            _ => *idx += 1,
+        }
+    }
+
+    let mut rgb = [
+        r.ok_or_else(|| "falta `Red Component` en color".to_string())?
+            .clamp(0.0, 1.0),
+        g.ok_or_else(|| "falta `Green Component` en color".to_string())?
+            .clamp(0.0, 1.0),
+        b.ok_or_else(|| "falta `Blue Component` en color".to_string())?
+            .clamp(0.0, 1.0),
+    ];
+    if is_p3 {
+        rgb = p3_to_srgb(rgb);
+    }
+    Ok(Color::from_rgb(
+        (rgb[0] * 255.0).round() as u8,
+        (rgb[1] * 255.0).round() as u8,
+        (rgb[2] * 255.0).round() as u8,
+    ))
+}
+
+fn parse_plist_color_dicts(xml: &str) -> Result<Vec<(String, Color)>, String> {
+    let tokens = tokenize_xml(xml);
+    let Some(root_dict_pos) = tokens
+        .iter()
+        .position(|t| matches!(t, XmlToken::Open("dict")))
+    else {
+        return Err("el archivo .itermcolors no contiene un `<dict>` raíz".to_string());
+    };
+    let mut idx = root_dict_pos + 1;
+    let mut colors = Vec::new();
+    let mut depth = 1usize;
+
+    while idx < tokens.len() && depth > 0 {
+        match tokens[idx] {
+            XmlToken::Open("dict") => {
+                depth += 1;
+                idx += 1;
+            }
+            XmlToken::Close("dict") => {
+                depth -= 1;
+                idx += 1;
+            }
+            XmlToken::Open("key") if depth == 1 => {
+                idx += 1;
+                let key = parse_tag_text(&tokens, &mut idx, "key").unwrap_or_default();
+                while idx < tokens.len() {
+                    match tokens[idx] {
+                        XmlToken::Open("dict") => {
+                            idx += 1;
+                            let color = parse_single_color_dict(&tokens, &mut idx)?;
+                            colors.push((key, color));
+                            break;
+                        }
+                        XmlToken::Open(other) => {
+                            idx += 1;
+                            let _ = parse_tag_text(&tokens, &mut idx, other);
+                            break;
+                        }
+                        XmlToken::Close("dict") => break,
+                        _ => idx += 1,
+                    }
+                }
+            }
+            _ => idx += 1,
+        }
+    }
+
+    Ok(colors)
 }
 
 #[cfg(test)]
@@ -866,5 +1313,71 @@ mod tests {
             assert!(contrast_ratio(c, on) < TEXT_MIN_CONTRAST);
             assert!(contrast_ratio(t.readable(c, on), on) >= TEXT_MIN_CONTRAST);
         }
+    }
+
+    fn sample_itermcolors_xml(p3: bool) -> String {
+        let mut dict_entries = String::new();
+        let mut push_color = |name: &str, r: f64, g: f64, b: f64| {
+            let cs = if p3 {
+                "<key>Color Space</key><string>P3</string>"
+            } else {
+                "<key>Color Space</key><string>sRGB</string>"
+            };
+            dict_entries.push_str(&format!(
+                "<key>{name}</key><dict>{cs}<key>Red Component</key><real>{r}</real><key>Green Component</key><real>{g}</real><key>Blue Component</key><real>{b}</real></dict>\n"
+            ));
+        };
+        push_color("Background Color", 0.1, 0.12, 0.18);
+        push_color("Foreground Color", 0.85, 0.88, 0.94);
+        push_color("Cursor Color", 0.95, 0.8, 0.6);
+        for i in 0..16 {
+            let f = f64::from(i) / 16.0;
+            push_color(&format!("Ansi {i} Color"), f, 0.5, 1.0 - f);
+        }
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\"><dict>\n{dict_entries}</dict></plist>"
+        )
+    }
+
+    #[test]
+    fn test_parse_itermcolors_srgb_and_p3_and_errors() {
+        let srgb = Theme::from_itermcolors_str(&sample_itermcolors_xml(false))
+            .expect("itermcolors sRGB válido");
+        assert_eq!(srgb.background, Color::from_rgb(26, 31, 46));
+        assert_eq!(srgb.foreground, Color::from_rgb(217, 224, 240));
+        assert_eq!(srgb.cursor, Color::from_rgb(242, 204, 153));
+        assert_eq!(srgb.selection, srgb.foreground);
+        assert_eq!(srgb.selection_fg, srgb.background);
+
+        let p3 = Theme::from_itermcolors_str(&sample_itermcolors_xml(true))
+            .expect("itermcolors P3 válido");
+        assert_ne!(p3.ansi[1], Color::TRANSPARENT);
+
+        let err = Theme::from_itermcolors_str("<plist><dict><key>Background Color</key><dict><key>Red Component</key><real>0.1</real><key>Green Component</key><real>0.1</real><key>Blue Component</key><real>0.1</real></dict></dict></plist>");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn test_scan_custom_themes_dir_loads_itermcolors() {
+        let dir = std::env::temp_dir().join(format!(
+            "tearminal-custom-theme-test-{}-{}",
+            std::process::id(),
+            sanitize_theme_name("Custom Showcase")
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("crear dir temporal");
+        std::fs::write(
+            dir.join("Mi Tema Neon.itermcolors"),
+            sample_itermcolors_xml(false),
+        )
+        .expect("escribir tema");
+        std::fs::write(dir.join("rototo.itermcolors"), "<invalid/>").expect("escribir corrupto");
+
+        let scanned = Theme::scan_custom_themes(std::slice::from_ref(&dir));
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].0, "Mi Tema Neon");
+        assert_eq!(scanned[0].1.background, Color::from_rgb(26, 31, 46));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

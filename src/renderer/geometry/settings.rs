@@ -7,6 +7,8 @@ use crate::renderer::state::SettingsSection;
 pub(crate) struct SettingsPageRects {
     pub nav_appearance: (usize, usize, usize, usize),
     pub nav_terminal: (usize, usize, usize, usize),
+    pub nav_database: (usize, usize, usize, usize),
+    pub nav_performance: (usize, usize, usize, usize),
     pub nav_shortcuts: (usize, usize, usize, usize),
     pub nav_about: (usize, usize, usize, usize),
 
@@ -67,6 +69,62 @@ pub(crate) struct SettingsPageRects {
     /// Acciones editoriales de «Acerca de» (no comparten rectángulo con Terminal)
     pub about_open_file_btn: (usize, usize, usize, usize),
     pub about_reset_btn: (usize, usize, usize, usize),
+
+    // Bases de datos (Screen 15)
+    pub db_prod_read_only_btn: (usize, usize, usize, usize),
+    pub db_write_window_minus_btn: (usize, usize, usize, usize),
+    pub db_write_window_plus_btn: (usize, usize, usize, usize),
+    pub db_write_window_value_box: (usize, usize, usize, usize),
+    pub db_written_confirmation_btn: (usize, usize, usize, usize),
+    pub db_warn_no_where_btn: (usize, usize, usize, usize),
+    pub db_enforce_transaction_btn: (usize, usize, usize, usize),
+    pub db_backup_original_rows_btn: (usize, usize, usize, usize),
+    pub db_warn_unsafe_pem_permissions_btn: (usize, usize, usize, usize),
+    pub db_cert_warn_days_minus_btn: (usize, usize, usize, usize),
+    pub db_cert_warn_days_plus_btn: (usize, usize, usize, usize),
+    pub db_cert_warn_days_value_box: (usize, usize, usize, usize),
+    pub db_certs_folder_btn: (usize, usize, usize, usize),
+
+    pub db_page_size_minus_btn: (usize, usize, usize, usize),
+    pub db_page_size_plus_btn: (usize, usize, usize, usize),
+    pub db_page_size_value_box: (usize, usize, usize, usize),
+    pub db_query_timeout_minus_btn: (usize, usize, usize, usize),
+    pub db_query_timeout_plus_btn: (usize, usize, usize, usize),
+    pub db_query_timeout_value_box: (usize, usize, usize, usize),
+    pub db_query_row_limit_minus_btn: (usize, usize, usize, usize),
+    pub db_query_row_limit_plus_btn: (usize, usize, usize, usize),
+    pub db_query_row_limit_value_box: (usize, usize, usize, usize),
+    pub db_slow_query_threshold_minus_btn: (usize, usize, usize, usize),
+    pub db_slow_query_threshold_plus_btn: (usize, usize, usize, usize),
+    pub db_slow_query_threshold_value_box: (usize, usize, usize, usize),
+    pub db_autocomplete_btn: (usize, usize, usize, usize),
+    pub db_save_passwords_btn: (usize, usize, usize, usize),
+    pub db_save_query_history_btn: (usize, usize, usize, usize),
+
+    // Rendimiento (Screen 14 / Brief F8)
+    pub perf_show_cpu_btn: (usize, usize, usize, usize),
+    pub perf_show_ram_btn: (usize, usize, usize, usize),
+    pub perf_show_gpu_btn: (usize, usize, usize, usize),
+    pub perf_show_disk_btn: (usize, usize, usize, usize),
+    pub perf_show_net_btn: (usize, usize, usize, usize),
+    pub perf_sample_interval_minus_btn: (usize, usize, usize, usize),
+    pub perf_sample_interval_plus_btn: (usize, usize, usize, usize),
+    pub perf_sample_interval_value_box: (usize, usize, usize, usize),
+    pub perf_enable_alerts_btn: (usize, usize, usize, usize),
+    pub perf_cpu_threshold_minus_btn: (usize, usize, usize, usize),
+    pub perf_cpu_threshold_plus_btn: (usize, usize, usize, usize),
+    pub perf_cpu_threshold_value_box: (usize, usize, usize, usize),
+    pub perf_ram_threshold_minus_btn: (usize, usize, usize, usize),
+    pub perf_ram_threshold_plus_btn: (usize, usize, usize, usize),
+    pub perf_ram_threshold_value_box: (usize, usize, usize, usize),
+    pub perf_disk_threshold_minus_btn: (usize, usize, usize, usize),
+    pub perf_disk_threshold_plus_btn: (usize, usize, usize, usize),
+    pub perf_disk_threshold_value_box: (usize, usize, usize, usize),
+    pub perf_agent_input_box: (usize, usize, usize, usize),
+    pub perf_agent_reset_btn: (usize, usize, usize, usize),
+    pub shortcuts_rows: [(usize, usize, usize, usize); 16],
+    pub shortcuts_reset_btn: (usize, usize, usize, usize),
+
     pub card_w: usize,
     pub content_x: usize,
 }
@@ -93,6 +151,8 @@ impl SettingsPageRects {
         match section {
             Appearance => 1012,
             Terminal => 894,
+            Database => 860,
+            Performance => 680,
             Shortcuts => 424,
             About => 360,
         }
@@ -156,8 +216,10 @@ impl SettingsPageRects {
         let row = |i: usize| (x, page_y + 76 + i * 38, w, 34);
         r.nav_appearance = row(0);
         r.nav_terminal = row(1);
-        r.nav_shortcuts = row(2);
-        r.nav_about = row(3);
+        r.nav_database = row(2);
+        r.nav_performance = row(3);
+        r.nav_shortcuts = row(4);
+        r.nav_about = row(5);
         r
     }
 
@@ -191,11 +253,13 @@ impl SettingsPageRects {
         let nav_y = page_y + 92;
         let nav_h = 34;
 
-        let nav_w = card_w / 4;
+        let nav_w = card_w / 6;
         let nav_appearance = (content_x, nav_y, nav_w, nav_h);
         let nav_terminal = (content_x + nav_w, nav_y, nav_w, nav_h);
-        let nav_shortcuts = (content_x + nav_w * 2, nav_y, nav_w, nav_h);
-        let nav_about = (content_x + nav_w * 3, nav_y, nav_w, nav_h);
+        let nav_database = (content_x + nav_w * 2, nav_y, nav_w, nav_h);
+        let nav_performance = (content_x + nav_w * 3, nav_y, nav_w, nav_h);
+        let nav_shortcuts = (content_x + nav_w * 4, nav_y, nav_w, nav_h);
+        let nav_about = (content_x + nav_w * 5, nav_y, nav_w, nav_h);
 
         let card_y = page_y + Self::CONTENT_TOP;
 
@@ -329,9 +393,124 @@ impl SettingsPageRects {
         let about_open_file_btn = (content_x + 20, about_y, 190, 32);
         let about_reset_btn = (content_x + 220, about_y, 190, 32);
 
+        // Dos columnas para Bases de datos y Rendimiento (Screen 14 y 15)
+        let col_gap = 28;
+        let col_w = (card_w.saturating_sub(col_gap)) / 2;
+        let col1_x = content_x;
+        let col2_x = content_x + col_w + col_gap;
+        let db_row_h = 50;
+
+        // DB Columna 1 (Seguridad en producción)
+        let db_base_y = card_y + 36;
+        let db_r1 = |i: usize| db_base_y + i * db_row_h;
+        let db_prod_read_only_btn = (col1_x + col_w.saturating_sub(44), db_r1(0) + 14, 40, 20);
+        let db_write_window_minus_btn = (col1_x + col_w.saturating_sub(96), db_r1(1) + 12, 26, 26);
+        let db_write_window_value_box = (col1_x + col_w.saturating_sub(68), db_r1(1) + 12, 40, 26);
+        let db_write_window_plus_btn = (col1_x + col_w.saturating_sub(26), db_r1(1) + 12, 26, 26);
+        let db_written_confirmation_btn =
+            (col1_x + col_w.saturating_sub(44), db_r1(2) + 14, 40, 20);
+        let db_warn_no_where_btn = (col1_x + col_w.saturating_sub(44), db_r1(3) + 14, 40, 20);
+        let db_enforce_transaction_btn = (col1_x + col_w.saturating_sub(44), db_r1(4) + 14, 40, 20);
+        let db_backup_original_rows_btn =
+            (col1_x + col_w.saturating_sub(44), db_r1(5) + 14, 40, 20);
+        let db_warn_unsafe_pem_permissions_btn =
+            (col1_x + col_w.saturating_sub(44), db_r1(6) + 14, 40, 20);
+        let db_cert_warn_days_minus_btn =
+            (col1_x + col_w.saturating_sub(96), db_r1(7) + 12, 26, 26);
+        let db_cert_warn_days_value_box =
+            (col1_x + col_w.saturating_sub(68), db_r1(7) + 12, 40, 26);
+        let db_cert_warn_days_plus_btn = (col1_x + col_w.saturating_sub(26), db_r1(7) + 12, 26, 26);
+        let db_certs_folder_btn = (col1_x + col_w.saturating_sub(110), db_r1(8) + 12, 110, 26);
+
+        // DB Columna 2 (Consultas y Privacidad)
+        let db_r2 = |i: usize| db_base_y + i * db_row_h;
+        let db_page_size_minus_btn = (col2_x + col_w.saturating_sub(96), db_r2(0) + 12, 26, 26);
+        let db_page_size_value_box = (col2_x + col_w.saturating_sub(68), db_r2(0) + 12, 40, 26);
+        let db_page_size_plus_btn = (col2_x + col_w.saturating_sub(26), db_r2(0) + 12, 26, 26);
+        let db_query_timeout_minus_btn = (col2_x + col_w.saturating_sub(96), db_r2(1) + 12, 26, 26);
+        let db_query_timeout_value_box = (col2_x + col_w.saturating_sub(68), db_r2(1) + 12, 40, 26);
+        let db_query_timeout_plus_btn = (col2_x + col_w.saturating_sub(26), db_r2(1) + 12, 26, 26);
+        let db_query_row_limit_minus_btn =
+            (col2_x + col_w.saturating_sub(96), db_r2(2) + 12, 26, 26);
+        let db_query_row_limit_value_box =
+            (col2_x + col_w.saturating_sub(68), db_r2(2) + 12, 40, 26);
+        let db_query_row_limit_plus_btn =
+            (col2_x + col_w.saturating_sub(26), db_r2(2) + 12, 26, 26);
+        let db_slow_query_threshold_minus_btn =
+            (col2_x + col_w.saturating_sub(96), db_r2(3) + 12, 26, 26);
+        let db_slow_query_threshold_value_box =
+            (col2_x + col_w.saturating_sub(68), db_r2(3) + 12, 40, 26);
+        let db_slow_query_threshold_plus_btn =
+            (col2_x + col_w.saturating_sub(26), db_r2(3) + 12, 26, 26);
+        let db_autocomplete_btn = (col2_x + col_w.saturating_sub(44), db_r2(4) + 14, 40, 20);
+
+        let cred_y = db_base_y + 5 * db_row_h + 34;
+        let db_save_passwords_btn = (col2_x + col_w.saturating_sub(44), cred_y + 14, 40, 20);
+        let db_save_query_history_btn = (
+            col2_x + col_w.saturating_sub(44),
+            cred_y + db_row_h + 14,
+            40,
+            20,
+        );
+
+        // Rendimiento (Medidores columna 1, Muestreo y alertas columna 2)
+        let perf_base_y = card_y + 36;
+        let perf_r1 = |i: usize| perf_base_y + i * db_row_h;
+        let perf_show_cpu_btn = (col1_x + col_w.saturating_sub(44), perf_r1(0) + 14, 40, 20);
+        let perf_show_ram_btn = (col1_x + col_w.saturating_sub(44), perf_r1(1) + 14, 40, 20);
+        let perf_show_gpu_btn = (col1_x + col_w.saturating_sub(44), perf_r1(2) + 14, 40, 20);
+        let perf_show_disk_btn = (col1_x + col_w.saturating_sub(44), perf_r1(3) + 14, 40, 20);
+        let perf_show_net_btn = (col1_x + col_w.saturating_sub(44), perf_r1(4) + 14, 40, 20);
+
+        let perf_r2 = |i: usize| perf_base_y + i * db_row_h;
+        let perf_sample_interval_minus_btn =
+            (col2_x + col_w.saturating_sub(96), perf_r2(0) + 12, 26, 26);
+        let perf_sample_interval_value_box =
+            (col2_x + col_w.saturating_sub(68), perf_r2(0) + 12, 40, 26);
+        let perf_sample_interval_plus_btn =
+            (col2_x + col_w.saturating_sub(26), perf_r2(0) + 12, 26, 26);
+        let perf_enable_alerts_btn = (col2_x + col_w.saturating_sub(44), perf_r2(1) + 14, 40, 20);
+        let perf_cpu_threshold_minus_btn =
+            (col2_x + col_w.saturating_sub(96), perf_r2(2) + 12, 26, 26);
+        let perf_cpu_threshold_value_box =
+            (col2_x + col_w.saturating_sub(68), perf_r2(2) + 12, 40, 26);
+        let perf_cpu_threshold_plus_btn =
+            (col2_x + col_w.saturating_sub(26), perf_r2(2) + 12, 26, 26);
+        let perf_ram_threshold_minus_btn =
+            (col2_x + col_w.saturating_sub(96), perf_r2(3) + 12, 26, 26);
+        let perf_ram_threshold_value_box =
+            (col2_x + col_w.saturating_sub(68), perf_r2(3) + 12, 40, 26);
+        let perf_ram_threshold_plus_btn =
+            (col2_x + col_w.saturating_sub(26), perf_r2(3) + 12, 26, 26);
+        let perf_disk_threshold_minus_btn =
+            (col2_x + col_w.saturating_sub(96), perf_r2(4) + 12, 26, 26);
+        let perf_disk_threshold_value_box =
+            (col2_x + col_w.saturating_sub(68), perf_r2(4) + 12, 40, 26);
+        let perf_disk_threshold_plus_btn =
+            (col2_x + col_w.saturating_sub(26), perf_r2(4) + 12, 26, 26);
+        let agent_y = perf_r1(5) + 22;
+        let perf_agent_reset_btn = (col1_x + col_w.saturating_sub(78), agent_y, 78, 28);
+        let perf_agent_input_box = (col1_x, agent_y, col_w.saturating_sub(84), 28);
+
+        let sc_col_gap = 28;
+        let sc_col_w = (card_w.saturating_sub(40 + sc_col_gap)) / 2;
+        let sc_start_y = card_y + 56;
+        let sc_row_h = 40;
+        let mut shortcuts_rows = [(0, 0, 0, 0); 16];
+        for (idx, slot) in shortcuts_rows.iter_mut().enumerate() {
+            let col = idx / 8;
+            let row = idx % 8;
+            let x = content_x + 14 + col * (sc_col_w + sc_col_gap);
+            let y = sc_start_y + row * sc_row_h - 3;
+            *slot = (x, y, sc_col_w + 8, sc_row_h - 2);
+        }
+        let shortcuts_reset_btn = (content_x + card_w.saturating_sub(116), card_y + 10, 96, 26);
+
         Self {
             nav_appearance,
             nav_terminal,
+            nav_database,
+            nav_performance,
             nav_shortcuts,
             nav_about,
             theme_slot_dark_btn,
@@ -387,6 +566,56 @@ impl SettingsPageRects {
             term_reset_btn,
             about_open_file_btn,
             about_reset_btn,
+            db_prod_read_only_btn,
+            db_write_window_minus_btn,
+            db_write_window_plus_btn,
+            db_write_window_value_box,
+            db_written_confirmation_btn,
+            db_warn_no_where_btn,
+            db_enforce_transaction_btn,
+            db_backup_original_rows_btn,
+            db_warn_unsafe_pem_permissions_btn,
+            db_cert_warn_days_minus_btn,
+            db_cert_warn_days_plus_btn,
+            db_cert_warn_days_value_box,
+            db_certs_folder_btn,
+            db_page_size_minus_btn,
+            db_page_size_plus_btn,
+            db_page_size_value_box,
+            db_query_timeout_minus_btn,
+            db_query_timeout_plus_btn,
+            db_query_timeout_value_box,
+            db_query_row_limit_minus_btn,
+            db_query_row_limit_plus_btn,
+            db_query_row_limit_value_box,
+            db_slow_query_threshold_minus_btn,
+            db_slow_query_threshold_plus_btn,
+            db_slow_query_threshold_value_box,
+            db_autocomplete_btn,
+            db_save_passwords_btn,
+            db_save_query_history_btn,
+            perf_show_cpu_btn,
+            perf_show_ram_btn,
+            perf_show_gpu_btn,
+            perf_show_disk_btn,
+            perf_show_net_btn,
+            perf_sample_interval_minus_btn,
+            perf_sample_interval_plus_btn,
+            perf_sample_interval_value_box,
+            perf_enable_alerts_btn,
+            perf_cpu_threshold_minus_btn,
+            perf_cpu_threshold_plus_btn,
+            perf_cpu_threshold_value_box,
+            perf_ram_threshold_minus_btn,
+            perf_ram_threshold_plus_btn,
+            perf_ram_threshold_value_box,
+            perf_disk_threshold_minus_btn,
+            perf_disk_threshold_plus_btn,
+            perf_disk_threshold_value_box,
+            perf_agent_input_box,
+            perf_agent_reset_btn,
+            shortcuts_rows,
+            shortcuts_reset_btn,
             card_w,
             content_x,
         }

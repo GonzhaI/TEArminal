@@ -311,6 +311,288 @@ impl TerminalRenderer {
         );
     }
 
+    /// Control de interruptor (switch deslizante estilo Screen 14/15 de 40×20 con pastilla de 14×14).
+    pub(super) fn draw_switch_control(
+        &mut self,
+        canvas: &mut Canvas,
+        rect: Rect,
+        checked: bool,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let (bx, by, bw, bh) = rect;
+        let bg = if checked {
+            theme.accent_color()
+        } else if hovered {
+            theme.surface_hover()
+        } else {
+            theme.mix(theme.background, theme.foreground, 0.05)
+        };
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_ROW, bg);
+        let border = if checked {
+            theme.accent_color()
+        } else if hovered {
+            theme.chrome_line_strong()
+        } else {
+            theme.chrome_line()
+        };
+        canvas.rounded_stroke(bx, by, bw, bh, tokens::RADIUS_ROW, border);
+
+        let knob_w = 14;
+        let knob_h = 14;
+        let knob_y = by + (bh.saturating_sub(knob_h)) / 2;
+        let knob_x = if checked {
+            bx + bw.saturating_sub(knob_w + 3)
+        } else {
+            bx + 3
+        };
+        let knob_c = if checked {
+            theme.background
+        } else {
+            theme.text_secondary()
+        };
+        canvas.rounded_fill(knob_x, knob_y, knob_w, knob_h, tokens::RADIUS_ROW, knob_c);
+    }
+
+    /// Fila de ajuste con interruptor switch, título, descripción y línea inferior.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_settings_row_switch(
+        &mut self,
+        canvas: &mut Canvas,
+        col_x: usize,
+        col_w: usize,
+        y: usize,
+        label: &str,
+        hint: &str,
+        switch_rect: Rect,
+        checked: bool,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let row_h = 50;
+        let label_max = col_x + col_w.saturating_sub(54);
+        let baseline = self.centered_baseline(y + 16);
+        self.draw_ui_text(
+            canvas,
+            label,
+            col_x,
+            baseline,
+            label_max,
+            if hovered {
+                theme.foreground
+            } else {
+                theme.text_secondary()
+            },
+            tokens::BODY,
+            false,
+        );
+        let hint_baseline = self.centered_baseline(y + 34);
+        self.draw_ui_text(
+            canvas,
+            hint,
+            col_x,
+            hint_baseline,
+            label_max,
+            theme.text_muted(),
+            tokens::DETAIL,
+            false,
+        );
+
+        self.draw_switch_control(canvas, switch_rect, checked, hovered, theme);
+
+        Self::draw_rect(canvas, col_x, y + row_h - 1, col_w, 1, theme.chrome_line());
+    }
+
+    /// Fila de ajuste con selector numérico stepper [-] [valor] [+], título, descripción y línea inferior.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_settings_row_stepper(
+        &mut self,
+        canvas: &mut Canvas,
+        col_x: usize,
+        col_w: usize,
+        y: usize,
+        label: &str,
+        hint: &str,
+        minus_rect: Rect,
+        val_rect: Rect,
+        plus_rect: Rect,
+        value_str: &str,
+        hovered_minus: bool,
+        hovered_plus: bool,
+        theme: &Theme,
+    ) {
+        let row_h = 50;
+        let label_max = col_x + col_w.saturating_sub(106);
+        let baseline = self.centered_baseline(y + 16);
+        self.draw_ui_text(
+            canvas,
+            label,
+            col_x,
+            baseline,
+            label_max,
+            theme.foreground,
+            tokens::BODY,
+            false,
+        );
+        let hint_baseline = self.centered_baseline(y + 34);
+        self.draw_ui_text(
+            canvas,
+            hint,
+            col_x,
+            hint_baseline,
+            label_max,
+            theme.text_muted(),
+            tokens::DETAIL,
+            false,
+        );
+
+        self.draw_button(canvas, minus_rect, "−", hovered_minus, false, theme);
+
+        let (vx, vy, vw, vh) = val_rect;
+        canvas.rounded_fill(
+            vx,
+            vy,
+            vw,
+            vh,
+            tokens::RADIUS_ROW,
+            theme.mix(theme.background, theme.foreground, 0.05),
+        );
+        canvas.rounded_stroke(vx, vy, vw, vh, tokens::RADIUS_ROW, theme.chrome_line());
+        let val_w = self.measure_mono_text(value_str, tokens::DETAIL, false);
+        let tx = vx + (vw.saturating_sub(val_w)) / 2;
+        let v_baseline = self.centered_baseline(vy + vh / 2);
+        self.draw_mono_text(
+            canvas,
+            value_str,
+            tx,
+            v_baseline,
+            vx + vw.saturating_sub(2),
+            theme.foreground,
+            tokens::DETAIL,
+            false,
+        );
+
+        self.draw_button(canvas, plus_rect, "+", hovered_plus, false, theme);
+
+        Self::draw_rect(canvas, col_x, y + row_h - 1, col_w, 1, theme.chrome_line());
+    }
+
+    /// Fila de ajuste con botón de valor monoespaciado (p. ej. ruta de carpeta de certificados).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_settings_row_value(
+        &mut self,
+        canvas: &mut Canvas,
+        col_x: usize,
+        col_w: usize,
+        y: usize,
+        label: &str,
+        hint: &str,
+        btn_rect: Rect,
+        value_str: &str,
+        hovered: bool,
+        theme: &Theme,
+    ) {
+        let row_h = 50;
+        let label_max = col_x + col_w.saturating_sub(btn_rect.2 + 10);
+        let baseline = self.centered_baseline(y + 16);
+        self.draw_ui_text(
+            canvas,
+            label,
+            col_x,
+            baseline,
+            label_max,
+            if hovered {
+                theme.foreground
+            } else {
+                theme.text_secondary()
+            },
+            tokens::BODY,
+            false,
+        );
+        let hint_baseline = self.centered_baseline(y + 34);
+        self.draw_ui_text(
+            canvas,
+            hint,
+            col_x,
+            hint_baseline,
+            label_max,
+            theme.text_muted(),
+            tokens::DETAIL,
+            false,
+        );
+
+        let (bx, by, bw, bh) = btn_rect;
+        let bg = if hovered {
+            theme.surface_hover()
+        } else {
+            theme.mix(theme.background, theme.foreground, 0.05)
+        };
+        canvas.rounded_fill(bx, by, bw, bh, tokens::RADIUS_ROW, bg);
+        canvas.rounded_stroke(
+            bx,
+            by,
+            bw,
+            bh,
+            tokens::RADIUS_ROW,
+            if hovered {
+                theme.chrome_line_strong()
+            } else {
+                theme.chrome_line()
+            },
+        );
+        let val_w = self.measure_mono_text(value_str, tokens::DETAIL, false);
+        let tx = bx + (bw.saturating_sub(val_w)) / 2;
+        let v_baseline = self.centered_baseline(by + bh / 2);
+        self.draw_mono_text(
+            canvas,
+            value_str,
+            tx,
+            v_baseline,
+            bx + bw.saturating_sub(4),
+            theme.foreground,
+            tokens::DETAIL,
+            false,
+        );
+
+        Self::draw_rect(canvas, col_x, y + row_h - 1, col_w, 1, theme.chrome_line());
+    }
+
+    /// Caja de aviso informativo estilo Screen 15 ("Todo es local: sin nube ni telemetría").
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn draw_info_notice(
+        &mut self,
+        canvas: &mut Canvas,
+        x: usize,
+        y: usize,
+        w: usize,
+        h: usize,
+        text: &str,
+        theme: &Theme,
+    ) {
+        canvas.rounded_fill(x, y, w, h, tokens::RADIUS_ROW, theme.accent_soft(20));
+        canvas.rounded_stroke(x, y, w, h, tokens::RADIUS_ROW, theme.accent_soft(90));
+        let cy = y + h / 2;
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Info,
+            x + 16,
+            cy,
+            14.0,
+            theme.accent_color(),
+        );
+        let baseline = self.centered_baseline(cy);
+        self.draw_ui_text(
+            canvas,
+            text,
+            x + 34,
+            baseline,
+            x + w.saturating_sub(12),
+            theme.foreground,
+            tokens::DETAIL,
+            false,
+        );
+    }
+
     /// Renderiza la página completa de la pestaña de Ajustes y Personalización de TEArminal
     pub(crate) fn render_settings_page(
         &mut self,
@@ -318,7 +600,7 @@ impl TerminalRenderer {
         page_x: usize,
         right_inset: usize,
         page_y: usize,
-        status_bar_h: usize,
+        _status_bar_h: usize,
         config: &TearminalConfig,
         state: &SettingsPageState,
         cursor_visible: bool,
@@ -497,6 +779,18 @@ impl TerminalRenderer {
                 rects.nav_terminal,
             ),
             (
+                SettingsSection::Database,
+                crate::ui::LucideIcon::Database,
+                "Bases de datos",
+                rects.nav_database,
+            ),
+            (
+                SettingsSection::Performance,
+                crate::ui::LucideIcon::Sliders,
+                "Rendimiento",
+                rects.nav_performance,
+            ),
+            (
                 SettingsSection::Shortcuts,
                 crate::ui::LucideIcon::Keyboard,
                 "Atajos",
@@ -556,15 +850,17 @@ impl TerminalRenderer {
         // 4. Contenido: se dibuja en coordenadas locales (`width` x `top + content_h`) desplazadas por
         // el scroll y recortadas a la ventana visible; el fondo se pinta antes en esa ventana.
         let top = SettingsPageRects::CONTENT_TOP;
+        let bottom_pad = 16;
         let content_h = SettingsPageRects::content_height(state.section);
-        let viewport_h = page_h.saturating_sub(top + status_bar_h);
+        let viewport_h = page_h.saturating_sub(top + bottom_pad);
         let scroll = state
             .scroll_y
             .min(SettingsPageRects::max_scroll(state.section, viewport_h));
         let tmp_h = top + content_h;
         let v = SettingsPageRects::compute_modal(page_x, 0, page_w, page_h);
         let win_y = page_y + top;
-        let win_end = (win_y + viewport_h.min(content_h - scroll)).min(height);
+        let win_end =
+            (page_y + top + viewport_h.min(content_h - scroll)).min(page_y + page_h - bottom_pad);
         let window = canvas.real_clip_of((page_x + nav_w, win_y, page_x + page_w, win_end));
         canvas.with_offset(
             0,
@@ -586,9 +882,22 @@ impl TerminalRenderer {
                 SettingsSection::Terminal => {
                     self.draw_settings_terminal(c, content_x, card_w, top, config, state, &v, theme)
                 }
-                SettingsSection::Shortcuts => {
-                    self.draw_settings_shortcuts(c, content_x, card_w, top, theme)
+                SettingsSection::Database => {
+                    self.draw_settings_database(c, content_x, card_w, top, config, state, &v, theme)
                 }
+                SettingsSection::Performance => self.draw_settings_performance(
+                    c,
+                    content_x,
+                    card_w,
+                    top,
+                    config,
+                    state,
+                    cursor_visible,
+                    &v,
+                    theme,
+                ),
+                SettingsSection::Shortcuts => self
+                    .draw_settings_shortcuts(c, content_x, card_w, top, config, state, &v, theme),
                 SettingsSection::About => {
                     self.draw_settings_about(c, content_x, card_w, top, state, &v, theme)
                 }
@@ -598,7 +907,7 @@ impl TerminalRenderer {
         if let Some((track, thumb)) = SettingsPageRects::scrollbar(
             state.section,
             page_y,
-            width.saturating_sub(right_inset),
+            page_x + page_w - 4,
             viewport_h,
             scroll,
         ) {
@@ -654,7 +963,7 @@ impl TerminalRenderer {
             (rects.theme_slot_light_btn, "Claro"),
         ]
         .into_iter()
-        .zip(slot_names)
+        .zip(&slot_names)
         .enumerate()
         {
             self.draw_button(
@@ -703,7 +1012,7 @@ impl TerminalRenderer {
                 theme.text_muted()
             },
         );
-        let count = format!("{}/{}", matches.len(), Theme::names().count());
+        let count = format!("{}/{}", matches.len(), Theme::all_count());
         let count_w = self.measure_mono_text(&count, tokens::MICRO, false);
         let text_y = self.centered_baseline(sb.1 + sb.3 / 2);
         self.draw_mono_text(
@@ -733,7 +1042,7 @@ impl TerminalRenderer {
         );
 
         // Lista desplazable de temas
-        let current = slot_names[usize::from(state.theme_slot_light)];
+        let current = slot_names[usize::from(state.theme_slot_light)].as_ref();
         let first = state
             .theme_scroll
             .min(matches.len().saturating_sub(SettingsPageRects::THEME_ROWS));
@@ -750,7 +1059,7 @@ impl TerminalRenderer {
                 false,
             );
         }
-        for (i, &name) in matches
+        for (i, name) in matches
             .iter()
             .skip(first)
             .take(SettingsPageRects::THEME_ROWS)
@@ -1403,13 +1712,709 @@ impl TerminalRenderer {
         );
     }
 
-    /// Sección «Atajos»: dos columnas con keycaps individuales.
+    /// Sección «Bases de datos» (Screen 15: seguridad en PROD, consultas, privacidad y certificados).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_settings_database(
+        &mut self,
+        canvas: &mut Canvas,
+        content_x: usize,
+        card_w: usize,
+        top: usize,
+        config: &TearminalConfig,
+        state: &SettingsPageState,
+        rects: &SettingsPageRects,
+        theme: &Theme,
+    ) {
+        let col_gap = 28;
+        let col_w = (card_w.saturating_sub(col_gap)) / 2;
+        let col1_x = content_x;
+        let col2_x = content_x + col_w + col_gap;
+        let db_base_y = top + 36;
+        let db = &config.database;
+
+        // Columna 1 Header: SEGURIDAD EN PRODUCCIÓN
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Lock,
+            col1_x + 8,
+            top + 14,
+            14.0,
+            theme.ansi[1],
+        );
+        self.draw_group_label(
+            canvas,
+            col1_x + 22,
+            top + 6,
+            col1_x + col_w,
+            "SEGURIDAD EN PRODUCCIÓN",
+            theme,
+        );
+        Self::draw_rect(canvas, col1_x, top + 28, col_w, 1, theme.chrome_line());
+
+        // Columna 1 Rows
+        let r1 = |i: usize| db_base_y + i * 50;
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(0),
+            "Abrir conexiones PROD en solo lectura",
+            "La escritura se habilita por pestaña y caduca sola.",
+            rects.db_prod_read_only_btn,
+            db.prod_read_only,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::ProdReadOnly),
+            theme,
+        );
+
+        let dur_str = format!("{} min", db.write_window_minutes);
+        self.draw_settings_row_stepper(
+            canvas,
+            col1_x,
+            col_w,
+            r1(1),
+            "Duración de la escritura habilitada",
+            "Después vuelve a solo lectura.",
+            rects.db_write_window_minus_btn,
+            rects.db_write_window_value_box,
+            rects.db_write_window_plus_btn,
+            &dur_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::WriteWindowMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::WriteWindowPlus),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(2),
+            "Pedir confirmación escrita",
+            "Hay que escribir el nombre de la conexión para aplicar.",
+            rects.db_written_confirmation_btn,
+            db.written_confirmation,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::WrittenConfirmation),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(3),
+            "Avisar de DELETE y UPDATE sin WHERE",
+            "Muestra las filas afectadas antes de ejecutar.",
+            rects.db_warn_no_where_btn,
+            db.warn_no_where,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::WarnNoWhere),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(4),
+            "Aplicar cambios dentro de una transacción",
+            "Si una sentencia falla, se revierte todo.",
+            rects.db_enforce_transaction_btn,
+            db.enforce_transaction,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::EnforceTransaction),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(5),
+            "Guardar las filas originales antes de aplicar",
+            "Archivo local para poder deshacer.",
+            rects.db_backup_original_rows_btn,
+            db.backup_original_rows,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::BackupOriginalRows),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(6),
+            "Avisar si una clave .pem es legible por otros",
+            "Comprueba los permisos de Windows al abrir la conexión.",
+            rects.db_warn_unsafe_pem_permissions_btn,
+            db.warn_unsafe_pem_permissions,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::WarnUnsafePem),
+            theme,
+        );
+
+        let cert_str = format!("{} días", db.cert_warn_days);
+        self.draw_settings_row_stepper(
+            canvas,
+            col1_x,
+            col_w,
+            r1(7),
+            "Aviso de certificados por vencer",
+            "Con esta antelación al vencimiento.",
+            rects.db_cert_warn_days_minus_btn,
+            rects.db_cert_warn_days_value_box,
+            rects.db_cert_warn_days_plus_btn,
+            &cert_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::CertWarnDaysMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::CertWarnDaysPlus),
+            theme,
+        );
+
+        let folder_str = if db.certs_folder.is_empty() {
+            "…\\certs"
+        } else {
+            &db.certs_folder
+        };
+        self.draw_settings_row_value(
+            canvas,
+            col1_x,
+            col_w,
+            r1(8),
+            "Carpeta de certificados .pem",
+            "Solo se guarda la ruta, nunca el contenido.",
+            rects.db_certs_folder_btn,
+            folder_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::CertsFolder),
+            theme,
+        );
+
+        // Subheader: ETIQUETAS DE ENTORNO
+        let env_y = r1(8) + 60;
+        self.draw_group_label(
+            canvas,
+            col1_x,
+            env_y,
+            col1_x + col_w,
+            "ETIQUETAS DE ENTORNO",
+            theme,
+        );
+        let tags = [
+            ("LOCAL", theme.ansi[2]),
+            ("STG", theme.ansi[3]),
+            ("PROD", theme.ansi[1]),
+        ];
+        let mut cur_tag_x = col1_x;
+        for (name, color) in tags {
+            let tag_w = 76;
+            let tag_h = 28;
+            canvas.rounded_fill(
+                cur_tag_x,
+                env_y + 22,
+                tag_w,
+                tag_h,
+                tokens::RADIUS_ROW,
+                theme.mix(theme.background, theme.foreground, 0.05),
+            );
+            canvas.rounded_stroke(
+                cur_tag_x,
+                env_y + 22,
+                tag_w,
+                tag_h,
+                tokens::RADIUS_ROW,
+                theme.chrome_line(),
+            );
+            canvas.rounded_fill(
+                cur_tag_x + 10,
+                env_y + 31,
+                10,
+                10,
+                tokens::RADIUS_ROW,
+                color,
+            );
+            let baseline = self.centered_baseline(env_y + 22 + tag_h / 2);
+            self.draw_ui_text(
+                canvas,
+                name,
+                cur_tag_x + 26,
+                baseline,
+                cur_tag_x + tag_w,
+                theme.foreground,
+                tokens::DETAIL,
+                true,
+            );
+            cur_tag_x += tag_w + 10;
+        }
+
+        // Columna 2 Header: CONSULTAS
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Database,
+            col2_x + 8,
+            top + 14,
+            14.0,
+            theme.accent_color(),
+        );
+        self.draw_group_label(
+            canvas,
+            col2_x + 22,
+            top + 6,
+            col2_x + col_w,
+            "CONSULTAS",
+            theme,
+        );
+        Self::draw_rect(canvas, col2_x, top + 28, col_w, 1, theme.chrome_line());
+
+        let r2 = |i: usize| db_base_y + i * 50;
+        let page_str = format!("{}", db.page_size);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(0),
+            "Filas por página",
+            "Vista de datos de tablas.",
+            rects.db_page_size_minus_btn,
+            rects.db_page_size_value_box,
+            rects.db_page_size_plus_btn,
+            &page_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::PageSizeMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::PageSizePlus),
+            theme,
+        );
+
+        let timeout_str = format!("{} s", db.query_timeout_seconds);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(1),
+            "Tiempo máximo de consulta",
+            "Cancela al superarlo.",
+            rects.db_query_timeout_minus_btn,
+            rects.db_query_timeout_value_box,
+            rects.db_query_timeout_plus_btn,
+            &timeout_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::QueryTimeoutMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::QueryTimeoutPlus),
+            theme,
+        );
+
+        let limit_str = format!("{}", db.query_row_limit);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(2),
+            "Límite de filas devueltas",
+            "Evita cargar resultados enormes.",
+            rects.db_query_row_limit_minus_btn,
+            rects.db_query_row_limit_value_box,
+            rects.db_query_row_limit_plus_btn,
+            &limit_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::QueryRowLimitMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::QueryRowLimitPlus),
+            theme,
+        );
+
+        let slow_str = format!("{} ms", db.slow_query_threshold_ms);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(3),
+            "Avisar de consultas lentas desde",
+            "Muestra un aviso y la marca LENTA.",
+            rects.db_slow_query_threshold_minus_btn,
+            rects.db_slow_query_threshold_value_box,
+            rects.db_slow_query_threshold_plus_btn,
+            &slow_str,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::SlowQueryThresholdMinus),
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::SlowQueryThresholdPlus),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col2_x,
+            col_w,
+            r2(4),
+            "Autocompletado de tablas y columnas",
+            "Usa el esquema leído de la conexión.",
+            rects.db_autocomplete_btn,
+            db.autocomplete,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::Autocomplete),
+            theme,
+        );
+
+        // Columna 2 Header: CREDENCIALES Y PRIVACIDAD
+        let cred_y = r2(4) + 60;
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Lock,
+            col2_x + 8,
+            cred_y + 8,
+            14.0,
+            theme.ansi[3],
+        );
+        self.draw_group_label(
+            canvas,
+            col2_x + 22,
+            cred_y,
+            col2_x + col_w,
+            "CREDENCIALES Y PRIVACIDAD",
+            theme,
+        );
+        Self::draw_rect(canvas, col2_x, cred_y + 22, col_w, 1, theme.chrome_line());
+
+        let cred_r = |i: usize| cred_y + 30 + i * 50;
+        self.draw_settings_row_switch(
+            canvas,
+            col2_x,
+            col_w,
+            cred_r(0),
+            "Guardar contraseñas en el Administrador de Windows",
+            "Nunca en tearminal.toml ni en el historial.",
+            rects.db_save_passwords_btn,
+            db.save_passwords_in_credential_manager,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::SavePasswords),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col2_x,
+            col_w,
+            cred_r(1),
+            "Guardar historial de consultas",
+            "Solo texto y duración, sin valores de parámetros.",
+            rects.db_save_query_history_btn,
+            db.save_query_history,
+            state.hovered_db == Some(crate::renderer::HoveredDbControl::SaveQueryHistory),
+            theme,
+        );
+
+        // Info Notice Card al pie
+        let notice_y = cred_r(1) + 66;
+        self.draw_info_notice(
+            canvas,
+            col2_x,
+            notice_y,
+            col_w,
+            46,
+            "Todo es local: sin nube ni telemetría. Conexión directa o por túnel SSH.",
+            theme,
+        );
+    }
+
+    /// Sección «Rendimiento» (Screen 14 / Brief F8: medidores barra de estado, muestreo y alertas).
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
+    fn draw_settings_performance(
+        &mut self,
+        canvas: &mut Canvas,
+        content_x: usize,
+        card_w: usize,
+        top: usize,
+        config: &TearminalConfig,
+        state: &SettingsPageState,
+        cursor_visible: bool,
+        rects: &SettingsPageRects,
+        theme: &Theme,
+    ) {
+        let col_gap = 28;
+        let col_w = (card_w.saturating_sub(col_gap)) / 2;
+        let col1_x = content_x;
+        let col2_x = content_x + col_w + col_gap;
+        let perf_base_y = top + 36;
+        let perf = &config.performance;
+
+        // Columna 1 Header: MEDIDORES EN LA BARRA DE ESTADO
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Sliders,
+            col1_x + 8,
+            top + 14,
+            14.0,
+            theme.accent_color(),
+        );
+        self.draw_group_label(
+            canvas,
+            col1_x + 22,
+            top + 6,
+            col1_x + col_w,
+            "MEDIDORES EN LA BARRA DE ESTADO",
+            theme,
+        );
+        Self::draw_rect(canvas, col1_x, top + 28, col_w, 1, theme.chrome_line());
+
+        let r1 = |i: usize| perf_base_y + i * 50;
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(0),
+            "Uso de CPU",
+            "Muestra el porcentaje total de uso de CPU en la barra.",
+            rects.perf_show_cpu_btn,
+            perf.show_cpu,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::ShowCpu),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(1),
+            "Memoria RAM",
+            "Muestra el porcentaje de memoria ocupada en la barra.",
+            rects.perf_show_ram_btn,
+            perf.show_ram,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::ShowRam),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(2),
+            "Uso de GPU",
+            "Muestra el porcentaje de GPU 3D en la barra.",
+            rects.perf_show_gpu_btn,
+            perf.show_gpu,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::ShowGpu),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(3),
+            "Espacio en disco",
+            "Muestra el porcentaje de disco usado en la barra.",
+            rects.perf_show_disk_btn,
+            perf.show_disk,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::ShowDisk),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col1_x,
+            col_w,
+            r1(4),
+            "Actividad de red",
+            "Muestra el tráfico de red en la barra.",
+            rects.perf_show_net_btn,
+            perf.show_net,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::ShowNet),
+            theme,
+        );
+
+        // Perfiles de agentes CLI IA (Columna 1)
+        let agents_header_y = r1(5) + 2;
+        self.draw_group_label(
+            canvas,
+            col1_x,
+            agents_header_y,
+            col1_x + col_w,
+            "AGENTES CLI CONFIGURABLES (COMA)",
+            theme,
+        );
+        let ab = rects.perf_agent_input_box;
+        let editing_agents = state.editing_setting == Some(EditingSettingField::AgentProfiles);
+        let hover_agents =
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::AgentProfilesBox);
+        canvas.rounded_fill(
+            ab.0,
+            ab.1,
+            ab.2,
+            ab.3,
+            tokens::RADIUS_ROW,
+            theme.mix(theme.background, theme.foreground, 0.05),
+        );
+        canvas.rounded_stroke(
+            ab.0,
+            ab.1,
+            ab.2,
+            ab.3,
+            tokens::RADIUS_ROW,
+            if editing_agents {
+                theme.accent_color()
+            } else if hover_agents {
+                theme.foreground
+            } else {
+                theme.chrome_line()
+            },
+        );
+        let ab_text_y = self.centered_baseline(ab.1 + ab.3 / 2);
+        if editing_agents {
+            self.render_text_input_content(
+                canvas,
+                &state.agent_profiles_input,
+                ab.0 + 10,
+                ab_text_y,
+                ab.0 + ab.2.saturating_sub(10),
+                ab.1,
+                ab.3,
+                cursor_visible,
+                "claude, agy, gemini, codex…",
+                true,
+                theme,
+            );
+        } else {
+            let csv = perf.agent_executables_csv();
+            let shown = if csv.is_empty() {
+                "Ninguno (clic para añadir)"
+            } else {
+                &csv
+            };
+            self.draw_mono_text(
+                canvas,
+                shown,
+                ab.0 + 10,
+                ab_text_y,
+                ab.0 + ab.2.saturating_sub(10),
+                if csv.is_empty() {
+                    theme.text_muted()
+                } else {
+                    theme.foreground
+                },
+                tokens::DETAIL,
+                false,
+            );
+        }
+        self.draw_button(
+            canvas,
+            rects.perf_agent_reset_btn,
+            "Defecto",
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::AgentProfilesReset),
+            false,
+            theme,
+        );
+
+        // Columna 2 Header: MUESTREO Y ALERTAS
+        self.draw_lucide_icon(
+            canvas,
+            crate::ui::LucideIcon::Sliders,
+            col2_x + 8,
+            top + 14,
+            14.0,
+            theme.accent_color(),
+        );
+        self.draw_group_label(
+            canvas,
+            col2_x + 22,
+            top + 6,
+            col2_x + col_w,
+            "MUESTREO Y ALERTAS",
+            theme,
+        );
+        Self::draw_rect(canvas, col2_x, top + 28, col_w, 1, theme.chrome_line());
+
+        let r2 = |i: usize| perf_base_y + i * 50;
+        let int_str = format!("{} s", perf.sample_interval_ms / 1000);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(0),
+            "Intervalo de muestreo",
+            "Frecuencia de lectura del monitor del sistema.",
+            rects.perf_sample_interval_minus_btn,
+            rects.perf_sample_interval_value_box,
+            rects.perf_sample_interval_plus_btn,
+            &int_str,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::SampleIntervalMinus),
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::SampleIntervalPlus),
+            theme,
+        );
+
+        self.draw_settings_row_switch(
+            canvas,
+            col2_x,
+            col_w,
+            r2(1),
+            "Alertas visuales",
+            "Avisa si un recurso supera el umbral crítico.",
+            rects.perf_enable_alerts_btn,
+            perf.enable_alerts,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::EnableAlerts),
+            theme,
+        );
+
+        let cpu_th_str = format!("{}%", perf.cpu_alert_threshold);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(2),
+            "Umbral de alerta CPU",
+            "Marca en amarillo o rojo al superarlo.",
+            rects.perf_cpu_threshold_minus_btn,
+            rects.perf_cpu_threshold_value_box,
+            rects.perf_cpu_threshold_plus_btn,
+            &cpu_th_str,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::CpuThresholdMinus),
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::CpuThresholdPlus),
+            theme,
+        );
+
+        let ram_th_str = format!("{}%", perf.ram_alert_threshold);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(3),
+            "Umbral de alerta RAM",
+            "Marca en amarillo o rojo al superarlo.",
+            rects.perf_ram_threshold_minus_btn,
+            rects.perf_ram_threshold_value_box,
+            rects.perf_ram_threshold_plus_btn,
+            &ram_th_str,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::RamThresholdMinus),
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::RamThresholdPlus),
+            theme,
+        );
+
+        let disk_th_str = format!("{}%", perf.disk_alert_threshold);
+        self.draw_settings_row_stepper(
+            canvas,
+            col2_x,
+            col_w,
+            r2(4),
+            "Umbral de alerta Disco",
+            "Marca en amarillo o rojo al superarlo.",
+            rects.perf_disk_threshold_minus_btn,
+            rects.perf_disk_threshold_value_box,
+            rects.perf_disk_threshold_plus_btn,
+            &disk_th_str,
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::DiskThresholdMinus),
+            state.hovered_perf == Some(crate::renderer::HoveredPerfControl::DiskThresholdPlus),
+            theme,
+        );
+
+        // Info Notice al pie
+        let perf_notice_y = r2(4) + 66;
+        self.draw_info_notice(
+            canvas,
+            col2_x,
+            perf_notice_y,
+            col_w,
+            46,
+            "Reposo absoluto: el monitor se detiene cuando la ventana no es visible.",
+            theme,
+        );
+    }
+
+    /// Sección «Atajos»: dos columnas con keycaps individuales y edición interactiva.
+    #[allow(clippy::too_many_arguments)]
     fn draw_settings_shortcuts(
         &mut self,
         canvas: &mut Canvas,
         content_x: usize,
         card_w: usize,
         card_y: usize,
+        config: &TearminalConfig,
+        state: &SettingsPageState,
+        rects: &SettingsPageRects,
         theme: &Theme,
     ) {
         self.draw_card(
@@ -1418,61 +2423,94 @@ impl TerminalRenderer {
             card_y,
             card_w,
             SettingsPageRects::SHORTCUTS_CARD_H,
-            "ATAJOS DE TECLADO",
+            "ATAJOS DE TECLADO · CLIC PARA EDITAR",
             theme,
         );
-
-        let shortcuts = [
-            ("Ctrl + T", "Nueva terminal o pestaña"),
-            ("Ctrl + W", "Cerrar pestaña o panel activo"),
-            ("Ctrl + Tab", "Siguiente pestaña (o Ctrl+AvPág)"),
-            ("Ctrl + 1..9", "Ir a pestaña 1–8 o última (9)"),
-            ("Ctrl + F", "Buscar en terminal o explorador"),
-            ("Ctrl + Shift + P", "Paleta de comandos (o F1)"),
-            ("Ctrl + ,", "Abrir o cerrar Ajustes"),
-            ("F11", "Pantalla completa (o Alt+Enter)"),
-            ("Alt + Shift + D", "Dividir debajo (o Alt+Shift+-)"),
-            ("Alt + Shift + V", "Dividir al lado (o Alt+Shift++)"),
-            ("Alt + Flechas", "Mover el foco entre paneles"),
-            ("Ctrl + Shift + W", "Cerrar panel dividido"),
-            ("Ctrl + C", "Copiar (o Ctrl+Insert)"),
-            ("Ctrl + V", "Pegar (o Shift+Insert)"),
-            ("F5", "Refrescar explorador y Git"),
-            ("Ctrl + Backspace", "Borrar palabra atrás"),
-        ];
+        self.draw_button(
+            canvas,
+            rects.shortcuts_reset_btn,
+            "Restablecer",
+            state.hovered_shortcuts_reset,
+            false,
+            theme,
+        );
 
         let col_gap = 28;
         let col_w = (card_w.saturating_sub(40 + col_gap)) / 2;
         let start_y = card_y + 56;
         let row_h = 40;
-        for (idx, (chord, desc)) in shortcuts.iter().enumerate() {
+        for idx in 0..16 {
+            let (chord, desc, action_opt) = config.shortcuts.slot_info(idx);
             let col = idx / 8;
             let row = idx % 8;
             let x = content_x + 20 + col * (col_w + col_gap);
             let y = start_y + row * row_h;
-            let mut kx = x;
-            let key_max = x + col_w;
-            for (ki, key) in chord.split(" + ").enumerate() {
-                if ki > 0 {
-                    let plus_w = self.measure_mono_text("+", tokens::MICRO, false);
-                    let plus_base = self.centered_baseline(y + tokens::KEYCAP_H / 2);
-                    self.draw_mono_text(
-                        canvas,
-                        "+",
-                        kx + 4,
-                        plus_base,
-                        key_max,
-                        theme.text_muted(),
-                        tokens::MICRO,
-                        false,
+            let row_rect = rects.shortcuts_rows[idx];
+            let is_editing = action_opt.is_some() && state.editing_shortcut == action_opt;
+            let is_hover = action_opt.is_some() && state.hovered_shortcut_idx == Some(idx);
+
+            if is_editing {
+                canvas.rounded_fill(
+                    row_rect.0,
+                    row_rect.1,
+                    row_rect.2,
+                    row_rect.3,
+                    tokens::RADIUS_ROW,
+                    theme.accent_soft(26),
+                );
+                canvas.rounded_stroke(
+                    row_rect.0,
+                    row_rect.1,
+                    row_rect.2,
+                    row_rect.3,
+                    tokens::RADIUS_ROW,
+                    theme.accent_color(),
+                );
+                self.draw_mono_text(
+                    canvas,
+                    "Pulsa combinación… (Esc cancela)",
+                    x,
+                    self.centered_baseline(y + tokens::KEYCAP_H / 2),
+                    x + col_w,
+                    theme.accent_color(),
+                    tokens::MICRO,
+                    true,
+                );
+            } else {
+                if is_hover {
+                    canvas.rounded_fill(
+                        row_rect.0,
+                        row_rect.1,
+                        row_rect.2,
+                        row_rect.3,
+                        tokens::RADIUS_ROW,
+                        theme.surface_hover(),
                     );
-                    kx += plus_w + 8;
                 }
-                if kx >= key_max {
-                    break;
+                let mut kx = x;
+                let key_max = x + col_w;
+                for (ki, key) in chord.split(" + ").enumerate() {
+                    if ki > 0 {
+                        let plus_w = self.measure_mono_text("+", tokens::MICRO, false);
+                        let plus_base = self.centered_baseline(y + tokens::KEYCAP_H / 2);
+                        self.draw_mono_text(
+                            canvas,
+                            "+",
+                            kx + 4,
+                            plus_base,
+                            key_max,
+                            theme.text_muted(),
+                            tokens::MICRO,
+                            false,
+                        );
+                        kx += plus_w + 8;
+                    }
+                    if kx >= key_max {
+                        break;
+                    }
+                    let kw = self.draw_keycap(canvas, kx, y, key, theme);
+                    kx += kw + 4;
                 }
-                let kw = self.draw_keycap(canvas, kx, y, key, theme);
-                kx += kw + 4;
             }
             self.draw_ui_text(
                 canvas,
@@ -1480,9 +2518,15 @@ impl TerminalRenderer {
                 x,
                 y + 32,
                 x + col_w,
-                theme.text_secondary(),
+                if is_editing {
+                    theme.foreground
+                } else if action_opt.is_none() {
+                    theme.text_muted()
+                } else {
+                    theme.text_secondary()
+                },
                 tokens::BODY,
-                false,
+                is_editing,
             );
         }
     }
@@ -1553,7 +2597,7 @@ impl TerminalRenderer {
         );
 
         let config_path = TearminalConfig::config_path();
-        let themes = Theme::names().count().to_string();
+        let themes = Theme::all_count().to_string();
         let data = [
             ("VERSIÓN", version.clone()),
             ("TEMAS", themes),

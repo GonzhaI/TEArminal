@@ -188,19 +188,14 @@ fn test_app_tab_switching_and_toggle() {
         "Debe inicializar con al menos 1 pestaña"
     );
 
-    // El panel de Spaces resta su ancho por la izquierda; Ctrl+B solo oculta la tarjeta del explorador
-    app.sidebar_visible = true;
+    // El riel + panel contextual restan su ancho por la izquierda; toggle_sidebar contrae el panel a solo el riel
+    app.sidebar_collapsed = false;
     assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
     app.toggle_sidebar();
-    assert!(!app.sidebar_visible);
-    assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
-    app.toggle_sidebar();
-    assert!(app.sidebar_visible);
-
-    // Colapsado a riel el panel de Spaces resta 44 px
-    app.toggle_spaces_panel();
+    assert!(app.sidebar_collapsed);
     assert_eq!(app.sidebar_offset(), SpacesPanelRects::RAIL_W);
-    app.toggle_spaces_panel();
+    app.toggle_sidebar();
+    assert!(!app.sidebar_collapsed);
     assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
 }
 
@@ -1116,7 +1111,7 @@ fn test_keep_awake_mode_cycle_and_rects() {
     let width = 1000;
     let height = 600;
     let kw_w = 65;
-    let rects = StatusBarRects::compute_full(width, height, 100, None, 0, 0, kw_w);
+    let rects = StatusBarRects::compute_full(width, height, 100, None, 0, 0, kw_w, true);
     assert_eq!(
         rects.keep_awake_btn.0 + rects.keep_awake_btn.2,
         width - StatusBarRects::RIGHT_PAD,
@@ -1739,11 +1734,15 @@ fn test_git_quick_actions_in_changes_view() {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["init"]).status();
+    let _ = cmd.args(["init"]).output();
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["config", "core.autocrlf", "false"]).status();
+    let _ = cmd.args(["config", "core.autocrlf", "false"]).output();
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(&dir);
+    crate::app::platform::hide_console(&mut cmd);
+    let _ = cmd.args(["config", "commit.gpgsign", "false"]).output();
 
     let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
     app.file_explorer.set_root(dir.clone());
@@ -1757,17 +1756,17 @@ fn test_git_quick_actions_in_changes_view() {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["config", "user.name", "TestUser"]).status();
+    let _ = cmd.args(["config", "user.name", "TestUser"]).output();
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
     let _ = cmd
         .args(["config", "user.email", "test@example.com"])
-        .status();
+        .output();
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(&dir);
     crate::app::platform::hide_console(&mut cmd);
-    let _ = cmd.args(["commit", "-m", "init"]).status();
+    let _ = cmd.args(["commit", "-m", "init", "--no-gpg-sign"]).output();
 
     // Modificar tracked.txt (quedará unstaged)
     std::fs::write(&tracked, "version 2 modified\n").unwrap();
@@ -2252,6 +2251,8 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
         file_explorer_width: 300,
         spaces: Vec::new(),
         spaces_collapsed: false,
+        active_module: crate::config::AppModule::Spaces,
+        sidebar_collapsed: false,
         tabs: vec![TabSession {
             title: "T".into(),
             layout: gone,
@@ -2278,6 +2279,8 @@ fn test_restore_ignores_missing_folders_and_empty_sessions() {
         file_explorer_width: 240,
         spaces: Vec::new(),
         spaces_collapsed: false,
+        active_module: crate::config::AppModule::Spaces,
+        sidebar_collapsed: false,
         tabs: Vec::new(),
     };
     let app = TearminalApp::from_session(TearminalConfig::default(), None, Some(empty));
@@ -3039,33 +3042,27 @@ fn test_encode_kitty_key_various_combinations() {
 }
 
 #[test]
-fn test_explorer_docks_right_and_spaces_panel_reserves_the_left() {
-    use crate::renderer::{SidebarRects, SpacesPanelRects};
+fn test_explorer_docks_in_left_contextual_sidebar() {
+    use crate::renderer::{ContextualSidebarRects, RailRects, SpacesPanelRects, TopTabBarRects};
 
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.sidebar_visible = true;
-    app.file_explorer.visible = true;
-    let pw = app.panel_width();
+    app.set_active_module(crate::config::AppModule::Files);
     assert_eq!(
         (app.sidebar_offset(), app.file_explorer_offset()),
-        (SpacesPanelRects::WIDTH, pw)
+        (SpacesPanelRects::WIDTH, 0)
     );
 
-    // El explorador ocupa el interior de la tarjeta derecha (sin su margen de CARD_INSET)
+    // El explorador ocupa el interior del panel contextual izquierdo
     app.sync_explorer_dock(1200, 800);
-    let (x, y, _, _) = app.file_explorer.panel_geometry(1200, 800, 38, 26);
-    assert_eq!(x, 1200 - pw + SidebarRects::CARD_INSET);
-    assert_eq!(
-        app.panel_local_x(x + 5, 40, 1200, 800),
-        Some(5 + SidebarRects::CARD_INSET)
-    );
-    // El ratón dentro del explorador no es del panel; el panel de Spaces tampoco es «panel»
-    assert_eq!(app.panel_local_x(x + 5, y + 5, 1200, 800), None);
-    assert_eq!(app.panel_local_x(10, 100, 1200, 800), None);
+    let (x, y, w, h) = app.file_explorer.panel_geometry(1200, 800, 40, 28);
+    assert_eq!(x, RailRects::WIDTH);
+    assert_eq!(y, TopTabBarRects::HEIGHT);
+    assert_eq!(w, ContextualSidebarRects::WIDTH);
+    assert_eq!(h, 800 - 28 - TopTabBarRects::HEIGHT);
 
-    // Con la tarjeta oculta el contenido recupera el ancho
-    app.sidebar_visible = false;
-    app.file_explorer.visible = false;
+    // Con el panel contraído solo queda el riel (56 px)
+    app.toggle_sidebar();
+    assert_eq!(app.sidebar_offset(), RailRects::WIDTH);
     assert_eq!(app.file_explorer_offset(), 0);
 }
 
@@ -3073,12 +3070,12 @@ fn test_explorer_docks_right_and_spaces_panel_reserves_the_left() {
 fn test_top_tabs_panel_shows_and_hides_the_explorer_with_it() {
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
 
-    app.sidebar_visible = true;
-    app.file_explorer.visible = true;
-    app.toggle_file_explorer();
-    assert!(!app.sidebar_visible && !app.file_explorer.visible);
+    app.set_active_module(crate::config::AppModule::Files);
+    assert!(!app.sidebar_collapsed && app.file_explorer.visible);
     app.toggle_sidebar();
-    assert!(app.sidebar_visible && app.file_explorer.visible);
+    assert!(app.sidebar_collapsed);
+    app.toggle_sidebar();
+    assert!(!app.sidebar_collapsed && app.file_explorer.visible);
 }
 
 #[test]
@@ -3125,7 +3122,7 @@ fn test_settings_modal_keeps_the_layout_underneath() {
     assert!(app.tabs[app.active_tab_index].is_settings);
     assert_eq!(
         (app.sidebar_offset(), app.file_explorer_offset()),
-        (SpacesPanelRects::WIDTH, app.panel_width())
+        (SpacesPanelRects::WIDTH, 0)
     );
     assert!(app.sidebar_visible && app.file_explorer.visible);
     assert!(
@@ -3137,7 +3134,7 @@ fn test_settings_modal_keeps_the_layout_underneath() {
     app.close_settings();
     assert!(!app.tabs.iter().any(|t| t.is_settings));
     assert_eq!(app.sidebar_offset(), SpacesPanelRects::WIDTH);
-    assert_eq!(app.file_explorer_offset(), app.panel_width());
+    assert_eq!(app.file_explorer_offset(), 0);
 }
 
 #[test]
@@ -3182,7 +3179,7 @@ fn test_explorer_follows_the_focused_pane_of_the_same_tab() {
     std::fs::create_dir_all(&b).unwrap();
 
     let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.file_explorer.visible = true;
+    app.set_active_module(crate::config::AppModule::Files);
     app.file_explorer.is_pinned = false;
     tab_with_panes(&mut app, 2);
     let tab = &mut app.tabs[app.active_tab_index];
@@ -3217,23 +3214,23 @@ fn test_terminal_area_offsets_not_corrupted_by_settings_tab() {
     config.appearance.show_status_bar = true;
     let mut app = TearminalApp::new(config, None);
     app.sidebar_visible = true;
-    let pw = app.panel_width();
+    let _pw = app.panel_width();
 
-    // Con la terminal activa, el área descuenta el panel de Spaces, la tarjeta derecha y la barra de estado
+    // Con la terminal activa, el área descuenta el riel + panel contextual y la barra de estado de 28 px
     let (left, right, top, status_h) = app.terminal_area_offsets();
     assert_eq!(left, SpacesPanelRects::WIDTH);
-    assert_eq!(right, pw);
+    assert_eq!(right, 0);
     assert_eq!(top, crate::renderer::TopTabBarRects::HEIGHT);
-    assert_eq!(status_h, 26);
+    assert_eq!(status_h, 28);
 
     // Con Ajustes abierto (un modal sobre el contenido, que sigue dibujándose debajo) las dimensiones de
     // las terminales no cambian: no se recalcula el PTY/VT al abrirlo ni al cerrarlo.
     app.open_or_switch_settings_tab();
     assert!(app.panel_shown());
-    assert_eq!(app.status_bar_height(), 26);
+    assert_eq!(app.status_bar_height(), 28);
     assert_eq!(
         app.terminal_area_offsets(),
-        (SpacesPanelRects::WIDTH, pw, top, 26)
+        (SpacesPanelRects::WIDTH, 0, top, 28)
     );
 
     // Al cerrar el modal, todo se mantiene intacto
@@ -3241,7 +3238,7 @@ fn test_terminal_area_offsets_not_corrupted_by_settings_tab() {
     assert!(app.panel_shown());
     assert_eq!(
         app.terminal_area_offsets(),
-        (SpacesPanelRects::WIDTH, pw, top, 26)
+        (SpacesPanelRects::WIDTH, 0, top, 28)
     );
 }
 
@@ -3341,59 +3338,40 @@ fn test_cache_alignment_and_enum_size_regressions() {
 }
 
 #[test]
-fn test_card_regions_stretch_content_under_the_right_card() {
+fn test_card_regions_content_area() {
     use super::redraw::card_regions;
-    use crate::renderer::{SidebarRects, SpacesPanelRects};
+    use crate::renderer::SpacesPanelRects;
 
-    let (w, h, status, top) = (1440usize, 900usize, 28usize, 38usize);
-    let inset = SidebarRects::CARD_INSET;
+    let (w, h, status, top) = (1440usize, 900usize, 28usize, 40usize);
     let usable = h - status;
     let left = SpacesPanelRects::WIDTH;
 
-    // Con el explorador a la vista (right_offset = SIDEBAR_WIDTH): el contenido se estira bajo su margen.
-    let r = card_regions(w, h, status, left, SIDEBAR_WIDTH, top, true, true);
-    assert_eq!(
-        r.panel,
-        Some((w - SIDEBAR_WIDTH, top, SIDEBAR_WIDTH, usable - top))
-    );
-    assert_eq!(
-        r.content,
-        (left, top, w - SIDEBAR_WIDTH + inset - left, usable - top)
-    );
-
-    // Sin explorador: solo la tarjeta del contenido, sin estirar.
-    let r = card_regions(w, h, status, left, 0, top, false, true);
+    // En F1 el explorador está a la izquierda en el panel contextual; no hay tarjeta a la derecha.
+    let r = card_regions(w, h, status, left, 0, top, true, true);
     assert_eq!(r.panel, None);
     assert_eq!(r.content, (left, top, w - left, usable - top));
+
+    // Con el panel contraído el área de trabajo arranca desde el riel (56 px)
+    let r = card_regions(w, h, status, SpacesPanelRects::RAIL_W, 0, top, false, true);
+    assert_eq!(r.panel, None);
+    assert_eq!(
+        r.content,
+        (
+            SpacesPanelRects::RAIL_W,
+            top,
+            w - SpacesPanelRects::RAIL_W,
+            usable - top
+        )
+    );
 }
 
 #[test]
 fn test_panel_resize_edge_detection_and_mouse_drag() {
-    use crate::explorer::FILE_EXPLORER_MIN_WIDTH;
-
-    let mut app = TearminalApp::new(TearminalConfig::load_or_default(), None);
-    app.sidebar_visible = true;
-    app.file_explorer.visible = true;
+    let app = TearminalApp::new(TearminalConfig::load_or_default(), None);
     let (win_w, win_h) = (1200, 800);
 
-    // El explorador va a la derecha: su borde de redimensionado está en x = win_w - ancho (±5 px)
-    app.file_explorer.width = 300;
-    let edge_x = win_w - 300;
-    assert!(app.on_panel_resize_edge(edge_x, 200, win_w, win_h));
-    assert!(app.on_panel_resize_edge(edge_x - 3, 200, win_w, win_h));
-    assert!(app.on_panel_resize_edge(edge_x + 3, 200, win_w, win_h));
-    assert!(!app.on_panel_resize_edge(edge_x - 30, 200, win_w, win_h));
-
-    // Arrastrar a la izquierda ensancha el panel (win_w - mx)
-    app.resize_panel_from_mouse(win_w - 450, win_w);
-    assert_eq!(app.panel_width(), 450);
-    assert_eq!(app.file_explorer_offset(), 450);
-
-    // Límites de acotado
-    app.resize_panel_from_mouse(win_w - 50, win_w);
-    assert_eq!(app.panel_width(), FILE_EXPLORER_MIN_WIDTH);
-    app.resize_panel_from_mouse(0, win_w);
-    assert_eq!(app.panel_width(), win_w / 2);
+    // En F1 el panel contextual es de ancho fijo o contraído; no se redimensiona por ratón
+    assert!(!app.on_panel_resize_edge(320, 200, win_w, win_h));
 }
 
 #[test]
@@ -3794,8 +3772,7 @@ fn test_explorer_drag_to_terminal_and_click_behavior() {
 fn test_explorer_left_click_directory_expands_and_stays_expanded() {
     let mut app = TearminalApp::new(TearminalConfig::default(), None);
     let (win_w, win_h) = app.window_size();
-    app.sidebar_visible = true;
-    app.file_explorer.visible = true;
+    app.set_active_module(crate::config::AppModule::Files);
     app.sync_explorer_dock(win_w, win_h);
 
     app.file_explorer.items = vec![crate::explorer::ExplorerItem {
@@ -4106,4 +4083,421 @@ fn test_terminal_ctrl_click_opens_file_path() {
     let viewer = active_tab.file_viewer.as_ref().expect("debe ser un visor");
     assert_eq!(viewer.cursor_line, 4); // 0-based index para línea 5
     assert_eq!(viewer.cursor_col, 1); // 0-based index para col 2
+}
+
+#[test]
+fn test_system_monitor_lifecycle_clicks_and_idle() {
+    let mut app = TearminalApp::new(TearminalConfig::default(), None);
+    assert_eq!(app.tabs.len(), 1);
+    assert!(!app.tabs[0].is_system_monitor);
+
+    // 1. Crear y abrir pestaña de Sistema
+    app.open_or_switch_system_monitor_tab();
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab_index, 1);
+    assert!(app.tabs[1].is_system_monitor);
+    assert_eq!(app.tabs[1].display_title(), "Sistema");
+
+    // Re-llamar no debe duplicar la pestaña
+    app.open_or_switch_system_monitor_tab();
+    assert_eq!(app.tabs.len(), 2);
+    assert_eq!(app.active_tab_index, 1);
+
+    // 2. Cargar snapshot sintético para probar interacción
+    let snap = crate::monitor::SystemSnapshot {
+        cpu_total: 18.0,
+        ram_pct: 33.0,
+        gpu_usage_pct: 7.0,
+        disk_usage_pct: 44.0,
+        processes: vec![
+            crate::monitor::ProcessInfo {
+                pid: 1234,
+                name: "cargo.exe".into(),
+                note: "build de TEArminal".into(),
+                kind: crate::monitor::ProcessKind::Build,
+                cpu_pct: 41.0,
+                ram_bytes: 248 * 1024 * 1024,
+                gpu_pct: 0.0,
+            },
+            crate::monitor::ProcessInfo {
+                pid: 5678,
+                name: "node.exe".into(),
+                note: "Claude Code".into(),
+                kind: crate::monitor::ProcessKind::AiAgent,
+                cpu_pct: 3.2,
+                ram_bytes: 412 * 1024 * 1024,
+                gpu_pct: 0.0,
+            },
+        ],
+        top_project_folders: vec![crate::monitor::ProjectFolderInfo {
+            name: "target/".into(),
+            size_bytes: 14 * 1024 * 1024 * 1024,
+            action: Some("cargo clean".into()),
+        }],
+        ..Default::default()
+    };
+    app.monitor.apply_snapshot(snap);
+
+    // 3. Probar filtros de procesos
+    let (win_w, win_h) = (1440, 900);
+    let layout = crate::renderer::SystemLayoutRects::compute(
+        app.sidebar_offset(),
+        app.top_offset(),
+        win_w,
+        win_h,
+        app.status_bar_height(),
+        false,
+    );
+
+    // Clic en filtro IA
+    let (ai_x, ai_y, _, _) = layout.filter_ai_btn;
+    app.click_system_monitor_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        ai_x + 2,
+        ai_y + 2,
+        win_w,
+        win_h,
+    );
+    assert_eq!(
+        app.monitor.process_filter,
+        crate::monitor::ProcessFilterKind::Ai
+    );
+
+    // Clic en filtro Todos
+    let (all_x, all_y, _, _) = layout.filter_all_btn;
+    app.click_system_monitor_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        all_x + 2,
+        all_y + 2,
+        win_w,
+        win_h,
+    );
+    assert_eq!(
+        app.monitor.process_filter,
+        crate::monitor::ProcessFilterKind::All
+    );
+
+    // 4. Selección de fila de proceso
+    let row0_y = layout.process_row_y(0);
+    app.click_system_monitor_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        layout.process_list_rect.0 + 20,
+        row0_y + 5,
+        win_w,
+        win_h,
+    );
+    assert_eq!(app.monitor.selected_process_pid, Some(1234));
+
+    // Clic de nuevo en la misma fila deselecciona
+    app.click_system_monitor_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        layout.process_list_rect.0 + 20,
+        row0_y + 5,
+        win_w,
+        win_h,
+    );
+    assert_eq!(app.monitor.selected_process_pid, None);
+
+    // 5. Clic en medidores de la barra de estado
+    app.switch_to_tab(0);
+    assert_eq!(app.active_tab_index, 0);
+
+    let meters = crate::renderer::TerminalRenderer::system_status_meters(&app.monitor);
+    let meters_w = meters.len() * 150;
+    let sb_rects = crate::renderer::StatusBarRects::compute_full(
+        win_w, win_h, 0, None, 0, meters_w, 65, false,
+    );
+    let (mx, my, _, _) = sb_rects.meters;
+    let handled = app.click_status_bar_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        mx + 5,
+        my + 5,
+        win_w,
+        win_h,
+        false,
+    );
+    assert!(handled);
+    assert_eq!(app.active_tab_index, 1);
+    assert!(app.tabs[app.active_tab_index].is_system_monitor);
+
+    // 6. Reposo absoluto (0 % CPU cuando la ventana está oculta)
+    app.occluded = true;
+    app.monitor.is_sampling = false;
+    let wake = app.tick();
+    assert!(!app.monitor.is_sampling);
+    assert!(wake.is_none() || wake.unwrap() > std::time::Instant::now());
+}
+
+#[test]
+fn test_ssh_reconnect_state_and_subtitles() {
+    let mut state = crate::app::SshReconnectState::new(
+        "deploy@worker-stg".to_string(),
+        Some("/var/www/api".to_string()),
+    );
+    assert_eq!(state.host, "worker-stg");
+    assert_eq!(state.destination, "deploy@worker-stg");
+    assert_eq!(state.remote_dir.as_deref(), Some("/var/www/api"));
+    assert_eq!(state.attempt, 1);
+    assert_eq!(state.max_attempts, 5);
+    assert_eq!(state.countdown_seconds, 5);
+
+    // Subtítulo con cuenta atrás
+    state.attempt = 3;
+    state.countdown_seconds = 4;
+    assert_eq!(
+        state.subtitle(),
+        "Reintento 3 de 5 en 4 s. La sesión y el directorio se recuperan al reconectar."
+    );
+
+    // Subtítulo cuando está reconectando
+    state.is_reconnecting = true;
+    assert_eq!(state.subtitle(), "Reconectando con worker-stg…");
+
+    // Subtítulo tras agotar intentos
+    state.is_reconnecting = false;
+    state.attempt = 6;
+    assert_eq!(
+        state.subtitle(),
+        "No se pudo reconectar tras 5 intentos. La sesión y el directorio se recuperan al reconectar."
+    );
+}
+
+#[test]
+fn test_on_shell_exit_enters_ssh_reconnect_mode() {
+    let theme = crate::theme::Theme::default();
+    let pty = crate::pty::PtyManager::new(
+        PaneId(101),
+        "powershell.exe",
+        false,
+        80,
+        24,
+        None,
+        None,
+        None,
+    )
+    .expect("pty");
+    let term = crate::terminal::TerminalState::new(80, 24, 1000, theme);
+    let mut pane = TerminalPane::new(PaneId(101), pty, term, (80, 24));
+    pane.terminal.ssh_session = Some(crate::terminal::SshSession {
+        destination: "deploy@worker-stg".to_string(),
+        remote_dir: Some("/var/www/api".to_string()),
+        is_active: true,
+        ..Default::default()
+    });
+
+    let tab = TerminalTab::new(TabId(1), "worker-stg".into(), pane);
+    let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
+    app.tabs = vec![tab];
+    app.active_tab_index = 0;
+
+    // Al salir el shell mientras SSH estaba activo, no debe cerrar el panel, sino pasar a ssh_reconnect
+    app.on_shell_exit(PaneId(101));
+    assert_eq!(app.tabs.len(), 1);
+    let p = app.tabs[0].find_pane(PaneId(101)).expect("pane exists");
+    assert!(p.ssh_reconnect.is_some());
+    let rec = p.ssh_reconnect.as_ref().unwrap();
+    assert_eq!(rec.host, "worker-stg");
+    assert_eq!(rec.destination, "deploy@worker-stg");
+    assert_eq!(rec.remote_dir.as_deref(), Some("/var/www/api"));
+
+    // Título y subtítulo reflejan la desconexión
+    assert_eq!(p.header_title("worker-stg"), "worker-stg");
+    assert_eq!(p.header_subtitle(), None);
+
+    // Segundo fallo de salida mientras está en reconexión incrementa el intento
+    app.on_shell_exit(PaneId(101));
+    let p = app.tabs[0].find_pane(PaneId(101)).expect("pane exists");
+    let rec = p.ssh_reconnect.as_ref().unwrap();
+    assert_eq!(rec.attempt, 2);
+    assert_eq!(rec.countdown_seconds, 5);
+}
+
+#[test]
+fn test_ssh_lost_connection_click_actions() {
+    let theme = crate::theme::Theme::default();
+    let pty1 = crate::pty::PtyManager::new(
+        PaneId(201),
+        "powershell.exe",
+        false,
+        80,
+        24,
+        None,
+        None,
+        None,
+    )
+    .expect("pty1");
+    let term1 = crate::terminal::TerminalState::new(80, 24, 1000, theme.clone());
+    let mut pane1 = TerminalPane::new(PaneId(201), pty1, term1, (80, 24));
+    pane1.set_ssh_disconnected("deploy@worker-stg", Some("/var/www/api".into()));
+
+    let pty2 = crate::pty::PtyManager::new(
+        PaneId(202),
+        "powershell.exe",
+        false,
+        80,
+        24,
+        None,
+        None,
+        None,
+    )
+    .expect("pty2");
+    let term2 = crate::terminal::TerminalState::new(80, 24, 1000, theme);
+    let pane2 = TerminalPane::new(PaneId(202), pty2, term2, (80, 24));
+
+    let tab = TerminalTab::from_layout(
+        TabId(1),
+        "test".into(),
+        crate::app::PaneNode::Split {
+            direction: crate::app::SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(crate::app::PaneNode::Leaf(PaneId(201))),
+            second: Box::new(crate::app::PaneNode::Leaf(PaneId(202))),
+        },
+        vec![pane1, pane2],
+        PaneId(201),
+    );
+
+    let mut app = TearminalApp::new(crate::config::TearminalConfig::default(), None);
+    app.tabs = vec![tab];
+    app.active_tab_index = 0;
+
+    let rects = app.active_tab_pane_rects(1000, 800);
+    let r1 = rects.iter().find(|r| r.pane_id == PaneId(201)).expect("r1");
+    let lost = crate::renderer::SshLostConnectionRects::compute(r1.x, r1.y, r1.width, r1.height);
+
+    // 1. Clic en "Cerrar panel" cierra ese panel
+    let (cx, cy, _, _) = lost.close_pane_btn;
+    app.click_terminal_panes_area(
+        ElementState::Pressed,
+        MouseButton::Left,
+        cx + 5,
+        cy + 5,
+        1000,
+        800,
+    );
+    // Ahora solo queda pane2
+    assert_eq!(app.tabs[0].panes.len(), 1);
+    assert_eq!(app.tabs[0].panes[0].id, PaneId(202));
+}
+
+#[test]
+fn test_remote_file_tree_escaped_names() {
+    let name_raw = "report\x1b[31m.txt";
+    assert!(crate::db::sanitize::has_escapes(name_raw));
+    assert_eq!(
+        crate::db::sanitize::display(name_raw),
+        "report\\x1b[31m.txt"
+    );
+
+    let clean = "normal_file.txt";
+    assert!(!crate::db::sanitize::has_escapes(clean));
+    assert_eq!(crate::db::sanitize::display(clean), "normal_file.txt");
+}
+
+#[test]
+fn test_render_ssh_lost_connection_to_canvas() {
+    let theme = crate::theme::Theme::default();
+    let mut renderer =
+        crate::renderer::TerminalRenderer::new(&crate::config::TearminalConfig::default(), 1.0);
+    let mut canvas = crate::renderer::Canvas::new();
+    canvas.begin(800, 600);
+
+    let reconnect = crate::app::SshReconnectState::new(
+        "deploy@worker-stg".to_string(),
+        Some("/var/www/api".to_string()),
+    );
+
+    renderer.render_ssh_lost_connection(
+        &mut canvas,
+        50,
+        50,
+        700,
+        500,
+        &reconnect,
+        Some(crate::renderer::SshLostButton::Reconnect),
+        &theme,
+    );
+
+    // Canvas debe haber registrado comandos de dibujo
+    assert!(!canvas.scene().ops.is_empty());
+}
+
+#[test]
+fn test_apply_grid_presets_2x2_and_1plus2() {
+    use crate::app::layout::GridPreset;
+    use crate::terminal::TerminalState;
+    use crate::theme::Theme;
+
+    let theme = Theme::default();
+    let make_pane = |id: usize| {
+        let pty = PtyManager::new(
+            PaneId(id),
+            "powershell.exe",
+            false,
+            80,
+            24,
+            None,
+            None,
+            None,
+        )
+        .expect("Pty");
+        let term = TerminalState::new(80, 24, 1000, theme.clone());
+        TerminalPane::new(PaneId(id), pty, term, (80, 24))
+    };
+
+    let mut tab = TerminalTab::new(TabId(0), "Grid".to_string(), make_pane(1));
+    // Aplicar 1+2 a una pestaña de 1 panel añadiendo 2 paneles extras
+    tab.apply_grid_preset(GridPreset::OnePlusTwo, vec![make_pane(2), make_pane(3)]);
+    let rects_1p2 = tab.compute_pane_rects(0, 0, 1000, 600);
+    assert_eq!(rects_1p2.len(), 3);
+    // Panel izquierdo ocupa la mitad del ancho y todo el alto útil
+    let left = rects_1p2
+        .iter()
+        .find(|r| r.pane_id == PaneId(1))
+        .expect("left");
+    let right_top = rects_1p2
+        .iter()
+        .find(|r| r.pane_id == PaneId(2))
+        .expect("rt");
+    let right_bot = rects_1p2
+        .iter()
+        .find(|r| r.pane_id == PaneId(3))
+        .expect("rb");
+    assert_eq!(left.x, 0);
+    assert!(left.width >= 498 && left.width <= 500);
+    assert!(right_top.x >= 500 && right_bot.x == right_top.x);
+    assert!(right_top.slot_y < right_bot.slot_y);
+    assert!(left.height > right_top.height);
+
+    // Aplicar 2x2 añadiendo el cuarto panel
+    tab.apply_grid_preset(GridPreset::TwoByTwo, vec![make_pane(4)]);
+    let rects_2x2 = tab.compute_pane_rects(0, 0, 1000, 600);
+    assert_eq!(rects_2x2.len(), 4);
+    let r1 = rects_2x2
+        .iter()
+        .find(|r| r.pane_id == PaneId(1))
+        .expect("p1");
+    let r2 = rects_2x2
+        .iter()
+        .find(|r| r.pane_id == PaneId(2))
+        .expect("p2");
+    let r3 = rects_2x2
+        .iter()
+        .find(|r| r.pane_id == PaneId(3))
+        .expect("p3");
+    let r4 = rects_2x2
+        .iter()
+        .find(|r| r.pane_id == PaneId(4))
+        .expect("p4");
+    assert_eq!(r1.x, r3.x);
+    assert_eq!(r2.x, r4.x);
+    assert!(r1.x < r2.x);
+    assert_eq!(r1.slot_y, r2.slot_y);
+    assert_eq!(r3.slot_y, r4.slot_y);
+    assert!(r1.slot_y < r3.slot_y);
 }

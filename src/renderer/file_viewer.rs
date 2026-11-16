@@ -143,31 +143,83 @@ impl TerminalRenderer {
             );
         }
 
-        let hov = viewer.hovered_mode_btn;
-        let (icon, label, fg, bg) = if viewer.is_read_only {
-            (
-                crate::ui::LucideIcon::Lock,
-                "Lectura",
-                if hov { accent } else { theme.ansi[8] },
+        if let Some(rect) = header_rects.stage_file_btn {
+            let hov = viewer.hovered_stage_file;
+            let (icon, label) = if viewer.is_staged {
+                (crate::ui::LucideIcon::Minus, "Quitar archivo")
+            } else {
+                (crate::ui::LucideIcon::Plus, "Preparar archivo")
+            };
+            self.draw_header_button(
+                canvas,
+                rect,
+                icon,
+                label,
+                if hov { accent } else { theme.foreground },
                 if hov { theme.surface_hover() } else { chip_bg },
-            )
-        } else {
-            (
-                crate::ui::LucideIcon::Pencil,
-                "Edición",
-                theme.ansi[2],
-                tint(theme.ansi[2], if hov { 40 } else { 20 }),
-            )
-        };
-        self.draw_header_button(
-            canvas,
-            header_rects.mode_btn,
-            icon,
-            label,
-            fg,
-            bg,
-            header_base,
-        );
+                header_base,
+            );
+        }
+
+        if let Some(rect) = header_rects.next_change_btn {
+            let hov = viewer.hovered_next_change;
+            canvas.rounded_stroke(rect.0, rect.1, rect.2, rect.3, 0, theme.chrome_line());
+            if hov {
+                canvas.fill_rect(clip, rect.0, rect.1, rect.2, rect.3, theme.surface_hover());
+            }
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::ChevronDown,
+                rect.0 + rect.2 / 2,
+                rect.1 + rect.3 / 2,
+                12.0,
+                if hov { accent } else { theme.text_secondary() },
+            );
+        }
+
+        if let Some(rect) = header_rects.prev_change_btn {
+            let hov = viewer.hovered_prev_change;
+            canvas.rounded_stroke(rect.0, rect.1, rect.2, rect.3, 0, theme.chrome_line());
+            if hov {
+                canvas.fill_rect(clip, rect.0, rect.1, rect.2, rect.3, theme.surface_hover());
+            }
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::ArrowUp,
+                rect.0 + rect.2 / 2,
+                rect.1 + rect.3 / 2,
+                12.0,
+                if hov { accent } else { theme.text_secondary() },
+            );
+        }
+
+        if header_rects.mode_btn.2 > 0 {
+            let hov = viewer.hovered_mode_btn;
+            let (icon, label, fg, bg) = if viewer.is_read_only {
+                (
+                    crate::ui::LucideIcon::Lock,
+                    "Lectura",
+                    if hov { accent } else { theme.ansi[8] },
+                    if hov { theme.surface_hover() } else { chip_bg },
+                )
+            } else {
+                (
+                    crate::ui::LucideIcon::Pencil,
+                    "Edición",
+                    theme.ansi[2],
+                    tint(theme.ansi[2], if hov { 40 } else { 20 }),
+                )
+            };
+            self.draw_header_button(
+                canvas,
+                header_rects.mode_btn,
+                icon,
+                label,
+                fg,
+                bg,
+                header_base,
+            );
+        }
 
         // Chips en orden de prioridad (de derecha a izquierda); los que no caben junto al nombre se omiten
         let size_text = if viewer.file_size < 1024 {
@@ -223,11 +275,25 @@ impl TerminalRenderer {
             chip_bg,
         ));
 
+        if viewer.is_diff() {
+            let (add, del) = viewer.diff_stats();
+            chips.push((format!("−{del}"), theme.ansi[1], tint(theme.ansi[1], 24)));
+            chips.push((format!("+{add}"), theme.ansi[2], tint(theme.ansi[2], 24)));
+            chips.push(("DIFF".into(), theme.ansi[6], tint(theme.ansi[6], 24)));
+        }
+
         let name_start_x = x + SidebarRects::CARD_INSET + 34;
         let name_end_x =
             name_start_x + self.measure_ui_text(&viewer.file_name, tokens::SECTION, true);
-        let mut right_x = header_rects.mode_btn.0;
+        let mut right_x = if header_rects.mode_btn.2 > 0 {
+            header_rects.mode_btn.0
+        } else {
+            x + w
+        };
         for r in [
+            header_rects.stage_file_btn,
+            header_rects.next_change_btn,
+            header_rects.prev_change_btn,
             header_rects.md_btn,
             header_rects.diff_btn,
             header_rects.diff_mode_btn,
@@ -393,7 +459,8 @@ impl TerminalRenderer {
         let total_lines = viewer.lines.len();
         let is_md_rendered = viewer.render_markdown && is_markdown;
         let show_gutter = !is_md_rendered;
-        let lay = crate::renderer::geometry::FileViewerLayout::compute(
+        let has_disk_banner = viewer.has_external_disk_change();
+        let lay = crate::renderer::geometry::FileViewerLayout::compute_with_banner(
             x,
             y,
             w,
@@ -402,11 +469,89 @@ impl TerminalRenderer {
             self.char_width,
             total_lines,
             show_gutter,
+            has_disk_banner,
         );
+        let content_y = lay.content_y;
+        let content_h = lay.content_h;
         let (row_h, char_w, gutter_w, sep_x) = (lay.row_h, lay.char_w, lay.gutter_w, lay.sep_x);
         let visible_lines = content_h / row_h;
         let max_scroll_x = viewer.max_scroll_x();
         let scroll_x = viewer.scroll_offset_x.min(max_scroll_x);
+
+        if has_disk_banner {
+            let b_rects =
+                crate::renderer::geometry::FileViewerBannerRects::compute(x, y + header_h, full_w);
+            let banner_bg = Color::from_u32_xrgb(theme.background.blend_over(theme.ansi[3], 18));
+            canvas.fill_rect(
+                clip,
+                b_rects.banner_rect.0,
+                b_rects.banner_rect.1,
+                b_rects.banner_rect.2,
+                b_rects.banner_rect.3,
+                banner_bg,
+            );
+            canvas.fill_rect(
+                clip,
+                b_rects.banner_rect.0,
+                b_rects.banner_rect.1 + b_rects.banner_rect.3 - 1,
+                b_rects.banner_rect.2,
+                1,
+                theme.chrome_line(),
+            );
+            self.draw_lucide_icon(
+                canvas,
+                crate::ui::LucideIcon::Info,
+                b_rects.banner_rect.0 + 20,
+                b_rects.banner_rect.1 + b_rects.banner_rect.3 / 2,
+                14.0,
+                theme.ansi[3],
+            );
+            let text =
+                "Este archivo cambió en disco (probablemente un agente). Hay ediciones sin guardar.";
+            let base_y = self.centered_baseline(b_rects.banner_rect.1 + b_rects.banner_rect.3 / 2);
+            self.draw_ui_text(
+                canvas,
+                text,
+                b_rects.banner_rect.0 + 38,
+                base_y,
+                b_rects.reload_btn.0.saturating_sub(8),
+                theme.foreground,
+                tokens::DETAIL,
+                false,
+            );
+            // Botón Recargar
+            let (rx, ry, rw, rh) = b_rects.reload_btn;
+            canvas.rounded_stroke(rx, ry, rw, rh, tokens::RADIUS_ROW, theme.chrome_line());
+            let r_text = "Recargar";
+            let rw_text = self.measure_ui_text(r_text, tokens::MICRO, true);
+            let r_base = self.centered_baseline(ry + rh / 2);
+            self.draw_ui_text(
+                canvas,
+                r_text,
+                rx + (rw.saturating_sub(rw_text)) / 2,
+                r_base,
+                rx + rw,
+                theme.foreground,
+                tokens::MICRO,
+                true,
+            );
+            // Botón Conservar la mía
+            let (kx, ky, kw, kh) = b_rects.keep_mine_btn;
+            canvas.rounded_stroke(kx, ky, kw, kh, tokens::RADIUS_ROW, theme.chrome_line());
+            let k_text = "Conservar la mía";
+            let kw_text = self.measure_ui_text(k_text, tokens::MICRO, true);
+            let k_base = self.centered_baseline(ky + kh / 2);
+            self.draw_ui_text(
+                canvas,
+                k_text,
+                kx + (kw.saturating_sub(kw_text)) / 2,
+                k_base,
+                kx + kw,
+                theme.foreground,
+                tokens::MICRO,
+                true,
+            );
+        }
 
         // Fondo sutil del gutter (solo si el gutter está activo)
         if gutter_w > 0 {
@@ -870,7 +1015,7 @@ impl TerminalRenderer {
                         .map(|c| if c == '\t' { tab_adv } else { char_w as i32 })
                         .sum();
                     let label = format!("{} líneas", end - line_idx);
-                    let chip_w = self.measure_ui_text(&label, 10.5, false) + 14;
+                    let chip_w = self.measure_ui_text(&label, tokens::MICRO, false) + 14;
                     let chip_x = (cur_x + text_w + char_w as i32).max(text_clip.0 as i32) as usize;
                     if chip_x + chip_w < text_max_x {
                         canvas.rounded_fill(
@@ -888,7 +1033,7 @@ impl TerminalRenderer {
                             baseline_y,
                             text_max_x,
                             accent,
-                            10.5,
+                            tokens::MICRO,
                             false,
                         );
                     }

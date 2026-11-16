@@ -91,7 +91,7 @@ impl TerminalRenderer {
             PaletteCategory::File,
         ]
         .iter()
-        .map(|c| self.measure_ui_text(c.label(), 9.5, true))
+        .map(|c| self.measure_ui_text(c.label(), tokens::MICRO, true))
         .max()
         .unwrap_or(0)
             + 16;
@@ -219,7 +219,7 @@ impl TerminalRenderer {
             let badge_x = rx + 30;
             let badge_y = item_cy.saturating_sub(10);
             canvas.rounded_fill(badge_x, badge_y, badge_w, 20, tokens::RADIUS_ROW, cat_bg);
-            let cat_w = self.measure_ui_text(cat_label, 9.5, true);
+            let cat_w = self.measure_ui_text(cat_label, tokens::MICRO, true);
             let cat_text_x = badge_x + (badge_w.saturating_sub(cat_w)) / 2;
             self.draw_ui_text(
                 canvas,
@@ -228,7 +228,7 @@ impl TerminalRenderer {
                 item_baseline,
                 badge_x + badge_w,
                 cat_fg,
-                9.5,
+                tokens::MICRO,
                 true,
             );
 

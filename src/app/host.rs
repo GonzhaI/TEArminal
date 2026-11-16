@@ -235,7 +235,8 @@ impl ApplicationHandler<TearminalEvent> for TearminalHost {
         match event {
             TearminalEvent::SshDone
             | TearminalEvent::FsChanged
-            | TearminalEvent::UpdateCheckDone => {
+            | TearminalEvent::UpdateCheckDone
+            | TearminalEvent::MonitorDone => {
                 for w in &mut self.windows {
                     w.on_user_event(event);
                 }

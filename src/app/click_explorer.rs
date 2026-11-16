@@ -37,15 +37,19 @@ impl TearminalApp {
             let (panel_x, panel_y, panel_w, panel_h) =
                 self.file_explorer
                     .panel_geometry(win_w, win_h, top_offset, status_bar_h);
-            let expanded_hover = self.renderer.as_mut().and_then(|r| {
-                r.explorer_hovered_item_geometry(
-                    win_w,
-                    win_h,
-                    top_offset,
-                    status_bar_h,
-                    &self.file_explorer,
-                )
-            });
+            let expanded_hover = if self.file_explorer.changes_only {
+                None
+            } else {
+                self.renderer.as_mut().and_then(|r| {
+                    r.explorer_hovered_item_geometry(
+                        win_w,
+                        win_h,
+                        top_offset,
+                        status_bar_h,
+                        &self.file_explorer,
+                    )
+                })
+            };
             let in_expanded_item = expanded_hover.is_some_and(|(idx, item_y, item_h, row_w)| {
                 self.file_explorer.hovered_index == Some(idx)
                     && my >= item_y
@@ -58,6 +62,249 @@ impl TearminalApp {
 
             if in_panel || in_expanded_item {
                 if state == ElementState::Pressed && button == MouseButton::Left {
+                    if self.file_explorer.changes_only {
+                        self.file_explorer.is_focused = true;
+                        let header_h = crate::explorer::FileExplorer::HEADER_HEIGHT;
+                        let content_y = panel_y + header_h;
+                        let content_h = panel_h.saturating_sub(header_h);
+
+                        let staged_items = self.file_explorer.staged_change_items();
+                        let unstaged_items = self.file_explorer.unstaged_change_items();
+                        let staged_count = staged_items.len();
+                        let unstaged_count = unstaged_items.len();
+                        let staged_collapsed = self.file_explorer.staged_collapsed;
+                        let unstaged_collapsed = self.file_explorer.unstaged_collapsed;
+                        let has_discard_confirm = self.file_explorer.discard_confirm.is_some();
+
+                        let rects = crate::renderer::GitPanelRects::compute(
+                            panel_x,
+                            content_y,
+                            panel_w,
+                            content_h,
+                            staged_count,
+                            staged_collapsed,
+                            unstaged_count,
+                            unstaged_collapsed,
+                            has_discard_confirm,
+                        );
+
+                        if let Some(target) = rects.hit_test(
+                            mx,
+                            my,
+                            staged_count,
+                            staged_collapsed,
+                            unstaged_count,
+                            unstaged_collapsed,
+                            self.file_explorer.scroll_offset,
+                        ) {
+                            match target {
+                                crate::renderer::GitClickTarget::BranchRow => {
+                                    self.file_explorer.git_commit.is_focused = false;
+                                    if let Some(repo) = self.file_explorer.git_root.clone() {
+                                        self.spawn_git_ahead_behind(repo.clone());
+                                        let branches = crate::explorer::git_local_branches(&repo);
+                                        if !branches.is_empty() {
+                                            let items: Vec<crate::app::context_menu::MenuItem> =
+                                                branches
+                                                    .into_iter()
+                                                    .map(|(name, is_cur)| {
+                                                        let icon = if is_cur {
+                                                            crate::ui::LucideIcon::Check
+                                                        } else {
+                                                            crate::ui::LucideIcon::GitBranch
+                                                        };
+                                                        let label = if is_cur {
+                                                            format!("{name} (actual)")
+                                                        } else {
+                                                            name.clone()
+                                                        };
+                                                        crate::app::context_menu::MenuItem::new(
+                                                            label,
+                                                            icon,
+                                                            "",
+                                                            crate::app::context_menu::MenuAction::GitCheckoutBranch(name),
+                                                            !is_cur,
+                                                        )
+                                                    })
+                                                    .collect();
+                                            let br = rects.branch_row;
+                                            let pos = (br.0 + 8, br.1 + br.3);
+                                            self.context_menu =
+                                                Some(crate::app::context_menu::ContextMenu::new(
+                                                    items,
+                                                    230,
+                                                    pos,
+                                                    (win_w, win_h),
+                                                ));
+                                        }
+                                    }
+                                    self.file_explorer.refresh_git_status();
+                                }
+                                crate::renderer::GitClickTarget::CommitInput => {
+                                    self.file_explorer.git_commit.is_focused = true;
+                                    let text_x = rects.commit_input.0 + 8;
+                                    let mut input =
+                                        std::mem::take(&mut self.file_explorer.git_commit.input);
+                                    self.handle_text_input_click(&mut input, mx, text_x);
+                                    self.file_explorer.git_commit.input = input;
+                                }
+                                crate::renderer::GitClickTarget::CommitBtn => {
+                                    self.execute_git_commit();
+                                }
+                                crate::renderer::GitClickTarget::PushBtn => {
+                                    self.execute_git_push();
+                                }
+                                crate::renderer::GitClickTarget::AmendToggle => {
+                                    self.file_explorer.git_commit.amend =
+                                        !self.file_explorer.git_commit.amend;
+                                    if self.file_explorer.git_commit.amend
+                                        && self.file_explorer.git_commit.input.text().is_empty()
+                                    {
+                                        if let Some(repo) = &self.file_explorer.git_root {
+                                            if let Some(last_msg) =
+                                                crate::explorer::git_last_commit_message(repo)
+                                            {
+                                                self.file_explorer
+                                                    .git_commit
+                                                    .input
+                                                    .set_text(last_msg);
+                                            }
+                                        }
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::StagedHeaderToggle => {
+                                    self.file_explorer.staged_collapsed =
+                                        !self.file_explorer.staged_collapsed;
+                                }
+                                crate::renderer::GitClickTarget::UnstageAll => {
+                                    if let Some(repo) = self.file_explorer.git_root.clone() {
+                                        self.spawn_git_bulk_action(
+                                            repo,
+                                            crate::renderer::GitBulkActionKind::UnstageAll,
+                                        );
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::StagedItem(idx) => {
+                                    self.file_explorer.git_commit.is_focused = false;
+                                    if idx < staged_items.len() {
+                                        let item = &staged_items[idx];
+                                        self.file_explorer.selected_path = Some(item.path.clone());
+                                        let now = Instant::now();
+                                        let double = self.last_explorer_click_idx == Some(idx)
+                                            && now.duration_since(self.last_explorer_click_time)
+                                                <= platform::double_click_time();
+                                        self.last_explorer_click_idx = Some(idx);
+                                        self.last_explorer_click_time = now;
+                                        self.open_file_in_viewer(&item.path, double);
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::UnstageItem(idx) => {
+                                    if idx < staged_items.len() {
+                                        let item = &staged_items[idx];
+                                        self.execute_git_action(
+                                            &item.path,
+                                            crate::renderer::GitActionKind::Unstage,
+                                            false,
+                                        );
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::UnstagedHeaderToggle => {
+                                    self.file_explorer.unstaged_collapsed =
+                                        !self.file_explorer.unstaged_collapsed;
+                                }
+                                crate::renderer::GitClickTarget::StageAll => {
+                                    if let Some(repo) = self.file_explorer.git_root.clone() {
+                                        self.spawn_git_bulk_action(
+                                            repo,
+                                            crate::renderer::GitBulkActionKind::StageAll,
+                                        );
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::DiscardAllPrompt => {
+                                    let unstaged_count = unstaged_items.len();
+                                    self.open_dialog(
+                                        crate::app::dialog::DialogSpec::discard_git_changes(
+                                            unstaged_count,
+                                        ),
+                                    );
+                                }
+                                crate::renderer::GitClickTarget::UnstagedItem(idx) => {
+                                    self.file_explorer.git_commit.is_focused = false;
+                                    if idx < unstaged_items.len() {
+                                        let item = &unstaged_items[idx];
+                                        self.file_explorer.selected_path = Some(item.path.clone());
+                                        let now = Instant::now();
+                                        let double = self.last_explorer_click_idx
+                                            == Some(100_000 + idx)
+                                            && now.duration_since(self.last_explorer_click_time)
+                                                <= platform::double_click_time();
+                                        self.last_explorer_click_idx = Some(100_000 + idx);
+                                        self.last_explorer_click_time = now;
+                                        self.open_file_in_viewer(&item.path, double);
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::StageItem(idx) => {
+                                    if idx < unstaged_items.len() {
+                                        let item = &unstaged_items[idx];
+                                        let is_untracked = item.git_status
+                                            == Some(crate::explorer::GitFileStatus::Untracked);
+                                        self.execute_git_action(
+                                            &item.path,
+                                            crate::renderer::GitActionKind::Stage,
+                                            is_untracked,
+                                        );
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::DiscardItemPrompt(idx) => {
+                                    if idx < unstaged_items.len() {
+                                        let item = &unstaged_items[idx];
+                                        let is_untracked = item.git_status
+                                            == Some(crate::explorer::GitFileStatus::Untracked);
+                                        self.file_explorer.discard_confirm =
+                                            Some(crate::explorer::DiscardTarget::File(
+                                                item.path.clone(),
+                                                is_untracked,
+                                            ));
+                                    }
+                                }
+                                crate::renderer::GitClickTarget::DiscardConfirmCancel => {
+                                    self.file_explorer.discard_confirm = None;
+                                }
+                                crate::renderer::GitClickTarget::DiscardConfirmExecute => {
+                                    if let Some(target) = self.file_explorer.discard_confirm.take()
+                                    {
+                                        match target {
+                                            crate::explorer::DiscardTarget::All => {
+                                                if let Some(repo) =
+                                                    self.file_explorer.git_root.clone()
+                                                {
+                                                    self.spawn_git_bulk_action(
+                                                        repo,
+                                                        crate::renderer::GitBulkActionKind::DiscardAll,
+                                                    );
+                                                }
+                                            }
+                                            crate::explorer::DiscardTarget::File(p, untracked) => {
+                                                self.execute_git_action(
+                                                    &p,
+                                                    crate::renderer::GitActionKind::Discard,
+                                                    untracked,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            self.file_explorer.git_commit.is_focused = false;
+                        }
+
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                        return true;
+                    }
+
                     // Barra de edición de nombre (nuevo/renombrar): un clic dentro coloca el cursor; fuera la cancela
                     if self.file_explorer.edit.is_some() {
                         let bar =
