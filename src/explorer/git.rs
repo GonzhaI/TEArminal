@@ -534,6 +534,9 @@ mod tests {
         let _ = git_command(&path)
             .args(["config", "commit.gpgsign", "false"])
             .status();
+        let _ = git_command(&path)
+            .args(["config", "core.autocrlf", "false"])
+            .status();
         Some(path)
     }
 
@@ -584,13 +587,17 @@ mod tests {
         // 5. Descartar cambios
         std::fs::write(&file_a, "Cambio no deseado\n").unwrap();
         git_discard_file(&repo, &file_a, false).expect("discard file_a");
-        let content = std::fs::read_to_string(&file_a).unwrap();
+        let content = std::fs::read_to_string(&file_a)
+            .unwrap()
+            .replace("\r\n", "\n");
         assert_eq!(content, "Línea 1\nLínea 2\n");
 
         // 6. Descartar todo (git_discard_all)
         std::fs::write(&file_a, "Otro cambio que se descartará en bloque\n").unwrap();
         git_discard_all(&repo).expect("discard all");
-        let content_after_discard_all = std::fs::read_to_string(&file_a).unwrap();
+        let content_after_discard_all = std::fs::read_to_string(&file_a)
+            .unwrap()
+            .replace("\r\n", "\n");
         assert_eq!(content_after_discard_all, "Línea 1\nLínea 2\n");
 
         // 7. Listar ramas locales y validar rechazo de nombres inválidos en checkout
